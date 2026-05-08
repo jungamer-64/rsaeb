@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::process;
 
-use rsaeb::{AebError, DEFAULT_MAX_STEPS, Program, RunOptions, TraceEvent};
+use rsaeb::{DEFAULT_MAX_STEPS, Program, RuleId, RunOptions, TraceEvent};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Cli {
@@ -68,10 +68,10 @@ fn main() {
         }
     };
 
-    let source = match fs::read_to_string(&cli.program_path) {
+    let source = match fs::read(&cli.program_path) {
         Ok(source) => source,
         Err(error) => {
-            eprintln!("{}", AebError::Io(error));
+            eprintln!("io error reading '{}': {error}", cli.program_path);
             process::exit(1);
         }
     };
@@ -86,14 +86,16 @@ fn main() {
 
     let options = RunOptions::new(cli.max_steps);
     let result = if cli.trace {
-        program.run_with_trace(&cli.input, options, print_trace_event)
+        program.run_with_trace(&cli.input, options, |event| {
+            print_trace_event(&program, event)
+        })
     } else {
         program.run(&cli.input, options)
     };
 
     match result {
         Ok(result) => {
-            println!("{}", result.output_lossy_string());
+            println!("{}", String::from_utf8_lossy(result.output()));
 
             if cli.trace {
                 eprintln!("steps: {}, returned: {}", result.steps(), result.returned());
@@ -106,18 +108,20 @@ fn main() {
     }
 }
 
-fn print_trace_event(event: TraceEvent) {
+fn print_trace_event(program: &Program, event: TraceEvent) {
     match event {
         TraceEvent::Initial { state } => {
             eprintln!("0: {}", String::from_utf8_lossy(&state));
         }
         TraceEvent::Step {
             step,
+            rule,
             line_number,
-            source,
             output,
             returned,
         } => {
+            let source = compact_source_for_trace(program, rule);
+
             if returned {
                 eprintln!(
                     "{step}: line {line_number}: {source} => return {}",
@@ -131,4 +135,11 @@ fn print_trace_event(event: TraceEvent) {
             }
         }
     }
+}
+
+fn compact_source_for_trace(program: &Program, rule: RuleId) -> String {
+    program.rule(rule).map_or_else(
+        || format!("<unknown rule {}>", rule.index()),
+        |info| String::from_utf8_lossy(info.compact_source()).into_owned(),
+    )
 }

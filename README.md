@@ -3,16 +3,18 @@
 A small Rust 2024 library and command-line interpreter for ordered `lhs=rhs`
 rewrite programs.
 
-The important rule is simple: program code and runtime input are different
-things. Program code is compact ASCII syntax. Runtime input is ASCII data. The
-interpreter preserves input bytes that the program syntax cannot write, such as
-spaces and reserved characters.
+The important split is deliberately boring and strict: program code and runtime
+input are different domains. Program code is compact ASCII syntax. Runtime input
+is ASCII data. The interpreter preserves input bytes that the program syntax
+cannot write, such as spaces and reserved characters.
 
 ## Library Usage
 
-This crate now exposes the interpreter as a library. The binary is intentionally
-thin; parsing, execution, result ownership, errors, and tracing live in
-`src/lib.rs`.
+This crate exposes the interpreter as a library. The binary is intentionally
+thin; filesystem reads, argument parsing, stdout/stderr formatting, and lossy
+output/state rendering all stay in `src/main.rs`. The library does not expose
+`std::io` errors, because the interpreter does not read files. Civilization
+survived this separation somehow.
 
 Basic one-shot execution:
 
@@ -40,10 +42,21 @@ assert_eq!(second.output(), b"bc");
 ```
 
 `(once)` consumption is runtime-local. Reusing `Program` is safe because parsed
-programs are immutable; each run owns its own rule state. Shocking development:
-global mutable interpreter state was not required after all.
+programs are immutable; each run owns its own rule state.
 
-Trace output is also library-owned data, not hard-coded stderr behavior:
+The parser is byte-oriented. Comments may contain non-ASCII or even non-UTF-8
+bytes because the library ignores bytes after `#` before validating executable
+code:
+
+```rust
+use rsaeb::Program;
+
+let program = Program::parse(b"a=b#\xff\xfe\n")?;
+assert_eq!(program.rule_count(), 1);
+# Ok::<(), rsaeb::ParseError>(())
+```
+
+Trace output is library-owned data, not hard-coded stderr behavior:
 
 ```rust
 use rsaeb::{Program, RunOptions, TraceEvent};
@@ -62,20 +75,45 @@ assert_eq!(events.len(), 3);
 # Ok::<(), rsaeb::AebError>(())
 ```
 
+Trace step events carry a `RuleId`, not a cloned display string. Human-readable
+rule text is metadata on `Program`:
+
+```rust
+use rsaeb::{Program, RunOptions, TraceEvent};
+
+let program = Program::parse("a = b # comment")?;
+let mut applied_rule = None;
+
+program.run_with_trace(b"a", RunOptions::new(10_000), |event| {
+    if let TraceEvent::Step { rule, .. } = event {
+        applied_rule = Some(rule);
+    }
+})?;
+
+let rule = program.rule(applied_rule.unwrap()).unwrap();
+assert_eq!(rule.line_number(), 1);
+assert_eq!(rule.compact_source(), b"a=b");
+# Ok::<(), rsaeb::AebError>(())
+```
+
 Public API surface:
 
-- `Program::parse(source)`: parse a reusable program.
+- `Program::parse(source)`: parse reusable program bytes.
+- `Program::parse_bytes(source)`: explicit byte parser.
+- `Program::parse_str(source)`: explicit UTF-8 string parser.
 - `Program::run(input, options)`: execute without tracing.
 - `Program::run_with_trace(input, options, callback)`: execute and receive
   trace events.
+- `Program::rule(rule_id)`: read parsed rule metadata for tracing/debug UIs.
+- `Program::rules()`: iterate parsed rule metadata.
 - `run(source, input, options)`: one-shot parse and execute helper.
 - `RunOptions`: currently holds the step limit.
 - `RunResult`: owns output bytes plus `steps` and `returned` metadata.
-- `AebError`: parse, input, step-limit, and optional I/O error reporting.
+- `ParseError`: structured source parse failure.
+- `RunError`: structured runtime failure.
+- `AebError`: one-shot `run` union of `ParseError` and `RunError`.
 
-The CLI remains available as `aeb` and uses the same public library API.
-
-## Usage
+## CLI Usage
 
 Run through Cargo:
 
@@ -100,7 +138,7 @@ Arguments:
 
 ## Program Format
 
-A program is a text file containing one rewrite rule per non-empty code line:
+A program is a byte file containing one rewrite rule per non-empty code line:
 
 ```text
 lhs=rhs
@@ -259,111 +297,26 @@ An empty left side matches an empty byte sequence. For unanchored rules and
 
 This inserts `x` at the start of the state.
 
-For `(end)` rules, an empty left side matches at the end of the current state:
+## Error Model
 
-```text
-(end)=x
+The library error model is intentionally split:
+
+```rust
+use rsaeb::{Program, RunError};
+
+let parse_error = Program::parse("a=b=c").unwrap_err();
+assert_eq!(parse_error.line(), 1);
+
+let run_error = Program::parse("a=b")?
+    .run("aあ".as_bytes(), Default::default())
+    .unwrap_err();
+
+if let RunError::Input(input_error) = run_error {
+    assert_eq!(input_error.column(), 2);
+}
+# Ok::<(), rsaeb::AebError>(())
 ```
 
-This appends `x` to the end of the state.
-
-Empty-left-side rules can always match, so they usually need careful ordering, a
-terminating rule, or a step limit. A common default-return pattern is:
-
-```text
-success=(return)true
-=(return)false
-```
-
-## Execution Semantics
-
-At each step, rules are scanned from top to bottom. The first rule that is both
-eligible and matching is applied.
-
-For unanchored rules, the leftmost contiguous byte match in the current state is
-used. For anchored rules, only the selected edge of the state is checked.
-
-Ignored whitespace in the program does not let a rule skip over whitespace in
-the input. Matching remains contiguous over the actual input bytes.
-
-Example:
-
-```text
-program: a b=bb
-input:   abc
-output:  bbc
-```
-
-The program code `a b=bb` is compacted to `ab=bb`, so `ab` matches `abc`.
-
-```text
-program: a b=bb
-input:   a bc
-output:  a bc
-```
-
-The input contains a real space between `a` and `b`, so compact `ab` does not
-match.
-
-```text
-program: ab=bb
-input:   a bc
-output:  a bc
-```
-
-The rule still does not match, for the same reason.
-
-```text
-program: a=b
-input:   a bc
-output:  b bc
-```
-
-Only the `a` is rewritten. The input space is preserved.
-
-Execution stops when:
-
-- no eligible rule matches the current state;
-- a rule with `(return)` is applied;
-- the `--max-steps` limit is reached.
-
-If the step limit is reached, the interpreter exits with an error and reports
-the state at the limit.
-
-## Internal Safety Model
-
-The implementation intentionally separates the byte domains:
-
-- `CodeByte`: private bytes that may exist as rule payload data. Reserved
-  characters, whitespace, and non-ASCII bytes are impossible to construct through
-  the parser.
-- `Payload`: a private sequence of `CodeByte`, used for rule left sides and
-  right-side payloads.
-- `RuntimeByte`: private ASCII input/runtime byte. This includes spaces and
-  reserved characters.
-- `State`: private runtime state.
-- `Program`, `RunOptions`, `RunResult`, `TraceEvent`, and `AebError`: the public
-  library boundary.
-
-So a rule payload cannot accidentally contain `=`, `#`, `(`, `)`, whitespace, or
-non-ASCII data. Runtime state can still hold those ASCII bytes when they came
-from input. In other words, the parser does not merely check the rule data and
-then throw it back into an untyped `Vec<u8>` swamp. We do not need another tiny
-byte swamp. Humanity has enough swamps.
-
-## Development Checks
-
-Run checks with:
-
-```sh
-cargo fmt
-cargo test
-cargo run -- examples/basic.ab aaa
-```
-
-Useful source searches:
-
-```sh
-rg "Vec<u8>|CodeByte|RuntimeByte|Payload|State|RunResult|TraceEvent" src README.md
-rg "reserved|whitespace|non-ASCII|multiple '='|parentheses" src README.md
-```
+Filesystem failures are not part of the library error model. Read files in the
+application layer, then pass bytes into `Program::parse`. The CLI does exactly
+that.

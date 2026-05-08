@@ -1,16 +1,17 @@
 //! Library API for the A=B rewrite interpreter.
 //!
-//! The public API is intentionally small:
+//! The crate exposes a byte-oriented parser and runtime. Program syntax and
+//! runtime input are separate domains:
 //!
-//! - [`Program`] is a parsed, reusable rewrite program.
-//! - [`RunOptions`] controls one execution.
-//! - [`RunResult`] owns the output bytes and execution metadata.
-//! - [`AebError`] reports parse, input, and runtime failures.
+//! - program code is compact ASCII syntax;
+//! - comments are ignored bytes after `#`;
+//! - runtime input is ASCII data and may contain whitespace/reserved bytes;
+//! - program payloads cannot contain whitespace, reserved syntax characters, or
+//!   non-ASCII bytes.
 //!
-//! Program syntax bytes and runtime input bytes are separate domains. Program
-//! payload bytes cannot contain whitespace, reserved syntax characters, or
-//! non-ASCII data. Runtime input may contain any ASCII byte and those bytes are
-//! preserved unless editable adjacent data is rewritten.
+//! Files, stdout, stderr, argument parsing, and lossy display formatting are
+//! intentionally outside this library. The command-line binary can do command-
+//! line things without smuggling those habits into the interpreter core.
 
 use std::error::Error;
 use std::fmt;
@@ -23,15 +24,17 @@ const TOK_START: &[u8] = b"(start)";
 const TOK_END: &[u8] = b"(end)";
 const TOK_RETURN: &[u8] = b"(return)";
 
-/// Parses and runs a source string in one call.
+/// Parses and runs source bytes in one call.
 ///
-/// Use [`Program::parse`] when the same program will be executed multiple times.
+/// Use [`Program::parse`] when the same program will be executed multiple
+/// times.
 pub fn run(
-    source: &str,
+    source: impl AsRef<[u8]>,
     input: impl AsRef<[u8]>,
     options: RunOptions,
 ) -> Result<RunResult, AebError> {
-    Program::parse(source)?.run(input, options)
+    let program = Program::parse(source).map_err(AebError::Parse)?;
+    program.run(input, options).map_err(AebError::Run)
 }
 
 /// Execution options for one runtime invocation.
@@ -54,6 +57,46 @@ impl Default for RunOptions {
         Self {
             max_steps: DEFAULT_MAX_STEPS,
         }
+    }
+}
+
+/// Stable identifier for a parsed rule inside one [`Program`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RuleId(usize);
+
+impl RuleId {
+    /// Zero-based rule index in parse order.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0
+    }
+}
+
+/// Read-only metadata for a parsed rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuleInfo<'program> {
+    id: RuleId,
+    line_number: usize,
+    compact_source: &'program [u8],
+}
+
+impl<'program> RuleInfo<'program> {
+    /// Rule identifier.
+    #[must_use]
+    pub const fn id(self) -> RuleId {
+        self.id
+    }
+
+    /// One-based source line number.
+    #[must_use]
+    pub const fn line_number(self) -> usize {
+        self.line_number
+    }
+
+    /// Whitespace-stripped executable code for this rule.
+    #[must_use]
+    pub const fn compact_source(self) -> &'program [u8] {
+        self.compact_source
     }
 }
 
@@ -95,37 +138,31 @@ impl CodeByte {
     fn parse(
         byte: u8,
         line_number: usize,
-        context: &str,
         compact_column: usize,
-    ) -> Result<Self, AebError> {
+        payload_kind: PayloadKind,
+    ) -> Result<Self, ParseError> {
         if !byte.is_ascii() {
-            return Err(AebError::Parse {
-                line: line_number,
-                message: format!(
-                    "non-ASCII byte 0x{byte:02x} in {context} at compact column {compact_column}",
-                ),
-            });
+            return Err(ParseError::new(
+                line_number,
+                Some(compact_column),
+                ParseErrorKind::NonAsciiInCode { byte },
+            ));
         }
 
         if byte.is_ascii_whitespace() {
-            return Err(AebError::Parse {
-                line: line_number,
-                message: format!(
-                    "whitespace byte 0x{byte:02x} cannot be represented as \
-                     {context} at compact column {compact_column}",
-                ),
-            });
+            return Err(ParseError::new(
+                line_number,
+                Some(compact_column),
+                ParseErrorKind::WhitespaceInPayload { byte, payload_kind },
+            ));
         }
 
         if is_reserved_code_byte(byte) {
-            return Err(AebError::Parse {
-                line: line_number,
-                message: format!(
-                    "reserved character '{}' cannot be represented as \
-                     {context} at compact column {compact_column}",
-                    byte as char,
-                ),
-            });
+            return Err(ParseError::new(
+                line_number,
+                Some(compact_column),
+                ParseErrorKind::ReservedByteInPayload { byte, payload_kind },
+            ));
         }
 
         Ok(Self(byte))
@@ -140,13 +177,11 @@ impl CodeByte {
 struct RuntimeByte(u8);
 
 impl RuntimeByte {
-    fn parse_input(byte: u8, zero_based_column: usize) -> Result<Self, AebError> {
+    fn parse_input(byte: u8, zero_based_column: usize) -> Result<Self, InputError> {
         if !byte.is_ascii() {
-            return Err(AebError::Input {
-                message: format!(
-                    "non-ASCII byte 0x{byte:02x} at column {}",
-                    zero_based_column + 1,
-                ),
+            return Err(InputError {
+                column: zero_based_column + 1,
+                byte,
             });
         }
 
@@ -168,13 +203,17 @@ struct Payload {
 }
 
 impl Payload {
-    fn parse(input: &[u8], line_number: usize, context: &str) -> Result<Self, AebError> {
+    fn parse(
+        input: &[u8],
+        line_number: usize,
+        payload_kind: PayloadKind,
+    ) -> Result<Self, ParseError> {
         let bytes = input
             .iter()
             .copied()
             .enumerate()
             .map(|(zero_based_column, byte)| {
-                CodeByte::parse(byte, line_number, context, zero_based_column + 1)
+                CodeByte::parse(byte, line_number, zero_based_column + 1, payload_kind)
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -208,7 +247,7 @@ struct State {
 }
 
 impl State {
-    fn parse_input(input: &[u8]) -> Result<Self, AebError> {
+    fn parse_input(input: &[u8]) -> Result<Self, InputError> {
         let bytes = input
             .iter()
             .copied()
@@ -314,11 +353,21 @@ enum Action {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Rule {
     line_number: usize,
-    source: String,
+    compact_source: Vec<u8>,
     repeat: RuleRepeat,
     anchor: Anchor,
     lhs: Payload,
     action: Action,
+}
+
+impl Rule {
+    fn info(&self, index: usize) -> RuleInfo<'_> {
+        RuleInfo {
+            id: RuleId(index),
+            line_number: self.line_number,
+            compact_source: &self.compact_source,
+        }
+    }
 }
 
 /// Parsed A=B rewrite program.
@@ -331,9 +380,19 @@ pub struct Program {
 }
 
 impl Program {
-    /// Parses program source into a reusable program value.
-    pub fn parse(source: &str) -> Result<Self, AebError> {
+    /// Parses program source bytes into a reusable program value.
+    pub fn parse(source: impl AsRef<[u8]>) -> Result<Self, ParseError> {
+        parse_program_impl(source.as_ref())
+    }
+
+    /// Parses program source bytes into a reusable program value.
+    pub fn parse_bytes(source: &[u8]) -> Result<Self, ParseError> {
         parse_program_impl(source)
+    }
+
+    /// Parses a UTF-8 source string into a reusable program value.
+    pub fn parse_str(source: &str) -> Result<Self, ParseError> {
+        parse_program_impl(source.as_bytes())
     }
 
     /// Returns the number of executable rules in the parsed program.
@@ -342,23 +401,32 @@ impl Program {
         self.rules.len()
     }
 
+    /// Returns rule metadata by [`RuleId`].
+    #[must_use]
+    pub fn rule(&self, id: RuleId) -> Option<RuleInfo<'_>> {
+        self.rules.get(id.index()).map(|rule| rule.info(id.index()))
+    }
+
+    /// Iterates over parsed rule metadata in execution order.
+    pub fn rules(&self) -> impl Iterator<Item = RuleInfo<'_>> + '_ {
+        self.rules
+            .iter()
+            .enumerate()
+            .map(|(index, rule)| rule.info(index))
+    }
+
     /// Runs this program with the given input bytes.
-    pub fn run(&self, input: impl AsRef<[u8]>, options: RunOptions) -> Result<RunResult, AebError> {
+    pub fn run(&self, input: impl AsRef<[u8]>, options: RunOptions) -> Result<RunResult, RunError> {
         Runtime::new(self, input.as_ref())?.run(options.max_steps)
     }
 
     /// Runs this program and emits trace events.
-    ///
-    /// The core interpreter still owns no stderr/stdout behavior. The CLI uses
-    /// this hook to print traces; library users can collect or format events in
-    /// their own domain instead of inheriting yet another hard-coded human
-    /// nozzle.
     pub fn run_with_trace<F>(
         &self,
         input: impl AsRef<[u8]>,
         options: RunOptions,
         trace: F,
-    ) -> Result<RunResult, AebError>
+    ) -> Result<RunResult, RunError>
     where
         F: FnMut(TraceEvent),
     {
@@ -375,7 +443,7 @@ struct Runtime<'program> {
 }
 
 impl<'program> Runtime<'program> {
-    fn new(program: &'program Program, input: &[u8]) -> Result<Self, AebError> {
+    fn new(program: &'program Program, input: &[u8]) -> Result<Self, InputError> {
         Ok(Self {
             program,
             state: State::parse_input(input)?,
@@ -384,18 +452,18 @@ impl<'program> Runtime<'program> {
         })
     }
 
-    fn run(self, max_steps: usize) -> Result<RunResult, AebError> {
+    fn run(self, max_steps: usize) -> Result<RunResult, RunError> {
         self.run_impl(max_steps, None::<fn(TraceEvent)>)
     }
 
-    fn run_with_trace<F>(self, max_steps: usize, trace: F) -> Result<RunResult, AebError>
+    fn run_with_trace<F>(self, max_steps: usize, trace: F) -> Result<RunResult, RunError>
     where
         F: FnMut(TraceEvent),
     {
         self.run_impl(max_steps, Some(trace))
     }
 
-    fn run_impl<F>(mut self, max_steps: usize, mut trace: Option<F>) -> Result<RunResult, AebError>
+    fn run_impl<F>(mut self, max_steps: usize, mut trace: Option<F>) -> Result<RunResult, RunError>
     where
         F: FnMut(TraceEvent),
     {
@@ -408,10 +476,11 @@ impl<'program> Runtime<'program> {
 
         loop {
             if self.steps >= max_steps {
-                return Err(AebError::StepLimit {
+                return Err(StepLimitError {
                     max_steps,
                     state: self.state.into_vec_u8(),
-                });
+                }
+                .into());
             }
 
             let Some((rule_index, position)) = self.find_next_match() else {
@@ -466,6 +535,7 @@ impl<'program> Runtime<'program> {
         self.consume_rule_if_needed(rule_index);
 
         let rule = &self.program.rules[rule_index];
+        let rule_id = RuleId(rule_index);
         let lhs_len = rule.lhs.len();
 
         match &rule.action {
@@ -477,8 +547,8 @@ impl<'program> Runtime<'program> {
                     trace,
                     TraceEvent::Step {
                         step: self.steps,
+                        rule: rule_id,
                         line_number: rule.line_number,
-                        source: rule.source.clone(),
                         output: self.state.to_vec_u8(),
                         returned: false,
                     },
@@ -492,8 +562,8 @@ impl<'program> Runtime<'program> {
                     trace,
                     TraceEvent::Step {
                         step: self.steps,
+                        rule: rule_id,
                         line_number: rule.line_number,
-                        source: rule.source.clone(),
                         output: self.state.to_vec_u8(),
                         returned: false,
                     },
@@ -507,8 +577,8 @@ impl<'program> Runtime<'program> {
                     trace,
                     TraceEvent::Step {
                         step: self.steps,
+                        rule: rule_id,
                         line_number: rule.line_number,
-                        source: rule.source.clone(),
                         output: self.state.to_vec_u8(),
                         returned: false,
                     },
@@ -522,8 +592,8 @@ impl<'program> Runtime<'program> {
                     trace,
                     TraceEvent::Step {
                         step: self.steps,
+                        rule: rule_id,
                         line_number: rule.line_number,
-                        source: rule.source.clone(),
                         output: output.clone(),
                         returned: true,
                     },
@@ -585,15 +655,6 @@ impl RunResult {
         self.output
     }
 
-    /// Final output rendered lossily as UTF-8.
-    ///
-    /// Valid input is restricted to ASCII, so this is mainly a convenience for
-    /// callers that want `String` output.
-    #[must_use]
-    pub fn output_lossy_string(&self) -> String {
-        String::from_utf8_lossy(&self.output).into_owned()
-    }
-
     /// Number of rewrite steps applied.
     #[must_use]
     pub fn steps(&self) -> usize {
@@ -615,8 +676,8 @@ pub enum TraceEvent {
     /// One applied rule.
     Step {
         step: usize,
+        rule: RuleId,
         line_number: usize,
-        source: String,
         output: Vec<u8>,
         returned: bool,
     },
@@ -631,52 +692,22 @@ impl TraceEvent {
             Self::Step { output, .. } => output,
         }
     }
-
-    /// Output/state rendered lossily as UTF-8.
-    #[must_use]
-    pub fn lossy_string(&self) -> String {
-        String::from_utf8_lossy(self.bytes()).into_owned()
-    }
 }
 
-/// Interpreter error.
-#[derive(Debug)]
+/// Combined one-shot error used by [`run`].
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AebError {
     /// Source program parse error.
-    Parse { line: usize, message: String },
-    /// Runtime input is invalid.
-    Input { message: String },
-    /// Execution exceeded the configured step limit.
-    StepLimit { max_steps: usize, state: Vec<u8> },
-    /// I/O error kept for CLI/library convenience when callers choose to map
-    /// filesystem loading into this error type.
-    Io(std::io::Error),
-}
-
-impl AebError {
-    /// Returns the line number for parse errors.
-    #[must_use]
-    pub fn parse_line(&self) -> Option<usize> {
-        match self {
-            Self::Parse { line, .. } => Some(*line),
-            Self::Input { .. } | Self::StepLimit { .. } | Self::Io(_) => None,
-        }
-    }
+    Parse(ParseError),
+    /// Runtime execution error.
+    Run(RunError),
 }
 
 impl fmt::Display for AebError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AebError::Parse { line, message } => {
-                write!(f, "parse error at line {line}: {message}")
-            }
-            AebError::Input { message } => write!(f, "input error: {message}"),
-            AebError::StepLimit { max_steps, state } => write!(
-                f,
-                "step limit exceeded after {max_steps} steps; state: {}",
-                String::from_utf8_lossy(state),
-            ),
-            AebError::Io(error) => write!(f, "io error: {error}"),
+            Self::Parse(error) => error.fmt(f),
+            Self::Run(error) => error.fmt(f),
         }
     }
 }
@@ -684,62 +715,298 @@ impl fmt::Display for AebError {
 impl Error for AebError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Io(error) => Some(error),
-            Self::Parse { .. } | Self::Input { .. } | Self::StepLimit { .. } => None,
+            Self::Parse(error) => Some(error),
+            Self::Run(error) => Some(error),
         }
     }
 }
 
-impl From<std::io::Error> for AebError {
-    fn from(value: std::io::Error) -> Self {
-        Self::Io(value)
+impl From<ParseError> for AebError {
+    fn from(value: ParseError) -> Self {
+        Self::Parse(value)
     }
 }
+
+impl From<RunError> for AebError {
+    fn from(value: RunError) -> Self {
+        Self::Run(value)
+    }
+}
+
+/// Source program parse error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseError {
+    line: usize,
+    column: Option<usize>,
+    kind: ParseErrorKind,
+}
+
+impl ParseError {
+    fn new(line: usize, column: Option<usize>, kind: ParseErrorKind) -> Self {
+        Self { line, column, kind }
+    }
+
+    /// One-based source line number.
+    #[must_use]
+    pub const fn line(&self) -> usize {
+        self.line
+    }
+
+    /// One-based source or compact column, when the error has a single byte
+    /// position.
+    #[must_use]
+    pub const fn column(&self) -> Option<usize> {
+        self.column
+    }
+
+    /// Structured parse error reason.
+    #[must_use]
+    pub const fn kind(&self) -> &ParseErrorKind {
+        &self.kind
+    }
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "parse error at line {}", self.line)?;
+
+        if let Some(column) = self.column {
+            write!(f, ", column {column}")?;
+        }
+
+        write!(f, ": {}", self.kind)
+    }
+}
+
+impl Error for ParseError {}
+
+/// Structured parse error reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParseErrorKind {
+    /// A non-ASCII byte appeared before the line comment marker.
+    NonAsciiInCode { byte: u8 },
+    /// A non-empty code line did not contain `=`.
+    MissingEquals,
+    /// A compact code line contained more than one `=`.
+    MultipleEquals,
+    /// A payload attempted to contain ASCII whitespace after compaction.
+    WhitespaceInPayload { byte: u8, payload_kind: PayloadKind },
+    /// A payload attempted to contain syntax bytes such as `=`, `#`, `(`, or `)`.
+    ReservedByteInPayload { byte: u8, payload_kind: PayloadKind },
+    /// Left-side modifiers were duplicated or ordered outside the supported grammar.
+    UnsupportedLeftModifierOrder,
+}
+
+impl fmt::Display for ParseErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NonAsciiInCode { byte } => write!(f, "non-ASCII byte 0x{byte:02x} in code"),
+            Self::MissingEquals => write!(f, "missing '='"),
+            Self::MultipleEquals => write!(f, "multiple '=' characters are not allowed"),
+            Self::WhitespaceInPayload { byte, payload_kind } => write!(
+                f,
+                "whitespace byte 0x{byte:02x} cannot be represented as {payload_kind}",
+            ),
+            Self::ReservedByteInPayload { byte, payload_kind } => write!(
+                f,
+                "reserved character '{}' cannot be represented as {payload_kind}",
+                printable_ascii(*byte),
+            ),
+            Self::UnsupportedLeftModifierOrder => {
+                write!(f, "duplicated or unsupported left-side modifier order")
+            }
+        }
+    }
+}
+
+/// Program payload context used by structured parse errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PayloadKind {
+    LeftSideData,
+    RightSideData,
+    RightSideMoveStartPayload,
+    RightSideMoveEndPayload,
+    RightSideReturnPayload,
+}
+
+impl fmt::Display for PayloadKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LeftSideData => write!(f, "left-side data"),
+            Self::RightSideData => write!(f, "right-side data"),
+            Self::RightSideMoveStartPayload => write!(f, "right-side move-to-start payload"),
+            Self::RightSideMoveEndPayload => write!(f, "right-side move-to-end payload"),
+            Self::RightSideReturnPayload => write!(f, "right-side return payload"),
+        }
+    }
+}
+
+/// Runtime execution error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunError {
+    /// Runtime input is invalid.
+    Input(InputError),
+    /// Execution exceeded the configured step limit.
+    StepLimit(StepLimitError),
+}
+
+impl fmt::Display for RunError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Input(error) => error.fmt(f),
+            Self::StepLimit(error) => error.fmt(f),
+        }
+    }
+}
+
+impl Error for RunError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Input(error) => Some(error),
+            Self::StepLimit(error) => Some(error),
+        }
+    }
+}
+
+impl From<InputError> for RunError {
+    fn from(value: InputError) -> Self {
+        Self::Input(value)
+    }
+}
+
+impl From<StepLimitError> for RunError {
+    fn from(value: StepLimitError) -> Self {
+        Self::StepLimit(value)
+    }
+}
+
+/// Runtime input validation error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputError {
+    column: usize,
+    byte: u8,
+}
+
+impl InputError {
+    /// One-based input column.
+    #[must_use]
+    pub const fn column(&self) -> usize {
+        self.column
+    }
+
+    /// Rejected byte.
+    #[must_use]
+    pub const fn byte(&self) -> u8 {
+        self.byte
+    }
+}
+
+impl fmt::Display for InputError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "input error: non-ASCII byte 0x{:02x} at column {}",
+            self.byte, self.column,
+        )
+    }
+}
+
+impl Error for InputError {}
+
+/// Step-limit failure with the last runtime state preserved as bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepLimitError {
+    max_steps: usize,
+    state: Vec<u8>,
+}
+
+impl StepLimitError {
+    /// Configured maximum step count.
+    #[must_use]
+    pub const fn max_steps(&self) -> usize {
+        self.max_steps
+    }
+
+    /// Runtime state when the limit was hit.
+    #[must_use]
+    pub fn state(&self) -> &[u8] {
+        &self.state
+    }
+
+    /// Consumes the error and returns the runtime state.
+    #[must_use]
+    pub fn into_state(self) -> Vec<u8> {
+        self.state
+    }
+}
+
+impl fmt::Display for StepLimitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "step limit exceeded after {} steps; state length: {} bytes",
+            self.max_steps,
+            self.state.len(),
+        )
+    }
+}
+
+impl Error for StepLimitError {}
 
 fn is_reserved_code_byte(byte: u8) -> bool {
     matches!(byte, b'=' | b'#' | b'(' | b')')
 }
 
-fn parse_program_impl(source: &str) -> Result<Program, AebError> {
+fn printable_ascii(byte: u8) -> char {
+    if byte.is_ascii() {
+        byte as char
+    } else {
+        '\u{fffd}'
+    }
+}
+
+fn parse_program_impl(source: &[u8]) -> Result<Program, ParseError> {
     let mut rules = Vec::new();
 
-    for (zero_based_line, raw_line) in source.lines().enumerate() {
+    for (zero_based_line, raw_line) in source.split(|&byte| byte == b'\n').enumerate() {
         let line_number = zero_based_line + 1;
         let code_line = parse_code_line(raw_line, line_number)?;
-        let code = strip_code_whitespace(&code_line);
+        let compact_code = strip_code_whitespace(&code_line);
 
-        if code.is_empty() {
+        if compact_code.is_empty() {
             continue;
         }
 
-        let equals_count = code.iter().filter(|&&byte| byte == b'=').count();
+        let equals_count = compact_code.iter().filter(|&&byte| byte == b'=').count();
 
         if equals_count == 0 {
-            return Err(AebError::Parse {
-                line: line_number,
-                message: "missing '='".to_string(),
-            });
+            return Err(ParseError::new(
+                line_number,
+                None,
+                ParseErrorKind::MissingEquals,
+            ));
         }
 
         if equals_count > 1 {
-            return Err(AebError::Parse {
-                line: line_number,
-                message: "multiple '=' characters are not allowed".to_string(),
-            });
+            return Err(ParseError::new(
+                line_number,
+                None,
+                ParseErrorKind::MultipleEquals,
+            ));
         }
 
-        let equals_position = code
+        let equals_position = compact_code
             .iter()
             .position(|&byte| byte == b'=')
             .expect("equals_count checked above");
-        let lhs_code = &code[..equals_position];
-        let rhs_code = &code[equals_position + 1..];
+        let lhs_code = &compact_code[..equals_position];
+        let rhs_code = &compact_code[equals_position + 1..];
         let (repeat, anchor, lhs) = parse_lhs(lhs_code, line_number)?;
         let action = parse_rhs(rhs_code, line_number)?;
 
         rules.push(Rule {
             line_number,
-            source: String::from_utf8_lossy(&code_line).trim().to_string(),
+            compact_source: compact_code,
             repeat,
             anchor,
             lhs,
@@ -750,11 +1017,10 @@ fn parse_program_impl(source: &str) -> Result<Program, AebError> {
     Ok(Program { rules })
 }
 
-fn parse_code_line(raw_line: &str, line_number: usize) -> Result<Vec<u8>, AebError> {
-    let raw_bytes = raw_line.as_bytes();
-    let code_bytes = match raw_bytes.iter().position(|&byte| byte == b'#') {
-        Some(comment_start) => &raw_bytes[..comment_start],
-        None => raw_bytes,
+fn parse_code_line(raw_line: &[u8], line_number: usize) -> Result<Vec<u8>, ParseError> {
+    let code_bytes = match raw_line.iter().position(|&byte| byte == b'#') {
+        Some(comment_start) => &raw_line[..comment_start],
+        None => raw_line,
     };
 
     if let Some((zero_based_column, byte)) = code_bytes
@@ -763,13 +1029,11 @@ fn parse_code_line(raw_line: &str, line_number: usize) -> Result<Vec<u8>, AebErr
         .enumerate()
         .find(|(_, byte)| !byte.is_ascii())
     {
-        return Err(AebError::Parse {
-            line: line_number,
-            message: format!(
-                "non-ASCII byte 0x{byte:02x} in code at column {}",
-                zero_based_column + 1,
-            ),
-        });
+        return Err(ParseError::new(
+            line_number,
+            Some(zero_based_column + 1),
+            ParseErrorKind::NonAsciiInCode { byte },
+        ));
     }
 
     Ok(code_bytes.to_vec())
@@ -786,7 +1050,7 @@ fn strip_code_whitespace(input: &[u8]) -> Vec<u8> {
 fn parse_lhs(
     mut input: &[u8],
     line_number: usize,
-) -> Result<(RuleRepeat, Anchor, Payload), AebError> {
+) -> Result<(RuleRepeat, Anchor, Payload), ParseError> {
     let mut repeat = RuleRepeat::Always;
 
     if input.starts_with(TOK_ONCE) {
@@ -805,40 +1069,41 @@ fn parse_lhs(
     };
 
     if input.starts_with(TOK_ONCE) || input.starts_with(TOK_START) || input.starts_with(TOK_END) {
-        return Err(AebError::Parse {
-            line: line_number,
-            message: "duplicated or unsupported left-side modifier order".to_string(),
-        });
+        return Err(ParseError::new(
+            line_number,
+            None,
+            ParseErrorKind::UnsupportedLeftModifierOrder,
+        ));
     }
 
-    let lhs = Payload::parse(input, line_number, "left-side data")?;
+    let lhs = Payload::parse(input, line_number, PayloadKind::LeftSideData)?;
     Ok((repeat, anchor, lhs))
 }
 
-fn parse_rhs(input: &[u8], line_number: usize) -> Result<Action, AebError> {
+fn parse_rhs(input: &[u8], line_number: usize) -> Result<Action, ParseError> {
     if input.starts_with(TOK_START) {
         let payload = Payload::parse(
             &input[TOK_START.len()..],
             line_number,
-            "right-side move-to-start payload",
+            PayloadKind::RightSideMoveStartPayload,
         )?;
         Ok(Action::MoveStart(payload))
     } else if input.starts_with(TOK_END) {
         let payload = Payload::parse(
             &input[TOK_END.len()..],
             line_number,
-            "right-side move-to-end payload",
+            PayloadKind::RightSideMoveEndPayload,
         )?;
         Ok(Action::MoveEnd(payload))
     } else if input.starts_with(TOK_RETURN) {
         let payload = Payload::parse(
             &input[TOK_RETURN.len()..],
             line_number,
-            "right-side return payload",
+            PayloadKind::RightSideReturnPayload,
         )?;
         Ok(Action::Return(payload))
     } else {
-        let payload = Payload::parse(input, line_number, "right-side data")?;
+        let payload = Payload::parse(input, line_number, PayloadKind::RightSideData)?;
         Ok(Action::Replace(payload))
     }
 }
@@ -890,6 +1155,30 @@ mod tests {
         assert_eq!(events[0].bytes(), b"a");
         assert_eq!(events[1].bytes(), b"b");
         assert_eq!(events[2].bytes(), b"ok");
+
+        let TraceEvent::Step {
+            rule, line_number, ..
+        } = &events[1]
+        else {
+            panic!("expected step event");
+        };
+        assert_eq!(rule.index(), 0);
+        assert_eq!(*line_number, 1);
+        assert_eq!(program.rule(*rule).unwrap().compact_source(), b"a=b");
+    }
+
+    #[test]
+    fn rule_metadata_is_exposed_without_embedding_display_strings_in_trace_events() {
+        let program = Program::parse("a = b # comment\n(start)c=(end)d").unwrap();
+        let rules = program.rules().collect::<Vec<_>>();
+
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].id().index(), 0);
+        assert_eq!(rules[0].line_number(), 1);
+        assert_eq!(rules[0].compact_source(), b"a=b");
+        assert_eq!(rules[1].id().index(), 1);
+        assert_eq!(rules[1].line_number(), 2);
+        assert_eq!(rules[1].compact_source(), b"(start)c=(end)d");
     }
 
     #[test]
@@ -979,15 +1268,32 @@ mod tests {
     }
 
     #[test]
+    fn comments_may_contain_non_utf8_bytes_because_the_core_parser_is_byte_oriented() {
+        let source = b"a=b#\xff\xfe\n";
+        let program = Program::parse(source).unwrap();
+        let result = program.run(b"a", RunOptions::new(10_000)).unwrap();
+        assert_eq!(result.output(), b"b");
+    }
+
+    #[test]
     fn code_body_rejects_non_ascii_outside_comments() {
         assert!(Program::parse("a=あ").is_err());
         assert!(Program::parse("あ=b# comment").is_err());
         assert!(Program::parse("a=b#あ").is_ok());
+
+        let error = Program::parse("a=あ").unwrap_err();
+        assert_eq!(error.line(), 1);
+        assert_eq!(error.column(), Some(3));
+        assert!(matches!(
+            error.kind(),
+            ParseErrorKind::NonAsciiInCode { .. }
+        ));
     }
 
     #[test]
     fn second_equals_is_a_parse_error_unless_it_is_in_a_comment() {
-        assert!(Program::parse("a=b=c").is_err());
+        let error = Program::parse("a=b=c").unwrap_err();
+        assert!(matches!(error.kind(), ParseErrorKind::MultipleEquals));
         assert!(Program::parse("a=b#=c").is_ok());
     }
 
@@ -1013,6 +1319,15 @@ mod tests {
     }
 
     #[test]
+    fn invalid_left_modifier_order_is_structured() {
+        let error = Program::parse("(start)(once)a=b").unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            ParseErrorKind::UnsupportedLeftModifierOrder
+        ));
+    }
+
+    #[test]
     fn reserved_input_bytes_are_preserved_but_not_editable_from_code() {
         assert_eq!(run_source("a=b", "a=()#c"), "b=()#c");
         assert!(
@@ -1024,12 +1339,41 @@ mod tests {
     }
 
     #[test]
+    fn runtime_input_error_is_structured() {
+        let error = Program::parse("a=b")
+            .unwrap()
+            .run("aあ".as_bytes(), RunOptions::default())
+            .unwrap_err();
+
+        let RunError::Input(error) = error else {
+            panic!("expected input error");
+        };
+
+        assert_eq!(error.column(), 2);
+    }
+
+    #[test]
     fn runtime_state_can_hold_reserved_bytes_that_program_payloads_cannot_construct() {
         let program = Program::parse("a=b").unwrap();
-        assert!(Payload::parse(b"=", 1, "test payload").is_err());
+        assert!(Payload::parse(b"=", 1, PayloadKind::RightSideData).is_err());
 
         let result = program.run(b"a=#()", RunOptions::new(10_000)).unwrap();
         assert_eq!(String::from_utf8(result.into_output()).unwrap(), "b=#()");
+    }
+
+    #[test]
+    fn step_limit_error_keeps_state_as_bytes() {
+        let error = Program::parse("=a")
+            .unwrap()
+            .run(b"", RunOptions::new(3))
+            .unwrap_err();
+
+        let RunError::StepLimit(error) = error else {
+            panic!("expected step limit error");
+        };
+
+        assert_eq!(error.max_steps(), 3);
+        assert_eq!(error.state(), b"aaa");
     }
 
     #[test]
@@ -1037,7 +1381,11 @@ mod tests {
         let source = "\
 b=a|a|
 c=a|aa|
-a|-=\n--=(return)false\n(start)a|=(end)-\n(start)a=(end)|-\n=(return)true";
+a|-=
+--=(return)false
+(start)a|=(end)-
+(start)a=(end)|-
+=(return)true";
 
         assert_eq!(run_source(source, "aba"), "true");
         assert_eq!(run_source(source, "ab"), "false");
