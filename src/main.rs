@@ -471,16 +471,26 @@ mod tests {
     }
 
     #[test]
-    fn start_anchor_works() {
-        let source = "(start)a=x\na=y";
+    fn start_anchor_matches_only_at_start() {
+        let source = "(start)a=x";
         assert_eq!(run_source(source, "aba"), "xba");
-        assert_eq!(run_source(source, "ba"), "by");
+        assert_eq!(run_source(source, "ba"), "ba");
     }
 
     #[test]
-    fn end_anchor_works() {
-        let source = "(end)a=x\na=y";
+    fn end_anchor_matches_only_at_end() {
+        let source = "(end)a=x";
         assert_eq!(run_source(source, "aba"), "abx");
+        assert_eq!(run_source(source, "ab"), "ab");
+    }
+
+    #[test]
+    fn runtime_continues_after_anchored_replacement() {
+        let source = "(start)a=x\na=y";
+        assert_eq!(run_source(source, "aba"), "xby");
+
+        let source = "(end)a=x\na=y";
+        assert_eq!(run_source(source, "aba"), "ybx");
     }
 
     #[test]
