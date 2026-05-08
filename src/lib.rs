@@ -50,7 +50,11 @@ pub fn run(
 /// Execution options for one runtime invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunOptions {
-    /// Maximum number of rewrite steps before execution fails.
+    /// Maximum number of rewrite steps that may be applied.
+    ///
+    /// A run that becomes stable exactly at this count succeeds. The limit is
+    /// an error only when another matching rule would need to be applied after
+    /// this many steps.
     pub max_steps: usize,
 }
 
@@ -145,37 +149,26 @@ impl RuntimeRuleState {
 struct CodeByte(u8);
 
 impl CodeByte {
-    fn parse(
-        byte: u8,
+    fn parse_compact(
+        byte: CompactByte,
         line_number: usize,
-        compact_column: usize,
         payload_kind: PayloadKind,
     ) -> Result<Self, ParseError> {
-        if !byte.is_ascii() {
+        debug_assert!(byte.as_u8().is_ascii());
+        debug_assert!(!byte.as_u8().is_ascii_whitespace());
+
+        if is_reserved_code_byte(byte.as_u8()) {
             return Err(ParseError::new(
                 line_number,
-                Some(compact_column),
-                ParseErrorKind::NonAsciiInCode { byte },
+                Some(byte.source_column()),
+                ParseErrorKind::ReservedByteInPayload {
+                    byte: byte.as_u8(),
+                    payload_kind,
+                },
             ));
         }
 
-        if byte.is_ascii_whitespace() {
-            return Err(ParseError::new(
-                line_number,
-                Some(compact_column),
-                ParseErrorKind::WhitespaceInPayload { byte, payload_kind },
-            ));
-        }
-
-        if is_reserved_code_byte(byte) {
-            return Err(ParseError::new(
-                line_number,
-                Some(compact_column),
-                ParseErrorKind::ReservedByteInPayload { byte, payload_kind },
-            ));
-        }
-
-        Ok(Self(byte))
+        Ok(Self(byte.as_u8()))
     }
 
     fn as_u8(self) -> u8 {
@@ -214,17 +207,14 @@ struct Payload {
 
 impl Payload {
     fn parse(
-        input: &[u8],
+        input: &[CompactByte],
         line_number: usize,
         payload_kind: PayloadKind,
     ) -> Result<Self, ParseError> {
         let bytes = input
             .iter()
             .copied()
-            .enumerate()
-            .map(|(zero_based_column, byte)| {
-                CodeByte::parse(byte, line_number, zero_based_column + 1, payload_kind)
-            })
+            .map(|byte| CodeByte::parse_compact(byte, line_number, payload_kind))
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self { bytes })
@@ -326,6 +316,15 @@ impl State {
         Self { bytes }
     }
 
+    fn apply_action(&self, state_match: StateMatch, action: &Action) -> RewriteEffect {
+        match action {
+            Action::Replace(rhs) => RewriteEffect::Continue(self.replace_at(state_match, rhs)),
+            Action::MoveStart(rhs) => RewriteEffect::Continue(self.move_start_at(state_match, rhs)),
+            Action::MoveEnd(rhs) => RewriteEffect::Continue(self.move_end_at(state_match, rhs)),
+            Action::Return(output) => RewriteEffect::Return(output.to_vec_u8()),
+        }
+    }
+
     fn replaced_len(&self, state_match: StateMatch, rhs: &Payload) -> usize {
         self.len() - state_match.lhs_len() + rhs.len()
     }
@@ -388,6 +387,12 @@ enum Action {
     MoveStart(Payload),
     MoveEnd(Payload),
     Return(Payload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RewriteEffect {
+    Continue(State),
+    Return(Vec<u8>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -522,14 +527,6 @@ impl<'program> Runtime<'program> {
         );
 
         loop {
-            if self.steps >= max_steps {
-                return Err(StepLimitError {
-                    max_steps,
-                    state: self.state.into_vec_u8(),
-                }
-                .into());
-            }
-
             let Some(matched) = self.find_next_match() else {
                 return Ok(RunResult {
                     output: self.state.into_vec_u8(),
@@ -537,6 +534,14 @@ impl<'program> Runtime<'program> {
                     returned: false,
                 });
             };
+
+            if self.steps >= max_steps {
+                return Err(StepLimitError {
+                    max_steps,
+                    state: self.state.into_vec_u8(),
+                }
+                .into());
+            }
 
             if let Some(result) = self.apply_rule(matched, &mut trace) {
                 return Ok(result);
@@ -586,78 +591,41 @@ impl<'program> Runtime<'program> {
 
         let rule = matched.rule;
         let rule_id = matched.rule_id;
-        let state_match = matched.state_match;
+        let effect = self
+            .state
+            .apply_action(matched.state_match, &matched.rule.action);
 
-        match &rule.action {
-            Action::Replace(rhs) => {
-                self.state = self.state.replace_at(state_match, rhs);
-                self.steps += 1;
+        self.steps += 1;
 
-                emit_trace(
-                    trace,
-                    TraceEvent::Step {
-                        step: self.steps,
-                        rule: rule_id,
-                        line_number: rule.line_number,
-                        output: self.state.to_vec_u8(),
-                        returned: false,
-                    },
-                );
+        let (output, returned) = match effect {
+            RewriteEffect::Continue(next_state) => {
+                let output = next_state.to_vec_u8();
+                self.state = next_state;
+                (output, false)
             }
-            Action::MoveStart(rhs) => {
-                self.state = self.state.move_start_at(state_match, rhs);
-                self.steps += 1;
+            RewriteEffect::Return(output) => (output, true),
+        };
 
-                emit_trace(
-                    trace,
-                    TraceEvent::Step {
-                        step: self.steps,
-                        rule: rule_id,
-                        line_number: rule.line_number,
-                        output: self.state.to_vec_u8(),
-                        returned: false,
-                    },
-                );
-            }
-            Action::MoveEnd(rhs) => {
-                self.state = self.state.move_end_at(state_match, rhs);
-                self.steps += 1;
+        emit_trace(
+            trace,
+            TraceEvent::Step {
+                step: self.steps,
+                rule: rule_id,
+                line_number: rule.line_number,
+                output: output.clone(),
+                returned,
+            },
+        );
 
-                emit_trace(
-                    trace,
-                    TraceEvent::Step {
-                        step: self.steps,
-                        rule: rule_id,
-                        line_number: rule.line_number,
-                        output: self.state.to_vec_u8(),
-                        returned: false,
-                    },
-                );
-            }
-            Action::Return(output) => {
-                self.steps += 1;
-                let output = output.to_vec_u8();
-
-                emit_trace(
-                    trace,
-                    TraceEvent::Step {
-                        step: self.steps,
-                        rule: rule_id,
-                        line_number: rule.line_number,
-                        output: output.clone(),
-                        returned: true,
-                    },
-                );
-
-                return Some(RunResult {
-                    output,
-                    steps: self.steps,
-                    returned: true,
-                });
-            }
+        if returned {
+            Some(RunResult {
+                output,
+                steps: self.steps,
+                returned: true,
+            })
+        } else {
+            None
         }
-
-        None
     }
 }
 
@@ -796,8 +764,7 @@ impl ParseError {
         self.line
     }
 
-    /// One-based source or compact column, when the error has a single byte
-    /// position.
+    /// One-based source column, when the error has a single byte position.
     #[must_use]
     pub const fn column(&self) -> Option<usize> {
         self.column
@@ -833,8 +800,6 @@ pub enum ParseErrorKind {
     MissingEquals,
     /// A compact code line contained more than one `=`.
     MultipleEquals,
-    /// A payload attempted to contain ASCII whitespace after compaction.
-    WhitespaceInPayload { byte: u8, payload_kind: PayloadKind },
     /// A payload attempted to contain syntax bytes such as `=`, `#`, `(`, or `)`.
     ReservedByteInPayload { byte: u8, payload_kind: PayloadKind },
     /// Left-side modifiers were duplicated or ordered outside the supported grammar.
@@ -847,10 +812,6 @@ impl fmt::Display for ParseErrorKind {
             Self::NonAsciiInCode { byte } => write!(f, "non-ASCII byte 0x{byte:02x} in code"),
             Self::MissingEquals => write!(f, "missing '='"),
             Self::MultipleEquals => write!(f, "multiple '=' characters are not allowed"),
-            Self::WhitespaceInPayload { byte, payload_kind } => write!(
-                f,
-                "whitespace byte 0x{byte:02x} cannot be represented as {payload_kind}",
-            ),
             Self::ReservedByteInPayload { byte, payload_kind } => write!(
                 f,
                 "reserved character '{}' cannot be represented as {payload_kind}",
@@ -1009,52 +970,158 @@ fn printable_ascii(byte: u8) -> char {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CompactByte {
+    byte: u8,
+    source_column: usize,
+}
+
+impl CompactByte {
+    const fn new(byte: u8, source_column: usize) -> Self {
+        Self {
+            byte,
+            source_column,
+        }
+    }
+
+    const fn as_u8(self) -> u8 {
+        self.byte
+    }
+
+    const fn source_column(self) -> usize {
+        self.source_column
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CodeLine<'source> {
+    line_number: usize,
+    bytes: &'source [u8],
+}
+
+impl<'source> CodeLine<'source> {
+    fn parse(raw_line: &'source [u8], line_number: usize) -> Result<Self, ParseError> {
+        let code_bytes = raw_line
+            .iter()
+            .position(|&byte| byte == b'#')
+            .and_then(|comment_start| raw_line.get(..comment_start))
+            .unwrap_or(raw_line);
+
+        if let Some((zero_based_column, byte)) = code_bytes
+            .iter()
+            .copied()
+            .enumerate()
+            .find(|(_, byte)| !byte.is_ascii())
+        {
+            return Err(ParseError::new(
+                line_number,
+                Some(zero_based_column + 1),
+                ParseErrorKind::NonAsciiInCode { byte },
+            ));
+        }
+
+        Ok(Self {
+            line_number,
+            bytes: code_bytes,
+        })
+    }
+
+    fn compact(self) -> CompactCodeLine {
+        let bytes = self
+            .bytes
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, byte)| !byte.is_ascii_whitespace())
+            .map(|(zero_based_column, byte)| CompactByte::new(byte, zero_based_column + 1))
+            .collect();
+
+        CompactCodeLine {
+            line_number: self.line_number,
+            bytes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompactCodeLine {
+    line_number: usize,
+    bytes: Vec<CompactByte>,
+}
+
+impl CompactCodeLine {
+    fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    fn compact_source(&self) -> Vec<u8> {
+        self.bytes.iter().copied().map(CompactByte::as_u8).collect()
+    }
+
+    fn equals_position(&self) -> Result<usize, ParseError> {
+        let Some(first_equals) = self.bytes.iter().position(|byte| byte.as_u8() == b'=') else {
+            return Err(ParseError::new(
+                self.line_number,
+                None,
+                ParseErrorKind::MissingEquals,
+            ));
+        };
+
+        if let Some(second_equals) = self
+            .bytes
+            .iter()
+            .skip(first_equals + 1)
+            .find(|byte| byte.as_u8() == b'=')
+            .copied()
+        {
+            return Err(ParseError::new(
+                self.line_number,
+                Some(second_equals.source_column()),
+                ParseErrorKind::MultipleEquals,
+            ));
+        }
+
+        Ok(first_equals)
+    }
+
+    fn split_at_equals(
+        &self,
+        equals_position: usize,
+    ) -> Result<(&[CompactByte], &[CompactByte]), ParseError> {
+        let (lhs, rhs_with_equals) = self.bytes.split_at(equals_position);
+
+        let Some(rhs) = rhs_with_equals.get(1..) else {
+            return Err(ParseError::new(
+                self.line_number,
+                None,
+                ParseErrorKind::MissingEquals,
+            ));
+        };
+
+        Ok((lhs, rhs))
+    }
+}
+
 fn parse_program_impl(source: &[u8]) -> Result<Program, ParseError> {
     let mut rules = Vec::new();
 
     for (zero_based_line, raw_line) in source.split(|&byte| byte == b'\n').enumerate() {
         let line_number = zero_based_line + 1;
-        let code_line = parse_code_line(raw_line, line_number)?;
-        let compact_code = strip_code_whitespace(&code_line);
+        let compact_code = CodeLine::parse(raw_line, line_number)?.compact();
 
         if compact_code.is_empty() {
             continue;
         }
 
-        let Some(equals_position) = compact_code.iter().position(|&byte| byte == b'=') else {
-            return Err(ParseError::new(
-                line_number,
-                None,
-                ParseErrorKind::MissingEquals,
-            ));
-        };
-
-        if compact_code
-            .iter()
-            .skip(equals_position + 1)
-            .any(|&byte| byte == b'=')
-        {
-            return Err(ParseError::new(
-                line_number,
-                None,
-                ParseErrorKind::MultipleEquals,
-            ));
-        }
-
-        let (lhs_code, rhs_with_equals) = compact_code.split_at(equals_position);
-        let Some((_, rhs_code)) = rhs_with_equals.split_first() else {
-            return Err(ParseError::new(
-                line_number,
-                None,
-                ParseErrorKind::MissingEquals,
-            ));
-        };
+        let equals_position = compact_code.equals_position()?;
+        let compact_source = compact_code.compact_source();
+        let (lhs_code, rhs_code) = compact_code.split_at_equals(equals_position)?;
         let (repeat, anchor, lhs) = parse_lhs(lhs_code, line_number)?;
         let action = parse_rhs(rhs_code, line_number)?;
 
         rules.push(Rule {
             line_number,
-            compact_source: compact_code,
+            compact_source,
             repeat,
             anchor,
             lhs,
@@ -1065,62 +1132,57 @@ fn parse_program_impl(source: &[u8]) -> Result<Program, ParseError> {
     Ok(Program { rules })
 }
 
-fn parse_code_line(raw_line: &[u8], line_number: usize) -> Result<Vec<u8>, ParseError> {
-    let code_bytes = raw_line
-        .iter()
-        .position(|&byte| byte == b'#')
-        .and_then(|comment_start| raw_line.get(..comment_start))
-        .unwrap_or(raw_line);
-
-    if let Some((zero_based_column, byte)) = code_bytes
-        .iter()
-        .copied()
-        .enumerate()
-        .find(|(_, byte)| !byte.is_ascii())
-    {
-        return Err(ParseError::new(
-            line_number,
-            Some(zero_based_column + 1),
-            ParseErrorKind::NonAsciiInCode { byte },
-        ));
+fn strip_token<'code>(input: &'code [CompactByte], token: &[u8]) -> Option<&'code [CompactByte]> {
+    if input.len() < token.len() {
+        return None;
     }
 
-    Ok(code_bytes.to_vec())
+    let starts_with_token = input
+        .iter()
+        .take(token.len())
+        .copied()
+        .map(CompactByte::as_u8)
+        .eq(token.iter().copied());
+
+    if starts_with_token {
+        input.get(token.len()..)
+    } else {
+        None
+    }
 }
 
-fn strip_code_whitespace(input: &[u8]) -> Vec<u8> {
-    input
-        .iter()
-        .copied()
-        .filter(|byte| !byte.is_ascii_whitespace())
-        .collect()
+fn starts_with_token(input: &[CompactByte], token: &[u8]) -> bool {
+    strip_token(input, token).is_some()
 }
 
 fn parse_lhs(
-    mut input: &[u8],
+    mut input: &[CompactByte],
     line_number: usize,
 ) -> Result<(RuleRepeat, Anchor, Payload), ParseError> {
     let mut repeat = RuleRepeat::Always;
 
-    if let Some(rest) = input.strip_prefix(TOK_ONCE) {
+    if let Some(rest) = strip_token(input, TOK_ONCE) {
         repeat = RuleRepeat::Once;
         input = rest;
     }
 
-    let anchor = if let Some(rest) = input.strip_prefix(TOK_START) {
+    let anchor = if let Some(rest) = strip_token(input, TOK_START) {
         input = rest;
         Anchor::Start
-    } else if let Some(rest) = input.strip_prefix(TOK_END) {
+    } else if let Some(rest) = strip_token(input, TOK_END) {
         input = rest;
         Anchor::End
     } else {
         Anchor::Anywhere
     };
 
-    if input.starts_with(TOK_ONCE) || input.starts_with(TOK_START) || input.starts_with(TOK_END) {
+    if starts_with_token(input, TOK_ONCE)
+        || starts_with_token(input, TOK_START)
+        || starts_with_token(input, TOK_END)
+    {
         return Err(ParseError::new(
             line_number,
-            None,
+            input.first().copied().map(CompactByte::source_column),
             ParseErrorKind::UnsupportedLeftModifierOrder,
         ));
     }
@@ -1129,14 +1191,14 @@ fn parse_lhs(
     Ok((repeat, anchor, lhs))
 }
 
-fn parse_rhs(input: &[u8], line_number: usize) -> Result<Action, ParseError> {
-    if let Some(rest) = input.strip_prefix(TOK_START) {
+fn parse_rhs(input: &[CompactByte], line_number: usize) -> Result<Action, ParseError> {
+    if let Some(rest) = strip_token(input, TOK_START) {
         let payload = Payload::parse(rest, line_number, PayloadKind::RightSideMoveStartPayload)?;
         Ok(Action::MoveStart(payload))
-    } else if let Some(rest) = input.strip_prefix(TOK_END) {
+    } else if let Some(rest) = strip_token(input, TOK_END) {
         let payload = Payload::parse(rest, line_number, PayloadKind::RightSideMoveEndPayload)?;
         Ok(Action::MoveEnd(payload))
-    } else if let Some(rest) = input.strip_prefix(TOK_RETURN) {
+    } else if let Some(rest) = strip_token(input, TOK_RETURN) {
         let payload = Payload::parse(rest, line_number, PayloadKind::RightSideReturnPayload)?;
         Ok(Action::Return(payload))
     } else {
@@ -1148,191 +1210,341 @@ fn parse_rhs(input: &[u8], line_number: usize) -> Result<Action, ParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::string::String;
+    use std::string::{FromUtf8Error, String};
 
-    fn run_source(source: &str, input: &str) -> String {
-        let program = Program::parse(source).unwrap();
-        let result = program
-            .run(input.as_bytes(), RunOptions::new(10_000))
-            .unwrap();
+    enum TestFailure {
+        Message(&'static str),
+        Parse(ParseError),
+        Run(RunError),
+        Aeb(AebError),
+        Utf8(FromUtf8Error),
+    }
 
-        String::from_utf8(result.into_output()).unwrap()
+    impl core::fmt::Debug for TestFailure {
+        fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            match self {
+                Self::Message(message) => formatter.debug_tuple("Message").field(message).finish(),
+                Self::Parse(error) => formatter.debug_tuple("Parse").field(error).finish(),
+                Self::Run(error) => formatter.debug_tuple("Run").field(error).finish(),
+                Self::Aeb(error) => formatter.debug_tuple("Aeb").field(error).finish(),
+                Self::Utf8(error) => formatter.debug_tuple("Utf8").field(error).finish(),
+            }
+        }
+    }
+
+    impl From<ParseError> for TestFailure {
+        fn from(value: ParseError) -> Self {
+            Self::Parse(value)
+        }
+    }
+
+    impl From<RunError> for TestFailure {
+        fn from(value: RunError) -> Self {
+            Self::Run(value)
+        }
+    }
+
+    impl From<AebError> for TestFailure {
+        fn from(value: AebError) -> Self {
+            Self::Aeb(value)
+        }
+    }
+
+    impl From<FromUtf8Error> for TestFailure {
+        fn from(value: FromUtf8Error) -> Self {
+            Self::Utf8(value)
+        }
+    }
+
+    type TestResult = Result<(), TestFailure>;
+
+    fn run_source(source: &str, input: &str) -> Result<String, TestFailure> {
+        let program = Program::parse(source)?;
+        let result = program.run(input.as_bytes(), RunOptions::new(10_000))?;
+        Ok(String::from_utf8(result.into_output())?)
+    }
+
+    fn expect_parse_error(source: &str) -> Result<ParseError, TestFailure> {
+        match Program::parse(source) {
+            Ok(_) => Err(TestFailure::Message("expected parse error")),
+            Err(error) => Ok(error),
+        }
+    }
+
+    fn expect_run_error(result: Result<RunResult, RunError>) -> Result<RunError, TestFailure> {
+        match result {
+            Ok(_) => Err(TestFailure::Message("expected runtime error")),
+            Err(error) => Ok(error),
+        }
+    }
+
+    fn expect_event(events: &[TraceEvent], index: usize) -> Result<&TraceEvent, TestFailure> {
+        events
+            .get(index)
+            .ok_or(TestFailure::Message("expected trace event"))
+    }
+
+    fn expect_rule(program: &Program, rule: RuleId) -> Result<RuleInfo<'_>, TestFailure> {
+        program
+            .rule(rule)
+            .ok_or(TestFailure::Message("expected rule metadata"))
+    }
+
+    fn expect_step_limit(error: RunError) -> Result<StepLimitError, TestFailure> {
+        match error {
+            RunError::StepLimit(error) => Ok(error),
+            RunError::Input(_) => Err(TestFailure::Message("expected step limit error")),
+        }
+    }
+
+    fn expect_input_error(error: RunError) -> Result<InputError, TestFailure> {
+        match error {
+            RunError::Input(error) => Ok(error),
+            RunError::StepLimit(_) => Err(TestFailure::Message("expected input error")),
+        }
     }
 
     #[test]
-    fn public_free_run_works() {
-        let result = run("a=b", b"a", RunOptions::default()).unwrap();
+    fn public_free_run_works() -> TestResult {
+        let result = run("a=b", b"a", RunOptions::default())?;
         assert_eq!(result.output(), b"b");
         assert_eq!(result.steps(), 1);
         assert!(!result.returned());
+        Ok(())
     }
 
     #[test]
-    fn parsed_program_is_reusable_and_once_state_is_per_run() {
-        let program = Program::parse("(once)a=b\na=c").unwrap();
+    fn parsed_program_is_reusable_and_once_state_is_per_run() -> TestResult {
+        let program = Program::parse("(once)a=b\na=c")?;
 
-        let first = program.run(b"aa", RunOptions::new(10_000)).unwrap();
-        let second = program.run(b"aa", RunOptions::new(10_000)).unwrap();
+        let first = program.run(b"aa", RunOptions::new(10_000))?;
+        let second = program.run(b"aa", RunOptions::new(10_000))?;
 
         assert_eq!(first.output(), b"bc");
         assert_eq!(second.output(), b"bc");
+        Ok(())
     }
 
     #[test]
-    fn trace_events_are_emitted_without_core_stderr() {
-        let program = Program::parse("a=b\nb=(return)ok").unwrap();
+    fn trace_events_are_emitted_without_core_stderr() -> TestResult {
+        let program = Program::parse("a=b\nb=(return)ok")?;
         let mut events = Vec::new();
-        let result = program
-            .run_with_trace(b"a", RunOptions::new(10_000), |event| events.push(event))
-            .unwrap();
+        let result = program.run_with_trace(b"a", RunOptions::new(10_000), |event| {
+            events.push(event);
+        })?;
 
         assert_eq!(result.output(), b"ok");
         assert!(result.returned());
         assert_eq!(events.len(), 3);
-        assert!(matches!(events[0], TraceEvent::Initial { .. }));
-        assert_eq!(events[0].bytes(), b"a");
-        assert_eq!(events[1].bytes(), b"b");
-        assert_eq!(events[2].bytes(), b"ok");
 
-        let TraceEvent::Step {
-            rule, line_number, ..
-        } = &events[1]
-        else {
-            panic!("expected step event");
-        };
-        assert_eq!(rule.index(), 0);
-        assert_eq!(*line_number, 1);
-        assert_eq!(program.rule(*rule).unwrap().compact_source(), b"a=b");
+        let initial = expect_event(&events, 0)?;
+        let first_step = expect_event(&events, 1)?;
+        let second_step = expect_event(&events, 2)?;
+
+        assert!(matches!(initial, TraceEvent::Initial { .. }));
+        assert_eq!(initial.bytes(), b"a");
+        assert_eq!(first_step.bytes(), b"b");
+        assert_eq!(second_step.bytes(), b"ok");
+
+        match first_step {
+            TraceEvent::Step {
+                rule, line_number, ..
+            } => {
+                assert_eq!(rule.index(), 0);
+                assert_eq!(*line_number, 1);
+                assert_eq!(expect_rule(&program, *rule)?.compact_source(), b"a=b");
+            }
+            TraceEvent::Initial { .. } => {
+                return Err(TestFailure::Message("expected step event"));
+            }
+        }
+
+        Ok(())
     }
 
     #[test]
-    fn rule_metadata_is_exposed_without_embedding_display_strings_in_trace_events() {
-        let program = Program::parse("a = b # comment\n(start)c=(end)d").unwrap();
+    fn rule_metadata_is_exposed_without_embedding_display_strings_in_trace_events() -> TestResult {
+        let program = Program::parse("a = b # comment\n(start)c=(end)d")?;
         let rules = program.rules().collect::<Vec<_>>();
 
         assert_eq!(rules.len(), 2);
-        assert_eq!(rules[0].id().index(), 0);
-        assert_eq!(rules[0].line_number(), 1);
-        assert_eq!(rules[0].compact_source(), b"a=b");
-        assert_eq!(rules[1].id().index(), 1);
-        assert_eq!(rules[1].line_number(), 2);
-        assert_eq!(rules[1].compact_source(), b"(start)c=(end)d");
+
+        let first = rules
+            .first()
+            .ok_or(TestFailure::Message("expected first rule"))?;
+        let second = rules
+            .get(1)
+            .ok_or(TestFailure::Message("expected second rule"))?;
+
+        assert_eq!(first.id().index(), 0);
+        assert_eq!(first.line_number(), 1);
+        assert_eq!(first.compact_source(), b"a=b");
+        assert_eq!(second.id().index(), 1);
+        assert_eq!(second.line_number(), 2);
+        assert_eq!(second.compact_source(), b"(start)c=(end)d");
+        Ok(())
     }
 
     #[test]
-    fn normal_replacement_is_ordered_and_leftmost() {
+    fn normal_replacement_is_ordered_and_leftmost() -> TestResult {
         let source = "aa=x\na=y";
-        assert_eq!(run_source(source, "aaaa"), "xx");
+        assert_eq!(run_source(source, "aaaa")?, "xx");
+        Ok(())
     }
 
     #[test]
-    fn start_anchor_matches_only_at_start() {
+    fn start_anchor_matches_only_at_start() -> TestResult {
         let source = "(start)a=x";
-        assert_eq!(run_source(source, "aba"), "xba");
-        assert_eq!(run_source(source, "ba"), "ba");
+        assert_eq!(run_source(source, "aba")?, "xba");
+        assert_eq!(run_source(source, "ba")?, "ba");
+        Ok(())
     }
 
     #[test]
-    fn end_anchor_matches_only_at_end() {
+    fn end_anchor_matches_only_at_end() -> TestResult {
         let source = "(end)a=x";
-        assert_eq!(run_source(source, "aba"), "abx");
-        assert_eq!(run_source(source, "ab"), "ab");
+        assert_eq!(run_source(source, "aba")?, "abx");
+        assert_eq!(run_source(source, "ab")?, "ab");
+        Ok(())
     }
 
     #[test]
-    fn runtime_continues_after_anchored_replacement() {
+    fn runtime_continues_after_anchored_replacement() -> TestResult {
         let source = "(start)a=x\na=y";
-        assert_eq!(run_source(source, "aba"), "xby");
+        assert_eq!(run_source(source, "aba")?, "xby");
 
         let source = "(end)a=x\na=y";
-        assert_eq!(run_source(source, "aba"), "ybx");
+        assert_eq!(run_source(source, "aba")?, "ybx");
+        Ok(())
     }
 
     #[test]
-    fn move_start_works() {
+    fn move_start_works() -> TestResult {
         let source = "a=(start)x";
-        assert_eq!(run_source(source, "ba"), "xb");
+        assert_eq!(run_source(source, "ba")?, "xb");
+        Ok(())
     }
 
     #[test]
-    fn move_end_works() {
+    fn move_end_works() -> TestResult {
         let source = "a=(end)x";
-        assert_eq!(run_source(source, "ba"), "bx");
+        assert_eq!(run_source(source, "ba")?, "bx");
+        Ok(())
     }
 
     #[test]
-    fn once_rule_is_used_at_most_once() {
+    fn empty_lhs_anywhere_matches_at_start() -> TestResult {
+        let source = "(once)=x\n(start)x=(return)ok";
+        let result = Program::parse(source)?.run(b"ab", RunOptions::new(2))?;
+
+        assert_eq!(result.output(), b"ok");
+        assert_eq!(result.steps(), 2);
+        assert!(result.returned());
+        Ok(())
+    }
+
+    #[test]
+    fn empty_lhs_start_and_end_anchors_pick_different_edges() -> TestResult {
+        let start_result =
+            Program::parse("(once)(start)=x\nxab=(return)start")?.run(b"ab", RunOptions::new(2))?;
+        let end_result =
+            Program::parse("(once)(end)=x\nabx=(return)end")?.run(b"ab", RunOptions::new(2))?;
+
+        assert_eq!(start_result.output(), b"start");
+        assert_eq!(end_result.output(), b"end");
+        Ok(())
+    }
+
+    #[test]
+    fn once_rule_is_used_at_most_once() -> TestResult {
         let source = "(once)a=b\na=c";
-        assert_eq!(run_source(source, "aa"), "bc");
+        assert_eq!(run_source(source, "aa")?, "bc");
+        Ok(())
     }
 
     #[test]
-    fn return_discards_current_state() {
+    fn return_discards_current_state() -> TestResult {
         let source = "aa=(return)ok\na=x";
-        assert_eq!(run_source(source, "aabb"), "ok");
+        assert_eq!(run_source(source, "aabb")?, "ok");
+        Ok(())
     }
 
     #[test]
-    fn empty_lhs_inserts_at_start() {
+    fn empty_lhs_inserts_at_start() -> TestResult {
         let source = "aaa=(return)a\n=a";
-        assert_eq!(run_source(source, ""), "a");
+        assert_eq!(run_source(source, "")?, "a");
+        Ok(())
     }
 
     #[test]
-    fn code_spaces_are_ignored_in_rules() {
-        assert_eq!(run_source("a b=bb", "abc"), "bbc");
-        assert_eq!(run_source("a = b", "a"), "b");
-        assert_eq!(run_source("( once ) a = ( end ) b", "ca"), "cb");
+    fn code_spaces_are_ignored_in_rules() -> TestResult {
+        assert_eq!(run_source("a b=bb", "abc")?, "bbc");
+        assert_eq!(run_source("a = b", "a")?, "b");
+        assert_eq!(run_source("( once ) a = ( end ) b", "ca")?, "cb");
+        Ok(())
     }
 
     #[test]
-    fn input_spaces_are_preserved_and_do_not_bridge_matches() {
-        assert_eq!(run_source("a= b", "a bc"), "b bc");
-        assert_eq!(run_source("a b=bb", "a bc"), "a bc");
-        assert_eq!(run_source("ab=bb", "a bc"), "a bc");
+    fn input_spaces_are_preserved_and_do_not_bridge_matches() -> TestResult {
+        assert_eq!(run_source("a= b", "a bc")?, "b bc");
+        assert_eq!(run_source("a b=bb", "a bc")?, "a bc");
+        assert_eq!(run_source("ab=bb", "a bc")?, "a bc");
+        Ok(())
     }
 
     #[test]
-    fn code_cannot_create_or_match_space_even_when_space_is_written_near_rules() {
-        assert_eq!(run_source("a= ", "a "), " ");
-        assert_eq!(run_source(" a = b ", "a"), "b");
+    fn code_cannot_create_or_match_space_even_when_space_is_written_near_rules() -> TestResult {
+        assert_eq!(run_source("a= ", "a ")?, " ");
+        assert_eq!(run_source(" a = b ", "a")?, "b");
+        Ok(())
     }
 
     #[test]
-    fn hash_starts_a_comment() {
-        assert_eq!(run_source("a=b#c", "a"), "b");
-        assert_eq!(run_source("#a=b", "a"), "a");
-        assert_eq!(run_source("a=b#コメント内の非ASCIIは許可", "a"), "b");
+    fn hash_starts_a_comment() -> TestResult {
+        assert_eq!(run_source("a=b#c", "a")?, "b");
+        assert_eq!(run_source("#a=b", "a")?, "a");
+        assert_eq!(run_source("a=b#コメント内の非ASCIIは許可", "a")?, "b");
+        Ok(())
     }
 
     #[test]
-    fn comments_may_contain_non_utf8_bytes_because_the_core_parser_is_byte_oriented() {
+    fn comments_may_contain_non_utf8_bytes_because_the_core_parser_is_byte_oriented() -> TestResult
+    {
         let source = b"a=b#\xff\xfe\n";
-        let program = Program::parse(source).unwrap();
-        let result = program.run(b"a", RunOptions::new(10_000)).unwrap();
+        let program = Program::parse(source)?;
+        let result = program.run(b"a", RunOptions::new(10_000))?;
         assert_eq!(result.output(), b"b");
+        Ok(())
     }
 
     #[test]
-    fn code_body_rejects_non_ascii_outside_comments() {
+    fn code_body_rejects_non_ascii_outside_comments() -> TestResult {
         assert!(Program::parse("a=あ").is_err());
         assert!(Program::parse("あ=b# comment").is_err());
         assert!(Program::parse("a=b#あ").is_ok());
 
-        let error = Program::parse("a=あ").unwrap_err();
+        let error = expect_parse_error("a=あ")?;
         assert_eq!(error.line(), 1);
         assert_eq!(error.column(), Some(3));
         assert!(matches!(
             error.kind(),
             ParseErrorKind::NonAsciiInCode { .. }
         ));
+        Ok(())
     }
 
     #[test]
-    fn second_equals_is_a_parse_error_unless_it_is_in_a_comment() {
-        let error = Program::parse("a=b=c").unwrap_err();
+    fn second_equals_is_a_parse_error_unless_it_is_in_a_comment() -> TestResult {
+        let error = expect_parse_error("a=b=c")?;
+        assert_eq!(error.column(), Some(4));
         assert!(matches!(error.kind(), ParseErrorKind::MultipleEquals));
+
+        let error = expect_parse_error("a=b =c")?;
+        assert_eq!(error.column(), Some(5));
+        assert!(matches!(error.kind(), ParseErrorKind::MultipleEquals));
+
         assert!(Program::parse("a=b#=c").is_ok());
+        Ok(())
     }
 
     #[test]
@@ -1357,75 +1569,121 @@ mod tests {
     }
 
     #[test]
-    fn invalid_left_modifier_order_is_structured() {
-        let error = Program::parse("(start)(once)a=b").unwrap_err();
+    fn reserved_payload_errors_report_original_source_column_after_compaction() -> TestResult {
+        let error = expect_parse_error("a = b (")?;
+        assert_eq!(error.column(), Some(7));
+        assert!(matches!(
+            error.kind(),
+            ParseErrorKind::ReservedByteInPayload {
+                payload_kind: PayloadKind::RightSideData,
+                ..
+            }
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_left_modifier_order_is_structured() -> TestResult {
+        let error = expect_parse_error("(start)(once)a=b")?;
         assert!(matches!(
             error.kind(),
             ParseErrorKind::UnsupportedLeftModifierOrder
         ));
+        Ok(())
     }
 
     #[test]
-    fn reserved_input_bytes_are_preserved_but_not_editable_from_code() {
-        assert_eq!(run_source("a=b", "a=()#c"), "b=()#c");
+    fn reserved_input_bytes_are_preserved_but_not_editable_from_code() -> TestResult {
+        assert_eq!(run_source("a=b", "a=()#c")?, "b=()#c");
         assert!(
-            Program::parse("a=b")
-                .unwrap()
+            Program::parse("a=b")?
                 .run("aあ".as_bytes(), RunOptions::default())
                 .is_err()
         );
+        Ok(())
     }
 
     #[test]
-    fn runtime_input_error_is_structured() {
-        let error = Program::parse("a=b")
-            .unwrap()
-            .run("aあ".as_bytes(), RunOptions::default())
-            .unwrap_err();
-
-        let RunError::Input(error) = error else {
-            panic!("expected input error");
-        };
+    fn runtime_input_error_is_structured() -> TestResult {
+        let error =
+            expect_run_error(Program::parse("a=b")?.run("aあ".as_bytes(), RunOptions::default()))?;
+        let error = expect_input_error(error)?;
 
         assert_eq!(error.column(), 2);
+        Ok(())
     }
 
     #[test]
-    fn runtime_state_can_hold_reserved_bytes_that_program_payloads_cannot_construct() {
-        let program = Program::parse("a=b").unwrap();
-        assert!(Payload::parse(b"=", 1, PayloadKind::RightSideData).is_err());
+    fn runtime_state_can_hold_reserved_bytes_that_program_payloads_cannot_construct() -> TestResult
+    {
+        let program = Program::parse("a=b")?;
+        assert!(Program::parse("a=(return)(").is_err());
+        assert!(Program::parse("a=b)").is_err());
 
-        let result = program.run(b"a=#()", RunOptions::new(10_000)).unwrap();
-        assert_eq!(String::from_utf8(result.into_output()).unwrap(), "b=#()");
+        let result = program.run(b"a=#()", RunOptions::new(10_000))?;
+        assert_eq!(String::from_utf8(result.into_output())?, "b=#()");
+        Ok(())
     }
 
     #[test]
-    fn step_limit_error_keeps_state_as_bytes() {
-        let error = Program::parse("=a")
-            .unwrap()
-            .run(b"", RunOptions::new(3))
-            .unwrap_err();
+    fn one_step_program_succeeds_at_exact_step_limit() -> TestResult {
+        let result = Program::parse("a=b")?.run(b"a", RunOptions::new(1))?;
 
-        let RunError::StepLimit(error) = error else {
-            panic!("expected step limit error");
-        };
+        assert_eq!(result.output(), b"b");
+        assert_eq!(result.steps(), 1);
+        assert!(!result.returned());
+        Ok(())
+    }
+
+    #[test]
+    fn return_program_succeeds_at_exact_step_limit() -> TestResult {
+        let result = Program::parse("a=(return)b")?.run(b"a", RunOptions::new(1))?;
+
+        assert_eq!(result.output(), b"b");
+        assert_eq!(result.steps(), 1);
+        assert!(result.returned());
+        Ok(())
+    }
+
+    #[test]
+    fn zero_step_limit_succeeds_when_no_rule_matches() -> TestResult {
+        let result = Program::parse("a=b")?.run(b"x", RunOptions::new(0))?;
+
+        assert_eq!(result.output(), b"x");
+        assert_eq!(result.steps(), 0);
+        assert!(!result.returned());
+        Ok(())
+    }
+
+    #[test]
+    fn zero_step_limit_fails_only_when_a_rule_would_apply() -> TestResult {
+        let error = expect_run_error(Program::parse("a=b")?.run(b"a", RunOptions::new(0)))?;
+        let error = expect_step_limit(error)?;
+
+        assert_eq!(error.max_steps(), 0);
+        assert_eq!(error.state(), b"a");
+        Ok(())
+    }
+
+    #[test]
+    fn step_limit_error_keeps_state_as_bytes() -> TestResult {
+        let error = expect_run_error(Program::parse("=a")?.run(b"", RunOptions::new(3)))?;
+        let error = expect_step_limit(error)?;
 
         assert_eq!(error.max_steps(), 3);
         assert_eq!(error.state(), b"aaa");
+        Ok(())
     }
 
     #[test]
-    fn palindrome_example_returns_true_or_false() {
+    fn palindrome_example_returns_true_or_false() -> TestResult {
         let source = "\
 b=a|a|
 c=a|aa|
-a|-=
---=(return)false
-(start)a|=(end)-
-(start)a=(end)|-
-=(return)true";
+a|-=\n--=(return)false\n(start)a|=(end)-\n(start)a=(end)|-\n=(return)true";
 
-        assert_eq!(run_source(source, "aba"), "true");
-        assert_eq!(run_source(source, "ab"), "false");
+        assert_eq!(run_source(source, "aba")?, "true");
+        assert_eq!(run_source(source, "ab")?, "false");
+        Ok(())
     }
 }

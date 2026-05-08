@@ -3,12 +3,5 @@
 version = 4
 
 [[package]]
-name = "a-eq-b-interpreter"
+name = "rsaeb"
 version = "0.1.0"
-
-[[package]]
-name = "aeb-cli"
-version = "0.1.0"
-dependencies = [
- "a-eq-b-interpreter",
-]

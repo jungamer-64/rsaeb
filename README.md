@@ -123,10 +123,11 @@ program.run_with_trace(b"a", RunOptions::new(10_000), |event| {
     }
 })?;
 
-let rule = program.rule(applied_rule.unwrap()).unwrap();
+let rule_id = applied_rule.ok_or("trace did not apply a rule")?;
+let rule = program.rule(rule_id).ok_or("missing rule metadata")?;
 assert_eq!(rule.line_number(), 1);
 assert_eq!(rule.compact_source(), b"a=b");
-# Ok::<(), rsaeb::AebError>(())
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 Public API surface:
@@ -146,6 +147,34 @@ Public API surface:
 - `RunError`: structured runtime failure.
 - `AebError`: one-shot `run` union of `ParseError` and `RunError`.
 
+## Step Limit Semantics
+
+`RunOptions::max_steps` is the maximum number of rewrite steps that may be
+applied successfully. A run that becomes stable exactly at the limit succeeds.
+The limit is an error only when another matching rule would need to be applied
+after that many steps.
+
+Examples:
+
+```rust
+use rsaeb::{Program, RunError, RunOptions};
+
+let exact = Program::parse("a=b")?
+    .run(b"a", RunOptions::new(1))?;
+assert_eq!(exact.output(), b"b");
+assert_eq!(exact.steps(), 1);
+
+let no_match = Program::parse("a=b")?
+    .run(b"x", RunOptions::new(0))?;
+assert_eq!(no_match.output(), b"x");
+assert_eq!(no_match.steps(), 0);
+
+let would_apply = Program::parse("a=b")?
+    .run(b"a", RunOptions::new(0));
+assert!(matches!(would_apply, Err(RunError::StepLimit(_))));
+# Ok::<(), rsaeb::AebError>(())
+```
+
 ## Program Format
 
 A program source is a byte sequence containing one rewrite rule per non-empty
@@ -163,6 +192,20 @@ Each line is parsed in this order:
 4. Empty compact code is ignored.
 5. Non-empty compact code must contain exactly one `=`.
 6. The left side and right side are parsed as compact rule syntax.
+
+Internally, the parser keeps these phases separate instead of passing a naked
+`Vec<u8>` through every stage:
+
+```text
+raw line bytes
+  -> CodeLine          # comment removed, code ASCII validated
+  -> CompactCodeLine   # whitespace removed, original source columns retained
+  -> Rule              # modifiers, anchors, payloads, and actions parsed
+```
+
+This keeps diagnostics tied to the original source columns even after whitespace
+compaction. For example, `a = b = c` reports the second `=` at its original
+source position, not at whatever column it happened to occupy after compaction.
 
 Examples:
 
@@ -315,14 +358,15 @@ The library error model is intentionally split:
 ```rust
 use rsaeb::{Program, RunError};
 
-let parse_error = Program::parse("a=b=c").unwrap_err();
-assert_eq!(parse_error.line(), 1);
+match Program::parse("a=b=c") {
+    Err(parse_error) => assert_eq!(parse_error.line(), 1),
+    Ok(_) => assert!(false, "expected parse error"),
+}
 
 let run_error = Program::parse("a=b")?
-    .run("aあ".as_bytes(), Default::default())
-    .unwrap_err();
+    .run("aあ".as_bytes(), Default::default());
 
-if let RunError::Input(input_error) = run_error {
+if let Err(RunError::Input(input_error)) = run_error {
     assert_eq!(input_error.column(), 2);
 }
 # Ok::<(), rsaeb::AebError>(())
