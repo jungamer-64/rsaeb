@@ -79,60 +79,76 @@ struct RunResult {
 }
 
 #[derive(Debug)]
-enum OsrError {
+enum AebError {
     Parse { line: usize, message: String },
+    Input { message: String },
     StepLimit { max_steps: usize, state: Vec<u8> },
     Io(std::io::Error),
 }
 
-impl fmt::Display for OsrError {
+impl fmt::Display for AebError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            OsrError::Parse { line, message } => {
+            AebError::Parse { line, message } => {
                 write!(f, "parse error at line {line}: {message}")
             }
-            OsrError::StepLimit { max_steps, state } => write!(
+            AebError::Input { message } => write!(f, "input error: {message}"),
+            AebError::StepLimit { max_steps, state } => write!(
                 f,
                 "step limit exceeded after {max_steps} steps; state: {}",
                 String::from_utf8_lossy(state),
             ),
-            OsrError::Io(error) => write!(f, "io error: {error}"),
+            AebError::Io(error) => write!(f, "io error: {error}"),
         }
     }
 }
 
-impl From<std::io::Error> for OsrError {
+impl From<std::io::Error> for AebError {
     fn from(value: std::io::Error) -> Self {
         Self::Io(value)
     }
 }
 
-fn parse_program(source: &str) -> Result<Program, OsrError> {
+fn parse_program(source: &str) -> Result<Program, AebError> {
     let mut rules = Vec::new();
 
     for (zero_based_line, raw_line) in source.lines().enumerate() {
         let line_number = zero_based_line + 1;
-        let line = raw_line.trim();
+        let code_line = parse_code_line(raw_line, line_number)?;
+        let code = strip_code_whitespace(&code_line);
 
-        if line.is_empty() {
+        if code.is_empty() {
             continue;
         }
 
-        let Some((lhs_raw, rhs_raw)) = line.split_once('=') else {
-            return Err(OsrError::Parse {
+        let equals_count = code.iter().filter(|&&byte| byte == b'=').count();
+
+        if equals_count == 0 {
+            return Err(AebError::Parse {
                 line: line_number,
                 message: "missing '='".to_string(),
             });
-        };
+        }
 
-        let lhs_code = strip_code_whitespace(lhs_raw.as_bytes());
-        let rhs_code = strip_code_whitespace(rhs_raw.as_bytes());
-        let (repeat, anchor, lhs) = parse_lhs(&lhs_code, line_number)?;
-        let action = parse_rhs(&rhs_code);
+        if equals_count > 1 {
+            return Err(AebError::Parse {
+                line: line_number,
+                message: "multiple '=' characters are not allowed".to_string(),
+            });
+        }
+
+        let equals_position = code
+            .iter()
+            .position(|&byte| byte == b'=')
+            .expect("equals_count checked above");
+        let lhs_code = &code[..equals_position];
+        let rhs_code = &code[equals_position + 1..];
+        let (repeat, anchor, lhs) = parse_lhs(lhs_code, line_number)?;
+        let action = parse_rhs(rhs_code, line_number)?;
 
         rules.push(Rule {
             line_number,
-            source: line.to_string(),
+            source: String::from_utf8_lossy(&code_line).trim().to_string(),
             repeat,
             anchor,
             lhs,
@@ -141,6 +157,31 @@ fn parse_program(source: &str) -> Result<Program, OsrError> {
     }
 
     Ok(Program { rules })
+}
+
+fn parse_code_line(raw_line: &str, line_number: usize) -> Result<Vec<u8>, AebError> {
+    let raw_bytes = raw_line.as_bytes();
+    let code_bytes = match raw_bytes.iter().position(|&byte| byte == b'#') {
+        Some(comment_start) => &raw_bytes[..comment_start],
+        None => raw_bytes,
+    };
+
+    if let Some((zero_based_column, byte)) = code_bytes
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, byte)| !byte.is_ascii())
+    {
+        return Err(AebError::Parse {
+            line: line_number,
+            message: format!(
+                "non-ASCII byte 0x{byte:02x} in code at column {}",
+                zero_based_column + 1,
+            ),
+        });
+    }
+
+    Ok(code_bytes.to_vec())
 }
 
 fn strip_code_whitespace(input: &[u8]) -> Vec<u8> {
@@ -154,7 +195,7 @@ fn strip_code_whitespace(input: &[u8]) -> Vec<u8> {
 fn parse_lhs(
     mut input: &[u8],
     line_number: usize,
-) -> Result<(RuleRepeat, Anchor, Vec<u8>), OsrError> {
+) -> Result<(RuleRepeat, Anchor, Vec<u8>), AebError> {
     let mut repeat = RuleRepeat::Always;
 
     if input.starts_with(TOK_ONCE) {
@@ -173,46 +214,95 @@ fn parse_lhs(
     };
 
     if input.starts_with(TOK_ONCE) || input.starts_with(TOK_START) || input.starts_with(TOK_END) {
-        return Err(OsrError::Parse {
+        return Err(AebError::Parse {
             line: line_number,
             message: "duplicated or unsupported left-side modifier order".to_string(),
         });
     }
 
+    reject_parentheses(input, line_number, "left-side data")?;
+
     Ok((repeat, anchor, input.to_vec()))
 }
 
-fn parse_rhs(input: &[u8]) -> Action {
+fn parse_rhs(input: &[u8], line_number: usize) -> Result<Action, AebError> {
     if input.starts_with(TOK_START) {
-        Action::MoveStart(input[TOK_START.len()..].to_vec())
+        let payload = &input[TOK_START.len()..];
+        reject_parentheses(payload, line_number, "right-side move-to-start payload")?;
+        Ok(Action::MoveStart(payload.to_vec()))
     } else if input.starts_with(TOK_END) {
-        Action::MoveEnd(input[TOK_END.len()..].to_vec())
+        let payload = &input[TOK_END.len()..];
+        reject_parentheses(payload, line_number, "right-side move-to-end payload")?;
+        Ok(Action::MoveEnd(payload.to_vec()))
     } else if input.starts_with(TOK_RETURN) {
-        Action::Return(input[TOK_RETURN.len()..].to_vec())
+        let payload = &input[TOK_RETURN.len()..];
+        reject_parentheses(payload, line_number, "right-side return payload")?;
+        Ok(Action::Return(payload.to_vec()))
     } else {
-        Action::Replace(input.to_vec())
+        reject_parentheses(input, line_number, "right-side data")?;
+        Ok(Action::Replace(input.to_vec()))
     }
 }
 
+fn reject_parentheses(input: &[u8], line_number: usize, context: &str) -> Result<(), AebError> {
+    if let Some((zero_based_column, byte)) = input
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, byte)| matches!(byte, b'(' | b')'))
+    {
+        return Err(AebError::Parse {
+            line: line_number,
+            message: format!(
+                "unsupported reserved parenthesis '{}' in {context} at compact column {}",
+                byte as char,
+                zero_based_column + 1,
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+fn validate_input(input: &[u8]) -> Result<(), AebError> {
+    if let Some((zero_based_column, byte)) = input
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, byte)| !byte.is_ascii())
+    {
+        return Err(AebError::Input {
+            message: format!(
+                "non-ASCII byte 0x{byte:02x} at column {}",
+                zero_based_column + 1,
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 impl<'program> Runtime<'program> {
-    fn new(program: &'program Program, input: &[u8], trace: bool) -> Self {
-        Self {
+    fn new(program: &'program Program, input: &[u8], trace: bool) -> Result<Self, AebError> {
+        validate_input(input)?;
+
+        Ok(Self {
             program,
             state: input.to_vec(),
             steps: 0,
             trace,
             rule_states: vec![RuntimeRuleState::Fresh; program.rules.len()].into_boxed_slice(),
-        }
+        })
     }
 
-    fn run(mut self, max_steps: usize) -> Result<RunResult, OsrError> {
+    fn run(mut self, max_steps: usize) -> Result<RunResult, AebError> {
         if self.trace {
             eprintln!("0: {}", String::from_utf8_lossy(&self.state));
         }
 
         loop {
             if self.steps >= max_steps {
-                return Err(OsrError::StepLimit {
+                return Err(AebError::StepLimit {
                     max_steps,
                     state: self.state,
                 });
@@ -416,7 +506,7 @@ fn parse_cli() -> Result<Cli, String> {
 }
 
 fn usage() -> String {
-    "usage: osr <program-file> [input] [--max-steps N] [--trace]".to_string()
+    "usage: aeb <program-file> [input] [--max-steps N] [--trace]".to_string()
 }
 
 fn main() {
@@ -431,7 +521,7 @@ fn main() {
     let source = match fs::read_to_string(&cli.program_path) {
         Ok(source) => source,
         Err(error) => {
-            eprintln!("{}", OsrError::Io(error));
+            eprintln!("{}", AebError::Io(error));
             process::exit(1);
         }
     };
@@ -444,7 +534,13 @@ fn main() {
         }
     };
 
-    let runtime = Runtime::new(&program, &cli.input, cli.trace);
+    let runtime = match Runtime::new(&program, &cli.input, cli.trace) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("{error}");
+            process::exit(2);
+        }
+    };
 
     match runtime.run(cli.max_steps) {
         Ok(result) => {
@@ -468,6 +564,7 @@ mod tests {
     fn run_source(source: &str, input: &str) -> String {
         let program = parse_program(source).unwrap();
         let result = Runtime::new(&program, input.as_bytes(), false)
+            .unwrap()
             .run(10_000)
             .unwrap();
 
@@ -526,8 +623,14 @@ mod tests {
         let source = "(once)a=b\na=c";
         let program = parse_program(source).unwrap();
 
-        let first = Runtime::new(&program, b"aa", false).run(10_000).unwrap();
-        let second = Runtime::new(&program, b"aa", false).run(10_000).unwrap();
+        let first = Runtime::new(&program, b"aa", false)
+            .unwrap()
+            .run(10_000)
+            .unwrap();
+        let second = Runtime::new(&program, b"aa", false)
+            .unwrap()
+            .run(10_000)
+            .unwrap();
 
         assert_eq!(String::from_utf8(first.output).unwrap(), "bc");
         assert_eq!(String::from_utf8(second.output).unwrap(), "bc");
@@ -557,6 +660,42 @@ mod tests {
         assert_eq!(run_source("a= b", "a bc"), "b bc");
         assert_eq!(run_source("a b=bb", "a bc"), "a bc");
         assert_eq!(run_source("ab=bb", "a bc"), "a bc");
+    }
+
+    #[test]
+    fn hash_starts_a_comment() {
+        assert_eq!(run_source("a=b#c", "a"), "b");
+        assert_eq!(run_source("#a=b", "a"), "a");
+        assert_eq!(run_source("a=b#コメント内の非ASCIIは許可", "a"), "b");
+    }
+
+    #[test]
+    fn code_body_rejects_non_ascii_outside_comments() {
+        assert!(parse_program("a=あ").is_err());
+        assert!(parse_program("あ=b# comment").is_err());
+        assert!(parse_program("a=b#あ").is_ok());
+    }
+
+    #[test]
+    fn second_equals_is_a_parse_error_unless_it_is_in_a_comment() {
+        assert!(parse_program("a=b=c").is_err());
+        assert!(parse_program("a=b#=c").is_ok());
+    }
+
+    #[test]
+    fn unsupported_parentheses_are_parse_errors() {
+        for source in ["a=b(", "a=b)", "a=b()", "a=()", "a=b(start)", "a=(once)b", "a(once)=b"] {
+            assert!(parse_program(source).is_err(), "source should fail: {source}");
+        }
+
+        assert!(parse_program("(once)(start)a=(end)b").is_ok());
+        assert!(parse_program("a=(return)").is_ok());
+    }
+
+    #[test]
+    fn reserved_input_bytes_are_preserved_but_not_editable_from_code() {
+        assert_eq!(run_source("a=b", "a=()#c"), "b=()#c");
+        assert!(Runtime::new(&parse_program("a=b").unwrap(), "aあ".as_bytes(), false).is_err());
     }
 
     #[test]

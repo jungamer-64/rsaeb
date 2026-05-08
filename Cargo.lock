@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "A-eq-B-interpretor"
+name = "a-eq-b-interpreter"
 version = "0.1.0"
