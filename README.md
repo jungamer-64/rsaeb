@@ -1,32 +1,23 @@
-# A=B Interpreter
+# A=B Interpreter Library
 
-A small Rust 2024 library and command-line interpreter for ordered `lhs=rhs`
-rewrite programs.
+A small Rust 2024 `no_std + alloc` library for ordered `lhs=rhs` rewrite
+programs.
 
 The important split is deliberately boring and strict: program code and runtime
 input are different domains. Program code is compact ASCII syntax. Runtime input
 is ASCII data. The interpreter preserves input bytes that the program syntax
 cannot write, such as spaces and reserved characters.
 
-
 ## `no_std` Library Boundary
 
 `src/lib.rs` is `#![no_std]` and uses `alloc` for owned buffers such as
 `Vec<u8>`, boxed per-run rule state, `RunResult`, trace events, and step-limit
 error state. This means the interpreter core does not depend on `std`, files,
-processes, stdout/stderr, environment variables, or OS error types. It still
-requires an allocator; this is `no_std + alloc`, not a fixed-capacity
-heapless interpreter. Because apparently asking a rewrite engine to grow and
-shrink byte strings without storage would be a small theological incident.
+processes, host I/O streams, environment variables, or OS error types. It still
+requires an allocator; this is `no_std + alloc`, not a fixed-capacity heapless
+interpreter.
 
-The command-line binary is a separate `std` package in `crates/aeb-cli`. Normal
-desktop usage goes through that package:
-
-```sh
-cargo run -p aeb-cli -- <program-file> [input] [--max-steps N] [--trace]
-```
-
-For embedded, WASM-core, kernel, or other non-`std` consumers, depend on the
+For embedded, WASM-core, kernel, or other non-`std` consumers, depend on this
 library package or build only the library target:
 
 ```sh
@@ -38,10 +29,10 @@ A downstream `std` application can use the library exactly the same way. A
 
 ## Library Usage
 
-This crate exposes the interpreter as a library. The binary is intentionally
-thin; filesystem reads, argument parsing, stdout/stderr formatting, and lossy
-output/state rendering all stay in the `aeb-cli` package. The library does not
-expose `std::io` errors, because the interpreter does not read files.
+This crate exposes only the parser, runtime, tracing data, and structured error
+types. External I/O and presentation formatting are outside the library
+boundary. The library does not expose `std::io` errors, because the interpreter
+does not read files.
 
 Basic one-shot execution:
 
@@ -83,7 +74,7 @@ assert_eq!(program.rule_count(), 1);
 # Ok::<(), rsaeb::ParseError>(())
 ```
 
-Trace output is library-owned data, not hard-coded stderr behavior:
+Trace output is library-owned data, not hard-coded side effects:
 
 ```rust
 use rsaeb::{Program, RunOptions, TraceEvent};
@@ -140,32 +131,10 @@ Public API surface:
 - `RunError`: structured runtime failure.
 - `AebError`: one-shot `run` union of `ParseError` and `RunError`.
 
-## CLI Usage
-
-Run through Cargo:
-
-```sh
-cargo run -p aeb-cli -- <program-file> [input] [--max-steps N] [--trace]
-```
-
-The binary usage is:
-
-```text
-usage: aeb <program-file> [input] [--max-steps N] [--trace]
-```
-
-Arguments:
-
-- `<program-file>`: path to the rewrite program.
-- `[input]`: optional initial input string. If omitted, the input is empty.
-- `--max-steps N`: maximum rewrite steps before execution fails. The default is
-  `1000000`.
-- `--trace`: print the initial state, each applied rule, and final execution
-  metadata to stderr.
-
 ## Program Format
 
-A program is a byte file containing one rewrite rule per non-empty code line:
+A program source is a byte sequence containing one rewrite rule per non-empty
+code line:
 
 ```text
 lhs=rhs
@@ -344,6 +313,5 @@ if let RunError::Input(input_error) = run_error {
 # Ok::<(), rsaeb::AebError>(())
 ```
 
-Filesystem failures are not part of the library error model. Read files in the
-application layer, then pass bytes into `Program::parse`. The CLI does exactly
-that.
+Filesystem failures are not part of the library error model. External I/O must
+be handled before bytes enter `Program::parse` or `run`.
