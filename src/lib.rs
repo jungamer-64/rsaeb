@@ -295,41 +295,73 @@ impl State {
             .then(|| StateMatch::new_unchecked(position, payload.len(), end))
     }
 
-    fn replace_at(&self, state_match: StateMatch, rhs: &Payload) -> Self {
-        let mut bytes = Vec::with_capacity(self.replaced_len(state_match, rhs));
+    fn replace_at(&self, state_match: StateMatch, rhs: &Payload) -> Result<Self, StateSizeError> {
+        let mut bytes = self.replacement_buffer(state_match, rhs)?;
         self.push_prefix(&mut bytes, state_match);
         bytes.extend(rhs.runtime_bytes());
         self.push_suffix(&mut bytes, state_match);
-        Self { bytes }
+        Ok(Self { bytes })
     }
 
-    fn move_start_at(&self, state_match: StateMatch, rhs: &Payload) -> Self {
-        let mut bytes = Vec::with_capacity(self.replaced_len(state_match, rhs));
+    fn move_start_at(
+        &self,
+        state_match: StateMatch,
+        rhs: &Payload,
+    ) -> Result<Self, StateSizeError> {
+        let mut bytes = self.replacement_buffer(state_match, rhs)?;
         bytes.extend(rhs.runtime_bytes());
         self.push_prefix(&mut bytes, state_match);
         self.push_suffix(&mut bytes, state_match);
-        Self { bytes }
+        Ok(Self { bytes })
     }
 
-    fn move_end_at(&self, state_match: StateMatch, rhs: &Payload) -> Self {
-        let mut bytes = Vec::with_capacity(self.replaced_len(state_match, rhs));
+    fn move_end_at(&self, state_match: StateMatch, rhs: &Payload) -> Result<Self, StateSizeError> {
+        let mut bytes = self.replacement_buffer(state_match, rhs)?;
         self.push_prefix(&mut bytes, state_match);
         self.push_suffix(&mut bytes, state_match);
         bytes.extend(rhs.runtime_bytes());
-        Self { bytes }
+        Ok(Self { bytes })
     }
 
-    fn apply_action(&self, state_match: StateMatch, action: &Action) -> RewriteEffect {
+    fn apply_action(
+        &self,
+        state_match: StateMatch,
+        action: &Action,
+    ) -> Result<RewriteEffect, StateSizeError> {
         match action {
-            Action::Replace(rhs) => RewriteEffect::Continue(self.replace_at(state_match, rhs)),
-            Action::MoveStart(rhs) => RewriteEffect::Continue(self.move_start_at(state_match, rhs)),
-            Action::MoveEnd(rhs) => RewriteEffect::Continue(self.move_end_at(state_match, rhs)),
-            Action::Return(output) => RewriteEffect::Return(output.to_vec_u8()),
+            Action::Replace(rhs) => Ok(RewriteEffect::Continue(self.replace_at(state_match, rhs)?)),
+            Action::MoveStart(rhs) => Ok(RewriteEffect::Continue(
+                self.move_start_at(state_match, rhs)?,
+            )),
+            Action::MoveEnd(rhs) => {
+                Ok(RewriteEffect::Continue(self.move_end_at(state_match, rhs)?))
+            }
+            Action::Return(output) => Ok(RewriteEffect::Return(output.to_vec_u8())),
         }
     }
 
-    fn replaced_len(&self, state_match: StateMatch, rhs: &Payload) -> usize {
-        self.len() - state_match.lhs_len() + rhs.len()
+    fn replaced_len(
+        &self,
+        state_match: StateMatch,
+        rhs: &Payload,
+    ) -> Result<usize, StateSizeError> {
+        self.len()
+            .checked_sub(state_match.lhs_len())
+            .and_then(|base| base.checked_add(rhs.len()))
+            .ok_or_else(|| StateSizeError::new(self.len(), state_match.lhs_len(), rhs.len()))
+    }
+
+    fn replacement_buffer(
+        &self,
+        state_match: StateMatch,
+        rhs: &Payload,
+    ) -> Result<Vec<RuntimeByte>, StateSizeError> {
+        let capacity = self.replaced_len(state_match, rhs)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(capacity)
+            .map_err(|_| StateSizeError::new(self.len(), state_match.lhs_len(), rhs.len()))?;
+        Ok(bytes)
     }
 
     fn push_prefix(&self, output: &mut Vec<RuntimeByte>, state_match: StateMatch) {
@@ -545,7 +577,7 @@ impl<'program> Runtime<'program> {
                 .into());
             }
 
-            if let Some(result) = self.apply_rule(matched, &mut trace) {
+            if let Some(result) = self.apply_rule(matched, &mut trace)? {
                 return Ok(result);
             }
         }
@@ -585,7 +617,7 @@ impl<'program> Runtime<'program> {
         &mut self,
         matched: MatchedRule<'program>,
         trace: &mut Option<F>,
-    ) -> Option<RunResult>
+    ) -> Result<Option<RunResult>, RunError>
     where
         F: FnMut(TraceEvent<'program>),
     {
@@ -595,7 +627,7 @@ impl<'program> Runtime<'program> {
         let rule_index = matched.rule_index;
         let effect = self
             .state
-            .apply_action(matched.state_match, &matched.rule.action);
+            .apply_action(matched.state_match, &matched.rule.action)?;
 
         self.steps += 1;
 
@@ -609,7 +641,7 @@ impl<'program> Runtime<'program> {
                 });
 
                 self.state = next_state;
-                None
+                Ok(None)
             }
             RewriteEffect::Return(output) => {
                 emit_trace(trace, || TraceEvent::Step {
@@ -619,11 +651,11 @@ impl<'program> Runtime<'program> {
                     returned: true,
                 });
 
-                Some(RunResult {
+                Ok(Some(RunResult {
                     output,
                     steps: self.steps,
                     returned: true,
-                })
+                }))
             }
         }
     }
@@ -698,7 +730,7 @@ pub enum TraceEvent<'program> {
     },
 }
 
-impl<'program> TraceEvent<'program> {
+impl TraceEvent<'_> {
     /// Output/state bytes carried by this event.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
@@ -854,6 +886,8 @@ impl fmt::Display for PayloadKind {
 pub enum RunError {
     /// Runtime input is invalid.
     Input(InputError),
+    /// A rewrite could not represent or reserve the next runtime state.
+    StateSize(StateSizeError),
     /// Execution exceeded the configured step limit.
     StepLimit(StepLimitError),
 }
@@ -862,6 +896,7 @@ impl fmt::Display for RunError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Input(error) => error.fmt(f),
+            Self::StateSize(error) => error.fmt(f),
             Self::StepLimit(error) => error.fmt(f),
         }
     }
@@ -871,6 +906,7 @@ impl Error for RunError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Input(error) => Some(error),
+            Self::StateSize(error) => Some(error),
             Self::StepLimit(error) => Some(error),
         }
     }
@@ -879,6 +915,12 @@ impl Error for RunError {
 impl From<InputError> for RunError {
     fn from(value: InputError) -> Self {
         Self::Input(value)
+    }
+}
+
+impl From<StateSizeError> for RunError {
+    fn from(value: StateSizeError) -> Self {
+        Self::StateSize(value)
     }
 }
 
@@ -920,6 +962,54 @@ impl fmt::Display for InputError {
 }
 
 impl Error for InputError {}
+
+/// Runtime state-size failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateSizeError {
+    state: usize,
+    lhs: usize,
+    rhs: usize,
+}
+
+impl StateSizeError {
+    const fn new(state_len: usize, lhs_len: usize, rhs_len: usize) -> Self {
+        Self {
+            state: state_len,
+            lhs: lhs_len,
+            rhs: rhs_len,
+        }
+    }
+
+    /// Runtime state length before the failing rewrite.
+    #[must_use]
+    pub const fn state_len(&self) -> usize {
+        self.state
+    }
+
+    /// Matched left-side length that would be removed.
+    #[must_use]
+    pub const fn lhs_len(&self) -> usize {
+        self.lhs
+    }
+
+    /// Right-side payload length that would be inserted.
+    #[must_use]
+    pub const fn rhs_len(&self) -> usize {
+        self.rhs
+    }
+}
+
+impl fmt::Display for StateSizeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "state size failure: replacing {} bytes in a {} byte state with {} bytes",
+            self.lhs, self.state, self.rhs,
+        )
+    }
+}
+
+impl Error for StateSizeError {}
 
 /// Step-limit failure with the last runtime state preserved as bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1299,14 +1389,18 @@ mod tests {
     fn expect_step_limit(error: RunError) -> Result<StepLimitError, TestFailure> {
         match error {
             RunError::StepLimit(error) => Ok(error),
-            RunError::Input(_) => Err(TestFailure::Message("expected step limit error")),
+            RunError::Input(_) | RunError::StateSize(_) => {
+                Err(TestFailure::Message("expected step limit error"))
+            }
         }
     }
 
     fn expect_input_error(error: RunError) -> Result<InputError, TestFailure> {
         match error {
             RunError::Input(error) => Ok(error),
-            RunError::StepLimit(_) => Err(TestFailure::Message("expected input error")),
+            RunError::StateSize(_) | RunError::StepLimit(_) => {
+                Err(TestFailure::Message("expected input error"))
+            }
         }
     }
 
@@ -1357,7 +1451,10 @@ mod tests {
                 assert_eq!(rule.index().as_usize(), 0);
                 assert_eq!(rule.line_number(), 1);
                 assert_eq!(rule.compact_source(), b"a=b");
-                assert_eq!(expect_rule(&program, rule.index())?.compact_source(), b"a=b");
+                assert_eq!(
+                    expect_rule(&program, rule.index())?.compact_source(),
+                    b"a=b"
+                );
             }
             TraceEvent::Initial { .. } => {
                 return Err(TestFailure::Message("expected step event"));
@@ -1471,6 +1568,15 @@ mod tests {
     fn return_discards_current_state() -> TestResult {
         let source = "aa=(return)ok\na=x";
         assert_eq!(run_source(source, "aabb")?, "ok");
+        Ok(())
+    }
+
+    #[test]
+    fn return_discards_runtime_only_bytes_explicitly() -> TestResult {
+        let result = Program::parse("a=(return)x")?.run(b"a=()#c", RunOptions::new(1))?;
+
+        assert_eq!(result.output(), b"x");
+        assert!(result.returned());
         Ok(())
     }
 
@@ -1699,8 +1805,7 @@ mod tests {
 
     #[test]
     fn zero_step_limit_blocks_return_rule_too() -> TestResult {
-        let error =
-            expect_run_error(Program::parse("a=(return)b")?.run(b"a", RunOptions::new(0)))?;
+        let error = expect_run_error(Program::parse("a=(return)b")?.run(b"a", RunOptions::new(0)))?;
         let error = expect_step_limit(error)?;
 
         assert_eq!(error.max_steps(), 0);

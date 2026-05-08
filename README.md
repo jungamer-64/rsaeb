@@ -20,8 +20,9 @@ If this interpreter interests you, please support the original game:
 
 The important split is deliberately boring and strict: program code and runtime
 input are different domains. Program code is compact ASCII syntax. Runtime input
-is ASCII data. The interpreter preserves input bytes that the program syntax
-cannot write, such as spaces and reserved characters.
+is ASCII data. Ordinary rewrites preserve input bytes that the program syntax
+cannot write, such as spaces and reserved characters, except when execution stops
+with `(return)`, which replaces the whole output with its return payload.
 
 ## `no_std` Library Boundary
 
@@ -196,8 +197,12 @@ Errors:
 - `PayloadKind`: identifies which payload rejected a reserved byte.
 - `RunError`: structured runtime failure.
 - `InputError`: runtime input validation failure.
+- `StateSizeError`: runtime state-size or reservation failure.
 - `InputError::column()`: one-based input column.
 - `InputError::byte()`: rejected input byte.
+- `StateSizeError::state_len()`: runtime state length before the failing rewrite.
+- `StateSizeError::lhs_len()`: matched left-side length that would be removed.
+- `StateSizeError::rhs_len()`: right-side payload length that would be inserted.
 - `StepLimitError`: step-limit failure with preserved runtime state.
 - `StepLimitError::max_steps()`: configured limit.
 - `StepLimitError::state()`: borrow state bytes at the limit.
@@ -351,10 +356,10 @@ rule data. Because `=`, `#`, `(`, and `)` are reserved, they also cannot be
 represented as rule data.
 
 The input is different. Input bytes are runtime data, not program code. Input
-must be ASCII, but it may contain whitespace and reserved characters. Rules
-cannot match, create, or delete those bytes directly. The bytes themselves remain
-runtime data, although nearby editable bytes may be inserted, removed, or moved
-by ordinary rewrites.
+must be ASCII, but it may contain whitespace and reserved characters. Ordinary
+rewrite actions cannot match, create, or delete those bytes directly. The bytes
+themselves remain runtime data, although nearby editable bytes may be inserted,
+removed, or moved.
 
 Example:
 
@@ -370,6 +375,16 @@ Rules also cannot match across preserved runtime-only bytes:
 program: ab=bb
 input:   a bc
 output:  a bc
+```
+
+`(return)` is intentionally different from ordinary rewrite actions. It stops
+execution and replaces the final output with the return payload, so runtime-only
+input bytes are not preserved after a matching return rule:
+
+```text
+program: a=(return)x
+input:   a=()#c
+output:  x
 ```
 
 ## Left-Side Modifiers
@@ -407,10 +422,13 @@ The right side selects the action for a matching rule:
 - `text`: replace the matched left side with `text`.
 - `(start)text`: remove the match and insert `text` at the start of the state.
 - `(end)text`: remove the match and append `text` to the end of the state.
-- `(return)text`: stop execution immediately and output `text`.
+- `(return)text`: stop execution immediately and output `text`, discarding the
+  current runtime state.
 
 The action payload is still program data, so it cannot contain whitespace,
-reserved characters, or non-ASCII bytes.
+reserved characters, or non-ASCII bytes. `(return)` can therefore output only
+program-representable bytes, even if the discarded runtime state contained
+spaces or reserved characters from the original input.
 
 Examples:
 
@@ -470,6 +488,9 @@ fn main() -> Result<(), rsaeb::AebError> {
     if let Err(RunError::Input(input_error)) = run_error {
         assert_eq!(input_error.column(), 2);
     }
+
+    // Very large rewrite states are reported as RunError::StateSize instead of
+    // relying on unchecked length arithmetic or unchecked output reservation.
 
     Ok(())
 }
