@@ -1,12 +1,79 @@
 # A=B Interpreter
 
-A small Rust 2024 command-line interpreter for ordered `lhs=rhs` rewrite
-programs.
+A small Rust 2024 library and command-line interpreter for ordered `lhs=rhs`
+rewrite programs.
 
 The important rule is simple: program code and runtime input are different
 things. Program code is compact ASCII syntax. Runtime input is ASCII data. The
 interpreter preserves input bytes that the program syntax cannot write, such as
 spaces and reserved characters.
+
+## Library Usage
+
+This crate now exposes the interpreter as a library. The binary is intentionally
+thin; parsing, execution, result ownership, errors, and tracing live in
+`src/lib.rs`.
+
+Basic one-shot execution:
+
+```rust
+use rsaeb::{run, RunOptions};
+
+let result = run("a=b", b"a", RunOptions::default())?;
+assert_eq!(result.output(), b"b");
+# Ok::<(), rsaeb::AebError>(())
+```
+
+Reusable parsed program:
+
+```rust
+use rsaeb::{Program, RunOptions};
+
+let program = Program::parse("(once)a=b\na=c")?;
+
+let first = program.run(b"aa", RunOptions::new(10_000))?;
+let second = program.run(b"aa", RunOptions::new(10_000))?;
+
+assert_eq!(first.output(), b"bc");
+assert_eq!(second.output(), b"bc");
+# Ok::<(), rsaeb::AebError>(())
+```
+
+`(once)` consumption is runtime-local. Reusing `Program` is safe because parsed
+programs are immutable; each run owns its own rule state. Shocking development:
+global mutable interpreter state was not required after all.
+
+Trace output is also library-owned data, not hard-coded stderr behavior:
+
+```rust
+use rsaeb::{Program, RunOptions, TraceEvent};
+
+let program = Program::parse("a=b\nb=(return)ok")?;
+let mut events = Vec::new();
+let result = program.run_with_trace(
+    b"a",
+    RunOptions::new(10_000),
+    |event: TraceEvent| events.push(event),
+)?;
+
+assert_eq!(result.output(), b"ok");
+assert!(result.returned());
+assert_eq!(events.len(), 3);
+# Ok::<(), rsaeb::AebError>(())
+```
+
+Public API surface:
+
+- `Program::parse(source)`: parse a reusable program.
+- `Program::run(input, options)`: execute without tracing.
+- `Program::run_with_trace(input, options, callback)`: execute and receive
+  trace events.
+- `run(source, input, options)`: one-shot parse and execute helper.
+- `RunOptions`: currently holds the step limit.
+- `RunResult`: owns output bytes plus `steps` and `returned` metadata.
+- `AebError`: parse, input, step-limit, and optional I/O error reporting.
+
+The CLI remains available as `aeb` and uses the same public library API.
 
 ## Usage
 
@@ -267,13 +334,16 @@ the state at the limit.
 
 The implementation intentionally separates the byte domains:
 
-- `CodeByte`: bytes that may exist as rule payload data. Reserved characters,
-  whitespace, and non-ASCII bytes are impossible to construct through the parser.
-- `Payload`: a sequence of `CodeByte`, used for rule left sides and right-side
-  payloads.
-- `RuntimeByte`: any ASCII input/runtime byte. This includes spaces and reserved
-  characters.
-- `State`: a sequence of `RuntimeByte`, used for execution state and final output.
+- `CodeByte`: private bytes that may exist as rule payload data. Reserved
+  characters, whitespace, and non-ASCII bytes are impossible to construct through
+  the parser.
+- `Payload`: a private sequence of `CodeByte`, used for rule left sides and
+  right-side payloads.
+- `RuntimeByte`: private ASCII input/runtime byte. This includes spaces and
+  reserved characters.
+- `State`: private runtime state.
+- `Program`, `RunOptions`, `RunResult`, `TraceEvent`, and `AebError`: the public
+  library boundary.
 
 So a rule payload cannot accidentally contain `=`, `#`, `(`, `)`, whitespace, or
 non-ASCII data. Runtime state can still hold those ASCII bytes when they came
@@ -283,15 +353,17 @@ byte swamp. Humanity has enough swamps.
 
 ## Development Checks
 
-Run tests with:
+Run checks with:
 
 ```sh
+cargo fmt
 cargo test
+cargo run -- examples/basic.ab aaa
 ```
 
 Useful source searches:
 
 ```sh
-rg "Vec<u8>|CodeByte|RuntimeByte|Payload|State" src README.md
+rg "Vec<u8>|CodeByte|RuntimeByte|Payload|State|RunResult|TraceEvent" src README.md
 rg "reserved|whitespace|non-ASCII|multiple '='|parentheses" src README.md
 ```
