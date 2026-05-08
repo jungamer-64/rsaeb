@@ -125,8 +125,10 @@ fn parse_program(source: &str) -> Result<Program, OsrError> {
             });
         };
 
-        let (repeat, anchor, lhs) = parse_lhs(lhs_raw.as_bytes(), line_number)?;
-        let action = parse_rhs(rhs_raw.as_bytes());
+        let lhs_code = strip_code_whitespace(lhs_raw.as_bytes());
+        let rhs_code = strip_code_whitespace(rhs_raw.as_bytes());
+        let (repeat, anchor, lhs) = parse_lhs(&lhs_code, line_number)?;
+        let action = parse_rhs(&rhs_code);
 
         rules.push(Rule {
             line_number,
@@ -139,6 +141,14 @@ fn parse_program(source: &str) -> Result<Program, OsrError> {
     }
 
     Ok(Program { rules })
+}
+
+fn strip_code_whitespace(input: &[u8]) -> Vec<u8> {
+    input
+        .iter()
+        .copied()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect()
 }
 
 fn parse_lhs(
@@ -533,6 +543,20 @@ mod tests {
     fn empty_lhs_inserts_at_start() {
         let source = "aaa=(return)a\n=a";
         assert_eq!(run_source(source, ""), "a");
+    }
+
+    #[test]
+    fn code_spaces_are_ignored_in_rules() {
+        assert_eq!(run_source("a b=bb", "abc"), "bbc");
+        assert_eq!(run_source("a = b", "a"), "b");
+        assert_eq!(run_source("( once ) a = ( end ) b", "ca"), "cb");
+    }
+
+    #[test]
+    fn input_spaces_are_preserved_and_do_not_bridge_matches() {
+        assert_eq!(run_source("a= b", "a bc"), "b bc");
+        assert_eq!(run_source("a b=bb", "a bc"), "a bc");
+        assert_eq!(run_source("ab=bb", "a bc"), "a bc");
     }
 
     #[test]
