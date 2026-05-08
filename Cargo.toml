@@ -1,11 +1,7 @@
 [package]
-name = "a-eq-b-interpreter"
+name = "rsaeb"
 version = "0.1.0"
 edition = "2024"
-
-[workspace]
-members = ["crates/aeb-cli"]
-resolver = "3"
 
 [lib]
 name = "rsaeb"
