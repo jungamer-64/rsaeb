@@ -272,75 +272,70 @@ impl State {
         self.bytes.len()
     }
 
-    fn starts_with_payload(&self, payload: &Payload) -> bool {
-        if payload.len() > self.len() {
-            return false;
-        }
-
-        self.bytes
-            .iter()
-            .copied()
-            .zip(payload.iter())
-            .take(payload.len())
-            .all(|(state_byte, payload_byte)| state_byte.as_u8() == payload_byte.as_u8())
+    fn starts_with_payload(&self, payload: &Payload) -> Option<StateMatch> {
+        self.matches_payload_at(0, payload)
     }
 
-    fn ends_with_payload(&self, payload: &Payload) -> bool {
-        if payload.len() > self.len() {
-            return false;
-        }
-
-        let start = self.len() - payload.len();
+    fn ends_with_payload(&self, payload: &Payload) -> Option<StateMatch> {
+        let start = self.len().checked_sub(payload.len())?;
         self.matches_payload_at(start, payload)
     }
 
-    fn find_payload(&self, payload: &Payload) -> Option<usize> {
+    fn find_payload(&self, payload: &Payload) -> Option<StateMatch> {
         if payload.is_empty() {
-            return Some(0);
+            return StateMatch::new(self.len(), 0, 0);
         }
 
-        if payload.len() > self.len() {
-            return None;
-        }
-
-        (0..=self.len() - payload.len())
-            .find(|&position| self.matches_payload_at(position, payload))
+        let last_start = self.len().checked_sub(payload.len())?;
+        (0..=last_start).find_map(|position| self.matches_payload_at(position, payload))
     }
 
-    fn matches_payload_at(&self, position: usize, payload: &Payload) -> bool {
-        if position + payload.len() > self.len() {
-            return false;
-        }
+    fn matches_payload_at(&self, position: usize, payload: &Payload) -> Option<StateMatch> {
+        let end = position.checked_add(payload.len())?;
+        let window = self.bytes.get(position..end)?;
 
-        self.bytes[position..position + payload.len()]
+        window
             .iter()
             .copied()
             .zip(payload.iter())
             .all(|(state_byte, payload_byte)| state_byte.as_u8() == payload_byte.as_u8())
+            .then(|| StateMatch::new_unchecked(position, payload.len(), end))
     }
 
-    fn replace_at(&self, position: usize, lhs_len: usize, rhs: &Payload) -> Self {
-        let mut bytes = Vec::with_capacity(self.len() - lhs_len + rhs.len());
-        bytes.extend_from_slice(&self.bytes[..position]);
+    fn replace_at(&self, state_match: StateMatch, rhs: &Payload) -> Self {
+        let mut bytes = Vec::with_capacity(self.replaced_len(state_match, rhs));
+        self.push_prefix(&mut bytes, state_match);
         bytes.extend(rhs.to_runtime_bytes());
-        bytes.extend_from_slice(&self.bytes[position + lhs_len..]);
+        self.push_suffix(&mut bytes, state_match);
         Self { bytes }
     }
 
-    fn move_start_at(&self, position: usize, lhs_len: usize, rhs: &Payload) -> Self {
-        let mut bytes = Vec::with_capacity(self.len() - lhs_len + rhs.len());
+    fn move_start_at(&self, state_match: StateMatch, rhs: &Payload) -> Self {
+        let mut bytes = Vec::with_capacity(self.replaced_len(state_match, rhs));
         bytes.extend(rhs.to_runtime_bytes());
-        bytes.extend_from_slice(&self.bytes[..position]);
-        bytes.extend_from_slice(&self.bytes[position + lhs_len..]);
+        self.push_prefix(&mut bytes, state_match);
+        self.push_suffix(&mut bytes, state_match);
         Self { bytes }
     }
 
-    fn move_end_at(&self, position: usize, lhs_len: usize, rhs: &Payload) -> Self {
-        let mut bytes = Vec::with_capacity(self.len() - lhs_len + rhs.len());
-        bytes.extend_from_slice(&self.bytes[..position]);
-        bytes.extend_from_slice(&self.bytes[position + lhs_len..]);
+    fn move_end_at(&self, state_match: StateMatch, rhs: &Payload) -> Self {
+        let mut bytes = Vec::with_capacity(self.replaced_len(state_match, rhs));
+        self.push_prefix(&mut bytes, state_match);
+        self.push_suffix(&mut bytes, state_match);
         bytes.extend(rhs.to_runtime_bytes());
         Self { bytes }
+    }
+
+    fn replaced_len(&self, state_match: StateMatch, rhs: &Payload) -> usize {
+        self.len() - state_match.lhs_len() + rhs.len()
+    }
+
+    fn push_prefix(&self, output: &mut Vec<RuntimeByte>, state_match: StateMatch) {
+        output.extend(self.bytes.iter().take(state_match.position()).copied());
+    }
+
+    fn push_suffix(&self, output: &mut Vec<RuntimeByte>, state_match: StateMatch) {
+        output.extend(self.bytes.iter().skip(state_match.end()).copied());
     }
 
     fn to_vec_u8(&self) -> Vec<u8> {
@@ -349,6 +344,41 @@ impl State {
 
     fn into_vec_u8(self) -> Vec<u8> {
         self.bytes.into_iter().map(RuntimeByte::as_u8).collect()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StateMatch {
+    position: usize,
+    lhs_len: usize,
+    end: usize,
+}
+
+impl StateMatch {
+    fn new(state_len: usize, position: usize, lhs_len: usize) -> Option<Self> {
+        let end = position.checked_add(lhs_len)?;
+        (position <= state_len && end <= state_len)
+            .then(|| Self::new_unchecked(position, lhs_len, end))
+    }
+
+    const fn new_unchecked(position: usize, lhs_len: usize, end: usize) -> Self {
+        Self {
+            position,
+            lhs_len,
+            end,
+        }
+    }
+
+    const fn position(self) -> usize {
+        self.position
+    }
+
+    const fn lhs_len(self) -> usize {
+        self.lhs_len
+    }
+
+    const fn end(self) -> usize {
+        self.end
     }
 }
 
@@ -444,6 +474,13 @@ impl Program {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MatchedRule<'program> {
+    rule_id: RuleId,
+    rule: &'program Rule,
+    state_match: StateMatch,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Runtime<'program> {
     program: &'program Program,
@@ -493,7 +530,7 @@ impl<'program> Runtime<'program> {
                 .into());
             }
 
-            let Some((rule_index, position)) = self.find_next_match() else {
+            let Some(matched) = self.find_next_match() else {
                 return Ok(RunResult {
                     output: self.state.into_vec_u8(),
                     steps: self.steps,
@@ -501,56 +538,59 @@ impl<'program> Runtime<'program> {
                 });
             };
 
-            if let Some(result) = self.apply_rule(rule_index, position, &mut trace) {
+            if let Some(result) = self.apply_rule(matched, &mut trace) {
                 return Ok(result);
             }
         }
     }
 
-    fn find_next_match(&self) -> Option<(usize, usize)> {
-        for (rule_index, rule) in self.program.rules.iter().enumerate() {
-            if self.is_rule_consumed(rule_index, rule) {
-                continue;
-            }
+    fn find_next_match(&self) -> Option<MatchedRule<'program>> {
+        let rules: &'program [Rule] = &self.program.rules;
 
-            if let Some(position) = find_match(&self.state, rule) {
-                return Some((rule_index, position));
-            }
+        rules
+            .iter()
+            .zip(self.rule_states.iter())
+            .enumerate()
+            .find_map(|(rule_index, (rule, state))| {
+                if rule.repeat.is_once() && state.is_consumed() {
+                    return None;
+                }
+
+                find_match(&self.state, rule).map(|state_match| MatchedRule {
+                    rule_id: RuleId(rule_index),
+                    rule,
+                    state_match,
+                })
+            })
+    }
+
+    fn consume_rule_if_needed(&mut self, matched: MatchedRule<'_>) {
+        if !matched.rule.repeat.is_once() {
+            return;
         }
 
-        None
-    }
-
-    fn is_rule_consumed(&self, rule_index: usize, rule: &Rule) -> bool {
-        rule.repeat.is_once() && self.rule_states[rule_index].is_consumed()
-    }
-
-    fn consume_rule_if_needed(&mut self, rule_index: usize) {
-        let rule = &self.program.rules[rule_index];
-
-        if rule.repeat.is_once() {
-            self.rule_states[rule_index] = RuntimeRuleState::Consumed;
+        if let Some(state) = self.rule_states.get_mut(matched.rule_id.index()) {
+            *state = RuntimeRuleState::Consumed;
         }
     }
 
     fn apply_rule<F>(
         &mut self,
-        rule_index: usize,
-        position: usize,
+        matched: MatchedRule<'program>,
         trace: &mut Option<F>,
     ) -> Option<RunResult>
     where
         F: FnMut(TraceEvent),
     {
-        self.consume_rule_if_needed(rule_index);
+        self.consume_rule_if_needed(matched);
 
-        let rule = &self.program.rules[rule_index];
-        let rule_id = RuleId(rule_index);
-        let lhs_len = rule.lhs.len();
+        let rule = matched.rule;
+        let rule_id = matched.rule_id;
+        let state_match = matched.state_match;
 
         match &rule.action {
             Action::Replace(rhs) => {
-                self.state = self.state.replace_at(position, lhs_len, rhs);
+                self.state = self.state.replace_at(state_match, rhs);
                 self.steps += 1;
 
                 emit_trace(
@@ -565,7 +605,7 @@ impl<'program> Runtime<'program> {
                 );
             }
             Action::MoveStart(rhs) => {
-                self.state = self.state.move_start_at(position, lhs_len, rhs);
+                self.state = self.state.move_start_at(state_match, rhs);
                 self.steps += 1;
 
                 emit_trace(
@@ -580,7 +620,7 @@ impl<'program> Runtime<'program> {
                 );
             }
             Action::MoveEnd(rhs) => {
-                self.state = self.state.move_end_at(position, lhs_len, rhs);
+                self.state = self.state.move_end_at(state_match, rhs);
                 self.steps += 1;
 
                 emit_trace(
@@ -630,17 +670,11 @@ where
     }
 }
 
-fn find_match(state: &State, rule: &Rule) -> Option<usize> {
+fn find_match(state: &State, rule: &Rule) -> Option<StateMatch> {
     match rule.anchor {
         Anchor::Anywhere => state.find_payload(&rule.lhs),
-        Anchor::Start => state.starts_with_payload(&rule.lhs).then_some(0),
-        Anchor::End => {
-            if state.ends_with_payload(&rule.lhs) {
-                Some(state.len().saturating_sub(rule.lhs.len()))
-            } else {
-                None
-            }
-        }
+        Anchor::Start => state.starts_with_payload(&rule.lhs),
+        Anchor::End => state.ends_with_payload(&rule.lhs),
     }
 }
 
@@ -987,17 +1021,19 @@ fn parse_program_impl(source: &[u8]) -> Result<Program, ParseError> {
             continue;
         }
 
-        let equals_count = compact_code.iter().filter(|&&byte| byte == b'=').count();
-
-        if equals_count == 0 {
+        let Some(equals_position) = compact_code.iter().position(|&byte| byte == b'=') else {
             return Err(ParseError::new(
                 line_number,
                 None,
                 ParseErrorKind::MissingEquals,
             ));
-        }
+        };
 
-        if equals_count > 1 {
+        if compact_code
+            .iter()
+            .skip(equals_position + 1)
+            .any(|&byte| byte == b'=')
+        {
             return Err(ParseError::new(
                 line_number,
                 None,
@@ -1005,12 +1041,14 @@ fn parse_program_impl(source: &[u8]) -> Result<Program, ParseError> {
             ));
         }
 
-        let equals_position = compact_code
-            .iter()
-            .position(|&byte| byte == b'=')
-            .expect("equals_count checked above");
-        let lhs_code = &compact_code[..equals_position];
-        let rhs_code = &compact_code[equals_position + 1..];
+        let (lhs_code, rhs_with_equals) = compact_code.split_at(equals_position);
+        let Some((_, rhs_code)) = rhs_with_equals.split_first() else {
+            return Err(ParseError::new(
+                line_number,
+                None,
+                ParseErrorKind::MissingEquals,
+            ));
+        };
         let (repeat, anchor, lhs) = parse_lhs(lhs_code, line_number)?;
         let action = parse_rhs(rhs_code, line_number)?;
 
@@ -1028,10 +1066,11 @@ fn parse_program_impl(source: &[u8]) -> Result<Program, ParseError> {
 }
 
 fn parse_code_line(raw_line: &[u8], line_number: usize) -> Result<Vec<u8>, ParseError> {
-    let code_bytes = match raw_line.iter().position(|&byte| byte == b'#') {
-        Some(comment_start) => &raw_line[..comment_start],
-        None => raw_line,
-    };
+    let code_bytes = raw_line
+        .iter()
+        .position(|&byte| byte == b'#')
+        .and_then(|comment_start| raw_line.get(..comment_start))
+        .unwrap_or(raw_line);
 
     if let Some((zero_based_column, byte)) = code_bytes
         .iter()
@@ -1063,16 +1102,16 @@ fn parse_lhs(
 ) -> Result<(RuleRepeat, Anchor, Payload), ParseError> {
     let mut repeat = RuleRepeat::Always;
 
-    if input.starts_with(TOK_ONCE) {
+    if let Some(rest) = input.strip_prefix(TOK_ONCE) {
         repeat = RuleRepeat::Once;
-        input = &input[TOK_ONCE.len()..];
+        input = rest;
     }
 
-    let anchor = if input.starts_with(TOK_START) {
-        input = &input[TOK_START.len()..];
+    let anchor = if let Some(rest) = input.strip_prefix(TOK_START) {
+        input = rest;
         Anchor::Start
-    } else if input.starts_with(TOK_END) {
-        input = &input[TOK_END.len()..];
+    } else if let Some(rest) = input.strip_prefix(TOK_END) {
+        input = rest;
         Anchor::End
     } else {
         Anchor::Anywhere
@@ -1091,26 +1130,14 @@ fn parse_lhs(
 }
 
 fn parse_rhs(input: &[u8], line_number: usize) -> Result<Action, ParseError> {
-    if input.starts_with(TOK_START) {
-        let payload = Payload::parse(
-            &input[TOK_START.len()..],
-            line_number,
-            PayloadKind::RightSideMoveStartPayload,
-        )?;
+    if let Some(rest) = input.strip_prefix(TOK_START) {
+        let payload = Payload::parse(rest, line_number, PayloadKind::RightSideMoveStartPayload)?;
         Ok(Action::MoveStart(payload))
-    } else if input.starts_with(TOK_END) {
-        let payload = Payload::parse(
-            &input[TOK_END.len()..],
-            line_number,
-            PayloadKind::RightSideMoveEndPayload,
-        )?;
+    } else if let Some(rest) = input.strip_prefix(TOK_END) {
+        let payload = Payload::parse(rest, line_number, PayloadKind::RightSideMoveEndPayload)?;
         Ok(Action::MoveEnd(payload))
-    } else if input.starts_with(TOK_RETURN) {
-        let payload = Payload::parse(
-            &input[TOK_RETURN.len()..],
-            line_number,
-            PayloadKind::RightSideReturnPayload,
-        )?;
+    } else if let Some(rest) = input.strip_prefix(TOK_RETURN) {
+        let payload = Payload::parse(rest, line_number, PayloadKind::RightSideReturnPayload)?;
         Ok(Action::Return(payload))
     } else {
         let payload = Payload::parse(input, line_number, PayloadKind::RightSideData)?;

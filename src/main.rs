@@ -45,11 +45,17 @@ fn parse_cli() -> Result<Cli, String> {
         return Err(usage());
     }
 
+    let mut positional = positional.into_iter();
+    let Some(program_path) = positional.next() else {
+        return Err(usage());
+    };
+    let input = positional
+        .next()
+        .map_or_else(Vec::new, |value| value.as_bytes().to_vec());
+
     Ok(Cli {
-        program_path: positional[0].clone(),
-        input: positional
-            .get(1)
-            .map_or_else(Vec::new, |value| value.as_bytes().to_vec()),
+        program_path,
+        input,
         max_steps,
         trace,
     })
@@ -87,7 +93,7 @@ fn main() {
     let options = RunOptions::new(cli.max_steps);
     let result = if cli.trace {
         program.run_with_trace(&cli.input, options, |event| {
-            print_trace_event(&program, event)
+            print_trace_event(&program, event);
         })
     } else {
         program.run(&cli.input, options)
