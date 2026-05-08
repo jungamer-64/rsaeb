@@ -3,17 +3,12 @@ name = "a-eq-b-interpreter"
 version = "0.1.0"
 edition = "2024"
 
-[features]
-default = ["cli"]
-cli = []
+[workspace]
+members = ["crates/aeb-cli"]
+resolver = "3"
 
 [lib]
 name = "rsaeb"
 path = "src/lib.rs"
-
-[[bin]]
-name = "aeb"
-path = "src/main.rs"
-required-features = ["cli"]
 
 [dependencies]
