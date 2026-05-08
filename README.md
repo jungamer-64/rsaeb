@@ -8,6 +8,36 @@ input are different domains. Program code is compact ASCII syntax. Runtime input
 is ASCII data. The interpreter preserves input bytes that the program syntax
 cannot write, such as spaces and reserved characters.
 
+
+## `no_std` Library Boundary
+
+`src/lib.rs` is `#![no_std]` and uses `alloc` for owned buffers such as
+`Vec<u8>`, boxed per-run rule state, `RunResult`, trace events, and step-limit
+error state. This means the interpreter core does not depend on `std`, files,
+processes, stdout/stderr, environment variables, or OS error types. It still
+requires an allocator; this is `no_std + alloc`, not a fixed-capacity
+heapless interpreter. Because apparently asking a rewrite engine to grow and
+shrink byte strings without storage would be a small theological incident.
+
+The command-line binary remains `std`-only and is gated behind the default
+`cli` feature. Normal desktop usage stays unchanged:
+
+```sh
+cargo run -- <program-file> [input] [--max-steps N] [--trace]
+```
+
+For embedded, WASM-core, kernel, or other non-`std` consumers, depend on the
+library or build only the library target. To avoid attempting to build the CLI
+binary on a non-`std` target, disable default features when building the package
+directly:
+
+```sh
+cargo check --lib --no-default-features
+```
+
+A downstream `std` application can use the library exactly the same way. A
+`no_std` downstream must provide an allocator before calling APIs that allocate.
+
 ## Library Usage
 
 This crate exposes the interpreter as a library. The binary is intentionally

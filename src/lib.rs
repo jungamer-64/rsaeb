@@ -13,8 +13,18 @@
 //! intentionally outside this library. The command-line binary can do command-
 //! line things without smuggling those habits into the interpreter core.
 
-use std::error::Error;
-use std::fmt;
+#![no_std]
+
+extern crate alloc;
+
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::error::Error;
+use core::fmt;
+
+#[cfg(test)]
+extern crate std;
 
 /// Default maximum number of rewrite steps for one execution.
 pub const DEFAULT_MAX_STEPS: usize = 1_000_000;
@@ -1111,6 +1121,7 @@ fn parse_rhs(input: &[u8], line_number: usize) -> Result<Action, ParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::string::String;
 
     fn run_source(source: &str, input: &str) -> String {
         let program = Program::parse(source).unwrap();
