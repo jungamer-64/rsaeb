@@ -302,15 +302,6 @@ impl<'program> Runtime<'program> {
     }
 }
 
-fn run(
-    program: &Program,
-    input: &[u8],
-    max_steps: usize,
-    trace: bool,
-) -> Result<RunResult, OsrError> {
-    Runtime::new(program, input, trace).run(max_steps)
-}
-
 fn find_match(state: &[u8], rule: &Rule) -> Option<usize> {
     match rule.anchor {
         Anchor::Anywhere => find_subslice(state, &rule.lhs),
@@ -466,7 +457,10 @@ mod tests {
 
     fn run_source(source: &str, input: &str) -> String {
         let program = parse_program(source).unwrap();
-        let result = run(&program, input.as_bytes(), 10_000, false).unwrap();
+        let result = Runtime::new(&program, input.as_bytes(), false)
+            .run(10_000)
+            .unwrap();
+
         String::from_utf8(result.output).unwrap()
     }
 
@@ -512,8 +506,8 @@ mod tests {
         let source = "(once)a=b\na=c";
         let program = parse_program(source).unwrap();
 
-        let first = run(&program, b"aa", 10_000, false).unwrap();
-        let second = run(&program, b"aa", 10_000, false).unwrap();
+        let first = Runtime::new(&program, b"aa", false).run(10_000).unwrap();
+        let second = Runtime::new(&program, b"aa", false).run(10_000).unwrap();
 
         assert_eq!(String::from_utf8(first.output).unwrap(), "bc");
         assert_eq!(String::from_utf8(second.output).unwrap(), "bc");
