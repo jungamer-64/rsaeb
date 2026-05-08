@@ -74,14 +74,17 @@ impl Default for RunOptions {
     }
 }
 
-/// Stable identifier for a parsed rule inside one [`Program`].
+/// Program-local zero-based index for a parsed rule.
+///
+/// The value is only meaningful together with the [`Program`] that produced it.
+/// It is intentionally named as an index, not a globally valid identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RuleId(usize);
+pub struct RuleIndex(usize);
 
-impl RuleId {
-    /// Zero-based rule index in parse order.
+impl RuleIndex {
+    /// Zero-based rule position in parse order.
     #[must_use]
-    pub const fn index(self) -> usize {
+    pub const fn as_usize(self) -> usize {
         self.0
     }
 }
@@ -89,16 +92,16 @@ impl RuleId {
 /// Read-only metadata for a parsed rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuleInfo<'program> {
-    id: RuleId,
+    index: RuleIndex,
     line_number: usize,
     compact_source: &'program [u8],
 }
 
 impl<'program> RuleInfo<'program> {
-    /// Rule identifier.
+    /// Program-local zero-based rule index.
     #[must_use]
-    pub const fn id(self) -> RuleId {
-        self.id
+    pub const fn index(self) -> RuleIndex {
+        self.index
     }
 
     /// One-based source line number.
@@ -232,8 +235,8 @@ impl Payload {
         self.bytes.iter().copied()
     }
 
-    fn to_runtime_bytes(&self) -> Vec<RuntimeByte> {
-        self.iter().map(RuntimeByte::from_code).collect()
+    fn runtime_bytes(&self) -> impl Iterator<Item = RuntimeByte> + '_ {
+        self.iter().map(RuntimeByte::from_code)
     }
 
     fn to_vec_u8(&self) -> Vec<u8> {
@@ -273,7 +276,7 @@ impl State {
 
     fn find_payload(&self, payload: &Payload) -> Option<StateMatch> {
         if payload.is_empty() {
-            return StateMatch::new(self.len(), 0, 0);
+            return StateMatch::checked(0, 0, self.len());
         }
 
         let last_start = self.len().checked_sub(payload.len())?;
@@ -295,14 +298,14 @@ impl State {
     fn replace_at(&self, state_match: StateMatch, rhs: &Payload) -> Self {
         let mut bytes = Vec::with_capacity(self.replaced_len(state_match, rhs));
         self.push_prefix(&mut bytes, state_match);
-        bytes.extend(rhs.to_runtime_bytes());
+        bytes.extend(rhs.runtime_bytes());
         self.push_suffix(&mut bytes, state_match);
         Self { bytes }
     }
 
     fn move_start_at(&self, state_match: StateMatch, rhs: &Payload) -> Self {
         let mut bytes = Vec::with_capacity(self.replaced_len(state_match, rhs));
-        bytes.extend(rhs.to_runtime_bytes());
+        bytes.extend(rhs.runtime_bytes());
         self.push_prefix(&mut bytes, state_match);
         self.push_suffix(&mut bytes, state_match);
         Self { bytes }
@@ -312,7 +315,7 @@ impl State {
         let mut bytes = Vec::with_capacity(self.replaced_len(state_match, rhs));
         self.push_prefix(&mut bytes, state_match);
         self.push_suffix(&mut bytes, state_match);
-        bytes.extend(rhs.to_runtime_bytes());
+        bytes.extend(rhs.runtime_bytes());
         Self { bytes }
     }
 
@@ -354,7 +357,7 @@ struct StateMatch {
 }
 
 impl StateMatch {
-    fn new(state_len: usize, position: usize, lhs_len: usize) -> Option<Self> {
+    fn checked(position: usize, lhs_len: usize, state_len: usize) -> Option<Self> {
         let end = position.checked_add(lhs_len)?;
         (position <= state_len && end <= state_len)
             .then(|| Self::new_unchecked(position, lhs_len, end))
@@ -408,7 +411,7 @@ struct Rule {
 impl Rule {
     fn info(&self, index: usize) -> RuleInfo<'_> {
         RuleInfo {
-            id: RuleId(index),
+            index: RuleIndex(index),
             line_number: self.line_number,
             compact_source: &self.compact_source,
         }
@@ -446,10 +449,12 @@ impl Program {
         self.rules.len()
     }
 
-    /// Returns rule metadata by [`RuleId`].
+    /// Returns rule metadata by program-local [`RuleIndex`].
     #[must_use]
-    pub fn rule(&self, id: RuleId) -> Option<RuleInfo<'_>> {
-        self.rules.get(id.index()).map(|rule| rule.info(id.index()))
+    pub fn rule(&self, index: RuleIndex) -> Option<RuleInfo<'_>> {
+        self.rules
+            .get(index.as_usize())
+            .map(|rule| rule.info(index.as_usize()))
     }
 
     /// Iterates over parsed rule metadata in execution order.
@@ -466,14 +471,14 @@ impl Program {
     }
 
     /// Runs this program and emits trace events.
-    pub fn run_with_trace<F>(
-        &self,
+    pub fn run_with_trace<'program, F>(
+        &'program self,
         input: impl AsRef<[u8]>,
         options: RunOptions,
         trace: F,
     ) -> Result<RunResult, RunError>
     where
-        F: FnMut(TraceEvent),
+        F: FnMut(TraceEvent<'program>),
     {
         Runtime::new(self, input.as_ref())?.run_with_trace(options.max_steps, trace)
     }
@@ -481,7 +486,7 @@ impl Program {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MatchedRule<'program> {
-    rule_id: RuleId,
+    rule_index: RuleIndex,
     rule: &'program Rule,
     state_match: StateMatch,
 }
@@ -505,26 +510,23 @@ impl<'program> Runtime<'program> {
     }
 
     fn run(self, max_steps: usize) -> Result<RunResult, RunError> {
-        self.run_impl(max_steps, None::<fn(TraceEvent)>)
+        self.run_impl(max_steps, None::<fn(TraceEvent<'program>)>)
     }
 
     fn run_with_trace<F>(self, max_steps: usize, trace: F) -> Result<RunResult, RunError>
     where
-        F: FnMut(TraceEvent),
+        F: FnMut(TraceEvent<'program>),
     {
         self.run_impl(max_steps, Some(trace))
     }
 
     fn run_impl<F>(mut self, max_steps: usize, mut trace: Option<F>) -> Result<RunResult, RunError>
     where
-        F: FnMut(TraceEvent),
+        F: FnMut(TraceEvent<'program>),
     {
-        emit_trace(
-            &mut trace,
-            TraceEvent::Initial {
-                state: self.state.to_vec_u8(),
-            },
-        );
+        emit_trace(&mut trace, || TraceEvent::Initial {
+            state: self.state.to_vec_u8(),
+        });
 
         loop {
             let Some(matched) = self.find_next_match() else {
@@ -562,7 +564,7 @@ impl<'program> Runtime<'program> {
                 }
 
                 find_match(&self.state, rule).map(|state_match| MatchedRule {
-                    rule_id: RuleId(rule_index),
+                    rule_index: RuleIndex(rule_index),
                     rule,
                     state_match,
                 })
@@ -574,7 +576,7 @@ impl<'program> Runtime<'program> {
             return;
         }
 
-        if let Some(state) = self.rule_states.get_mut(matched.rule_id.index()) {
+        if let Some(state) = self.rule_states.get_mut(matched.rule_index.as_usize()) {
             *state = RuntimeRuleState::Consumed;
         }
     }
@@ -585,56 +587,55 @@ impl<'program> Runtime<'program> {
         trace: &mut Option<F>,
     ) -> Option<RunResult>
     where
-        F: FnMut(TraceEvent),
+        F: FnMut(TraceEvent<'program>),
     {
         self.consume_rule_if_needed(matched);
 
         let rule = matched.rule;
-        let rule_id = matched.rule_id;
+        let rule_index = matched.rule_index;
         let effect = self
             .state
             .apply_action(matched.state_match, &matched.rule.action);
 
         self.steps += 1;
 
-        let (output, returned) = match effect {
+        match effect {
             RewriteEffect::Continue(next_state) => {
-                let output = next_state.to_vec_u8();
+                emit_trace(trace, || TraceEvent::Step {
+                    step: self.steps,
+                    rule: rule.info(rule_index.as_usize()),
+                    output: next_state.to_vec_u8(),
+                    returned: false,
+                });
+
                 self.state = next_state;
-                (output, false)
+                None
             }
-            RewriteEffect::Return(output) => (output, true),
-        };
+            RewriteEffect::Return(output) => {
+                emit_trace(trace, || TraceEvent::Step {
+                    step: self.steps,
+                    rule: rule.info(rule_index.as_usize()),
+                    output: output.clone(),
+                    returned: true,
+                });
 
-        emit_trace(
-            trace,
-            TraceEvent::Step {
-                step: self.steps,
-                rule: rule_id,
-                line_number: rule.line_number,
-                output: output.clone(),
-                returned,
-            },
-        );
-
-        if returned {
-            Some(RunResult {
-                output,
-                steps: self.steps,
-                returned: true,
-            })
-        } else {
-            None
+                Some(RunResult {
+                    output,
+                    steps: self.steps,
+                    returned: true,
+                })
+            }
         }
     }
 }
 
-fn emit_trace<F>(trace: &mut Option<F>, event: TraceEvent)
+fn emit_trace<'program, F, E>(trace: &mut Option<F>, event: E)
 where
-    F: FnMut(TraceEvent),
+    F: FnMut(TraceEvent<'program>),
+    E: FnOnce() -> TraceEvent<'program>,
 {
     if let Some(trace) = trace.as_mut() {
-        trace(event);
+        trace(event());
     }
 }
 
@@ -681,21 +682,23 @@ impl RunResult {
 }
 
 /// Trace event emitted by [`Program::run_with_trace`].
+///
+/// Step events carry borrowed rule metadata tied to the source [`Program`], so a
+/// trace cannot accidentally describe a rule from a different program.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TraceEvent {
+pub enum TraceEvent<'program> {
     /// Initial runtime state before any rewrite step.
     Initial { state: Vec<u8> },
     /// One applied rule.
     Step {
         step: usize,
-        rule: RuleId,
-        line_number: usize,
+        rule: RuleInfo<'program>,
         output: Vec<u8>,
         returned: bool,
     },
 }
 
-impl TraceEvent {
+impl<'program> TraceEvent<'program> {
     /// Output/state bytes carried by this event.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
@@ -1278,13 +1281,16 @@ mod tests {
         }
     }
 
-    fn expect_event(events: &[TraceEvent], index: usize) -> Result<&TraceEvent, TestFailure> {
+    fn expect_event<'events, 'program>(
+        events: &'events [TraceEvent<'program>],
+        index: usize,
+    ) -> Result<&'events TraceEvent<'program>, TestFailure> {
         events
             .get(index)
             .ok_or(TestFailure::Message("expected trace event"))
     }
 
-    fn expect_rule(program: &Program, rule: RuleId) -> Result<RuleInfo<'_>, TestFailure> {
+    fn expect_rule(program: &Program, rule: RuleIndex) -> Result<RuleInfo<'_>, TestFailure> {
         program
             .rule(rule)
             .ok_or(TestFailure::Message("expected rule metadata"))
@@ -1347,12 +1353,11 @@ mod tests {
         assert_eq!(second_step.bytes(), b"ok");
 
         match first_step {
-            TraceEvent::Step {
-                rule, line_number, ..
-            } => {
-                assert_eq!(rule.index(), 0);
-                assert_eq!(*line_number, 1);
-                assert_eq!(expect_rule(&program, *rule)?.compact_source(), b"a=b");
+            TraceEvent::Step { rule, .. } => {
+                assert_eq!(rule.index().as_usize(), 0);
+                assert_eq!(rule.line_number(), 1);
+                assert_eq!(rule.compact_source(), b"a=b");
+                assert_eq!(expect_rule(&program, rule.index())?.compact_source(), b"a=b");
             }
             TraceEvent::Initial { .. } => {
                 return Err(TestFailure::Message("expected step event"));
@@ -1376,10 +1381,10 @@ mod tests {
             .get(1)
             .ok_or(TestFailure::Message("expected second rule"))?;
 
-        assert_eq!(first.id().index(), 0);
+        assert_eq!(first.index().as_usize(), 0);
         assert_eq!(first.line_number(), 1);
         assert_eq!(first.compact_source(), b"a=b");
-        assert_eq!(second.id().index(), 1);
+        assert_eq!(second.index().as_usize(), 1);
         assert_eq!(second.line_number(), 2);
         assert_eq!(second.compact_source(), b"(start)c=(end)d");
         Ok(())
@@ -1485,6 +1490,18 @@ mod tests {
     }
 
     #[test]
+    fn crlf_source_is_accepted_as_code_whitespace() -> TestResult {
+        assert_eq!(run_source("a=b\r\nb=c\r\n", "a")?, "c");
+        Ok(())
+    }
+
+    #[test]
+    fn tab_whitespace_is_ignored_in_code() -> TestResult {
+        assert_eq!(run_source("a\tb = c\tc", "ab")?, "cc");
+        Ok(())
+    }
+
+    #[test]
     fn input_spaces_are_preserved_and_do_not_bridge_matches() -> TestResult {
         assert_eq!(run_source("a= b", "a bc")?, "b bc");
         assert_eq!(run_source("a b=bb", "a bc")?, "a bc");
@@ -1566,6 +1583,21 @@ mod tests {
 
         assert!(Program::parse("(once)(start)a=(end)b").is_ok());
         assert!(Program::parse("a=(return)").is_ok());
+    }
+
+    #[test]
+    fn right_side_action_payload_cannot_start_with_another_action() {
+        for source in [
+            "a=(start)(end)b",
+            "a=(start)(return)b",
+            "a=(end)(start)b",
+            "a=(return)(start)b",
+        ] {
+            assert!(
+                Program::parse(source).is_err(),
+                "source should fail: {source}"
+            );
+        }
     }
 
     #[test]
@@ -1658,6 +1690,17 @@ mod tests {
     #[test]
     fn zero_step_limit_fails_only_when_a_rule_would_apply() -> TestResult {
         let error = expect_run_error(Program::parse("a=b")?.run(b"a", RunOptions::new(0)))?;
+        let error = expect_step_limit(error)?;
+
+        assert_eq!(error.max_steps(), 0);
+        assert_eq!(error.state(), b"a");
+        Ok(())
+    }
+
+    #[test]
+    fn zero_step_limit_blocks_return_rule_too() -> TestResult {
+        let error =
+            expect_run_error(Program::parse("a=(return)b")?.run(b"a", RunOptions::new(0)))?;
         let error = expect_step_limit(error)?;
 
         assert_eq!(error.max_steps(), 0);

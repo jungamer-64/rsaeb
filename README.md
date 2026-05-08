@@ -95,19 +95,17 @@ fn main() -> Result<(), rsaeb::ParseError> {
 }
 ```
 
-Trace output is library-owned data, not hard-coded side effects:
+Trace output is library-owned data, not hard-coded side effects. State snapshots are owned per event and are only materialized when tracing is enabled:
 
 ```rust
-use rsaeb::{Program, RunOptions, TraceEvent};
+use rsaeb::{Program, RunOptions};
 
 fn main() -> Result<(), rsaeb::AebError> {
     let program = Program::parse("a=b\nb=(return)ok")?;
     let mut events = Vec::new();
-    let result = program.run_with_trace(
-        b"a",
-        RunOptions::new(10_000),
-        |event: TraceEvent| events.push(event),
-    )?;
+    let result = program.run_with_trace(b"a", RunOptions::new(10_000), |event| {
+        events.push(event);
+    })?;
 
     assert_eq!(result.output(), b"ok");
     assert!(result.returned());
@@ -116,26 +114,28 @@ fn main() -> Result<(), rsaeb::AebError> {
 }
 ```
 
-Trace step events carry a `RuleId`, not a cloned display string. Human-readable
-rule text is metadata on `Program`:
+Trace step events carry borrowed `RuleInfo<'program>` metadata, not a cloned
+display string and not a globally reusable identifier. The metadata is tied to
+the `Program` that produced the trace:
 
 ```rust
 use rsaeb::{Program, RunOptions, TraceEvent};
 
 fn main() -> Result<(), rsaeb::AebError> {
     let program = Program::parse("a = b # comment")?;
-    let mut applied_rule = None;
+    let mut applied_rule_index = None;
 
     program.run_with_trace(b"a", RunOptions::new(10_000), |event| {
         if let TraceEvent::Step { rule, .. } = event {
-            applied_rule = Some(rule);
+            assert_eq!(rule.line_number(), 1);
+            assert_eq!(rule.compact_source(), b"a=b");
+            applied_rule_index = Some(rule.index());
         }
     })?;
 
-    let rule_id = applied_rule.expect("trace should apply a rule");
-    let rule = program.rule(rule_id).expect("rule metadata should exist");
-    assert_eq!(rule.line_number(), 1);
-    assert_eq!(rule.compact_source(), b"a=b");
+    let rule_index = applied_rule_index.expect("trace should apply a rule");
+    let rule = program.rule(rule_index).expect("rule metadata should exist");
+    assert_eq!(rule.index().as_usize(), 0);
     Ok(())
 }
 ```
@@ -160,13 +160,13 @@ Program construction and execution:
 
 Rule metadata:
 
-- `RuleId`: stable parsed-rule identifier within one `Program`.
-- `RuleId::index()`: zero-based rule index in parse order.
-- `RuleInfo`: read-only parsed-rule metadata.
-- `RuleInfo::id()`: return the rule identifier.
+- `RuleIndex`: program-local zero-based parsed-rule index.
+- `RuleIndex::as_usize()`: zero-based rule position in parse order.
+- `RuleInfo`: read-only parsed-rule metadata borrowed from a `Program`.
+- `RuleInfo::index()`: return the program-local rule index.
 - `RuleInfo::line_number()`: return the one-based source line number.
 - `RuleInfo::compact_source()`: return whitespace-stripped executable code.
-- `Program::rule(rule_id)`: read parsed rule metadata for tracing/debug UIs.
+- `Program::rule(rule_index)`: read parsed rule metadata for tracing/debug UIs.
 - `Program::rules()`: iterate parsed rule metadata in execution order.
 
 Runtime configuration and result:
@@ -181,7 +181,8 @@ Runtime configuration and result:
 
 Tracing:
 
-- `TraceEvent`: `Initial` state and `Step` events emitted by tracing runs.
+- `TraceEvent<'program>`: `Initial` state and `Step` events emitted by tracing runs.
+  `Step` carries `RuleInfo<'program>`.
 - `TraceEvent::bytes()`: borrow the bytes carried by a trace event.
 
 Errors:
