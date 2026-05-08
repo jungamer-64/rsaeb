@@ -19,20 +19,18 @@ requires an allocator; this is `no_std + alloc`, not a fixed-capacity
 heapless interpreter. Because apparently asking a rewrite engine to grow and
 shrink byte strings without storage would be a small theological incident.
 
-The command-line binary remains `std`-only and is gated behind the default
-`cli` feature. Normal desktop usage stays unchanged:
+The command-line binary is a separate `std` package in `crates/aeb-cli`. Normal
+desktop usage goes through that package:
 
 ```sh
-cargo run -- <program-file> [input] [--max-steps N] [--trace]
+cargo run -p aeb-cli -- <program-file> [input] [--max-steps N] [--trace]
 ```
 
 For embedded, WASM-core, kernel, or other non-`std` consumers, depend on the
-library or build only the library target. To avoid attempting to build the CLI
-binary on a non-`std` target, disable default features when building the package
-directly:
+library package or build only the library target:
 
 ```sh
-cargo check --lib --no-default-features
+cargo check -p a-eq-b-interpreter --lib
 ```
 
 A downstream `std` application can use the library exactly the same way. A
@@ -42,9 +40,8 @@ A downstream `std` application can use the library exactly the same way. A
 
 This crate exposes the interpreter as a library. The binary is intentionally
 thin; filesystem reads, argument parsing, stdout/stderr formatting, and lossy
-output/state rendering all stay in `src/main.rs`. The library does not expose
-`std::io` errors, because the interpreter does not read files. Civilization
-survived this separation somehow.
+output/state rendering all stay in the `aeb-cli` package. The library does not
+expose `std::io` errors, because the interpreter does not read files.
 
 Basic one-shot execution:
 
@@ -148,7 +145,7 @@ Public API surface:
 Run through Cargo:
 
 ```sh
-cargo run -- <program-file> [input] [--max-steps N] [--trace]
+cargo run -p aeb-cli -- <program-file> [input] [--max-steps N] [--trace]
 ```
 
 The binary usage is:
