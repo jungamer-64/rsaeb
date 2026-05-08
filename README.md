@@ -449,8 +449,7 @@ With input `ab`, this inserts `x` at the end and produces `abx`.
 
 An unanchored empty-left rule without `(once)`, `(return)`, or some later rule
 that makes execution stop can rewrite forever until the step limit is reached.
-That is legal syntax; it is not magically rescued by the parser, because
-apparently runtimes need to experience consequences too.
+That is legal syntax; execution remains governed by the configured step limit.
 
 ## Error Model
 

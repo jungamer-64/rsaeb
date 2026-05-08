@@ -2,6 +2,14 @@
 name = "rsaeb"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.90"
+description = "A no_std + alloc interpreter for A=B ordered rewrite programs."
+readme = "README.md"
+repository = "https://github.com/jungamer-64/rsaeb"
+license = "MIT OR Apache-2.0"
+keywords = ["a-b", "interpreter", "rewrite", "no-std"]
+categories = ["compilers", "parser-implementations", "no-std"]
+include = ["/src/**", "/README.md"]
 
 [lib]
 name = "rsaeb"
