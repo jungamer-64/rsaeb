@@ -39,12 +39,241 @@ impl RuntimeRuleState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CodeByte(u8);
+
+impl CodeByte {
+    fn parse(
+        byte: u8,
+        line_number: usize,
+        context: &str,
+        compact_column: usize,
+    ) -> Result<Self, AebError> {
+        if !byte.is_ascii() {
+            return Err(AebError::Parse {
+                line: line_number,
+                message: format!(
+                    "non-ASCII byte 0x{byte:02x} in {context} at compact column {compact_column}",
+                ),
+            });
+        }
+
+        if byte.is_ascii_whitespace() {
+            return Err(AebError::Parse {
+                line: line_number,
+                message: format!(
+                    "whitespace byte 0x{byte:02x} cannot be represented as \
+                     {context} at compact column {compact_column}",
+                ),
+            });
+        }
+
+        if is_reserved_code_byte(byte) {
+            return Err(AebError::Parse {
+                line: line_number,
+                message: format!(
+                    "reserved character '{}' cannot be represented as \
+                     {context} at compact column {compact_column}",
+                    byte as char,
+                ),
+            });
+        }
+
+        Ok(Self(byte))
+    }
+
+    fn as_u8(self) -> u8 {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeByte(u8);
+
+impl RuntimeByte {
+    fn parse_input(byte: u8, zero_based_column: usize) -> Result<Self, AebError> {
+        if !byte.is_ascii() {
+            return Err(AebError::Input {
+                message: format!(
+                    "non-ASCII byte 0x{byte:02x} at column {}",
+                    zero_based_column + 1,
+                ),
+            });
+        }
+
+        Ok(Self(byte))
+    }
+
+    fn from_code(byte: CodeByte) -> Self {
+        Self(byte.as_u8())
+    }
+
+    fn as_u8(self) -> u8 {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Payload {
+    bytes: Vec<CodeByte>,
+}
+
+impl Payload {
+    fn parse(input: &[u8], line_number: usize, context: &str) -> Result<Self, AebError> {
+        let bytes = input
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(zero_based_column, byte)| {
+                CodeByte::parse(byte, line_number, context, zero_based_column + 1)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Self { bytes })
+    }
+
+    fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = CodeByte> + '_ {
+        self.bytes.iter().copied()
+    }
+
+    fn to_runtime_bytes(&self) -> Vec<RuntimeByte> {
+        self.iter().map(RuntimeByte::from_code).collect()
+    }
+
+    fn to_lossy_string(&self) -> String {
+        let bytes = self.iter().map(CodeByte::as_u8).collect::<Vec<_>>();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct State {
+    bytes: Vec<RuntimeByte>,
+}
+
+impl State {
+    fn parse_input(input: &[u8]) -> Result<Self, AebError> {
+        let bytes = input
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(zero_based_column, byte)| RuntimeByte::parse_input(byte, zero_based_column))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Self { bytes })
+    }
+
+    fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    fn starts_with_payload(&self, payload: &Payload) -> bool {
+        if payload.len() > self.len() {
+            return false;
+        }
+
+        self.bytes
+            .iter()
+            .copied()
+            .zip(payload.iter())
+            .take(payload.len())
+            .all(|(state_byte, payload_byte)| state_byte.as_u8() == payload_byte.as_u8())
+    }
+
+    fn ends_with_payload(&self, payload: &Payload) -> bool {
+        if payload.len() > self.len() {
+            return false;
+        }
+
+        let start = self.len() - payload.len();
+        self.matches_payload_at(start, payload)
+    }
+
+    fn find_payload(&self, payload: &Payload) -> Option<usize> {
+        if payload.is_empty() {
+            return Some(0);
+        }
+
+        if payload.len() > self.len() {
+            return None;
+        }
+
+        (0..=self.len() - payload.len())
+            .find(|&position| self.matches_payload_at(position, payload))
+    }
+
+    fn matches_payload_at(&self, position: usize, payload: &Payload) -> bool {
+        if position + payload.len() > self.len() {
+            return false;
+        }
+
+        self.bytes[position..position + payload.len()]
+            .iter()
+            .copied()
+            .zip(payload.iter())
+            .all(|(state_byte, payload_byte)| state_byte.as_u8() == payload_byte.as_u8())
+    }
+
+    fn replace_at(&self, position: usize, lhs_len: usize, rhs: &Payload) -> Self {
+        let mut bytes = Vec::with_capacity(self.len() - lhs_len + rhs.len());
+        bytes.extend_from_slice(&self.bytes[..position]);
+        bytes.extend(rhs.to_runtime_bytes());
+        bytes.extend_from_slice(&self.bytes[position + lhs_len..]);
+        Self { bytes }
+    }
+
+    fn move_start_at(&self, position: usize, lhs_len: usize, rhs: &Payload) -> Self {
+        let mut bytes = Vec::with_capacity(self.len() - lhs_len + rhs.len());
+        bytes.extend(rhs.to_runtime_bytes());
+        bytes.extend_from_slice(&self.bytes[..position]);
+        bytes.extend_from_slice(&self.bytes[position + lhs_len..]);
+        Self { bytes }
+    }
+
+    fn move_end_at(&self, position: usize, lhs_len: usize, rhs: &Payload) -> Self {
+        let mut bytes = Vec::with_capacity(self.len() - lhs_len + rhs.len());
+        bytes.extend_from_slice(&self.bytes[..position]);
+        bytes.extend_from_slice(&self.bytes[position + lhs_len..]);
+        bytes.extend(rhs.to_runtime_bytes());
+        Self { bytes }
+    }
+
+    fn from_payload(payload: &Payload) -> Self {
+        Self {
+            bytes: payload.to_runtime_bytes(),
+        }
+    }
+
+    #[cfg(test)]
+    fn into_vec_u8(self) -> Vec<u8> {
+        self.bytes.into_iter().map(RuntimeByte::as_u8).collect()
+    }
+
+    fn to_lossy_string(&self) -> String {
+        let bytes = self
+            .bytes
+            .iter()
+            .copied()
+            .map(RuntimeByte::as_u8)
+            .collect::<Vec<_>>();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Action {
-    Replace(Vec<u8>),
-    MoveStart(Vec<u8>),
-    MoveEnd(Vec<u8>),
-    Return(Vec<u8>),
+    Replace(Payload),
+    MoveStart(Payload),
+    MoveEnd(Payload),
+    Return(Payload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,7 +282,7 @@ struct Rule {
     source: String,
     repeat: RuleRepeat,
     anchor: Anchor,
-    lhs: Vec<u8>,
+    lhs: Payload,
     action: Action,
 }
 
@@ -65,7 +294,7 @@ struct Program {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Runtime<'program> {
     program: &'program Program,
-    state: Vec<u8>,
+    state: State,
     steps: usize,
     trace: bool,
     rule_states: Box<[RuntimeRuleState]>,
@@ -73,7 +302,7 @@ struct Runtime<'program> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RunResult {
-    output: Vec<u8>,
+    output: State,
     steps: usize,
     returned: bool,
 }
@@ -82,7 +311,7 @@ struct RunResult {
 enum AebError {
     Parse { line: usize, message: String },
     Input { message: String },
-    StepLimit { max_steps: usize, state: Vec<u8> },
+    StepLimit { max_steps: usize, state: State },
     Io(std::io::Error),
 }
 
@@ -96,7 +325,7 @@ impl fmt::Display for AebError {
             AebError::StepLimit { max_steps, state } => write!(
                 f,
                 "step limit exceeded after {max_steps} steps; state: {}",
-                String::from_utf8_lossy(state),
+                state.to_lossy_string(),
             ),
             AebError::Io(error) => write!(f, "io error: {error}"),
         }
@@ -107,6 +336,10 @@ impl From<std::io::Error> for AebError {
     fn from(value: std::io::Error) -> Self {
         Self::Io(value)
     }
+}
+
+fn is_reserved_code_byte(byte: u8) -> bool {
+    matches!(byte, b'=' | b'#' | b'(' | b')')
 }
 
 fn parse_program(source: &str) -> Result<Program, AebError> {
@@ -195,7 +428,7 @@ fn strip_code_whitespace(input: &[u8]) -> Vec<u8> {
 fn parse_lhs(
     mut input: &[u8],
     line_number: usize,
-) -> Result<(RuleRepeat, Anchor, Vec<u8>), AebError> {
+) -> Result<(RuleRepeat, Anchor, Payload), AebError> {
     let mut repeat = RuleRepeat::Always;
 
     if input.starts_with(TOK_ONCE) {
@@ -220,75 +453,43 @@ fn parse_lhs(
         });
     }
 
-    reject_parentheses(input, line_number, "left-side data")?;
-
-    Ok((repeat, anchor, input.to_vec()))
+    let lhs = Payload::parse(input, line_number, "left-side data")?;
+    Ok((repeat, anchor, lhs))
 }
 
 fn parse_rhs(input: &[u8], line_number: usize) -> Result<Action, AebError> {
     if input.starts_with(TOK_START) {
-        let payload = &input[TOK_START.len()..];
-        reject_parentheses(payload, line_number, "right-side move-to-start payload")?;
-        Ok(Action::MoveStart(payload.to_vec()))
+        let payload = Payload::parse(
+            &input[TOK_START.len()..],
+            line_number,
+            "right-side move-to-start payload",
+        )?;
+        Ok(Action::MoveStart(payload))
     } else if input.starts_with(TOK_END) {
-        let payload = &input[TOK_END.len()..];
-        reject_parentheses(payload, line_number, "right-side move-to-end payload")?;
-        Ok(Action::MoveEnd(payload.to_vec()))
+        let payload = Payload::parse(
+            &input[TOK_END.len()..],
+            line_number,
+            "right-side move-to-end payload",
+        )?;
+        Ok(Action::MoveEnd(payload))
     } else if input.starts_with(TOK_RETURN) {
-        let payload = &input[TOK_RETURN.len()..];
-        reject_parentheses(payload, line_number, "right-side return payload")?;
-        Ok(Action::Return(payload.to_vec()))
+        let payload = Payload::parse(
+            &input[TOK_RETURN.len()..],
+            line_number,
+            "right-side return payload",
+        )?;
+        Ok(Action::Return(payload))
     } else {
-        reject_parentheses(input, line_number, "right-side data")?;
-        Ok(Action::Replace(input.to_vec()))
+        let payload = Payload::parse(input, line_number, "right-side data")?;
+        Ok(Action::Replace(payload))
     }
-}
-
-fn reject_parentheses(input: &[u8], line_number: usize, context: &str) -> Result<(), AebError> {
-    if let Some((zero_based_column, byte)) = input
-        .iter()
-        .copied()
-        .enumerate()
-        .find(|(_, byte)| matches!(byte, b'(' | b')'))
-    {
-        return Err(AebError::Parse {
-            line: line_number,
-            message: format!(
-                "unsupported reserved parenthesis '{}' in {context} at compact column {}",
-                byte as char,
-                zero_based_column + 1,
-            ),
-        });
-    }
-
-    Ok(())
-}
-
-fn validate_input(input: &[u8]) -> Result<(), AebError> {
-    if let Some((zero_based_column, byte)) = input
-        .iter()
-        .copied()
-        .enumerate()
-        .find(|(_, byte)| !byte.is_ascii())
-    {
-        return Err(AebError::Input {
-            message: format!(
-                "non-ASCII byte 0x{byte:02x} at column {}",
-                zero_based_column + 1,
-            ),
-        });
-    }
-
-    Ok(())
 }
 
 impl<'program> Runtime<'program> {
     fn new(program: &'program Program, input: &[u8], trace: bool) -> Result<Self, AebError> {
-        validate_input(input)?;
-
         Ok(Self {
             program,
-            state: input.to_vec(),
+            state: State::parse_input(input)?,
             steps: 0,
             trace,
             rule_states: vec![RuntimeRuleState::Fresh; program.rules.len()].into_boxed_slice(),
@@ -297,7 +498,7 @@ impl<'program> Runtime<'program> {
 
     fn run(mut self, max_steps: usize) -> Result<RunResult, AebError> {
         if self.trace {
-            eprintln!("0: {}", String::from_utf8_lossy(&self.state));
+            eprintln!("0: {}", self.state.to_lossy_string());
         }
 
         loop {
@@ -356,15 +557,15 @@ impl<'program> Runtime<'program> {
 
         match &rule.action {
             Action::Replace(rhs) => {
-                self.state = replace_at(&self.state, position, lhs_len, rhs);
+                self.state = self.state.replace_at(position, lhs_len, rhs);
                 self.steps += 1;
             }
             Action::MoveStart(rhs) => {
-                self.state = move_start_at(&self.state, position, lhs_len, rhs);
+                self.state = self.state.move_start_at(position, lhs_len, rhs);
                 self.steps += 1;
             }
             Action::MoveEnd(rhs) => {
-                self.state = move_end_at(&self.state, position, lhs_len, rhs);
+                self.state = self.state.move_end_at(position, lhs_len, rhs);
                 self.steps += 1;
             }
             Action::Return(output) => {
@@ -376,12 +577,12 @@ impl<'program> Runtime<'program> {
                         self.steps,
                         rule.line_number,
                         rule.source,
-                        String::from_utf8_lossy(output),
+                        output.to_lossy_string(),
                     );
                 }
 
                 return Some(RunResult {
-                    output: output.clone(),
+                    output: State::from_payload(output),
                     steps: self.steps,
                     returned: true,
                 });
@@ -394,7 +595,7 @@ impl<'program> Runtime<'program> {
                 self.steps,
                 rule.line_number,
                 rule.source,
-                String::from_utf8_lossy(&self.state),
+                self.state.to_lossy_string(),
             );
         }
 
@@ -402,56 +603,18 @@ impl<'program> Runtime<'program> {
     }
 }
 
-fn find_match(state: &[u8], rule: &Rule) -> Option<usize> {
+fn find_match(state: &State, rule: &Rule) -> Option<usize> {
     match rule.anchor {
-        Anchor::Anywhere => find_subslice(state, &rule.lhs),
-        Anchor::Start => state.starts_with(&rule.lhs).then_some(0),
+        Anchor::Anywhere => state.find_payload(&rule.lhs),
+        Anchor::Start => state.starts_with_payload(&rule.lhs).then_some(0),
         Anchor::End => {
-            if state.ends_with(&rule.lhs) {
+            if state.ends_with_payload(&rule.lhs) {
                 Some(state.len().saturating_sub(rule.lhs.len()))
             } else {
                 None
             }
         }
     }
-}
-
-fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() {
-        return Some(0);
-    }
-
-    if needle.len() > haystack.len() {
-        return None;
-    }
-
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-
-fn replace_at(state: &[u8], position: usize, lhs_len: usize, rhs: &[u8]) -> Vec<u8> {
-    let mut next = Vec::with_capacity(state.len() - lhs_len + rhs.len());
-    next.extend_from_slice(&state[..position]);
-    next.extend_from_slice(rhs);
-    next.extend_from_slice(&state[position + lhs_len..]);
-    next
-}
-
-fn move_start_at(state: &[u8], position: usize, lhs_len: usize, rhs: &[u8]) -> Vec<u8> {
-    let mut next = Vec::with_capacity(state.len() - lhs_len + rhs.len());
-    next.extend_from_slice(rhs);
-    next.extend_from_slice(&state[..position]);
-    next.extend_from_slice(&state[position + lhs_len..]);
-    next
-}
-
-fn move_end_at(state: &[u8], position: usize, lhs_len: usize, rhs: &[u8]) -> Vec<u8> {
-    let mut next = Vec::with_capacity(state.len() - lhs_len + rhs.len());
-    next.extend_from_slice(&state[..position]);
-    next.extend_from_slice(&state[position + lhs_len..]);
-    next.extend_from_slice(rhs);
-    next
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -544,7 +707,7 @@ fn main() {
 
     match runtime.run(cli.max_steps) {
         Ok(result) => {
-            println!("{}", String::from_utf8_lossy(&result.output));
+            println!("{}", result.output.to_lossy_string());
 
             if cli.trace {
                 eprintln!("steps: {}, returned: {}", result.steps, result.returned);
@@ -568,7 +731,7 @@ mod tests {
             .run(10_000)
             .unwrap();
 
-        String::from_utf8(result.output).unwrap()
+        String::from_utf8(result.output.into_vec_u8()).unwrap()
     }
 
     #[test]
@@ -632,8 +795,11 @@ mod tests {
             .run(10_000)
             .unwrap();
 
-        assert_eq!(String::from_utf8(first.output).unwrap(), "bc");
-        assert_eq!(String::from_utf8(second.output).unwrap(), "bc");
+        assert_eq!(String::from_utf8(first.output.into_vec_u8()).unwrap(), "bc");
+        assert_eq!(
+            String::from_utf8(second.output.into_vec_u8()).unwrap(),
+            "bc"
+        );
     }
 
     #[test]
@@ -663,6 +829,12 @@ mod tests {
     }
 
     #[test]
+    fn code_cannot_create_or_match_space_even_when_space_is_written_near_rules() {
+        assert_eq!(run_source("a= ", "a "), " ");
+        assert_eq!(run_source(" a = b ", "a"), "b");
+    }
+
+    #[test]
     fn hash_starts_a_comment() {
         assert_eq!(run_source("a=b#c", "a"), "b");
         assert_eq!(run_source("#a=b", "a"), "a");
@@ -684,8 +856,19 @@ mod tests {
 
     #[test]
     fn unsupported_parentheses_are_parse_errors() {
-        for source in ["a=b(", "a=b)", "a=b()", "a=()", "a=b(start)", "a=(once)b", "a(once)=b"] {
-            assert!(parse_program(source).is_err(), "source should fail: {source}");
+        for source in [
+            "a=b(",
+            "a=b)",
+            "a=b()",
+            "a=()",
+            "a=b(start)",
+            "a=(once)b",
+            "a(once)=b",
+        ] {
+            assert!(
+                parse_program(source).is_err(),
+                "source should fail: {source}"
+            );
         }
 
         assert!(parse_program("(once)(start)a=(end)b").is_ok());
@@ -699,11 +882,30 @@ mod tests {
     }
 
     #[test]
+    fn runtime_state_can_hold_reserved_bytes_that_program_payloads_cannot_construct() {
+        let program = parse_program("a=b").unwrap();
+        assert!(Payload::parse(b"=", 1, "test payload").is_err());
+
+        let result = Runtime::new(&program, b"a=#()", false)
+            .unwrap()
+            .run(10_000)
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(result.output.into_vec_u8()).unwrap(),
+            "b=#()"
+        );
+    }
+
+    #[test]
     fn palindrome_example_returns_true_or_false() {
         let source = "\
 b=a|a|
 c=a|aa|
-a|-=\n--=(return)false\n(start)a|=(end)-\n(start)a=(end)|-\n=(return)true";
+a|-=
+--=(return)false
+(start)a|=(end)-
+(start)a=(end)|-
+=(return)true";
 
         assert_eq!(run_source(source, "aba"), "true");
         assert_eq!(run_source(source, "ab"), "false");

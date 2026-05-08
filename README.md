@@ -1,9 +1,12 @@
 # A=B Interpreter
 
-A small Rust command-line interpreter for ordered `lhs=rhs` rewrite programs.
-The interpreter treats the program as compact ASCII code and the input as ASCII
-runtime data. It repeatedly applies the first eligible rule until no rule
-matches, a rule returns, or the configured step limit is reached.
+A small Rust 2024 command-line interpreter for ordered `lhs=rhs` rewrite
+programs.
+
+The important rule is simple: program code and runtime input are different
+things. Program code is compact ASCII syntax. Runtime input is ASCII data. The
+interpreter preserves input bytes that the program syntax cannot write, such as
+spaces and reserved characters.
 
 ## Usage
 
@@ -23,8 +26,8 @@ Arguments:
 
 - `<program-file>`: path to the rewrite program.
 - `[input]`: optional initial input string. If omitted, the input is empty.
-- `--max-steps N`: maximum rewrite steps before execution fails. The default
-  is `1000000`.
+- `--max-steps N`: maximum rewrite steps before execution fails. The default is
+  `1000000`.
 - `--trace`: print the initial state, each applied rule, and final execution
   metadata to stderr.
 
@@ -36,13 +39,14 @@ A program is a text file containing one rewrite rule per non-empty code line:
 lhs=rhs
 ```
 
-The code part of each line is parsed as follows:
+Each line is parsed in this order:
 
 1. `#` starts a comment. Everything from `#` to the end of the line is ignored.
-2. ASCII whitespace in the code part is ignored.
-3. The remaining compact code must be ASCII only.
+2. Non-ASCII bytes are rejected in the remaining code part.
+3. ASCII whitespace in the code part is removed completely.
 4. Empty compact code is ignored.
 5. Non-empty compact code must contain exactly one `=`.
+6. The left side and right side are parsed as compact rule syntax.
 
 Examples:
 
@@ -58,7 +62,7 @@ Non-ASCII text is allowed only in comments:
 a=b# 日本語コメントは許可
 ```
 
-This is invalid because the non-ASCII byte is in code, not in a comment:
+This is invalid because the non-ASCII byte is in code:
 
 ```text
 a=あ
@@ -102,15 +106,15 @@ a=(once)b
 a(once)=b
 ```
 
-Because whitespace is ignored in program code, spaces cannot be represented as
-rule data. Because `=`, `#`, `(`, and `)` are reserved in program code, they also
-cannot be represented as rule data.
+Because whitespace is removed from program code, spaces cannot be represented as
+rule data. Because `=`, `#`, `(`, and `)` are reserved, they also cannot be
+represented as rule data.
 
-The input is different: input bytes are runtime data, not program code. Input
+The input is different. Input bytes are runtime data, not program code. Input
 must be ASCII, but it may contain whitespace and reserved characters. Those
-bytes are preserved through execution unless some adjacent editable data is
-rewritten. Rules cannot directly match, create, or delete reserved characters or
-spaces, because the program syntax has no way to write them as data.
+bytes are preserved through execution unless adjacent editable data is rewritten.
+Rules cannot directly match, create, or delete spaces or reserved characters,
+because the program syntax has no data representation for them.
 
 Example:
 
@@ -259,103 +263,35 @@ Execution stops when:
 If the step limit is reached, the interpreter exits with an error and reports
 the state at the limit.
 
-## Examples
+## Internal Safety Model
 
-### Basic Replacement
+The implementation intentionally separates the byte domains:
 
-Program:
+- `CodeByte`: bytes that may exist as rule payload data. Reserved characters,
+  whitespace, and non-ASCII bytes are impossible to construct through the parser.
+- `Payload`: a sequence of `CodeByte`, used for rule left sides and right-side
+  payloads.
+- `RuntimeByte`: any ASCII input/runtime byte. This includes spaces and reserved
+  characters.
+- `State`: a sequence of `RuntimeByte`, used for execution state and final output.
 
-```text
-aa=x
-a=y
-```
+So a rule payload cannot accidentally contain `=`, `#`, `(`, `)`, whitespace, or
+non-ASCII data. Runtime state can still hold those ASCII bytes when they came
+from input. In other words, the parser does not merely check the rule data and
+then throw it back into an untyped `Vec<u8>` swamp. We do not need another tiny
+byte swamp. Humanity has enough swamps.
 
-Run:
+## Development Checks
 
-```sh
-cargo run -- examples/basic.ab aaaa
-```
-
-Output:
-
-```text
-xx
-```
-
-The first rule is scanned first and rewrites `aa` to `x`, so `aaaa` becomes
-`xx`.
-
-### Comments and Compact Code
-
-Program:
-
-```text
-a b = b b # equivalent to ab=bb
-```
-
-Run:
+Run tests with:
 
 ```sh
-cargo run -- examples/compact.ab abc
+cargo test
 ```
 
-Output:
-
-```text
-bbc
-```
-
-Run with an input space:
+Useful source searches:
 
 ```sh
-cargo run -- examples/compact.ab 'a bc'
+rg "Vec<u8>|CodeByte|RuntimeByte|Payload|State" src README.md
+rg "reserved|whitespace|non-ASCII|multiple '='|parentheses" src README.md
 ```
-
-Output:
-
-```text
-a bc
-```
-
-The rule cannot skip over the input space.
-
-### Explicit Return
-
-Program:
-
-```text
-aa=(return)ok
-a=x
-```
-
-Run:
-
-```sh
-cargo run -- examples/return.ab aabb
-```
-
-Output:
-
-```text
-ok
-```
-
-The `(return)` action discards the current state and returns its right-side
-payload.
-
-## Validation Summary
-
-Program-code errors include:
-
-- non-empty compact code without `=`;
-- compact code containing more than one `=`;
-- non-ASCII bytes before `#`;
-- duplicated or unsupported modifier order;
-- any unsupported use of `(` or `)`.
-
-Input errors include:
-
-- any non-ASCII input byte.
-
-Reserved input bytes such as `=`, `#`, `(`, and `)` are valid input data and are
-preserved, but cannot be directly written in program rules.
