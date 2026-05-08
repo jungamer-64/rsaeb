@@ -36,7 +36,7 @@ For embedded, WASM-core, kernel, or other non-`std` consumers, depend on this
 library package or build only the library target:
 
 ```sh
-cargo check -p a-eq-b-interpreter --lib
+cargo check -p rsaeb --lib
 ```
 
 A downstream `std` application can use the library exactly the same way. A
