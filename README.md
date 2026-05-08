@@ -44,7 +44,7 @@ A downstream `std` application can use the library exactly the same way. A
 
 ## Library Usage
 
-This crate exposes only the parser, runtime, tracing data, and structured error
+This crate exposes the parser, runtime, tracing data, and structured error
 types. External I/O and presentation formatting are outside the library
 boundary. The library does not expose `std::io` errors, because the interpreter
 does not read files.
@@ -54,9 +54,11 @@ Basic one-shot execution:
 ```rust
 use rsaeb::{run, RunOptions};
 
-let result = run("a=b", b"a", RunOptions::default())?;
-assert_eq!(result.output(), b"b");
-# Ok::<(), rsaeb::AebError>(())
+fn main() -> Result<(), rsaeb::AebError> {
+    let result = run("a=b", b"a", RunOptions::default())?;
+    assert_eq!(result.output(), b"b");
+    Ok(())
+}
 ```
 
 Reusable parsed program:
@@ -64,14 +66,16 @@ Reusable parsed program:
 ```rust
 use rsaeb::{Program, RunOptions};
 
-let program = Program::parse("(once)a=b\na=c")?;
+fn main() -> Result<(), rsaeb::AebError> {
+    let program = Program::parse("(once)a=b\na=c")?;
 
-let first = program.run(b"aa", RunOptions::new(10_000))?;
-let second = program.run(b"aa", RunOptions::new(10_000))?;
+    let first = program.run(b"aa", RunOptions::new(10_000))?;
+    let second = program.run(b"aa", RunOptions::new(10_000))?;
 
-assert_eq!(first.output(), b"bc");
-assert_eq!(second.output(), b"bc");
-# Ok::<(), rsaeb::AebError>(())
+    assert_eq!(first.output(), b"bc");
+    assert_eq!(second.output(), b"bc");
+    Ok(())
+}
 ```
 
 `(once)` consumption is runtime-local. Reusing `Program` is safe because parsed
@@ -84,9 +88,11 @@ code:
 ```rust
 use rsaeb::Program;
 
-let program = Program::parse(b"a=b#\xff\xfe\n")?;
-assert_eq!(program.rule_count(), 1);
-# Ok::<(), rsaeb::ParseError>(())
+fn main() -> Result<(), rsaeb::ParseError> {
+    let program = Program::parse(b"a=b#\xff\xfe\n")?;
+    assert_eq!(program.rule_count(), 1);
+    Ok(())
+}
 ```
 
 Trace output is library-owned data, not hard-coded side effects:
@@ -94,18 +100,20 @@ Trace output is library-owned data, not hard-coded side effects:
 ```rust
 use rsaeb::{Program, RunOptions, TraceEvent};
 
-let program = Program::parse("a=b\nb=(return)ok")?;
-let mut events = Vec::new();
-let result = program.run_with_trace(
-    b"a",
-    RunOptions::new(10_000),
-    |event: TraceEvent| events.push(event),
-)?;
+fn main() -> Result<(), rsaeb::AebError> {
+    let program = Program::parse("a=b\nb=(return)ok")?;
+    let mut events = Vec::new();
+    let result = program.run_with_trace(
+        b"a",
+        RunOptions::new(10_000),
+        |event: TraceEvent| events.push(event),
+    )?;
 
-assert_eq!(result.output(), b"ok");
-assert!(result.returned());
-assert_eq!(events.len(), 3);
-# Ok::<(), rsaeb::AebError>(())
+    assert_eq!(result.output(), b"ok");
+    assert!(result.returned());
+    assert_eq!(events.len(), 3);
+    Ok(())
+}
 ```
 
 Trace step events carry a `RuleId`, not a cloned display string. Human-readable
@@ -114,38 +122,111 @@ rule text is metadata on `Program`:
 ```rust
 use rsaeb::{Program, RunOptions, TraceEvent};
 
-let program = Program::parse("a = b # comment")?;
-let mut applied_rule = None;
+fn main() -> Result<(), rsaeb::AebError> {
+    let program = Program::parse("a = b # comment")?;
+    let mut applied_rule = None;
 
-program.run_with_trace(b"a", RunOptions::new(10_000), |event| {
-    if let TraceEvent::Step { rule, .. } = event {
-        applied_rule = Some(rule);
-    }
-})?;
+    program.run_with_trace(b"a", RunOptions::new(10_000), |event| {
+        if let TraceEvent::Step { rule, .. } = event {
+            applied_rule = Some(rule);
+        }
+    })?;
 
-let rule_id = applied_rule.ok_or("trace did not apply a rule")?;
-let rule = program.rule(rule_id).ok_or("missing rule metadata")?;
-assert_eq!(rule.line_number(), 1);
-assert_eq!(rule.compact_source(), b"a=b");
-# Ok::<(), Box<dyn std::error::Error>>(())
+    let rule_id = applied_rule.expect("trace should apply a rule");
+    let rule = program.rule(rule_id).expect("rule metadata should exist");
+    assert_eq!(rule.line_number(), 1);
+    assert_eq!(rule.compact_source(), b"a=b");
+    Ok(())
+}
 ```
 
-Public API surface:
+## Public API Surface
 
+Constants:
+
+- `DEFAULT_MAX_STEPS`: default rewrite step limit.
+
+Program construction and execution:
+
+- `Program`
 - `Program::parse(source)`: parse reusable program bytes.
 - `Program::parse_bytes(source)`: explicit byte parser.
 - `Program::parse_str(source)`: explicit UTF-8 string parser.
+- `Program::rule_count()`: count executable rules.
 - `Program::run(input, options)`: execute without tracing.
 - `Program::run_with_trace(input, options, callback)`: execute and receive
   trace events.
-- `Program::rule(rule_id)`: read parsed rule metadata for tracing/debug UIs.
-- `Program::rules()`: iterate parsed rule metadata.
 - `run(source, input, options)`: one-shot parse and execute helper.
+
+Rule metadata:
+
+- `RuleId`: stable parsed-rule identifier within one `Program`.
+- `RuleId::index()`: zero-based rule index in parse order.
+- `RuleInfo`: read-only parsed-rule metadata.
+- `RuleInfo::id()`: return the rule identifier.
+- `RuleInfo::line_number()`: return the one-based source line number.
+- `RuleInfo::compact_source()`: return whitespace-stripped executable code.
+- `Program::rule(rule_id)`: read parsed rule metadata for tracing/debug UIs.
+- `Program::rules()`: iterate parsed rule metadata in execution order.
+
+Runtime configuration and result:
+
 - `RunOptions`: currently holds the step limit.
+- `RunOptions::new(max_steps)`: create options with an explicit step limit.
 - `RunResult`: owns output bytes plus `steps` and `returned` metadata.
-- `ParseError`: structured source parse failure.
-- `RunError`: structured runtime failure.
+- `RunResult::output()`: borrow final output bytes.
+- `RunResult::into_output()`: consume the result and return final output bytes.
+- `RunResult::steps()`: return the number of applied rewrite steps.
+- `RunResult::returned()`: report whether execution stopped by `(return)`.
+
+Tracing:
+
+- `TraceEvent`: `Initial` state and `Step` events emitted by tracing runs.
+- `TraceEvent::bytes()`: borrow the bytes carried by a trace event.
+
+Errors:
+
 - `AebError`: one-shot `run` union of `ParseError` and `RunError`.
+- `ParseError`: structured source parse failure.
+- `ParseError::line()`: one-based source line.
+- `ParseError::column()`: one-based source column when available.
+- `ParseError::kind()`: structured parse error kind.
+- `ParseErrorKind`: concrete parse failure category.
+- `PayloadKind`: identifies which payload rejected a reserved byte.
+- `RunError`: structured runtime failure.
+- `InputError`: runtime input validation failure.
+- `InputError::column()`: one-based input column.
+- `InputError::byte()`: rejected input byte.
+- `StepLimitError`: step-limit failure with preserved runtime state.
+- `StepLimitError::max_steps()`: configured limit.
+- `StepLimitError::state()`: borrow state bytes at the limit.
+- `StepLimitError::into_state()`: consume the error and return state bytes.
+
+## Execution Semantics
+
+Execution is ordered and single-step.
+
+On each step, the runtime scans rules from top to bottom and applies the first
+rule that matches the current state. For an unanchored non-empty left side, the
+leftmost match in the current state is used. After one rewrite step, scanning
+restarts from the first rule.
+
+Example:
+
+```text
+program:
+aa=x
+a=y
+
+input:
+aaaa
+
+output:
+xx
+```
+
+The first rule is preferred over the second rule, and each application rewrites
+the leftmost matching `aa`.
 
 ## Step Limit Semantics
 
@@ -159,20 +240,19 @@ Examples:
 ```rust
 use rsaeb::{Program, RunError, RunOptions};
 
-let exact = Program::parse("a=b")?
-    .run(b"a", RunOptions::new(1))?;
-assert_eq!(exact.output(), b"b");
-assert_eq!(exact.steps(), 1);
+fn main() -> Result<(), rsaeb::AebError> {
+    let exact = Program::parse("a=b")?.run(b"a", RunOptions::new(1))?;
+    assert_eq!(exact.output(), b"b");
+    assert_eq!(exact.steps(), 1);
 
-let no_match = Program::parse("a=b")?
-    .run(b"x", RunOptions::new(0))?;
-assert_eq!(no_match.output(), b"x");
-assert_eq!(no_match.steps(), 0);
+    let no_match = Program::parse("a=b")?.run(b"x", RunOptions::new(0))?;
+    assert_eq!(no_match.output(), b"x");
+    assert_eq!(no_match.steps(), 0);
 
-let would_apply = Program::parse("a=b")?
-    .run(b"a", RunOptions::new(0));
-assert!(matches!(would_apply, Err(RunError::StepLimit(_))));
-# Ok::<(), rsaeb::AebError>(())
+    let would_apply = Program::parse("a=b")?.run(b"a", RunOptions::new(0));
+    assert!(matches!(would_apply, Err(RunError::StepLimit(_))));
+    Ok(())
+}
 ```
 
 ## Program Format
@@ -270,10 +350,10 @@ rule data. Because `=`, `#`, `(`, and `)` are reserved, they also cannot be
 represented as rule data.
 
 The input is different. Input bytes are runtime data, not program code. Input
-must be ASCII, but it may contain whitespace and reserved characters. Those
-bytes are preserved through execution unless adjacent editable data is rewritten.
-Rules cannot directly match, create, or delete spaces or reserved characters,
-because the program syntax has no data representation for them.
+must be ASCII, but it may contain whitespace and reserved characters. Rules
+cannot match, create, or delete those bytes directly. The bytes themselves remain
+runtime data, although nearby editable bytes may be inserted, removed, or moved
+by ordinary rewrites.
 
 Example:
 
@@ -281,6 +361,14 @@ Example:
 program: a=b
 input:   a=()#c
 output:  b=()#c
+```
+
+Rules also cannot match across preserved runtime-only bytes:
+
+```text
+program: ab=bb
+input:   a bc
+output:  a bc
 ```
 
 ## Left-Side Modifiers
@@ -346,10 +434,23 @@ An empty left side matches an empty byte sequence. For unanchored rules and
 `(start)` rules, it matches at the start of the current state:
 
 ```text
-=x
+(once)=x
 ```
 
-This inserts `x` at the start of the state.
+With input `ab`, this inserts `x` at the start and produces `xab`.
+
+For `(end)` rules, an empty left side matches at the end of the current state:
+
+```text
+(once)(end)=x
+```
+
+With input `ab`, this inserts `x` at the end and produces `abx`.
+
+An unanchored empty-left rule without `(once)`, `(return)`, or some later rule
+that makes execution stop can rewrite forever until the step limit is reached.
+That is legal syntax; it is not magically rescued by the parser, because
+apparently runtimes need to experience consequences too.
 
 ## Error Model
 
@@ -358,18 +459,20 @@ The library error model is intentionally split:
 ```rust
 use rsaeb::{Program, RunError};
 
-match Program::parse("a=b=c") {
-    Err(parse_error) => assert_eq!(parse_error.line(), 1),
-    Ok(_) => assert!(false, "expected parse error"),
-}
+fn main() -> Result<(), rsaeb::AebError> {
+    match Program::parse("a=b=c") {
+        Err(parse_error) => assert_eq!(parse_error.line(), 1),
+        Ok(_) => panic!("expected parse error"),
+    }
 
-let run_error = Program::parse("a=b")?
-    .run("aあ".as_bytes(), Default::default());
+    let run_error = Program::parse("a=b")?.run("aあ".as_bytes(), Default::default());
 
-if let Err(RunError::Input(input_error)) = run_error {
-    assert_eq!(input_error.column(), 2);
+    if let Err(RunError::Input(input_error)) = run_error {
+        assert_eq!(input_error.column(), 2);
+    }
+
+    Ok(())
 }
-# Ok::<(), rsaeb::AebError>(())
 ```
 
 Filesystem failures are not part of the library error model. External I/O must
