@@ -3,6 +3,21 @@
 A small Rust 2024 `no_std + alloc` library for ordered `lhs=rhs` rewrite
 programs.
 
+## Unofficial Project Notice
+
+This project is an unofficial, independently developed interpreter library. It
+is not affiliated with, endorsed by, or maintained by Artless Games or the
+original A=B author.
+
+A=B's tiny `lhs=rhs` rule system is an unusually elegant programming puzzle
+idea, and this project exists because that design is worth studying, testing,
+and reimplementing. Thank you to the original A=B author and Artless Games for
+creating and publishing the game.
+
+If this interpreter interests you, please support the original game:
+
+- Steam store page: <https://store.steampowered.com/app/1720850/AB/>
+
 The important split is deliberately boring and strict: program code and runtime
 input are different domains. Program code is compact ASCII syntax. Runtime input
 is ASCII data. The interpreter preserves input bytes that the program syntax
