@@ -39,5 +39,5 @@ pub use error::{
     StepLimitError, TracedRunError,
 };
 pub use program::{DEFAULT_MAX_STEPS, Program, RunOptions, RunResult, RunTermination, run};
-pub use rule::{RuleInfo, RulePosition};
+pub use rule::{PayloadView, RuleActionView, RuleAnchor, RulePosition, RuleRepeat, RuleView};
 pub use trace::{TraceEffect, TraceEvent};

@@ -5,7 +5,7 @@ use crate::allocation::{AllocationContext, AllocationError, copy_bytes, try_rese
 use crate::bytes::{Payload, RuntimeByte, copy_runtime_bytes, push_runtime_bytes};
 use crate::error::{RunError, StateSizeError, StepLimitError, TracedRunError};
 use crate::program::{Program, RunResult};
-use crate::rule::{Action, Anchor, Rule, RulePosition, RuntimeRuleState};
+use crate::rule::{Action, Rule, RuleAnchor, RulePosition, RuntimeRuleState};
 use crate::trace::{TraceEffect, TraceEvent};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,57 +63,43 @@ impl State {
             .then_some(state_match)
     }
 
-    pub(crate) fn replace_at(
+    pub(crate) fn replace_at_into(
         &self,
         state_match: StateMatch,
         rhs: &Payload,
-    ) -> Result<Self, RunError> {
-        let mut bytes = self.replacement_buffer(state_match, rhs)?;
-        self.push_prefix(&mut bytes, state_match)?;
-        push_runtime_bytes(&mut bytes, rhs.runtime_bytes())?;
-        self.push_suffix(&mut bytes, state_match)?;
-        Ok(Self { bytes })
+        output: &mut Vec<RuntimeByte>,
+    ) -> Result<(), RunError> {
+        self.prepare_replacement_buffer(state_match, rhs, output)?;
+        self.push_prefix(output, state_match)?;
+        push_runtime_bytes(output, rhs.runtime_bytes())?;
+        self.push_suffix(output, state_match)?;
+        Ok(())
     }
 
-    pub(crate) fn move_start_at(
+    pub(crate) fn move_start_at_into(
         &self,
         state_match: StateMatch,
         rhs: &Payload,
-    ) -> Result<Self, RunError> {
-        let mut bytes = self.replacement_buffer(state_match, rhs)?;
-        push_runtime_bytes(&mut bytes, rhs.runtime_bytes())?;
-        self.push_prefix(&mut bytes, state_match)?;
-        self.push_suffix(&mut bytes, state_match)?;
-        Ok(Self { bytes })
+        output: &mut Vec<RuntimeByte>,
+    ) -> Result<(), RunError> {
+        self.prepare_replacement_buffer(state_match, rhs, output)?;
+        push_runtime_bytes(output, rhs.runtime_bytes())?;
+        self.push_prefix(output, state_match)?;
+        self.push_suffix(output, state_match)?;
+        Ok(())
     }
 
-    pub(crate) fn move_end_at(
+    pub(crate) fn move_end_at_into(
         &self,
         state_match: StateMatch,
         rhs: &Payload,
-    ) -> Result<Self, RunError> {
-        let mut bytes = self.replacement_buffer(state_match, rhs)?;
-        self.push_prefix(&mut bytes, state_match)?;
-        self.push_suffix(&mut bytes, state_match)?;
-        push_runtime_bytes(&mut bytes, rhs.runtime_bytes())?;
-        Ok(Self { bytes })
-    }
-
-    pub(crate) fn apply_action(
-        &self,
-        state_match: StateMatch,
-        action: &Action,
-    ) -> Result<RewriteEffect, RunError> {
-        match action {
-            Action::Replace(rhs) => Ok(RewriteEffect::Continue(self.replace_at(state_match, rhs)?)),
-            Action::MoveStart(rhs) => Ok(RewriteEffect::Continue(
-                self.move_start_at(state_match, rhs)?,
-            )),
-            Action::MoveEnd(rhs) => {
-                Ok(RewriteEffect::Continue(self.move_end_at(state_match, rhs)?))
-            }
-            Action::Return(output) => Ok(RewriteEffect::Return(output.to_output()?)),
-        }
+        output: &mut Vec<RuntimeByte>,
+    ) -> Result<(), RunError> {
+        self.prepare_replacement_buffer(state_match, rhs, output)?;
+        self.push_prefix(output, state_match)?;
+        self.push_suffix(output, state_match)?;
+        push_runtime_bytes(output, rhs.runtime_bytes())?;
+        Ok(())
     }
 
     fn replaced_len(
@@ -127,15 +113,16 @@ impl State {
             .ok_or_else(|| StateSizeError::new(self.len(), state_match.lhs_len(), rhs.len()))
     }
 
-    fn replacement_buffer(
+    fn prepare_replacement_buffer(
         &self,
         state_match: StateMatch,
         rhs: &Payload,
-    ) -> Result<Vec<RuntimeByte>, RunError> {
+        output: &mut Vec<RuntimeByte>,
+    ) -> Result<(), RunError> {
         let capacity = self.replaced_len(state_match, rhs)?;
-        let mut bytes = Vec::new();
-        try_reserve_total_exact(&mut bytes, capacity, AllocationContext::RuntimeState)?;
-        Ok(bytes)
+        output.clear();
+        try_reserve_total_exact(output, capacity, AllocationContext::RuntimeState)?;
+        Ok(())
     }
 
     fn push_prefix(
@@ -194,7 +181,7 @@ impl StateMatch {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RewriteEffect {
-    Continue(State),
+    Continue,
     Return(Vec<u8>),
 }
 
@@ -208,6 +195,7 @@ struct MatchedRule<'program> {
 pub(crate) struct Runtime<'program> {
     program: &'program Program,
     state: State,
+    scratch: Vec<RuntimeByte>,
     steps: usize,
     once_states: Vec<RuntimeRuleState>,
 }
@@ -226,9 +214,12 @@ impl<'program> Runtime<'program> {
             once_states.push(RuntimeRuleState::Fresh);
         }
 
+        let scratch = Vec::new();
+
         Ok(Self {
             program,
             state,
+            scratch,
             steps: 0,
             once_states,
         })
@@ -349,22 +340,21 @@ impl<'program> Runtime<'program> {
         F: FnMut(TraceEvent<'program>) -> Result<(), E>,
     {
         let effect = self
-            .state
-            .apply_action(matched.state_match, &matched.rule.action)
+            .apply_action_to_scratch(matched.state_match, &matched.rule.action)
             .map_err(TracedRunError::Run)?;
 
         self.steps += 1;
 
         match effect {
-            RewriteEffect::Continue(next_state) => {
+            RewriteEffect::Continue => {
                 self.emit_step_trace(
                     trace,
                     self.steps,
                     matched.position,
                     matched.rule,
-                    TraceStepPayload::State(&next_state),
+                    TraceStepPayload::State(&self.scratch),
                 )?;
-                self.state = next_state;
+                core::mem::swap(&mut self.state.bytes, &mut self.scratch);
                 Ok(None)
             }
             RewriteEffect::Return(output) => {
@@ -378,6 +368,31 @@ impl<'program> Runtime<'program> {
 
                 Ok(Some(RunResult::from_return(output, self.steps)))
             }
+        }
+    }
+
+    fn apply_action_to_scratch(
+        &mut self,
+        state_match: StateMatch,
+        action: &Action,
+    ) -> Result<RewriteEffect, RunError> {
+        match action {
+            Action::Replace(rhs) => {
+                self.state
+                    .replace_at_into(state_match, rhs, &mut self.scratch)?;
+                Ok(RewriteEffect::Continue)
+            }
+            Action::MoveStart(rhs) => {
+                self.state
+                    .move_start_at_into(state_match, rhs, &mut self.scratch)?;
+                Ok(RewriteEffect::Continue)
+            }
+            Action::MoveEnd(rhs) => {
+                self.state
+                    .move_end_at_into(state_match, rhs, &mut self.scratch)?;
+                Ok(RewriteEffect::Continue)
+            }
+            Action::Return(output) => Ok(RewriteEffect::Return(output.to_output()?)),
         }
     }
 
@@ -395,7 +410,8 @@ impl<'program> Runtime<'program> {
         if let Some(trace) = trace.as_mut() {
             let effect = match payload {
                 TraceStepPayload::State(state) => TraceEffect::Continue {
-                    state: state.snapshot().map_err(RunError::from)?,
+                    state: copy_runtime_bytes(state, AllocationContext::TraceSnapshot)
+                        .map_err(RunError::from)?,
                 },
                 TraceStepPayload::Return(output) => TraceEffect::Return {
                     output: copy_bytes(output, AllocationContext::TraceSnapshot)
@@ -405,7 +421,7 @@ impl<'program> Runtime<'program> {
 
             trace(TraceEvent::Step {
                 step,
-                rule: rule.info(position),
+                rule: rule.view(position),
                 effect,
             })
             .map_err(TracedRunError::Trace)?;
@@ -417,14 +433,14 @@ impl<'program> Runtime<'program> {
 
 fn find_match(state: &State, rule: &Rule) -> Option<StateMatch> {
     match rule.anchor {
-        Anchor::Anywhere => state.find_payload(&rule.lhs),
-        Anchor::Start => state.starts_with_payload(&rule.lhs),
-        Anchor::End => state.ends_with_payload(&rule.lhs),
+        RuleAnchor::Anywhere => state.find_payload(&rule.lhs),
+        RuleAnchor::Start => state.starts_with_payload(&rule.lhs),
+        RuleAnchor::End => state.ends_with_payload(&rule.lhs),
     }
 }
 
 enum TraceStepPayload<'a> {
-    State(&'a State),
+    State(&'a [RuntimeByte]),
     Return(&'a [u8]),
 }
 

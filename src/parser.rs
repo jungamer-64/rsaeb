@@ -4,7 +4,7 @@ use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserv
 use crate::bytes::{CompactByte, Payload};
 use crate::error::{ParseError, ParseErrorKind, PayloadKind};
 use crate::program::Program;
-use crate::rule::{Action, Anchor, Rule, RuleRepeat};
+use crate::rule::{Action, Rule, RuleAnchor, RuleRepeat};
 
 const TOK_ONCE: &[u8] = b"(once)";
 const TOK_START: &[u8] = b"(start)";
@@ -151,6 +151,13 @@ impl CompactCodeLine {
 
 pub(crate) fn parse_program_impl(source: &[u8]) -> Result<Program, ParseError> {
     let mut rules = Vec::new();
+    let rule_upper_bound = source.split(|&byte| byte == b'\n').count();
+    try_reserve_total_exact(
+        &mut rules,
+        rule_upper_bound,
+        AllocationContext::ProgramRules,
+    )
+    .map_err(|error| parse_allocation_error(1, error))?;
 
     for (zero_based_line, raw_line) in source.split(|&byte| byte == b'\n').enumerate() {
         let line_number = zero_based_line + 1;
@@ -212,7 +219,7 @@ fn starts_with_token(input: &[CompactByte], token: &[u8]) -> bool {
 fn parse_lhs(
     mut input: &[CompactByte],
     line_number: usize,
-) -> Result<(RuleRepeat, Anchor, Payload), ParseError> {
+) -> Result<(RuleRepeat, RuleAnchor, Payload), ParseError> {
     let mut repeat = RuleRepeat::Always;
 
     if let Some(rest) = strip_token(input, TOK_ONCE) {
@@ -222,12 +229,12 @@ fn parse_lhs(
 
     let anchor = if let Some(rest) = strip_token(input, TOK_START) {
         input = rest;
-        Anchor::Start
+        RuleAnchor::Start
     } else if let Some(rest) = strip_token(input, TOK_END) {
         input = rest;
-        Anchor::End
+        RuleAnchor::End
     } else {
-        Anchor::Anywhere
+        RuleAnchor::Anywhere
     };
 
     if starts_with_token(input, TOK_ONCE)
@@ -247,18 +254,36 @@ fn parse_lhs(
 
 fn parse_rhs(input: &[CompactByte], line_number: usize) -> Result<Action, ParseError> {
     if let Some(rest) = strip_token(input, TOK_START) {
+        reject_nested_rhs_action(rest, line_number)?;
         let payload = Payload::parse(rest, line_number, PayloadKind::RightSideMoveStartPayload)?;
         Ok(Action::MoveStart(payload))
     } else if let Some(rest) = strip_token(input, TOK_END) {
+        reject_nested_rhs_action(rest, line_number)?;
         let payload = Payload::parse(rest, line_number, PayloadKind::RightSideMoveEndPayload)?;
         Ok(Action::MoveEnd(payload))
     } else if let Some(rest) = strip_token(input, TOK_RETURN) {
+        reject_nested_rhs_action(rest, line_number)?;
         let payload = Payload::parse(rest, line_number, PayloadKind::RightSideReturnPayload)?;
         Ok(Action::Return(payload))
     } else {
         let payload = Payload::parse(input, line_number, PayloadKind::RightSideData)?;
         Ok(Action::Replace(payload))
     }
+}
+
+fn reject_nested_rhs_action(input: &[CompactByte], line_number: usize) -> Result<(), ParseError> {
+    if starts_with_token(input, TOK_START)
+        || starts_with_token(input, TOK_END)
+        || starts_with_token(input, TOK_RETURN)
+    {
+        return Err(ParseError::new(
+            line_number,
+            input.first().copied().map(CompactByte::source_column),
+            ParseErrorKind::UnsupportedRightActionSyntax,
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -393,18 +418,20 @@ mod tests {
     }
 
     #[test]
-    fn right_side_action_payload_cannot_start_with_another_action() {
+    fn right_side_action_payload_cannot_start_with_another_action() -> TestResult {
         for source in [
             "a=(start)(end)b",
             "a=(start)(return)b",
             "a=(end)(start)b",
             "a=(return)(start)b",
         ] {
+            let error = expect_parse_error(source)?;
             assert!(
-                Program::parse(source).is_err(),
-                "source should fail: {source}"
+                matches!(error.kind(), ParseErrorKind::UnsupportedRightActionSyntax),
+                "source should fail with nested right action syntax: {source}"
             );
         }
+        Ok(())
     }
 
     #[test]

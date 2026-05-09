@@ -141,16 +141,17 @@ fn main() -> Result<(), rsaeb::AebError> {
 }
 ```
 
-Trace step events carry borrowed `RuleInfo<'program>` metadata, not a cloned
-display string and not a globally reusable lookup key. The metadata is borrowed
+Trace step events carry borrowed `RuleView<'program>` data, not a cloned
+display string and not a globally reusable lookup key. The view is borrowed
 from the `Program` that produced the trace. There is intentionally no public
 `Program::rule(index)` API: a numeric index cannot prove which program produced
-it, so the library exposes rule metadata directly instead of accepting forged
-handles back from callers. Yes, this is mildly less convenient. That is usually
-what happens when the type system is asked to stop lying for us.
+it, so the library exposes rule data directly instead of accepting forged
+handles back from callers. The view includes the parsed repeat policy, anchor,
+left-side payload, and right-side action; `compact_source()` is display metadata,
+not a source string consumers are expected to parse again.
 
 ```rust
-use rsaeb::{Program, RunOptions, TraceEffect, TraceEvent};
+use rsaeb::{Program, RuleActionView, RuleAnchor, RuleRepeat, RunOptions, TraceEffect, TraceEvent};
 
 fn main() -> Result<(), rsaeb::AebError> {
     let program = Program::parse("a = b # comment")?;
@@ -158,11 +159,17 @@ fn main() -> Result<(), rsaeb::AebError> {
 
     assert_eq!(first_rule.position().zero_based(), 0);
     assert_eq!(first_rule.line_number(), 1);
+    assert_eq!(first_rule.repeat(), RuleRepeat::Always);
+    assert_eq!(first_rule.anchor(), RuleAnchor::Anywhere);
+    assert!(first_rule.lhs().eq_bytes(b"a"));
+    assert!(matches!(first_rule.action(), RuleActionView::Replace(payload) if payload.eq_bytes(b"b")));
     assert_eq!(first_rule.compact_source(), b"a=b");
 
     program.run_with_trace(b"a", RunOptions::new(10_000), |event| {
         if let TraceEvent::Step { rule, effect, .. } = event {
             assert_eq!(rule.position().zero_based(), 0);
+            assert!(rule.lhs().eq_bytes(b"a"));
+            assert!(matches!(rule.action(), RuleActionView::Replace(payload) if payload.eq_bytes(b"b")));
             assert_eq!(rule.compact_source(), b"a=b");
             assert!(matches!(effect, TraceEffect::Continue { .. }));
         }
@@ -185,7 +192,7 @@ Program construction and execution:
 - `Program::parse_bytes(source)`: explicit byte parser.
 - `Program::parse_str(source)`: explicit UTF-8 string parser.
 - `Program::rule_count()`: count executable rules.
-- `Program::rules()`: iterate borrowed parsed-rule metadata in execution order.
+- `Program::rules()`: iterate borrowed structured parsed-rule views in execution order.
 - `Program::run(input, options)`: execute without tracing.
 - `Program::run_with_trace(input, options, callback)`: execute and receive
   infallible trace events.
@@ -193,16 +200,31 @@ Program construction and execution:
   fallible trace events.
 - `run(source, input, options)`: one-shot parse and execute helper.
 
-Rule metadata:
+Rule data:
 
 - `RulePosition`: program-local parsed-rule position used only as metadata.
 - `RulePosition::zero_based()`: zero-based rule position in parse order.
 - `RulePosition::one_based()`: one-based rule number for display.
-- `RuleInfo<'program>`: read-only parsed-rule metadata borrowed from a `Program`.
-- `RuleInfo::position()`: return the program-local metadata position.
-- `RuleInfo::zero_based_position()`: return the zero-based position directly.
-- `RuleInfo::line_number()`: return the one-based source line number.
-- `RuleInfo::compact_source()`: return whitespace-stripped executable code.
+- `RuleRepeat`: `Always` or `Once`.
+- `RuleRepeat::is_once()`: report whether the repeat policy is `(once)`.
+- `RuleAnchor`: `Anywhere`, `Start`, or `End`.
+- `PayloadView<'program>`: read-only borrowed executable payload bytes.
+- `PayloadView::len()`: payload byte length.
+- `PayloadView::is_empty()`: report whether the payload is empty.
+- `PayloadView::bytes()`: iterate payload bytes without allocating.
+- `PayloadView::eq_bytes(expected)`: compare payload bytes without forcing callers to allocate.
+- `RuleActionView<'program>`: read-only right-side action view, one of `Replace`, `MoveStart`, `MoveEnd`, or `Return`.
+- `RuleActionView::payload()`: return the action payload.
+- `RuleActionView::is_return()`: report whether the action is `(return)`.
+- `RuleView<'program>`: read-only structured parsed-rule view borrowed from a `Program`.
+- `RuleView::position()`: return the program-local metadata position.
+- `RuleView::zero_based_position()`: return the zero-based position directly.
+- `RuleView::line_number()`: return the one-based source line number.
+- `RuleView::repeat()`: return the parsed repeat policy.
+- `RuleView::anchor()`: return the parsed match anchor.
+- `RuleView::lhs()`: return the parsed left-side payload.
+- `RuleView::action()`: return the parsed right-side action.
+- `RuleView::compact_source()`: return whitespace-stripped executable code for diagnostics/display.
 
 Runtime configuration and result:
 
@@ -220,7 +242,7 @@ Runtime configuration and result:
 Tracing:
 
 - `TraceEvent<'program>`: `Initial` state and `Step` events emitted by tracing
-  runs. `Step` carries `RuleInfo<'program>` and a typed `TraceEffect`.
+  runs. `Step` carries `RuleView<'program>` and a typed `TraceEffect`.
 - `TraceEffect`: `Continue { state }` or `Return { output }`, instead of an
   ambiguous byte buffer plus a boolean.
 - `TraceEffect::bytes()`: borrow the bytes carried by a step effect.
@@ -236,7 +258,7 @@ Errors:
 - `ParseError::column()`: one-based source column when available.
 - `ParseError::kind()`: structured parse error kind.
 - `ParseErrorKind`: concrete parse failure category, including parser
-  allocation failure and reserved syntax inside payload data.
+  allocation failure, reserved syntax inside payload data, and unsupported right-side action syntax.
 - `PayloadKind`: identifies which payload rejected reserved syntax as data.
 - `RunError`: structured runtime failure.
 - `TracedRunError<E>`: runtime-or-callback error for `try_run_with_trace`.

@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use crate::rule::RuleInfo;
+use crate::rule::RuleView;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TraceEffect {
@@ -30,7 +30,7 @@ impl TraceEffect {
 /// Trace event emitted by [`Program::run_with_trace`] and
 /// [`Program::try_run_with_trace`].
 ///
-/// Step events carry borrowed rule metadata and a structured effect. Return
+/// Step events carry a borrowed structured rule view and a structured effect. Return
 /// steps cannot be confused with ordinary continuation steps by forgetting to
 /// inspect a boolean flag.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,8 +41,8 @@ pub enum TraceEvent<'program> {
     Step {
         /// One-based applied step count.
         step: usize,
-        /// Metadata for the applied rule.
-        rule: RuleInfo<'program>,
+        /// Structured view of the applied rule.
+        rule: RuleView<'program>,
         /// Structured result of the rewrite step.
         effect: TraceEffect,
     },
@@ -71,7 +71,7 @@ impl TraceEvent<'_> {
 #[cfg(test)]
 mod tests {
     use crate::test_support::{TestFailure, TestResult, expect_event};
-    use crate::{Program, RunOptions, TraceEffect, TraceEvent, TracedRunError};
+    use crate::{Program, RuleActionView, RunOptions, TraceEffect, TraceEvent, TracedRunError};
     use std::vec::Vec;
     #[test]
     fn trace_events_are_emitted_without_core_stderr() -> TestResult {
@@ -105,6 +105,11 @@ mod tests {
                 assert_eq!(state.as_slice(), b"b");
                 assert_eq!(rule.position().zero_based(), 0);
                 assert_eq!(rule.line_number(), 1);
+                assert!(rule.lhs().eq_bytes(b"a"));
+                assert!(matches!(
+                    rule.action(),
+                    RuleActionView::Replace(payload) if payload.eq_bytes(b"b")
+                ));
                 assert_eq!(rule.compact_source(), b"a=b");
             }
             TraceEvent::Initial { .. } | TraceEvent::Step { .. } => {

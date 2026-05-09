@@ -95,7 +95,8 @@ impl Error for ParseError {
             | ParseErrorKind::MissingEquals
             | ParseErrorKind::MultipleEquals
             | ParseErrorKind::ReservedSyntaxInPayload { .. }
-            | ParseErrorKind::UnsupportedLeftModifierOrder => None,
+            | ParseErrorKind::UnsupportedLeftModifierOrder
+            | ParseErrorKind::UnsupportedRightActionSyntax => None,
         }
     }
 }
@@ -117,6 +118,8 @@ pub enum ParseErrorKind {
     ReservedSyntaxInPayload { byte: u8, payload_kind: PayloadKind },
     /// Left-side modifiers were duplicated or ordered outside the supported grammar.
     UnsupportedLeftModifierOrder,
+    /// Right-side actions were nested or otherwise used outside the supported grammar.
+    UnsupportedRightActionSyntax,
 }
 
 impl fmt::Display for ParseErrorKind {
@@ -136,6 +139,9 @@ impl fmt::Display for ParseErrorKind {
             ),
             Self::UnsupportedLeftModifierOrder => {
                 write!(f, "duplicated or unsupported left-side modifier order")
+            }
+            Self::UnsupportedRightActionSyntax => {
+                write!(f, "nested or unsupported right-side action syntax")
             }
         }
     }

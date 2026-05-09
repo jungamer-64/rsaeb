@@ -3,7 +3,7 @@ use core::convert::Infallible;
 
 use crate::error::{AebError, ParseError, RunError, TracedRunError};
 use crate::parser::parse_program_impl;
-use crate::rule::{Rule, RuleInfo, RulePosition};
+use crate::rule::{Rule, RulePosition, RuleView};
 use crate::runtime::Runtime;
 use crate::trace::TraceEvent;
 
@@ -80,12 +80,12 @@ impl Program {
         self.rules.len()
     }
 
-    /// Iterates over parsed rule metadata in execution order.
-    pub fn rules(&self) -> impl Iterator<Item = RuleInfo<'_>> + '_ {
+    /// Iterates over structured parsed-rule views in execution order.
+    pub fn rules(&self) -> impl Iterator<Item = RuleView<'_>> + '_ {
         self.rules
             .iter()
             .enumerate()
-            .map(|(index, rule)| rule.info(RulePosition::new(index)))
+            .map(|(index, rule)| rule.view(RulePosition::new(index)))
     }
 
     /// Runs this program with the given input bytes.
@@ -210,7 +210,7 @@ impl RunResult {
 mod tests {
     use super::*;
     use crate::test_support::{TestFailure, TestResult};
-    use crate::{RunTermination, run};
+    use crate::{RuleActionView, RuleAnchor, RuleRepeat, RunTermination, run};
     use std::vec::Vec;
     #[test]
     fn public_free_run_works() -> TestResult {
@@ -249,9 +249,24 @@ mod tests {
 
         assert_eq!(first.position().zero_based(), 0);
         assert_eq!(first.line_number(), 1);
+        assert_eq!(first.repeat(), RuleRepeat::Always);
+        assert_eq!(first.anchor(), RuleAnchor::Anywhere);
+        assert!(first.lhs().eq_bytes(b"a"));
+        assert!(matches!(
+            first.action(),
+            RuleActionView::Replace(payload) if payload.eq_bytes(b"b")
+        ));
         assert_eq!(first.compact_source(), b"a=b");
+
         assert_eq!(second.position().zero_based(), 1);
         assert_eq!(second.line_number(), 2);
+        assert_eq!(second.repeat(), RuleRepeat::Always);
+        assert_eq!(second.anchor(), RuleAnchor::Start);
+        assert!(second.lhs().eq_bytes(b"c"));
+        assert!(matches!(
+            second.action(),
+            RuleActionView::MoveEnd(payload) if payload.eq_bytes(b"d")
+        ));
         assert_eq!(second.compact_source(), b"(start)c=(end)d");
         Ok(())
     }
