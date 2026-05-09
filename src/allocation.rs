@@ -127,3 +127,14 @@ pub(crate) fn copy_bytes(
     output.extend_from_slice(source);
     Ok(output)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn allocation_contexts_are_publicly_inspectable() {
+        let error = AllocationError::new(AllocationContext::TraceSnapshot, 123);
+        assert_eq!(error.context(), AllocationContext::TraceSnapshot);
+        assert_eq!(error.requested_capacity(), 123);
+    }
+}

@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use crate::allocation::{try_push, try_reserve_total_exact, AllocationContext, AllocationError};
+use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::error::{InputError, ParseError, ParseErrorKind, PayloadKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,5 +195,49 @@ impl CompactByte {
 
     pub(crate) const fn source_column(self) -> usize {
         self.source_column
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ParseErrorKind, PayloadKind};
+    #[test]
+    fn code_byte_rejects_every_reserved_syntax_byte_even_if_payload_parser_is_called_directly() {
+        for reserved in [b'=', b'#', b'(', b')'] {
+            let compact = [CompactByte::new(reserved, 1)];
+            let error = Payload::parse(&compact, 1, PayloadKind::RightSideData)
+                .expect_err("reserved syntax byte should not become CodeByte");
+
+            assert_eq!(error.column(), Some(1));
+            assert!(matches!(
+                error.kind(),
+                ParseErrorKind::ReservedSyntaxInPayload {
+                    payload_kind: PayloadKind::RightSideData,
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn code_byte_revalidates_compact_bytes_instead_of_trusting_the_previous_phase() {
+        let non_ascii = [CompactByte::new(0xff, 1)];
+        let non_graphic = [CompactByte::new(b' ', 2)];
+
+        let error = Payload::parse(&non_ascii, 1, PayloadKind::RightSideData)
+            .expect_err("non-ASCII byte should not become CodeByte");
+        assert!(matches!(
+            error.kind(),
+            ParseErrorKind::NonAsciiInCode { .. }
+        ));
+
+        let error = Payload::parse(&non_graphic, 1, PayloadKind::RightSideData)
+            .expect_err("non-graphic byte should not become CodeByte");
+        assert_eq!(error.column(), Some(2));
+        assert!(matches!(
+            error.kind(),
+            ParseErrorKind::NonPrintableAsciiInCode { .. }
+        ));
     }
 }

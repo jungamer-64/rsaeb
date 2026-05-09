@@ -26,7 +26,7 @@ with `(return)`, which replaces the whole output with its return payload.
 
 ## `no_std` Library Boundary
 
-`src/lib.rs` is `#![no_std]` and uses `alloc` for owned buffers such as
+The library crate is `#![no_std]` and uses `alloc` for owned buffers such as
 `Vec<u8>`, boxed per-run rule state, `RunResult`, trace events, and step-limit
 error state. This means the interpreter core does not depend on `std`, files,
 processes, host I/O streams, environment variables, or OS error types. It still

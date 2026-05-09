@@ -67,3 +67,80 @@ impl TraceEvent<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support::{TestFailure, TestResult, expect_event};
+    use crate::{Program, RunOptions, TraceEffect, TraceEvent, TracedRunError};
+    use std::vec::Vec;
+    #[test]
+    fn trace_events_are_emitted_without_core_stderr() -> TestResult {
+        let program = Program::parse("a=b\nb=(return)ok")?;
+        let mut events = Vec::new();
+        let result = program.run_with_trace(b"a", RunOptions::new(10_000), |event| {
+            events.push(event);
+        })?;
+
+        assert_eq!(result.output(), b"ok");
+        assert!(result.returned());
+        assert_eq!(events.len(), 3);
+
+        let initial = expect_event(&events, 0)?;
+        let first_step = expect_event(&events, 1)?;
+        let second_step = expect_event(&events, 2)?;
+
+        assert!(matches!(initial, TraceEvent::Initial { .. }));
+        assert_eq!(initial.bytes(), b"a");
+        assert_eq!(first_step.bytes(), b"b");
+        assert_eq!(second_step.bytes(), b"ok");
+        assert!(!first_step.is_return_step());
+        assert!(second_step.is_return_step());
+
+        match first_step {
+            TraceEvent::Step {
+                rule,
+                effect: TraceEffect::Continue { state },
+                ..
+            } => {
+                assert_eq!(state.as_slice(), b"b");
+                assert_eq!(rule.position().zero_based(), 0);
+                assert_eq!(rule.line_number(), 1);
+                assert_eq!(rule.compact_source(), b"a=b");
+            }
+            TraceEvent::Initial { .. } | TraceEvent::Step { .. } => {
+                return Err(TestFailure::Message("expected continuing step event"));
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn fallible_trace_callback_can_abort_execution() -> TestResult {
+        let program = Program::parse("a=b\nb=c")?;
+        let result = program.try_run_with_trace(b"a", RunOptions::new(10_000), |_event| {
+            Err::<(), _>("trace sink full")
+        });
+
+        assert_eq!(result, Err(TracedRunError::Trace("trace sink full")));
+        Ok(())
+    }
+
+    #[test]
+    fn traced_final_event_matches_run_result() -> TestResult {
+        let program = Program::parse("a=b\nb=(return)c")?;
+        let mut events = Vec::new();
+
+        let result = program.run_with_trace(b"a", RunOptions::new(10), |event| {
+            events.push(event);
+        })?;
+
+        let last = events
+            .last()
+            .ok_or(TestFailure::Message("expected final trace event"))?;
+        assert_eq!(last.bytes(), result.output());
+        assert_eq!(events.len(), result.steps() + 1);
+        assert!(last.is_return_step());
+        Ok(())
+    }
+}

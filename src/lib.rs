@@ -21,6 +21,9 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+#[cfg(test)]
+mod test_support;
+
 mod allocation;
 mod bytes;
 mod error;
@@ -35,6 +38,6 @@ pub use error::{
     AebError, InputError, ParseError, ParseErrorKind, PayloadKind, RunError, StateSizeError,
     StepLimitError, TracedRunError,
 };
-pub use program::{run, Program, RunOptions, RunResult, RunTermination, DEFAULT_MAX_STEPS};
+pub use program::{DEFAULT_MAX_STEPS, Program, RunOptions, RunResult, RunTermination, run};
 pub use rule::{RuleInfo, RulePosition};
 pub use trace::{TraceEffect, TraceEvent};

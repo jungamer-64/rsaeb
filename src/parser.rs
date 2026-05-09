@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use crate::allocation::{try_push, try_reserve_total_exact, AllocationContext, AllocationError};
+use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::{CompactByte, Payload};
 use crate::error::{ParseError, ParseErrorKind, PayloadKind};
 use crate::program::Program;
@@ -92,7 +92,11 @@ impl CompactCodeLine {
 
     fn compact_source(&self) -> Result<Vec<u8>, AllocationError> {
         let mut source = Vec::new();
-        try_reserve_total_exact(&mut source, self.bytes.len(), AllocationContext::CompactSource)?;
+        try_reserve_total_exact(
+            &mut source,
+            self.bytes.len(),
+            AllocationContext::CompactSource,
+        )?;
 
         for byte in self.bytes.iter().copied() {
             source.push(byte.as_u8());
@@ -254,5 +258,188 @@ fn parse_rhs(input: &[CompactByte], line_number: usize) -> Result<Action, ParseE
     } else {
         let payload = Payload::parse(input, line_number, PayloadKind::RightSideData)?;
         Ok(Action::Replace(payload))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support::{TestResult, expect_parse_error, run_source};
+    use crate::{ParseErrorKind, PayloadKind, Program, RunOptions};
+    #[test]
+    fn code_spaces_are_ignored_in_rules() -> TestResult {
+        assert_eq!(run_source("a b=bb", "abc")?, "bbc");
+        assert_eq!(run_source("a = b", "a")?, "b");
+        assert_eq!(run_source("( once ) a = ( end ) b", "ca")?, "cb");
+        Ok(())
+    }
+
+    #[test]
+    fn crlf_source_is_accepted_as_code_whitespace() -> TestResult {
+        assert_eq!(run_source("a=b\r\nb=c\r\n", "a")?, "c");
+        Ok(())
+    }
+
+    #[test]
+    fn tab_whitespace_is_ignored_in_code() -> TestResult {
+        assert_eq!(run_source("a\tb = c\tc", "ab")?, "cc");
+        Ok(())
+    }
+
+    #[test]
+    fn hash_starts_a_comment() -> TestResult {
+        assert_eq!(run_source("a=b#c", "a")?, "b");
+        assert_eq!(run_source("#a=b", "a")?, "a");
+        assert_eq!(run_source("a=b#コメント内の非ASCIIは許可", "a")?, "b");
+        Ok(())
+    }
+
+    #[test]
+    fn comments_may_contain_non_utf8_bytes_because_the_core_parser_is_byte_oriented() -> TestResult
+    {
+        let source = b"a=b#\xff\xfe\n";
+        let program = Program::parse(source)?;
+        let result = program.run(b"a", RunOptions::new(10_000))?;
+        assert_eq!(result.output(), b"b");
+        Ok(())
+    }
+
+    #[test]
+    fn code_body_rejects_non_ascii_outside_comments() -> TestResult {
+        assert!(Program::parse("a=あ").is_err());
+        assert!(Program::parse("あ=b# comment").is_err());
+        assert!(Program::parse("a=b#あ").is_ok());
+
+        let error = expect_parse_error("a=あ")?;
+        assert_eq!(error.line(), 1);
+        assert_eq!(error.column(), Some(3));
+        assert!(matches!(
+            error.kind(),
+            ParseErrorKind::NonAsciiInCode { .. }
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn code_body_rejects_non_printable_ascii_outside_comments() -> TestResult {
+        let error = expect_parse_error("a=\0")?;
+        assert_eq!(error.line(), 1);
+        assert_eq!(error.column(), Some(3));
+        assert!(matches!(
+            error.kind(),
+            ParseErrorKind::NonPrintableAsciiInCode { .. }
+        ));
+
+        assert!(Program::parse("a=b#\0").is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn second_equals_is_a_parse_error_unless_it_is_in_a_comment() -> TestResult {
+        let error = expect_parse_error("a=b=c")?;
+        assert_eq!(error.column(), Some(4));
+        assert!(matches!(error.kind(), ParseErrorKind::MultipleEquals));
+
+        let error = expect_parse_error("a=b =c")?;
+        assert_eq!(error.column(), Some(5));
+        assert!(matches!(error.kind(), ParseErrorKind::MultipleEquals));
+
+        assert!(Program::parse("a=b#=c").is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_parentheses_are_parse_errors() {
+        for source in [
+            "a=b(",
+            "a=b)",
+            "a=b()",
+            "a=()",
+            "a=b(start)",
+            "a=(once)b",
+            "a(once)=b",
+        ] {
+            assert!(
+                Program::parse(source).is_err(),
+                "source should fail: {source}"
+            );
+        }
+
+        assert!(Program::parse("(once)(start)a=(end)b").is_ok());
+        assert!(Program::parse("a=(return)").is_ok());
+    }
+
+    #[test]
+    fn comment_before_non_ascii_code_hides_it() {
+        assert!(Program::parse(b"#\xff\xfe\n").is_ok());
+        assert!(Program::parse(b"a=b#\xff\xfe\n").is_ok());
+    }
+
+    #[test]
+    fn rhs_action_with_empty_payload_is_allowed() -> TestResult {
+        assert_eq!(run_source("a=(start)", "ba")?, "b");
+        assert_eq!(run_source("a=(end)", "ba")?, "b");
+        assert_eq!(run_source("a=(return)", "a")?, "");
+        Ok(())
+    }
+
+    #[test]
+    fn multiline_errors_report_line_and_original_column() -> TestResult {
+        let error = expect_parse_error("a=b\nx = y = z")?;
+
+        assert_eq!(error.line(), 2);
+        assert_eq!(error.column(), Some(7));
+        assert!(matches!(error.kind(), ParseErrorKind::MultipleEquals));
+        Ok(())
+    }
+
+    #[test]
+    fn right_side_action_payload_cannot_start_with_another_action() {
+        for source in [
+            "a=(start)(end)b",
+            "a=(start)(return)b",
+            "a=(end)(start)b",
+            "a=(return)(start)b",
+        ] {
+            assert!(
+                Program::parse(source).is_err(),
+                "source should fail: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn reserved_payload_syntax_errors_keep_original_source_column() -> TestResult {
+        let error = expect_parse_error("a = b (")?;
+        assert_eq!(error.column(), Some(7));
+        assert!(matches!(
+            error.kind(),
+            ParseErrorKind::ReservedSyntaxInPayload {
+                payload_kind: PayloadKind::RightSideData,
+                ..
+            }
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_left_modifier_order_is_structured() -> TestResult {
+        let error = expect_parse_error("(start)(once)a=b")?;
+        assert!(matches!(
+            error.kind(),
+            ParseErrorKind::UnsupportedLeftModifierOrder
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn compacted_source_and_spaced_source_are_equivalent() -> TestResult {
+        let compact = Program::parse("(once)(start)a=(end)b")?;
+        let spaced = Program::parse("( once ) ( start ) a = ( end ) b # comment")?;
+
+        let compact_result = compact.run(b"ac", RunOptions::new(10))?;
+        let spaced_result = spaced.run(b"ac", RunOptions::new(10))?;
+
+        assert_eq!(compact_result.output(), spaced_result.output());
+        Ok(())
     }
 }

@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
 use core::convert::Infallible;
 
-use crate::allocation::{copy_bytes, try_reserve_total_exact, AllocationContext, AllocationError};
-use crate::bytes::{copy_runtime_bytes, push_runtime_bytes, Payload, RuntimeByte};
+use crate::allocation::{AllocationContext, AllocationError, copy_bytes, try_reserve_total_exact};
+use crate::bytes::{Payload, RuntimeByte, copy_runtime_bytes, push_runtime_bytes};
 use crate::error::{RunError, StateSizeError, StepLimitError, TracedRunError};
 use crate::program::{Program, RunResult};
 use crate::rule::{Action, Anchor, Rule, RulePosition, RuntimeRuleState};
@@ -47,7 +47,11 @@ impl State {
         (0..=last_start).find_map(|position| self.matches_payload_at(position, payload))
     }
 
-    pub(crate) fn matches_payload_at(&self, position: usize, payload: &Payload) -> Option<StateMatch> {
+    pub(crate) fn matches_payload_at(
+        &self,
+        position: usize,
+        payload: &Payload,
+    ) -> Option<StateMatch> {
         let state_match = StateMatch::checked(position, payload.len(), self.len())?;
         let window = self.bytes.get(state_match.position()..state_match.end())?;
 
@@ -59,7 +63,11 @@ impl State {
             .then_some(state_match)
     }
 
-    pub(crate) fn replace_at(&self, state_match: StateMatch, rhs: &Payload) -> Result<Self, RunError> {
+    pub(crate) fn replace_at(
+        &self,
+        state_match: StateMatch,
+        rhs: &Payload,
+    ) -> Result<Self, RunError> {
         let mut bytes = self.replacement_buffer(state_match, rhs)?;
         self.push_prefix(&mut bytes, state_match)?;
         push_runtime_bytes(&mut bytes, rhs.runtime_bytes())?;
@@ -67,7 +75,11 @@ impl State {
         Ok(Self { bytes })
     }
 
-    pub(crate) fn move_start_at(&self, state_match: StateMatch, rhs: &Payload) -> Result<Self, RunError> {
+    pub(crate) fn move_start_at(
+        &self,
+        state_match: StateMatch,
+        rhs: &Payload,
+    ) -> Result<Self, RunError> {
         let mut bytes = self.replacement_buffer(state_match, rhs)?;
         push_runtime_bytes(&mut bytes, rhs.runtime_bytes())?;
         self.push_prefix(&mut bytes, state_match)?;
@@ -75,7 +87,11 @@ impl State {
         Ok(Self { bytes })
     }
 
-    pub(crate) fn move_end_at(&self, state_match: StateMatch, rhs: &Payload) -> Result<Self, RunError> {
+    pub(crate) fn move_end_at(
+        &self,
+        state_match: StateMatch,
+        rhs: &Payload,
+    ) -> Result<Self, RunError> {
         let mut bytes = self.replacement_buffer(state_match, rhs)?;
         self.push_prefix(&mut bytes, state_match)?;
         self.push_suffix(&mut bytes, state_match)?;
@@ -90,9 +106,9 @@ impl State {
     ) -> Result<RewriteEffect, RunError> {
         match action {
             Action::Replace(rhs) => Ok(RewriteEffect::Continue(self.replace_at(state_match, rhs)?)),
-            Action::MoveStart(rhs) => {
-                Ok(RewriteEffect::Continue(self.move_start_at(state_match, rhs)?))
-            }
+            Action::MoveStart(rhs) => Ok(RewriteEffect::Continue(
+                self.move_start_at(state_match, rhs)?,
+            )),
             Action::MoveEnd(rhs) => {
                 Ok(RewriteEffect::Continue(self.move_end_at(state_match, rhs)?))
             }
@@ -220,8 +236,7 @@ impl<'program> Runtime<'program> {
 
     pub(crate) fn run(self, max_steps: usize) -> Result<RunResult, RunError> {
         match self.run_impl::<fn(TraceEvent<'program>) -> Result<(), Infallible>, Infallible>(
-            max_steps,
-            None,
+            max_steps, None,
         ) {
             Ok(result) => Ok(result),
             Err(TracedRunError::Run(error)) => Err(error),
@@ -411,4 +426,259 @@ fn find_match(state: &State, rule: &Rule) -> Option<StateMatch> {
 enum TraceStepPayload<'a> {
     State(&'a State),
     Return(&'a [u8]),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bytes::{CompactByte, Payload};
+    use crate::test_support::{
+        TestResult, expect_input_error, expect_run_error, expect_step_limit, run_source,
+    };
+    use crate::{PayloadKind, Program, RunOptions};
+    use std::string::String;
+    #[test]
+    fn normal_replacement_is_ordered_and_leftmost() -> TestResult {
+        let source = "aa=x\na=y";
+        assert_eq!(run_source(source, "aaaa")?, "xx");
+        Ok(())
+    }
+
+    #[test]
+    fn start_anchor_matches_only_at_start() -> TestResult {
+        let source = "(start)a=x";
+        assert_eq!(run_source(source, "aba")?, "xba");
+        assert_eq!(run_source(source, "ba")?, "ba");
+        Ok(())
+    }
+
+    #[test]
+    fn end_anchor_matches_only_at_end() -> TestResult {
+        let source = "(end)a=x";
+        assert_eq!(run_source(source, "aba")?, "abx");
+        assert_eq!(run_source(source, "ab")?, "ab");
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_continues_after_anchored_replacement() -> TestResult {
+        let source = "(start)a=x\na=y";
+        assert_eq!(run_source(source, "aba")?, "xby");
+
+        let source = "(end)a=x\na=y";
+        assert_eq!(run_source(source, "aba")?, "ybx");
+        Ok(())
+    }
+
+    #[test]
+    fn move_start_works() -> TestResult {
+        let source = "a=(start)x";
+        assert_eq!(run_source(source, "ba")?, "xb");
+        Ok(())
+    }
+
+    #[test]
+    fn move_end_works() -> TestResult {
+        let source = "a=(end)x";
+        assert_eq!(run_source(source, "ba")?, "bx");
+        Ok(())
+    }
+
+    #[test]
+    fn empty_lhs_anywhere_matches_at_start() -> TestResult {
+        let source = "(once)=x\n(start)x=(return)ok";
+        let result = Program::parse(source)?.run(b"ab", RunOptions::new(2))?;
+
+        assert_eq!(result.output(), b"ok");
+        assert_eq!(result.steps(), 2);
+        assert!(result.returned());
+        Ok(())
+    }
+
+    #[test]
+    fn empty_lhs_start_and_end_anchors_pick_different_edges() -> TestResult {
+        let start_result =
+            Program::parse("(once)(start)=x\nxab=(return)start")?.run(b"ab", RunOptions::new(2))?;
+        let end_result =
+            Program::parse("(once)(end)=x\nabx=(return)end")?.run(b"ab", RunOptions::new(2))?;
+
+        assert_eq!(start_result.output(), b"start");
+        assert_eq!(end_result.output(), b"end");
+        Ok(())
+    }
+
+    #[test]
+    fn once_rule_is_used_at_most_once() -> TestResult {
+        let source = "(once)a=b\na=c";
+        assert_eq!(run_source(source, "aa")?, "bc");
+        Ok(())
+    }
+
+    #[test]
+    fn return_discards_current_state() -> TestResult {
+        let source = "aa=(return)ok\na=x";
+        assert_eq!(run_source(source, "aabb")?, "ok");
+        Ok(())
+    }
+
+    #[test]
+    fn return_discards_runtime_only_bytes_explicitly() -> TestResult {
+        let result = Program::parse("a=(return)x")?.run(b"a=()#c", RunOptions::new(1))?;
+
+        assert_eq!(result.output(), b"x");
+        assert!(result.returned());
+        Ok(())
+    }
+
+    #[test]
+    fn empty_lhs_inserts_at_start() -> TestResult {
+        let source = "aaa=(return)a\n=a";
+        assert_eq!(run_source(source, "")?, "a");
+        Ok(())
+    }
+
+    #[test]
+    fn input_spaces_are_preserved_and_do_not_bridge_matches() -> TestResult {
+        assert_eq!(run_source("a= b", "a bc")?, "b bc");
+        assert_eq!(run_source("a b=bb", "a bc")?, "a bc");
+        assert_eq!(run_source("ab=bb", "a bc")?, "a bc");
+        Ok(())
+    }
+
+    #[test]
+    fn code_cannot_create_or_match_space_even_when_space_is_written_near_rules() -> TestResult {
+        assert_eq!(run_source("a= ", "a ")?, " ");
+        assert_eq!(run_source(" a = b ", "a")?, "b");
+        Ok(())
+    }
+
+    #[test]
+    fn reserved_input_bytes_are_preserved_but_not_editable_from_code() -> TestResult {
+        assert_eq!(run_source("a=b", "a=()#c")?, "b=()#c");
+        assert!(
+            Program::parse("a=b")?
+                .run("aあ".as_bytes(), RunOptions::default())
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_input_error_is_structured() -> TestResult {
+        let error =
+            expect_run_error(Program::parse("a=b")?.run("aあ".as_bytes(), RunOptions::default()))?;
+        let error = expect_input_error(error)?;
+
+        assert_eq!(error.column(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_state_can_hold_reserved_bytes_that_program_payloads_cannot_construct() -> TestResult
+    {
+        let program = Program::parse("a=b")?;
+        assert!(Program::parse("a=(return)(").is_err());
+        assert!(Program::parse("a=b)").is_err());
+
+        let result = program.run(b"a=#()", RunOptions::new(10_000))?;
+        assert_eq!(String::from_utf8(result.into_output())?, "b=#()");
+        Ok(())
+    }
+
+    #[test]
+    fn one_step_program_succeeds_at_exact_step_limit() -> TestResult {
+        let result = Program::parse("a=b")?.run(b"a", RunOptions::new(1))?;
+
+        assert_eq!(result.output(), b"b");
+        assert_eq!(result.steps(), 1);
+        assert!(!result.returned());
+        Ok(())
+    }
+
+    #[test]
+    fn return_program_succeeds_at_exact_step_limit() -> TestResult {
+        let result = Program::parse("a=(return)b")?.run(b"a", RunOptions::new(1))?;
+
+        assert_eq!(result.output(), b"b");
+        assert_eq!(result.steps(), 1);
+        assert!(result.returned());
+        Ok(())
+    }
+
+    #[test]
+    fn zero_step_limit_succeeds_when_no_rule_matches() -> TestResult {
+        let result = Program::parse("a=b")?.run(b"x", RunOptions::new(0))?;
+
+        assert_eq!(result.output(), b"x");
+        assert_eq!(result.steps(), 0);
+        assert!(!result.returned());
+        Ok(())
+    }
+
+    #[test]
+    fn zero_step_limit_fails_only_when_a_rule_would_apply() -> TestResult {
+        let error = expect_run_error(Program::parse("a=b")?.run(b"a", RunOptions::new(0)))?;
+        let error = expect_step_limit(error)?;
+
+        assert_eq!(error.max_steps(), 0);
+        assert_eq!(error.state(), b"a");
+        Ok(())
+    }
+
+    #[test]
+    fn zero_step_limit_blocks_return_rule_too() -> TestResult {
+        let error = expect_run_error(Program::parse("a=(return)b")?.run(b"a", RunOptions::new(0)))?;
+        let error = expect_step_limit(error)?;
+
+        assert_eq!(error.max_steps(), 0);
+        assert_eq!(error.state(), b"a");
+        Ok(())
+    }
+
+    #[test]
+    fn step_limit_error_keeps_state_as_bytes() -> TestResult {
+        let error = expect_run_error(Program::parse("=a")?.run(b"", RunOptions::new(3)))?;
+        let error = expect_step_limit(error)?;
+
+        assert_eq!(error.max_steps(), 3);
+        assert_eq!(error.state(), b"aaa");
+        Ok(())
+    }
+
+    #[test]
+    fn palindrome_example_returns_true_or_false() -> TestResult {
+        let source = "\
+b=a|a|
+c=a|aa|
+a|-=
+--=(return)false
+(start)a|=(end)-
+(start)a=(end)|-
+=(return)true";
+
+        assert_eq!(run_source(source, "aba")?, "true");
+        assert_eq!(run_source(source, "ab")?, "false");
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_output_preserves_ascii_control_bytes_from_input() -> TestResult {
+        let result = Program::parse("a=b")?.run(b"a\0", RunOptions::new(1))?;
+        assert_eq!(result.output(), b"b\0");
+        Ok(())
+    }
+
+    #[test]
+    fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
+        let compact = [CompactByte::new(b'a', 1)];
+        let payload = Payload::parse(&compact, 1, PayloadKind::LeftSideData)?;
+        let state = State::parse_input(b"a=()# ")?;
+
+        assert_eq!(payload.bytes()[0].as_u8(), b'a');
+        assert_eq!(state.bytes[0].as_u8(), b'a');
+        assert_eq!(state.bytes[1].as_u8(), b'=');
+        assert_eq!(state.bytes[2].as_u8(), b'(');
+        assert_eq!(state.bytes[5].as_u8(), b' ');
+        Ok(())
+    }
 }
