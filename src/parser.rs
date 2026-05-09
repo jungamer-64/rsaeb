@@ -118,49 +118,6 @@ impl CompactCodeLine {
     fn is_empty(&self) -> bool {
         self.bytes.is_empty()
     }
-
-    fn equals_position(&self) -> Result<usize, ParseError> {
-        let Some(first_equals) = self.bytes.iter().position(|byte| byte.as_u8() == b'=') else {
-            return Err(ParseError::new(
-                self.line_number,
-                None,
-                ParseErrorKind::MissingEquals,
-            ));
-        };
-
-        if let Some(second_equals) = self
-            .bytes
-            .iter()
-            .skip(first_equals + 1)
-            .find(|byte| byte.as_u8() == b'=')
-            .copied()
-        {
-            return Err(ParseError::new(
-                self.line_number,
-                Some(second_equals.source_column()),
-                ParseErrorKind::MultipleEquals,
-            ));
-        }
-
-        Ok(first_equals)
-    }
-
-    fn split_at_equals(
-        &self,
-        equals_position: usize,
-    ) -> Result<(&[CompactByte], &[CompactByte]), ParseError> {
-        let (lhs, rhs_with_equals) = self.bytes.split_at(equals_position);
-
-        let Some(rhs) = rhs_with_equals.get(1..) else {
-            return Err(ParseError::new(
-                self.line_number,
-                None,
-                ParseErrorKind::MissingEquals,
-            ));
-        };
-
-        Ok((lhs, rhs))
-    }
 }
 
 pub(crate) fn parse_program_impl(source: &[u8]) -> Result<Program, ParseError> {
@@ -233,58 +190,6 @@ fn right_action_kind(input: &[CompactByte]) -> Option<RightActionKind> {
         Some(RightActionKind::Return)
     } else {
         None
-    }
-}
-
-fn parse_lhs(
-    mut input: &[CompactByte],
-    line_number: usize,
-) -> Result<(RuleRepeat, RuleAnchor, Payload), ParseError> {
-    let mut repeat = RuleRepeat::Always;
-
-    if let Some(rest) = strip_token(input, SyntaxToken::Once) {
-        repeat = RuleRepeat::Once;
-        input = rest;
-    }
-
-    let anchor = if let Some(rest) = strip_token(input, SyntaxToken::Start) {
-        input = rest;
-        RuleAnchor::Start
-    } else if let Some(rest) = strip_token(input, SyntaxToken::End) {
-        input = rest;
-        RuleAnchor::End
-    } else {
-        RuleAnchor::Anywhere
-    };
-
-    if let Some(modifier) = left_modifier_kind(input) {
-        return Err(ParseError::new(
-            line_number,
-            input.first().copied().map(CompactByte::source_column),
-            ParseErrorKind::UnsupportedLeftModifierOrder { modifier },
-        ));
-    }
-
-    let lhs = Payload::parse(input, line_number, PayloadKind::LeftSideData)?;
-    Ok((repeat, anchor, lhs))
-}
-
-fn parse_rhs(input: &[CompactByte], line_number: usize) -> Result<Action, ParseError> {
-    if let Some(rest) = strip_token(input, SyntaxToken::Start) {
-        reject_nested_rhs_action(rest, line_number)?;
-        let payload = Payload::parse(rest, line_number, PayloadKind::RightSideMoveStartPayload)?;
-        Ok(Action::MoveStart(payload))
-    } else if let Some(rest) = strip_token(input, SyntaxToken::End) {
-        reject_nested_rhs_action(rest, line_number)?;
-        let payload = Payload::parse(rest, line_number, PayloadKind::RightSideMoveEndPayload)?;
-        Ok(Action::MoveEnd(payload))
-    } else if let Some(rest) = strip_token(input, SyntaxToken::Return) {
-        reject_nested_rhs_action(rest, line_number)?;
-        let payload = Payload::parse(rest, line_number, PayloadKind::RightSideReturnPayload)?;
-        Ok(Action::Return(payload))
-    } else {
-        let payload = Payload::parse(input, line_number, PayloadKind::RightSideData)?;
-        Ok(Action::Replace(payload))
     }
 }
 
