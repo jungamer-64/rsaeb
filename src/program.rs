@@ -4,7 +4,9 @@ use core::convert::Infallible;
 use crate::allocation::{AllocationContext, AllocationError, try_push};
 use crate::error::{AebError, ParseError, RunError, TracedRunError};
 use crate::parser::parse_program_impl;
-use crate::rule::{OnceRuleSlot, ParsedRule, Rule, RulePosition, RuleRepeatPlan, RuleView};
+use crate::rule::{
+    OnceRuleSlot, ParsedRule, Rule, RuleCount, RulePosition, RuleRepeatPlan, RuleView,
+};
 use crate::runtime::Runtime;
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
@@ -277,15 +279,17 @@ impl RuleSet {
         OnceRuleSlot::new(self.once_rule_count())
     }
 
-    pub(crate) fn rule_count(&self) -> usize {
-        self.rules.len()
+    pub(crate) fn rule_count(&self) -> RuleCount {
+        RuleCount::new(self.rules.len())
     }
 
-    pub(crate) fn once_rule_count(&self) -> usize {
-        self.rules
-            .iter()
-            .filter(|rule| rule.repeat().is_once())
-            .count()
+    pub(crate) fn once_rule_count(&self) -> RuleCount {
+        RuleCount::new(
+            self.rules
+                .iter()
+                .filter(|rule| rule.repeat().is_once())
+                .count(),
+        )
     }
 
     pub(crate) fn as_slice(&self) -> &[Rule] {
@@ -325,13 +329,13 @@ impl Program {
 
     /// Returns the number of executable rules in the parsed program.
     #[must_use]
-    pub fn rule_count(&self) -> usize {
+    pub fn rule_count(&self) -> RuleCount {
         self.rule_set.rule_count()
     }
 
     /// Returns the number of `(once)` rules that need runtime state.
     #[must_use]
-    pub fn once_rule_count(&self) -> usize {
+    pub fn once_rule_count(&self) -> RuleCount {
         self.rule_set.once_rule_count()
     }
 
@@ -477,48 +481,55 @@ impl Program {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RunTermination {
+pub enum RunOutcome {
     /// No rule matched the final runtime state.
-    Stable,
+    Stable(RuntimeStateSnapshot),
     /// A matched rule executed the `(return)` action.
-    Return,
+    Return(ReturnOutput),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct RuntimeStateSnapshot {
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ReturnOutput {
+    bytes: Vec<u8>,
 }
 
 /// Result of one program execution.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RunResult {
-    output: Vec<u8>,
     steps: StepCount,
-    termination: RunTermination,
+    outcome: RunOutcome,
 }
 
 impl RunResult {
-    pub(crate) fn stable(output: Vec<u8>, steps: StepCount) -> Self {
+    pub(crate) fn stable(output: RuntimeStateSnapshot, steps: StepCount) -> Self {
         Self {
-            output,
             steps,
-            termination: RunTermination::Stable,
+            outcome: RunOutcome::Stable(output),
         }
     }
 
-    pub(crate) fn from_return(output: Vec<u8>, steps: StepCount) -> Self {
+    pub(crate) fn from_return(output: ReturnOutput, steps: StepCount) -> Self {
         Self {
-            output,
             steps,
-            termination: RunTermination::Return,
+            outcome: RunOutcome::Return(output),
         }
     }
 
-    /// Final output bytes.
+    /// Structured execution outcome.
     #[must_use]
-    pub fn output(&self) -> &[u8] {
-        &self.output
+    pub const fn outcome(&self) -> &RunOutcome {
+        &self.outcome
     }
 
-    /// Consumes the result and returns final output bytes.
+    /// Consumes the result and returns the structured execution outcome.
     #[must_use]
-    pub fn into_output(self) -> Vec<u8> {
-        self.output
+    pub fn into_outcome(self) -> RunOutcome {
+        self.outcome
     }
 
     /// Number of rewrite steps applied.
@@ -527,11 +538,6 @@ impl RunResult {
         self.steps
     }
 
-    /// Structured termination reason.
-    #[must_use]
-    pub const fn termination(&self) -> RunTermination {
-        self.termination
-    }
 }
 
 #[cfg(test)]

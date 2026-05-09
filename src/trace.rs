@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::RuntimeByte;
 use crate::error::{LimitError, RunError};
-use crate::program::{RunLimits, StepCount};
+use crate::program::{ReturnOutput, RunLimits, RuntimeStateSnapshot, StepCount};
 use crate::rule::{PayloadView, RuleView};
 
 /// Borrowed view of runtime-state bytes.
@@ -23,8 +23,8 @@ impl<'run> RuntimeStateView<'run> {
 
     /// Runtime state length in bytes.
     #[must_use]
-    pub const fn len(self) -> usize {
-        self.bytes.len()
+    pub const fn byte_count(self) -> crate::bytes::ByteCount {
+        crate::bytes::ByteCount::new(self.bytes.len())
     }
 
     /// Whether the state is empty.
@@ -41,7 +41,7 @@ impl<'run> RuntimeStateView<'run> {
     /// Returns whether this state has exactly the expected bytes.
     #[must_use]
     pub fn eq_bytes(self, expected: &[u8]) -> bool {
-        self.len() == expected.len()
+        self.byte_count().get() == expected.len()
             && self
                 .bytes()
                 .zip(expected.iter().copied())
@@ -63,7 +63,7 @@ impl<'run> RuntimeStateView<'run> {
         context: AllocationContext,
     ) -> Result<Vec<u8>, AllocationError> {
         let mut output = Vec::new();
-        try_reserve_total_exact(&mut output, self.len(), context)?;
+        try_reserve_total_exact(&mut output, self.byte_count().get(), context)?;
         for byte in self.bytes() {
             try_push(&mut output, byte, context)?;
         }
@@ -80,18 +80,18 @@ impl core::fmt::Debug for RuntimeStateView<'_> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum TraceSnapshotEffect {
     /// The step produced the next runtime state and execution may continue.
-    Continue { state: Vec<u8> },
+    Continue { state: RuntimeStateSnapshot },
     /// The step executed `(return)` and produced final output bytes.
-    Return { output: Vec<u8> },
+    Return { output: ReturnOutput },
 }
 
 impl TraceSnapshotEffect {
     /// State/output bytes carried by this effect.
     #[must_use]
-    pub fn bytes(&self) -> &[u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         match self {
-            Self::Continue { state } => state,
-            Self::Return { output } => output,
+            Self::Continue { state } => state.as_bytes(),
+            Self::Return { output } => output.as_bytes(),
         }
     }
 }
@@ -108,17 +108,17 @@ pub enum BorrowedTraceEffect<'program, 'run> {
 impl BorrowedTraceEffect<'_, '_> {
     /// Byte length carried by this effect.
     #[must_use]
-    pub fn len(self) -> usize {
+    pub fn byte_count(self) -> crate::bytes::ByteCount {
         match self {
-            Self::Continue { state } => state.len(),
-            Self::Return { output } => output.len(),
+            Self::Continue { state } => state.byte_count(),
+            Self::Return { output } => output.byte_count(),
         }
     }
 
     /// Whether the carried bytes are empty.
     #[must_use]
     pub fn is_empty(self) -> bool {
-        self.len() == 0
+        self.byte_count().is_zero()
     }
 
     /// Returns whether this effect carries exactly the expected bytes.
@@ -131,7 +131,7 @@ impl BorrowedTraceEffect<'_, '_> {
     }
 
     fn to_snapshot(self, limits: RunLimits) -> Result<TraceSnapshotEffect, RunError> {
-        ensure_trace_len(self.len(), limits)?;
+        ensure_trace_len(self.byte_count(), limits)?;
         match self {
             Self::Continue { state } => Ok(TraceSnapshotEffect::Continue {
                 state: state.to_vec_with_context(AllocationContext::TraceSnapshot)?,
@@ -154,7 +154,7 @@ impl BorrowedTraceEffect<'_, '_> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum TraceSnapshotEvent<'program> {
     /// Initial runtime state before any rewrite step.
-    Initial { state: Vec<u8> },
+    Initial { state: RuntimeStateSnapshot },
     /// One applied rule.
     Step {
         /// One-based applied step count.
@@ -169,10 +169,10 @@ pub enum TraceSnapshotEvent<'program> {
 impl TraceSnapshotEvent<'_> {
     /// State/output bytes carried by this event.
     #[must_use]
-    pub fn bytes(&self) -> &[u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         match self {
-            Self::Initial { state } => state,
-            Self::Step { effect, .. } => effect.bytes(),
+            Self::Initial { state } => state.as_bytes(),
+            Self::Step { effect, .. } => effect.as_bytes(),
         }
     }
 }

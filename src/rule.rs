@@ -2,9 +2,49 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
-use crate::bytes::Payload;
+use crate::bytes::{ByteCount, Payload};
 use crate::source::SourceLineNumber;
 use crate::syntax::SyntaxToken;
+
+/// Number of parsed rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RuleCount {
+    value: usize,
+}
+
+impl RuleCount {
+    pub(crate) const ZERO: Self = Self { value: 0 };
+
+    pub(crate) const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    /// Parsed-rule count as a primitive value.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+}
+
+/// One-based rule number for public diagnostics and display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RuleNumber {
+    one_based: usize,
+}
+
+impl RuleNumber {
+    const fn from_zero_based(zero_based: usize) -> Self {
+        Self {
+            one_based: zero_based + 1,
+        }
+    }
+
+    /// One-based rule number as a primitive value.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.one_based
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RulePosition {
@@ -16,16 +56,14 @@ impl RulePosition {
         Self { zero_based }
     }
 
-    /// Zero-based rule position in parse order.
-    #[must_use]
-    pub const fn zero_based(self) -> usize {
+    pub(crate) const fn zero_based(self) -> usize {
         self.zero_based
     }
 
     /// One-based rule number for display.
     #[must_use]
-    pub const fn one_based(self) -> usize {
-        self.zero_based + 1
+    pub const fn number(self) -> RuleNumber {
+        RuleNumber::from_zero_based(self.zero_based)
     }
 }
 
@@ -124,14 +162,14 @@ impl<'program> PayloadView<'program> {
 
     /// Payload length in bytes.
     #[must_use]
-    pub fn len(self) -> usize {
-        self.payload.len()
+    pub fn byte_count(self) -> ByteCount {
+        ByteCount::new(self.payload.len())
     }
 
     /// Whether the payload is empty.
     #[must_use]
     pub fn is_empty(self) -> bool {
-        self.payload.is_empty()
+        self.byte_count().is_zero()
     }
 
     /// Payload bytes as a materializing iterator.
@@ -225,12 +263,6 @@ impl<'program> RuleView<'program> {
     #[must_use]
     pub const fn position(self) -> RulePosition {
         self.position
-    }
-
-    /// Zero-based parsed-rule position.
-    #[must_use]
-    pub const fn zero_based_position(self) -> usize {
-        self.position.zero_based()
     }
 
     /// One-based source line number.
