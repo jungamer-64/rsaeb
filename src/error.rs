@@ -4,6 +4,7 @@ use core::fmt;
 
 use crate::allocation::AllocationError;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AebError {
     /// Source program parse error.
     Parse(ParseError),
@@ -273,6 +274,10 @@ pub struct InputError {
 }
 
 impl InputError {
+    pub(crate) const fn new(column: usize, byte: u8) -> Self {
+        Self { column, byte }
+    }
+
     /// One-based input column.
     #[must_use]
     pub const fn column(&self) -> usize {
@@ -354,6 +359,10 @@ pub struct StepLimitError {
 }
 
 impl StepLimitError {
+    pub(crate) fn new(max_steps: usize, state: Vec<u8>) -> Self {
+        Self { max_steps, state }
+    }
+
     /// Configured maximum step count.
     #[must_use]
     pub const fn max_steps(&self) -> usize {
@@ -393,4 +402,3 @@ fn printable_ascii(byte: u8) -> char {
         '\u{fffd}'
     }
 }
-

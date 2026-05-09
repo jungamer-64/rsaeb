@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 use core::error::Error;
 use core::fmt;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AllocationContext {
     /// Building the parsed program rule table.
     ProgramRules,
@@ -54,7 +55,7 @@ pub struct AllocationError {
 }
 
 impl AllocationError {
-    const fn new(context: AllocationContext, requested_capacity: usize) -> Self {
+    pub(crate) const fn new(context: AllocationContext, requested_capacity: usize) -> Self {
         Self {
             context,
             requested_capacity,
@@ -117,7 +118,10 @@ pub(crate) fn try_push<T>(
     Ok(())
 }
 
-pub(crate) fn copy_bytes(source: &[u8], context: AllocationContext) -> Result<Vec<u8>, AllocationError> {
+pub(crate) fn copy_bytes(
+    source: &[u8],
+    context: AllocationContext,
+) -> Result<Vec<u8>, AllocationError> {
     let mut output = Vec::new();
     try_reserve_total_exact(&mut output, source.len(), context)?;
     output.extend_from_slice(source);

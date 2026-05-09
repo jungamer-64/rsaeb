@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 
 use crate::bytes::Payload;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RulePosition {
     zero_based: usize,
 }
@@ -62,7 +63,7 @@ impl<'program> RuleInfo<'program> {
     }
 }
 
-/// Allocation site reported by fallible parser/runtime operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Anchor {
     Anywhere,
     Start,
@@ -92,8 +93,7 @@ impl RuntimeRuleState {
         matches!(self, Self::Consumed)
     }
 }
-
-
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Action {
     Replace(Payload),
     MoveStart(Payload),
@@ -101,6 +101,7 @@ pub(crate) enum Action {
     Return(Payload),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Rule {
     pub(crate) line_number: usize,
     pub(crate) compact_source: Vec<u8>,
@@ -119,8 +120,3 @@ impl Rule {
         }
     }
 }
-
-/// Parsed A=B rewrite program.
-///
-/// A parsed program is immutable and reusable. Per-run `(once)` state lives in
-/// the runtime invocation, not in this value.

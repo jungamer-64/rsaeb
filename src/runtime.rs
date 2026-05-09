@@ -8,6 +8,7 @@ use crate::program::{Program, RunResult};
 use crate::rule::{Action, Anchor, Rule, RulePosition, RuntimeRuleState};
 use crate::trace::{TraceEffect, TraceEvent};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct State {
     pub(crate) bytes: Vec<RuntimeByte>,
 }
@@ -252,11 +253,8 @@ impl<'program> Runtime<'program> {
         loop {
             if self.steps >= max_steps {
                 if self.has_match() {
-                    return Err(RunError::StepLimit(StepLimitError {
-                        max_steps,
-                        state: self.state.into_step_limit_state().map_err(RunError::from)?,
-                    })
-                    .into());
+                    let state = self.state.into_step_limit_state().map_err(RunError::from)?;
+                    return Err(RunError::StepLimit(StepLimitError::new(max_steps, state)).into());
                 }
 
                 return Ok(RunResult::stable(
@@ -410,11 +408,7 @@ fn find_match(state: &State, rule: &Rule) -> Option<StateMatch> {
     }
 }
 
-/// Why execution stopped.
-
 enum TraceStepPayload<'a> {
     State(&'a State),
     Return(&'a [u8]),
 }
-
-/// Effect of one traced rewrite step.

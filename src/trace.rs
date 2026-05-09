@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 
 use crate::rule::RuleInfo;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TraceEffect {
     /// The step produced the next runtime state and execution may continue.
     Continue { state: Vec<u8> },
@@ -66,5 +67,3 @@ impl TraceEvent<'_> {
         }
     }
 }
-
-/// Combined one-shot error used by [`run`].

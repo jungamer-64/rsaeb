@@ -1,8 +1,9 @@
 use alloc::vec::Vec;
 
 use crate::allocation::{try_push, try_reserve_total_exact, AllocationContext, AllocationError};
-use crate::error::{InputError, ParseError, ParseErrorKind, PayloadKind, RunError};
+use crate::error::{InputError, ParseError, ParseErrorKind, PayloadKind};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReservedSyntaxByte {
     Equals,
     Comment,
@@ -76,10 +77,7 @@ pub(crate) struct RuntimeByte(u8);
 impl RuntimeByte {
     pub(crate) fn parse_input(byte: u8, zero_based_column: usize) -> Result<Self, InputError> {
         if !byte.is_ascii() {
-            return Err(InputError {
-                column: zero_based_column + 1,
-                byte,
-            });
+            return Err(InputError::new(zero_based_column + 1, byte));
         }
 
         Ok(Self(byte))
@@ -145,8 +143,9 @@ impl Payload {
         payload_kind: PayloadKind,
     ) -> Result<Self, ParseError> {
         let mut bytes = Vec::new();
-        try_reserve_total_exact(&mut bytes, input.len(), AllocationContext::Payload)
-            .map_err(|error| parse_allocation_error(line_number, error))?;
+        try_reserve_total_exact(&mut bytes, input.len(), AllocationContext::Payload).map_err(
+            |error| ParseError::new(line_number, None, ParseErrorKind::Allocation(error)),
+        )?;
 
         for byte in input.iter().copied() {
             bytes.push(CodeByte::parse_compact(byte, line_number, payload_kind)?);
@@ -176,6 +175,7 @@ impl Payload {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CompactByte {
     byte: u8,
     source_column: usize,
@@ -197,4 +197,3 @@ impl CompactByte {
         self.source_column
     }
 }
-
