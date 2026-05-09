@@ -37,8 +37,7 @@ mod trace;
 pub use allocation::{AllocationContext, AllocationError};
 pub use error::{
     AebError, InputError, LeftModifierKind, ParseError, ParseErrorKind, PayloadKind,
-    ReturnLimitError, RightActionKind, RunError, StateLimitContext, StateLimitError,
-    StateSizeError, StepLimitError, TraceLimitError, TracedRunError,
+    LimitError, RightActionKind, RunError, StateLimitContext, StateSizeError, TracedRunError,
 };
 pub use program::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,

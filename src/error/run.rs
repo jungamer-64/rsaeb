@@ -1,4 +1,3 @@
-use alloc::vec::Vec;
 use core::error::Error;
 
 use crate::allocation::AllocationError;
@@ -12,14 +11,8 @@ pub enum RunError {
     Allocation(AllocationError),
     /// A rewrite length could not be represented.
     StateSize(StateSizeError),
-    /// Runtime state would exceed the configured state limit.
-    StateLimit(StateLimitError),
-    /// `(return)` output would exceed the configured return-output limit.
-    ReturnLimit(ReturnLimitError),
-    /// Trace snapshot materialization would exceed the configured trace limit.
-    TraceLimit(TraceLimitError),
-    /// Execution exceeded the configured step limit.
-    StepLimit(StepLimitError),
+    /// A configured runtime budget would be exceeded.
+    Limit(LimitError),
 }
 
 impl Error for RunError {
@@ -28,10 +21,7 @@ impl Error for RunError {
             Self::Input(error) => Some(error),
             Self::Allocation(error) => Some(error),
             Self::StateSize(error) => Some(error),
-            Self::StateLimit(error) => Some(error),
-            Self::ReturnLimit(error) => Some(error),
-            Self::TraceLimit(error) => Some(error),
-            Self::StepLimit(error) => Some(error),
+            Self::Limit(error) => Some(error),
         }
     }
 }
@@ -54,27 +44,9 @@ impl From<StateSizeError> for RunError {
     }
 }
 
-impl From<StateLimitError> for RunError {
-    fn from(value: StateLimitError) -> Self {
-        Self::StateLimit(value)
-    }
-}
-
-impl From<ReturnLimitError> for RunError {
-    fn from(value: ReturnLimitError) -> Self {
-        Self::ReturnLimit(value)
-    }
-}
-
-impl From<TraceLimitError> for RunError {
-    fn from(value: TraceLimitError) -> Self {
-        Self::TraceLimit(value)
-    }
-}
-
-impl From<StepLimitError> for RunError {
-    fn from(value: StepLimitError) -> Self {
-        Self::StepLimit(value)
+impl From<LimitError> for RunError {
+    fn from(value: LimitError) -> Self {
+        Self::Limit(value)
     }
 }
 
@@ -152,137 +124,77 @@ pub enum StateLimitContext {
     Rewrite,
 }
 
-/// State-limit failure reported before allocating an oversized state.
+/// Configured runtime budget failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StateLimitError {
-    limit: usize,
-    attempted_len: usize,
-    context: StateLimitContext,
+pub enum LimitError {
+    /// Runtime state would exceed the configured state length limit.
+    State {
+        /// Whether the limit was exceeded by input or by a rewrite.
+        context: StateLimitContext,
+        /// Configured maximum runtime state length.
+        limit: usize,
+        /// State length that would have been accepted without this guard.
+        attempted_len: usize,
+    },
+    /// `(return)` output would exceed the configured return-output limit.
+    Return {
+        /// Configured maximum `(return)` output length.
+        limit: usize,
+        /// Return payload length that would have been allocated.
+        attempted_len: usize,
+    },
+    /// Trace snapshot materialization would exceed the configured trace limit.
+    TraceSnapshot {
+        /// Configured maximum trace snapshot byte length.
+        limit: usize,
+        /// Trace state/output snapshot length that would have been allocated.
+        attempted_len: usize,
+    },
+    /// Execution exceeded the configured step limit.
+    Step {
+        /// Configured maximum step count.
+        max_steps: usize,
+        /// Number of completed rewrite steps when the next match was found.
+        completed_steps: usize,
+        /// Runtime state length when the limit was hit.
+        state_len: usize,
+    },
 }
 
-impl StateLimitError {
-    pub(crate) const fn new(
+impl LimitError {
+    pub(crate) const fn state(
+        context: StateLimitContext,
         limit: usize,
         attempted_len: usize,
-        context: StateLimitContext,
     ) -> Self {
-        Self {
-            limit,
-            attempted_len,
+        Self::State {
             context,
-        }
-    }
-
-    /// Configured maximum runtime state length.
-    #[must_use]
-    pub const fn limit(&self) -> usize {
-        self.limit
-    }
-
-    /// State length that would have been accepted without this guard.
-    #[must_use]
-    pub const fn attempted_len(&self) -> usize {
-        self.attempted_len
-    }
-
-    /// Whether the limit was exceeded by input or by a rewrite.
-    #[must_use]
-    pub const fn context(&self) -> StateLimitContext {
-        self.context
-    }
-}
-
-impl Error for StateLimitError {}
-
-/// Return-output limit failure reported before allocating oversized output.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReturnLimitError {
-    limit: usize,
-    attempted_len: usize,
-}
-
-impl ReturnLimitError {
-    pub(crate) const fn new(limit: usize, attempted_len: usize) -> Self {
-        Self {
             limit,
             attempted_len,
         }
     }
 
-    /// Configured maximum `(return)` output length.
-    #[must_use]
-    pub const fn limit(&self) -> usize {
-        self.limit
-    }
-
-    /// Return payload length that would have been allocated.
-    #[must_use]
-    pub const fn attempted_len(&self) -> usize {
-        self.attempted_len
-    }
-}
-
-impl Error for ReturnLimitError {}
-
-/// Trace snapshot materialization limit failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TraceLimitError {
-    limit: usize,
-    attempted_len: usize,
-}
-
-impl TraceLimitError {
-    pub(crate) const fn new(limit: usize, attempted_len: usize) -> Self {
-        Self {
+    pub(crate) const fn return_output(limit: usize, attempted_len: usize) -> Self {
+        Self::Return {
             limit,
             attempted_len,
         }
     }
 
-    /// Configured maximum trace snapshot byte length.
-    #[must_use]
-    pub const fn limit(&self) -> usize {
-        self.limit
+    pub(crate) const fn trace_snapshot(limit: usize, attempted_len: usize) -> Self {
+        Self::TraceSnapshot {
+            limit,
+            attempted_len,
+        }
     }
 
-    /// Trace state/output snapshot length that would have been allocated.
-    #[must_use]
-    pub const fn attempted_len(&self) -> usize {
-        self.attempted_len
-    }
-}
-
-impl Error for TraceLimitError {}
-
-/// Step-limit failure with the last runtime state preserved as bytes.
-#[derive(Debug, PartialEq, Eq)]
-pub struct StepLimitError {
-    max_steps: usize,
-    state: Vec<u8>,
-}
-
-impl StepLimitError {
-    pub(crate) fn new(max_steps: usize, state: Vec<u8>) -> Self {
-        Self { max_steps, state }
-    }
-
-    /// Configured maximum step count.
-    #[must_use]
-    pub const fn max_steps(&self) -> usize {
-        self.max_steps
-    }
-
-    /// Runtime state when the limit was hit.
-    #[must_use]
-    pub fn state(&self) -> &[u8] {
-        &self.state
-    }
-
-    /// Consumes the error and returns the runtime state.
-    #[must_use]
-    pub fn into_state(self) -> Vec<u8> {
-        self.state
+    pub(crate) const fn step(max_steps: usize, completed_steps: usize, state_len: usize) -> Self {
+        Self::Step {
+            max_steps,
+            completed_steps,
+            state_len,
+        }
     }
 }
 
-impl Error for StepLimitError {}
+impl Error for LimitError {}

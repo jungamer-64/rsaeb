@@ -13,8 +13,7 @@ use core::error::Error;
 
 pub use parse::{LeftModifierKind, ParseError, ParseErrorKind, PayloadKind, RightActionKind};
 pub use run::{
-    InputError, ReturnLimitError, RunError, StateLimitContext, StateLimitError, StateSizeError,
-    StepLimitError, TraceLimitError,
+    InputError, LimitError, RunError, StateLimitContext, StateSizeError,
 };
 pub use traced::TracedRunError;
 
