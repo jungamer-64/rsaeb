@@ -19,19 +19,28 @@ If this interpreter interests you, please support the original game:
 - Steam store page: <https://store.steampowered.com/app/1720850/AB/>
 
 The important split is deliberately boring and strict: program code and runtime
-input are different domains. Program code is compact ASCII syntax. Runtime input
-is ASCII data. Ordinary rewrites preserve input bytes that the program syntax
-cannot write, such as spaces and reserved characters, except when execution stops
-with `(return)`, which replaces the whole output with its return payload.
+input are different domains. Program code is compact printable ASCII syntax.
+Runtime input is ASCII data. Ordinary rewrites preserve input bytes that the
+program syntax cannot write, such as spaces and reserved characters, except when
+execution stops with `(return)`, which replaces the whole output with its return
+payload.
 
 ## `no_std` Library Boundary
 
 The library crate is `#![no_std]` and uses `alloc` for owned buffers such as
-`Vec<u8>`, boxed per-run rule state, `RunResult`, trace events, and step-limit
-error state. This means the interpreter core does not depend on `std`, files,
-processes, host I/O streams, environment variables, or OS error types. It still
-requires an allocator; this is `no_std + alloc`, not a fixed-capacity heapless
-interpreter.
+parsed rules, runtime input state, per-run `(once)` state, `RunResult`, trace
+events, and step-limit error state. This means the interpreter core does not
+depend on `std`, files, processes, host I/O streams, environment variables, or
+OS error types. It still requires an allocator; this is `no_std + alloc`, not a
+fixed-capacity heapless interpreter.
+
+Allocation is deliberately fallible inside the library API. Parser/runtime paths
+that allocate reserve explicitly and report `AllocationError` instead of relying
+on accidental `Vec` growth. Internally, parsed program payloads and runtime
+state are stored in distinct byte domains, so bytes constructible by code are
+not confused with input-derived bytes such as spaces or reserved syntax
+characters. Public `Vec<u8>` values are materialized only at API boundaries such
+as final output, `(return)` output, step-limit errors, and trace snapshots.
 
 For embedded, WASM-core, kernel, or other non-`std` consumers, depend on this
 library package or build only the library target:
@@ -96,7 +105,8 @@ fn main() -> Result<(), rsaeb::ParseError> {
 }
 ```
 
-Trace output is library-owned data, not hard-coded side effects. State snapshots are owned per event and are only materialized when tracing is enabled:
+Trace output is library-owned data, not hard-coded side effects. State snapshots
+are owned per event and are only materialized when tracing is enabled:
 
 ```rust
 use rsaeb::{Program, RunOptions};
@@ -115,28 +125,49 @@ fn main() -> Result<(), rsaeb::AebError> {
 }
 ```
 
-Trace step events carry borrowed `RuleInfo<'program>` metadata, not a cloned
-display string and not a globally reusable identifier. The metadata is tied to
-the `Program` that produced the trace:
+Fallible trace sinks can use `try_run_with_trace`:
 
 ```rust
-use rsaeb::{Program, RunOptions, TraceEvent};
+use rsaeb::{Program, RunOptions, TracedRunError};
+
+fn main() -> Result<(), rsaeb::AebError> {
+    let program = Program::parse("a=b\nb=c")?;
+    let result = program.try_run_with_trace(b"a", RunOptions::new(10_000), |_event| {
+        Err::<(), _>("trace sink full")
+    });
+
+    assert_eq!(result, Err(TracedRunError::Trace("trace sink full")));
+    Ok(())
+}
+```
+
+Trace step events carry borrowed `RuleInfo<'program>` metadata, not a cloned
+display string and not a globally reusable lookup key. The metadata is borrowed
+from the `Program` that produced the trace. There is intentionally no public
+`Program::rule(index)` API: a numeric index cannot prove which program produced
+it, so the library exposes rule metadata directly instead of accepting forged
+handles back from callers. Yes, this is mildly less convenient. That is usually
+what happens when the type system is asked to stop lying for us.
+
+```rust
+use rsaeb::{Program, RunOptions, TraceEffect, TraceEvent};
 
 fn main() -> Result<(), rsaeb::AebError> {
     let program = Program::parse("a = b # comment")?;
-    let mut applied_rule_index = None;
+    let first_rule = program.rules().next().expect("one parsed rule");
+
+    assert_eq!(first_rule.position().zero_based(), 0);
+    assert_eq!(first_rule.line_number(), 1);
+    assert_eq!(first_rule.compact_source(), b"a=b");
 
     program.run_with_trace(b"a", RunOptions::new(10_000), |event| {
-        if let TraceEvent::Step { rule, .. } = event {
-            assert_eq!(rule.line_number(), 1);
+        if let TraceEvent::Step { rule, effect, .. } = event {
+            assert_eq!(rule.position().zero_based(), 0);
             assert_eq!(rule.compact_source(), b"a=b");
-            applied_rule_index = Some(rule.index());
+            assert!(matches!(effect, TraceEffect::Continue { .. }));
         }
     })?;
 
-    let rule_index = applied_rule_index.expect("trace should apply a rule");
-    let rule = program.rule(rule_index).expect("rule metadata should exist");
-    assert_eq!(rule.index().as_usize(), 0);
     Ok(())
 }
 ```
@@ -154,37 +185,48 @@ Program construction and execution:
 - `Program::parse_bytes(source)`: explicit byte parser.
 - `Program::parse_str(source)`: explicit UTF-8 string parser.
 - `Program::rule_count()`: count executable rules.
+- `Program::rules()`: iterate borrowed parsed-rule metadata in execution order.
 - `Program::run(input, options)`: execute without tracing.
 - `Program::run_with_trace(input, options, callback)`: execute and receive
-  trace events.
+  infallible trace events.
+- `Program::try_run_with_trace(input, options, callback)`: execute and receive
+  fallible trace events.
 - `run(source, input, options)`: one-shot parse and execute helper.
 
 Rule metadata:
 
-- `RuleIndex`: program-local zero-based parsed-rule index.
-- `RuleIndex::as_usize()`: zero-based rule position in parse order.
-- `RuleInfo`: read-only parsed-rule metadata borrowed from a `Program`.
-- `RuleInfo::index()`: return the program-local rule index.
+- `RulePosition`: program-local parsed-rule position used only as metadata.
+- `RulePosition::zero_based()`: zero-based rule position in parse order.
+- `RulePosition::one_based()`: one-based rule number for display.
+- `RuleInfo<'program>`: read-only parsed-rule metadata borrowed from a `Program`.
+- `RuleInfo::position()`: return the program-local metadata position.
+- `RuleInfo::zero_based_position()`: return the zero-based position directly.
 - `RuleInfo::line_number()`: return the one-based source line number.
 - `RuleInfo::compact_source()`: return whitespace-stripped executable code.
-- `Program::rule(rule_index)`: read parsed rule metadata for tracing/debug UIs.
-- `Program::rules()`: iterate parsed rule metadata in execution order.
 
 Runtime configuration and result:
 
-- `RunOptions`: currently holds the step limit.
+- `RunOptions`: opaque runtime configuration for one execution.
 - `RunOptions::new(max_steps)`: create options with an explicit step limit.
-- `RunResult`: owns output bytes plus `steps` and `returned` metadata.
+- `RunOptions::max_steps()`: inspect the configured step limit.
+- `RunResult`: owns output bytes plus `steps` and structured termination metadata.
 - `RunResult::output()`: borrow final output bytes.
 - `RunResult::into_output()`: consume the result and return final output bytes.
 - `RunResult::steps()`: return the number of applied rewrite steps.
-- `RunResult::returned()`: report whether execution stopped by `(return)`.
+- `RunResult::termination()`: return `RunTermination::Stable` or `RunTermination::Return`.
+- `RunResult::returned()`: convenience check for `(return)` termination.
+- `RunTermination`: typed reason why execution stopped.
 
 Tracing:
 
-- `TraceEvent<'program>`: `Initial` state and `Step` events emitted by tracing runs.
-  `Step` carries `RuleInfo<'program>`.
+- `TraceEvent<'program>`: `Initial` state and `Step` events emitted by tracing
+  runs. `Step` carries `RuleInfo<'program>` and a typed `TraceEffect`.
+- `TraceEffect`: `Continue { state }` or `Return { output }`, instead of an
+  ambiguous byte buffer plus a boolean.
+- `TraceEffect::bytes()`: borrow the bytes carried by a step effect.
+- `TraceEffect::is_return()`: report whether the step executed `(return)`.
 - `TraceEvent::bytes()`: borrow the bytes carried by a trace event.
+- `TraceEvent::is_return_step()`: report whether this event is a returning step.
 
 Errors:
 
@@ -193,20 +235,17 @@ Errors:
 - `ParseError::line()`: one-based source line.
 - `ParseError::column()`: one-based source column when available.
 - `ParseError::kind()`: structured parse error kind.
-- `ParseErrorKind`: concrete parse failure category.
-- `PayloadKind`: identifies which payload rejected a reserved byte.
+- `ParseErrorKind`: concrete parse failure category, including parser
+  allocation failure and reserved syntax inside payload data.
+- `PayloadKind`: identifies which payload rejected reserved syntax as data.
 - `RunError`: structured runtime failure.
+- `TracedRunError<E>`: runtime-or-callback error for `try_run_with_trace`.
 - `InputError`: runtime input validation failure.
-- `StateSizeError`: runtime state-size or reservation failure.
-- `InputError::column()`: one-based input column.
-- `InputError::byte()`: rejected input byte.
-- `StateSizeError::state_len()`: runtime state length before the failing rewrite.
-- `StateSizeError::lhs_len()`: matched left-side length that would be removed.
-- `StateSizeError::rhs_len()`: right-side payload length that would be inserted.
+- `AllocationError`: fallible allocation failure with an `AllocationContext` and
+  requested capacity.
+- `AllocationContext`: parser/runtime allocation site.
+- `StateSizeError`: runtime state length arithmetic failure.
 - `StepLimitError`: step-limit failure with preserved runtime state.
-- `StepLimitError::max_steps()`: configured limit.
-- `StepLimitError::state()`: borrow state bytes at the limit.
-- `StepLimitError::into_state()`: consume the error and return state bytes.
 
 ## Execution Semantics
 
@@ -236,7 +275,7 @@ the leftmost matching `aa`.
 
 ## Step Limit Semantics
 
-`RunOptions::max_steps` is the maximum number of rewrite steps that may be
+`RunOptions::max_steps()` returns the maximum number of rewrite steps that may be
 applied successfully. A run that becomes stable exactly at the limit succeeds.
 The limit is an error only when another matching rule would need to be applied
 after that many steps.
@@ -275,18 +314,27 @@ Each line is parsed in this order:
 1. `#` starts a comment. Everything from `#` to the end of the line is ignored.
 2. Non-ASCII bytes are rejected in the remaining code part.
 3. ASCII whitespace in the code part is removed completely.
-4. Empty compact code is ignored.
-5. Non-empty compact code must contain exactly one `=`.
-6. The left side and right side are parsed as compact rule syntax.
+4. Remaining non-whitespace code bytes must be printable ASCII.
+5. Empty compact code is ignored.
+6. Non-empty compact code must contain exactly one `=`.
+7. The left side and right side are parsed as compact rule syntax.
 
-Internally, the parser keeps these phases separate instead of passing a naked
-`Vec<u8>` through every stage:
+Internally, the parser and runtime keep phases separate instead of passing a
+naked `Vec<u8>` through every stage:
 
 ```text
 raw line bytes
   -> CodeLine          # comment removed, code ASCII validated
-  -> CompactCodeLine   # whitespace removed, original source columns retained
-  -> Rule              # modifiers, anchors, payloads, and actions parsed
+  -> CompactCodeLine   # whitespace removed, printable code validated, columns retained
+  -> compact syntax    # tokens such as =, (once), (start), (end), (return)
+  -> CodeByte payloads # non-reserved bytes that program code is allowed to construct
+
+runtime input bytes
+  -> RuntimeByte state # ASCII data, including bytes code cannot construct
+
+CodeByte payloads are converted into RuntimeByte only when a rewrite inserts
+bytes into the runtime state. RuntimeByte state is converted back to public
+Vec<u8> only when returning results, traces, or errors.
 ```
 
 This keeps diagnostics tied to the original source columns even after whitespace
@@ -313,6 +361,10 @@ This is invalid because the non-ASCII byte is in code:
 a=あ
 ```
 
+ASCII control bytes are also invalid in executable code, except for ASCII
+whitespace that is removed during compaction. Runtime input is separate and may
+contain ASCII control bytes as data.
+
 ## Reserved Characters
 
 The following characters are reserved in program code:
@@ -327,6 +379,13 @@ Their meanings are fixed:
 - `#` starts a comment.
 - `(` and `)` are only allowed as part of supported modifier/action tokens.
 
+Internally, payload construction rejects all reserved syntax bytes at the
+`CodeByte` boundary. `=` and `#` are normally handled before payload parsing,
+but they still cannot become payload data even if a future parser path tries to
+feed them there. The implementation does not rely on “this should never arrive
+here” as a safety boundary, because that sentence is how small libraries become
+archaeological sites.
+
 A second `=` in compact code is a parse error:
 
 ```text
@@ -339,7 +398,7 @@ A second `=` inside a comment is ignored:
 a=b#=c
 ```
 
-Unsupported parenthesis usage is always a parse error:
+Reserved syntax where payload data is expected is always a parse error:
 
 ```text
 a=b(
@@ -352,14 +411,14 @@ a(once)=b
 ```
 
 Because whitespace is removed from program code, spaces cannot be represented as
-rule data. Because `=`, `#`, `(`, and `)` are reserved, they also cannot be
-represented as rule data.
+rule data. Because `=`, `#`, `(`, and `)` are reserved, `CodeByte` also refuses
+them as rule data.
 
 The input is different. Input bytes are runtime data, not program code. Input
-must be ASCII, but it may contain whitespace and reserved characters. Ordinary
-rewrite actions cannot match, create, or delete those bytes directly. The bytes
-themselves remain runtime data, although nearby editable bytes may be inserted,
-removed, or moved.
+must be ASCII, but it may contain whitespace, ASCII control bytes, and reserved
+characters. Ordinary rewrite actions cannot match, create, or delete those bytes
+directly. The bytes themselves remain runtime data, although nearby editable
+bytes may be inserted, removed, or moved.
 
 Example:
 
@@ -426,9 +485,9 @@ The right side selects the action for a matching rule:
   current runtime state.
 
 The action payload is still program data, so it cannot contain whitespace,
-reserved characters, or non-ASCII bytes. `(return)` can therefore output only
-program-representable bytes, even if the discarded runtime state contained
-spaces or reserved characters from the original input.
+reserved characters, non-ASCII bytes, or ASCII control bytes. `(return)` can
+therefore output only program-representable bytes, even if the discarded runtime
+state contained spaces or reserved characters from the original input.
 
 Examples:
 
@@ -489,12 +548,37 @@ fn main() -> Result<(), rsaeb::AebError> {
         assert_eq!(input_error.column(), 2);
     }
 
-    // Very large rewrite states are reported as RunError::StateSize instead of
-    // relying on unchecked length arithmetic or unchecked output reservation.
-
     Ok(())
 }
 ```
 
-Filesystem failures are not part of the library error model. External I/O must
-be handled before bytes enter `Program::parse` or `run`.
+Allocation failures are structured:
+
+```rust
+use rsaeb::{AllocationContext, RunError};
+
+fn inspect(error: RunError) {
+    if let RunError::Allocation(error) = error {
+        match error.context() {
+            AllocationContext::RuntimeState => {
+                eprintln!("failed to allocate next rewrite state");
+            }
+            AllocationContext::FinalOutput => {
+                eprintln!("failed to materialize final output bytes");
+            }
+            AllocationContext::StepLimitState => {
+                eprintln!("failed to materialize step-limit state bytes");
+            }
+            AllocationContext::TraceSnapshot => {
+                eprintln!("failed to allocate trace snapshot");
+            }
+            _ => {}
+        }
+    }
+}
+```
+
+State length arithmetic overflow is separate from allocation failure and is
+reported as `RunError::StateSize`. Filesystem failures are not part of the
+library error model. External I/O must be handled before bytes enter
+`Program::parse` or `run`.
