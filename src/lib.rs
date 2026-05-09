@@ -34,10 +34,10 @@ mod runtime;
 mod syntax;
 mod trace;
 
-pub use allocation::{AllocationContext, AllocationError};
+pub use allocation::{AllocationContext, AllocationError, AllocationErrorKind};
 pub use error::{
-    AebError, InputError, LeftModifierKind, ParseError, ParseErrorKind, PayloadKind,
-    LimitError, RightActionKind, RunError, StateLimitContext, StateSizeError, TracedRunError,
+    AebError, InputError, LeftModifierKind, LimitError, ParseError, ParseErrorKind, PayloadKind,
+    RightActionKind, RunError, StateLimitContext, StateSizeError, TracedRunError,
 };
 pub use program::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,

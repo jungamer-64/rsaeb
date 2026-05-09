@@ -11,6 +11,24 @@ fn parse_allocation_error(line_number: usize, error: AllocationError) -> ParseEr
     ParseError::new(line_number, None, ParseErrorKind::Allocation(error))
 }
 
+fn source_line_number(zero_based_line: usize) -> Result<usize, ParseError> {
+    zero_based_line.checked_add(1).ok_or_else(|| {
+        parse_allocation_error(
+            usize::MAX,
+            AllocationError::capacity_overflow(AllocationContext::CompactCodeLine),
+        )
+    })
+}
+
+fn source_column(zero_based_column: usize, line_number: usize) -> Result<usize, ParseError> {
+    zero_based_column.checked_add(1).ok_or_else(|| {
+        parse_allocation_error(
+            line_number,
+            AllocationError::capacity_overflow(AllocationContext::CompactCodeLine),
+        )
+    })
+}
+
 struct CodeLine<'source> {
     line_number: usize,
     bytes: &'source [u8],
@@ -31,7 +49,7 @@ impl<'source> CodeLine<'source> {
         {
             return Err(ParseError::new(
                 line_number,
-                Some(zero_based_column + 1),
+                Some(source_column(zero_based_column, line_number)?),
                 ParseErrorKind::NonAsciiInCode { byte },
             ));
         }
@@ -53,7 +71,7 @@ impl<'source> CodeLine<'source> {
             if !byte.is_ascii_graphic() {
                 return Err(ParseError::new(
                     self.line_number,
-                    Some(zero_based_column + 1),
+                    Some(source_column(zero_based_column, self.line_number)?),
                     ParseErrorKind::NonPrintableAsciiInCode { byte },
                 ));
             }
@@ -61,7 +79,7 @@ impl<'source> CodeLine<'source> {
             compact_len = compact_len.checked_add(1).ok_or_else(|| {
                 parse_allocation_error(
                     self.line_number,
-                    AllocationError::new(AllocationContext::CompactCodeLine, usize::MAX),
+                    AllocationError::capacity_overflow(AllocationContext::CompactCodeLine),
                 )
             })?;
         }
@@ -77,7 +95,7 @@ impl<'source> CodeLine<'source> {
 
             try_push(
                 &mut bytes,
-                CompactByte::new(byte, zero_based_column + 1),
+                CompactByte::new(byte, source_column(zero_based_column, self.line_number)?),
                 AllocationContext::CompactCodeLine,
             )
             .map_err(|error| parse_allocation_error(self.line_number, error))?;
@@ -149,7 +167,7 @@ pub(crate) fn parse_program_impl(source: &[u8]) -> Result<Program, ParseError> {
     let mut rule_set = RuleSet::new();
 
     for (zero_based_line, raw_line) in source.split(|&byte| byte == b'\n').enumerate() {
-        let line_number = zero_based_line + 1;
+        let line_number = source_line_number(zero_based_line)?;
         let compact_code = CodeLine::parse(raw_line, line_number)?.compact()?;
 
         if compact_code.is_empty() {

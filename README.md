@@ -408,7 +408,7 @@ the leftmost matching `aa`.
 rewrite system because a short run can still expand a state aggressively.
 
 ```rust
-use rsaeb::{Program, RunError, RunLimits, StateLimitContext};
+use rsaeb::{LimitError, Program, RunError, RunLimits, StateLimitContext};
 
 fn main() -> Result<(), rsaeb::AebError> {
     let limits = RunLimits::bounded(
@@ -421,10 +421,11 @@ fn main() -> Result<(), rsaeb::AebError> {
     let error = Program::parse_str("=a")?.run(b"", limits.with_max_state_len(2));
     assert!(matches!(
         error,
-        Err(RunError::StateLimit(error))
-            if error.context() == StateLimitContext::Rewrite
-                && error.limit() == 2
-                && error.attempted_len() == 3
+        Err(RunError::Limit(LimitError::State {
+            context: StateLimitContext::Rewrite,
+            limit: 2,
+            attempted_len: 3,
+        }))
     ));
 
     Ok(())
@@ -435,7 +436,7 @@ Execution may succeed exactly at the step limit. The step limit becomes an error
 only when another rule would still apply after the configured number of steps.
 
 ```rust
-use rsaeb::{Program, RunError, RunLimits};
+use rsaeb::{LimitError, Program, RunError, RunLimits};
 
 fn main() -> Result<(), rsaeb::AebError> {
     let exact = Program::parse_str("a=b")?.run(b"a", RunLimits::new(1))?;
@@ -447,7 +448,14 @@ fn main() -> Result<(), rsaeb::AebError> {
     assert_eq!(no_match.steps(), 0);
 
     let would_apply = Program::parse_str("a=b")?.run(b"a", RunLimits::new(0));
-    assert!(matches!(would_apply, Err(RunError::StepLimit(_))));
+    assert!(matches!(
+        would_apply,
+        Err(RunError::Limit(LimitError::Step {
+            max_steps: 0,
+            completed_steps: 0,
+            state_len: 1,
+        }))
+    ));
     Ok(())
 }
 ```
@@ -584,8 +592,11 @@ fn inspect(error: RunError) {
 ```
 
 State length arithmetic overflow is separate from allocation failure and is
-reported as `RunError::StateSize`. Configured byte budgets are reported as
-`RunError::StateLimit`, `RunError::ReturnLimit`, or `RunError::TraceLimit`. Step-limit errors try to materialize the last runtime state as public bytes; because runtime state is internally typed, that diagnostic materialization may allocate and can fail with `RunError::Allocation`.
+reported as `RunError::StateSize`. Configured byte budgets and step budgets are
+reported as `RunError::Limit(LimitError::...)`. Step-limit errors report the
+last state length, not the state bytes, so reporting the step limit cannot turn
+into an allocation failure. Use borrowed tracing when the last state bytes are
+needed for diagnostics.
 Filesystem failures are not part of the library error model. External I/O must
 be handled before bytes enter `Program::parse_bytes`, `Program::parse_str`,
 `run_bytes`, or `run_str`.
@@ -662,10 +673,8 @@ Errors:
 - `RunError`
 - `InputError`
 - `AllocationError`
+- `AllocationErrorKind`
 - `AllocationContext`
 - `StateSizeError`
-- `StateLimitError`
+- `LimitError`
 - `StateLimitContext`
-- `ReturnLimitError`
-- `TraceLimitError`
-- `StepLimitError`

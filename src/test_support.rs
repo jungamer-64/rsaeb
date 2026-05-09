@@ -3,8 +3,8 @@
 use std::string::{FromUtf8Error, String};
 
 use crate::{
-    AebError, AllocationError, InputError, ParseError, Program, RunError, RunLimits, RunResult,
-    StateLimitError, StepLimitError, TraceSnapshotEvent,
+    AebError, AllocationError, InputError, LimitError, ParseError, Program, RunError, RunLimits,
+    RunResult, TraceSnapshotEvent,
 };
 
 pub(crate) enum TestFailure {
@@ -96,38 +96,31 @@ pub(crate) fn expect_event<'events, 'program>(
         .ok_or(TestFailure::Message("expected trace event"))
 }
 
-pub(crate) fn expect_step_limit(error: RunError) -> Result<StepLimitError, TestFailure> {
+pub(crate) fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
-        RunError::StepLimit(error) => Ok(error),
+        RunError::Limit(error @ LimitError::Step { .. }) => Ok(error),
         RunError::Input(_)
         | RunError::Allocation(_)
         | RunError::StateSize(_)
-        | RunError::StateLimit(_)
-        | RunError::ReturnLimit(_)
-        | RunError::TraceLimit(_) => Err(TestFailure::Message("expected step limit error")),
+        | RunError::Limit(_) => Err(TestFailure::Message("expected step limit error")),
     }
 }
 
-pub(crate) fn expect_state_limit(error: RunError) -> Result<StateLimitError, TestFailure> {
+pub(crate) fn expect_state_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
-        RunError::StateLimit(error) => Ok(error),
+        RunError::Limit(error @ LimitError::State { .. }) => Ok(error),
         RunError::Input(_)
         | RunError::Allocation(_)
         | RunError::StateSize(_)
-        | RunError::ReturnLimit(_)
-        | RunError::TraceLimit(_)
-        | RunError::StepLimit(_) => Err(TestFailure::Message("expected state limit error")),
+        | RunError::Limit(_) => Err(TestFailure::Message("expected state limit error")),
     }
 }
 
 pub(crate) fn expect_input_error(error: RunError) -> Result<InputError, TestFailure> {
     match error {
         RunError::Input(error) => Ok(error),
-        RunError::Allocation(_)
-        | RunError::StateSize(_)
-        | RunError::StateLimit(_)
-        | RunError::ReturnLimit(_)
-        | RunError::TraceLimit(_)
-        | RunError::StepLimit(_) => Err(TestFailure::Message("expected input error")),
+        RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_) => {
+            Err(TestFailure::Message("expected input error"))
+        }
     }
 }

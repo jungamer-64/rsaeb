@@ -365,7 +365,7 @@ impl Rule {
 
         if self.repeat.is_once() {
             len = len.checked_add(SyntaxToken::Once.len()).ok_or_else(|| {
-                AllocationError::new(AllocationContext::CanonicalSource, usize::MAX)
+                AllocationError::capacity_overflow(AllocationContext::CanonicalSource)
             })?;
         }
 
@@ -380,7 +380,9 @@ impl Rule {
             .and_then(|len| len.checked_add(1))
             .and_then(|len| len.checked_add(action_token.map_or(0, SyntaxToken::len)))
             .and_then(|len| len.checked_add(payload.len()))
-            .ok_or_else(|| AllocationError::new(AllocationContext::CanonicalSource, usize::MAX))?;
+            .ok_or_else(|| {
+                AllocationError::capacity_overflow(AllocationContext::CanonicalSource)
+            })?;
 
         Ok(len)
     }

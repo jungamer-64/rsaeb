@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::RuntimeByte;
-use crate::error::{RunError, TraceLimitError};
+use crate::error::{LimitError, RunError};
 use crate::program::RunLimits;
 use crate::rule::{PayloadView, RuleView};
 
@@ -256,7 +256,7 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
     ///
     /// # Errors
     ///
-    /// Returns `RunError::TraceLimit` if the event bytes exceed
+    /// Returns `RunError::Limit` if the event bytes exceed
     /// `RunLimits::max_trace_snapshot_len`. Returns `RunError::Allocation` if
     /// snapshot allocation fails.
     pub fn to_snapshot(self, limits: RunLimits) -> Result<TraceSnapshotEvent<'program>, RunError> {
@@ -276,7 +276,7 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
 
 fn ensure_trace_len(len: usize, limits: RunLimits) -> Result<(), RunError> {
     if len > limits.max_trace_snapshot_len() {
-        return Err(TraceLimitError::new(limits.max_trace_snapshot_len(), len).into());
+        return Err(LimitError::trace_snapshot(limits.max_trace_snapshot_len(), len).into());
     }
 
     Ok(())

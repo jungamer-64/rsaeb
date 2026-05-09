@@ -287,7 +287,7 @@ impl Program {
     ///
     /// Returns `RunError` for ordinary runtime failures. Trace snapshot
     /// materialization is also checked against `RunLimits` and may return
-    /// `RunError::TraceLimit` or `RunError::Allocation`.
+    /// `RunError::Limit` or `RunError::Allocation`.
     pub fn run_with_trace_snapshots<'program, F>(
         &'program self,
         input: &[u8],
@@ -469,7 +469,7 @@ mod tests {
         TestFailure, TestResult, expect_event, expect_run_error, expect_state_limit,
     };
     use crate::{
-        RuleActionView, RuleAnchor, RuleRepeat, StateLimitContext, TraceSnapshotEffect,
+        LimitError, RuleActionView, RuleAnchor, RuleRepeat, StateLimitContext, TraceSnapshotEffect,
         TraceSnapshotEvent, run_bytes, run_str,
     };
     use std::vec::Vec;
@@ -620,9 +620,14 @@ mod tests {
         let error = expect_run_error(Program::parse_str("a=b")?.run(b"aa", limits))?;
         let error = expect_state_limit(error)?;
 
-        assert_eq!(error.context(), StateLimitContext::Input);
-        assert_eq!(error.limit(), 1);
-        assert_eq!(error.attempted_len(), 2);
+        assert_eq!(
+            error,
+            LimitError::State {
+                context: StateLimitContext::Input,
+                limit: 1,
+                attempted_len: 2,
+            },
+        );
         Ok(())
     }
 
@@ -632,9 +637,14 @@ mod tests {
         let error = expect_run_error(Program::parse_str("=a")?.run(b"aa", limits))?;
         let error = expect_state_limit(error)?;
 
-        assert_eq!(error.context(), StateLimitContext::Rewrite);
-        assert_eq!(error.limit(), 2);
-        assert_eq!(error.attempted_len(), 3);
+        assert_eq!(
+            error,
+            LimitError::State {
+                context: StateLimitContext::Rewrite,
+                limit: 2,
+                attempted_len: 3,
+            },
+        );
         Ok(())
     }
 

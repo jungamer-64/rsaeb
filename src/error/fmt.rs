@@ -1,11 +1,10 @@
 use core::fmt;
 
-use crate::allocation::{AllocationContext, AllocationError};
+use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind};
 
 use super::{
-    AebError, InputError, LeftModifierKind, ParseError, ParseErrorKind, PayloadKind,
-    ReturnLimitError, RightActionKind, RunError, StateLimitContext, StateLimitError,
-    StateSizeError, StepLimitError, TraceLimitError, TracedRunError,
+    AebError, InputError, LeftModifierKind, LimitError, ParseError, ParseErrorKind, PayloadKind,
+    RightActionKind, RunError, StateLimitContext, StateSizeError, TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -28,12 +27,23 @@ impl fmt::Display for AllocationContext {
 
 impl fmt::Display for AllocationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "allocation failure while building {}; requested capacity: {}",
-            self.context(),
-            self.requested_capacity(),
-        )
+        match self.kind() {
+            AllocationErrorKind::CapacityOverflow => {
+                write!(
+                    f,
+                    "allocation capacity overflow while building {}",
+                    self.context(),
+                )
+            }
+            AllocationErrorKind::ReserveFailed { requested_capacity } => {
+                write!(
+                    f,
+                    "allocation failure while building {}; requested capacity: {}",
+                    self.context(),
+                    requested_capacity,
+                )
+            }
+        }
     }
 }
 
@@ -125,10 +135,7 @@ impl fmt::Display for RunError {
             Self::Input(error) => error.fmt(f),
             Self::Allocation(error) => error.fmt(f),
             Self::StateSize(error) => error.fmt(f),
-            Self::StateLimit(error) => error.fmt(f),
-            Self::ReturnLimit(error) => error.fmt(f),
-            Self::TraceLimit(error) => error.fmt(f),
-            Self::StepLimit(error) => error.fmt(f),
+            Self::Limit(error) => error.fmt(f),
         }
     }
 }
@@ -177,48 +184,40 @@ impl fmt::Display for StateLimitContext {
     }
 }
 
-impl fmt::Display for StateLimitError {
+impl fmt::Display for LimitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "state limit exceeded by {}; attempted length: {}, limit: {}",
-            self.context(),
-            self.attempted_len(),
-            self.limit(),
-        )
-    }
-}
-
-impl fmt::Display for ReturnLimitError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "return output limit exceeded; attempted length: {}, limit: {}",
-            self.attempted_len(),
-            self.limit(),
-        )
-    }
-}
-
-impl fmt::Display for TraceLimitError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "trace snapshot limit exceeded; attempted length: {}, limit: {}",
-            self.attempted_len(),
-            self.limit(),
-        )
-    }
-}
-
-impl fmt::Display for StepLimitError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "step limit exceeded after {} steps; state length: {} bytes",
-            self.max_steps(),
-            self.state().len(),
-        )
+        match self {
+            Self::State {
+                context,
+                limit,
+                attempted_len,
+            } => write!(
+                f,
+                "state limit exceeded by {context}; attempted length: {attempted_len}, limit: {limit}",
+            ),
+            Self::Return {
+                limit,
+                attempted_len,
+            } => write!(
+                f,
+                "return output limit exceeded; attempted length: {attempted_len}, limit: {limit}",
+            ),
+            Self::TraceSnapshot {
+                limit,
+                attempted_len,
+            } => write!(
+                f,
+                "trace snapshot limit exceeded; attempted length: {attempted_len}, limit: {limit}",
+            ),
+            Self::Step {
+                max_steps,
+                completed_steps,
+                state_len,
+            } => write!(
+                f,
+                "step limit exceeded after {completed_steps} steps; max steps: {max_steps}, state length: {state_len} bytes",
+            ),
+        }
     }
 }
 
@@ -242,18 +241,25 @@ mod tests {
 
     #[test]
     fn allocation_display_names_the_failed_context_and_capacity() {
-        let error = AllocationError::new(AllocationContext::TraceSnapshot, 123);
+        let error = AllocationError::reserve_failed(AllocationContext::TraceSnapshot, 123);
 
         assert_eq!(
             error.to_string(),
             "allocation failure while building trace snapshot; requested capacity: 123",
         );
 
-        let error = AllocationError::new(AllocationContext::RuntimeStateView, 456);
+        let error = AllocationError::reserve_failed(AllocationContext::RuntimeStateView, 456);
 
         assert_eq!(
             error.to_string(),
             "allocation failure while building runtime state view; requested capacity: 456",
+        );
+
+        let error = AllocationError::capacity_overflow(AllocationContext::CanonicalSource);
+
+        assert_eq!(
+            error.to_string(),
+            "allocation capacity overflow while building canonical source bytes",
         );
     }
 
@@ -303,7 +309,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "step limit exceeded after 0 steps; state length: 1 bytes",
+            "step limit exceeded after 0 steps; max steps: 0, state length: 1 bytes",
         );
         Ok(())
     }

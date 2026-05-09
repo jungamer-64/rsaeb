@@ -29,17 +29,39 @@ pub enum AllocationContext {
 
 /// Fallible allocation failure reported instead of silently relying on
 /// allocation side effects.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AllocationError {
     context: AllocationContext,
-    requested_capacity: usize,
+    kind: AllocationErrorKind,
+}
+
+/// Reason an allocation boundary failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AllocationErrorKind {
+    /// The required capacity could not be represented as `usize`.
+    CapacityOverflow,
+    /// The allocator rejected the requested capacity.
+    ReserveFailed {
+        /// Vector capacity requested at the failing site.
+        requested_capacity: usize,
+    },
 }
 
 impl AllocationError {
-    pub(crate) const fn new(context: AllocationContext, requested_capacity: usize) -> Self {
+    pub(crate) const fn capacity_overflow(context: AllocationContext) -> Self {
         Self {
             context,
-            requested_capacity,
+            kind: AllocationErrorKind::CapacityOverflow,
+        }
+    }
+
+    pub(crate) const fn reserve_failed(
+        context: AllocationContext,
+        requested_capacity: usize,
+    ) -> Self {
+        Self {
+            context,
+            kind: AllocationErrorKind::ReserveFailed { requested_capacity },
         }
     }
 
@@ -49,10 +71,19 @@ impl AllocationError {
         self.context
     }
 
-    /// Requested vector capacity at the failing site.
+    /// Structured allocation failure reason.
     #[must_use]
-    pub const fn requested_capacity(&self) -> usize {
-        self.requested_capacity
+    pub const fn kind(&self) -> AllocationErrorKind {
+        self.kind
+    }
+
+    /// Requested vector capacity, when allocation reached the allocator.
+    #[must_use]
+    pub const fn requested_capacity(&self) -> Option<usize> {
+        match self.kind {
+            AllocationErrorKind::CapacityOverflow => None,
+            AllocationErrorKind::ReserveFailed { requested_capacity } => Some(requested_capacity),
+        }
     }
 }
 
@@ -67,9 +98,12 @@ pub(crate) fn try_reserve_total_exact<T>(
         return Ok(());
     }
 
-    let additional = total_capacity.saturating_sub(vec.len());
+    let additional = total_capacity
+        .checked_sub(vec.len())
+        .ok_or_else(|| AllocationError::capacity_overflow(context))?;
+
     vec.try_reserve_exact(additional)
-        .map_err(|_| AllocationError::new(context, total_capacity))
+        .map_err(|_| AllocationError::reserve_failed(context, total_capacity))
 }
 
 pub(crate) fn try_push<T>(
@@ -81,8 +115,8 @@ pub(crate) fn try_push<T>(
         let minimum_capacity = vec
             .len()
             .checked_add(1)
-            .ok_or_else(|| AllocationError::new(context, usize::MAX))?;
-        let doubled_capacity = vec.capacity().saturating_mul(2);
+            .ok_or_else(|| AllocationError::capacity_overflow(context))?;
+        let doubled_capacity = vec.capacity().checked_mul(2).unwrap_or(minimum_capacity);
         let requested_capacity =
             core::cmp::max(minimum_capacity, core::cmp::max(4, doubled_capacity));
         try_reserve_total_exact(vec, requested_capacity, context)?;
@@ -98,8 +132,19 @@ mod tests {
 
     #[test]
     fn allocation_contexts_are_publicly_inspectable() {
-        let error = AllocationError::new(AllocationContext::TraceSnapshot, 123);
+        let error = AllocationError::reserve_failed(AllocationContext::TraceSnapshot, 123);
         assert_eq!(error.context(), AllocationContext::TraceSnapshot);
-        assert_eq!(error.requested_capacity(), 123);
+        assert_eq!(
+            error.kind(),
+            AllocationErrorKind::ReserveFailed {
+                requested_capacity: 123,
+            },
+        );
+        assert_eq!(error.requested_capacity(), Some(123));
+
+        let error = AllocationError::capacity_overflow(AllocationContext::CanonicalSource);
+        assert_eq!(error.context(), AllocationContext::CanonicalSource);
+        assert_eq!(error.kind(), AllocationErrorKind::CapacityOverflow);
+        assert_eq!(error.requested_capacity(), None);
     }
 }
