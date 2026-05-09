@@ -36,6 +36,7 @@ mod syntax;
 mod trace;
 
 pub use allocation::{AllocationContext, AllocationError, AllocationErrorKind};
+pub use bytes::ByteCount;
 pub use error::{
     AebError, InputColumn, InputError, LeftModifierKind, LimitError, ParseError, ParseErrorKind,
     PayloadKind, RightActionKind, RunError, StateLimitContext, StateSizeError, TracedRunError,
@@ -43,8 +44,8 @@ pub use error::{
 pub use program::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, Program, ReturnByteLimit, ReturnOutput, RunLimits, RunOutcome,
-    RunResult, RuntimeStateSnapshot, StateByteLimit, StepCount, StepLimit,
-    TraceSnapshotByteLimit, run_bytes, run_str,
+    RunResult, RuntimeStateSnapshot, StateByteLimit, StepCount, StepLimit, TraceSnapshotByteLimit,
+    run_bytes, run_str,
 };
 pub use rule::{
     PayloadView, RuleActionView, RuleAnchor, RuleCount, RuleNumber, RulePosition, RuleRepeat,

@@ -3,8 +3,8 @@ use core::fmt;
 use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind};
 
 use super::{
-    AebError, InputError, LeftModifierKind, LimitError, ParseError, ParseErrorKind, PayloadKind,
-    RightActionKind, RunError, StateLimitContext, StateSizeError, TracedRunError,
+    AebError, InputColumn, InputError, LeftModifierKind, LimitError, ParseError, ParseErrorKind,
+    PayloadKind, RightActionKind, RunError, StateLimitContext, StateSizeError, TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -160,6 +160,12 @@ impl fmt::Display for InputError {
             self.byte(),
             self.column(),
         )
+    }
+}
+
+impl fmt::Display for InputColumn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.get().fmt(f)
     }
 }
 

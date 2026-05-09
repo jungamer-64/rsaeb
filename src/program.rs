@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 use core::convert::Infallible;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push};
+use crate::bytes::ByteCount;
 use crate::error::{AebError, ParseError, RunError, TracedRunError};
 use crate::parser::parse_program_impl;
 use crate::rule::{
@@ -276,7 +277,7 @@ impl RuleSet {
     }
 
     fn next_once_rule_slot(&self) -> OnceRuleSlot {
-        OnceRuleSlot::new(self.once_rule_count())
+        OnceRuleSlot::new(self.once_rule_count().get())
     }
 
     pub(crate) fn rule_count(&self) -> RuleCount {
@@ -353,7 +354,7 @@ impl Program {
     }
 
     pub(crate) fn runtime_once_rule_count(&self) -> usize {
-        self.rule_set.once_rule_count()
+        self.rule_set.once_rule_count().get()
     }
 
     /// Runs this program with the given input bytes.
@@ -480,7 +481,7 @@ impl Program {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum RunOutcome {
     /// No rule matched the final runtime state.
     Stable(RuntimeStateSnapshot),
@@ -493,9 +494,69 @@ pub struct RuntimeStateSnapshot {
     bytes: Vec<u8>,
 }
 
+impl RuntimeStateSnapshot {
+    pub(crate) fn from_vec(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    /// Borrow the materialized runtime-state bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Consumes the snapshot and returns the materialized bytes.
+    #[must_use]
+    pub fn into_vec(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    /// Materialized byte length.
+    #[must_use]
+    pub fn byte_count(&self) -> ByteCount {
+        ByteCount::new(self.bytes.len())
+    }
+
+    /// Whether this snapshot contains no bytes.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct ReturnOutput {
     bytes: Vec<u8>,
+}
+
+impl ReturnOutput {
+    pub(crate) fn from_vec(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    /// Borrow the materialized `(return)` output bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Consumes the return output and returns the materialized bytes.
+    #[must_use]
+    pub fn into_vec(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    /// Materialized byte length.
+    #[must_use]
+    pub fn byte_count(&self) -> ByteCount {
+        ByteCount::new(self.bytes.len())
+    }
+
+    /// Whether this return output contains no bytes.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
 }
 
 /// Result of one program execution.
@@ -537,17 +598,17 @@ impl RunResult {
     pub const fn steps(&self) -> StepCount {
         self.steps
     }
-
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::{
-        TestFailure, TestResult, expect_event, expect_run_error, expect_state_limit,
+        TestFailure, TestResult, expect_event, expect_return_output, expect_run_error,
+        expect_stable_output, expect_state_limit, result_bytes,
     };
     use crate::{
-        LimitError, ReturnByteLimit, RuleActionView, RuleAnchor, RuleRepeat, RunTermination,
+        ByteCount, LimitError, ReturnByteLimit, RuleActionView, RuleAnchor, RuleCount, RuleRepeat,
         StateByteLimit, StateLimitContext, TraceSnapshotByteLimit, TraceSnapshotEffect,
         TraceSnapshotEvent, run_bytes, run_str,
     };
@@ -563,12 +624,11 @@ mod tests {
     #[test]
     fn public_free_run_works() -> TestResult {
         let result = run_str("a=b", b"a", RunLimits::default())?;
-        assert_eq!(result.output(), b"b");
+        expect_stable_output(&result, b"b")?;
         assert_eq!(result.steps().get(), 1);
-        assert_eq!(result.termination(), RunTermination::Stable);
 
         let result = run_bytes(b"a=b#\xff", b"a", RunLimits::default())?;
-        assert_eq!(result.output(), b"b");
+        expect_stable_output(&result, b"b")?;
         Ok(())
     }
 
@@ -579,9 +639,34 @@ mod tests {
         let first = program.run(b"aa", RunLimits::new(StepLimit::new(10_000)))?;
         let second = program.run(b"aa", RunLimits::new(StepLimit::new(10_000)))?;
 
-        assert_eq!(first.output(), b"bc");
-        assert_eq!(second.output(), b"bc");
-        assert_eq!(program.once_rule_count(), 1);
+        assert_eq!(result_bytes(&first), b"bc");
+        assert_eq!(result_bytes(&second), b"bc");
+        assert_eq!(program.once_rule_count(), RuleCount::new(1));
+        Ok(())
+    }
+
+    #[test]
+    fn run_outcome_separates_stable_state_from_return_output() -> TestResult {
+        let stable = Program::parse_str("a=b")?.run(b"a", RunLimits::new(StepLimit::new(1)))?;
+        let returned =
+            Program::parse_str("a=(return)b")?.run(b"a", RunLimits::new(StepLimit::new(1)))?;
+
+        match stable.into_outcome() {
+            RunOutcome::Stable(output) => {
+                assert_eq!(output.as_bytes(), b"b");
+                assert_eq!(output.byte_count(), ByteCount::new(1));
+            }
+            RunOutcome::Return(_) => return Err(TestFailure::Message("expected stable outcome")),
+        }
+
+        match returned.into_outcome() {
+            RunOutcome::Return(output) => {
+                assert_eq!(output.as_bytes(), b"b");
+                assert_eq!(output.byte_count(), ByteCount::new(1));
+            }
+            RunOutcome::Stable(_) => return Err(TestFailure::Message("expected return outcome")),
+        }
+
         Ok(())
     }
 
@@ -600,7 +685,7 @@ mod tests {
             .copied()
             .ok_or(TestFailure::Message("expected second rule"))?;
 
-        assert_eq!(first.position().zero_based(), 0);
+        assert_eq!(first.position().number().get(), 1);
         assert_eq!(first.line_number().get(), 1);
         assert_eq!(first.repeat(), RuleRepeat::Always);
         assert_eq!(first.anchor(), RuleAnchor::Anywhere);
@@ -611,7 +696,7 @@ mod tests {
         ));
         assert_eq!(first.canonical_source()?, b"a=b");
 
-        assert_eq!(second.position().zero_based(), 1);
+        assert_eq!(second.position().number().get(), 2);
         assert_eq!(second.line_number().get(), 2);
         assert_eq!(second.repeat(), RuleRepeat::Always);
         assert_eq!(second.anchor(), RuleAnchor::Start);
@@ -632,8 +717,8 @@ mod tests {
         let reparsed = Program::parse_bytes(canonical.as_slice())?;
         let reparsed_rule = expect_rule(&reparsed, 0)?;
 
-        assert_eq!(reparsed.rule_count(), 1);
-        assert_eq!(reparsed.once_rule_count(), 1);
+        assert_eq!(reparsed.rule_count(), RuleCount::new(1));
+        assert_eq!(reparsed.once_rule_count(), RuleCount::new(1));
         assert_eq!(reparsed_rule.repeat(), RuleRepeat::Once);
         assert_eq!(reparsed_rule.anchor(), RuleAnchor::Start);
         assert!(reparsed_rule.lhs().eq_bytes(b"a"));
@@ -674,7 +759,7 @@ mod tests {
                             let rule = expect_rule(&program, 0)?;
                             let canonical = rule.canonical_source()?;
 
-                            assert_eq!(program.rule_count(), 1);
+                            assert_eq!(program.rule_count(), RuleCount::new(1));
                             assert_eq!(canonical, source, "source: {source:?}");
 
                             let reparsed = Program::parse_bytes(&canonical)?;
@@ -709,7 +794,7 @@ mod tests {
             LimitError::State {
                 context: StateLimitContext::Input,
                 limit: StateByteLimit::new(1),
-                attempted_len: 2,
+                attempted_len: ByteCount::new(2),
             },
         );
         Ok(())
@@ -731,7 +816,7 @@ mod tests {
             LimitError::State {
                 context: StateLimitContext::Rewrite,
                 limit: StateByteLimit::new(2),
-                attempted_len: 3,
+                attempted_len: ByteCount::new(3),
             },
         );
         Ok(())
@@ -749,8 +834,7 @@ mod tests {
             },
         )?;
 
-        assert_eq!(result.output(), b"ok");
-        assert_eq!(result.termination(), RunTermination::Return);
+        expect_return_output(&result, b"ok")?;
         assert_eq!(events.len(), 3);
         assert!(matches!(
             events.first(),
@@ -760,9 +844,9 @@ mod tests {
         let first_step = expect_event(&events, 1)?;
         let second_step = expect_event(&events, 2)?;
 
-        assert_eq!(initial.bytes(), b"a");
-        assert_eq!(first_step.bytes(), b"b");
-        assert_eq!(second_step.bytes(), b"ok");
+        assert_eq!(initial.as_bytes(), b"a");
+        assert_eq!(first_step.as_bytes(), b"b");
+        assert_eq!(second_step.as_bytes(), b"ok");
         assert!(matches!(
             first_step,
             TraceSnapshotEvent::Step {
@@ -784,7 +868,7 @@ mod tests {
                 effect: TraceSnapshotEffect::Continue { state },
                 ..
             } => {
-                assert_eq!(state.as_slice(), b"b");
+                assert_eq!(state.as_bytes(), b"b");
                 assert_eq!(rule.canonical_source()?, b"a=b");
             }
             TraceSnapshotEvent::Initial { .. } | TraceSnapshotEvent::Step { .. } => {

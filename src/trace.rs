@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
-use crate::bytes::RuntimeByte;
+use crate::bytes::{ByteCount, RuntimeByte};
 use crate::error::{LimitError, RunError};
 use crate::program::{ReturnOutput, RunLimits, RuntimeStateSnapshot, StepCount};
 use crate::rule::{PayloadView, RuleView};
@@ -23,8 +23,8 @@ impl<'run> RuntimeStateView<'run> {
 
     /// Runtime state length in bytes.
     #[must_use]
-    pub const fn byte_count(self) -> crate::bytes::ByteCount {
-        crate::bytes::ByteCount::new(self.bytes.len())
+    pub const fn byte_count(self) -> ByteCount {
+        ByteCount::new(self.bytes.len())
     }
 
     /// Whether the state is empty.
@@ -108,7 +108,7 @@ pub enum BorrowedTraceEffect<'program, 'run> {
 impl BorrowedTraceEffect<'_, '_> {
     /// Byte length carried by this effect.
     #[must_use]
-    pub fn byte_count(self) -> crate::bytes::ByteCount {
+    pub fn byte_count(self) -> ByteCount {
         match self {
             Self::Continue { state } => state.byte_count(),
             Self::Return { output } => output.byte_count(),
@@ -134,12 +134,16 @@ impl BorrowedTraceEffect<'_, '_> {
         ensure_trace_len(self.byte_count(), limits)?;
         match self {
             Self::Continue { state } => Ok(TraceSnapshotEffect::Continue {
-                state: state.to_vec_with_context(AllocationContext::TraceSnapshot)?,
+                state: RuntimeStateSnapshot::from_vec(
+                    state.to_vec_with_context(AllocationContext::TraceSnapshot)?,
+                ),
             }),
             Self::Return { output } => Ok(TraceSnapshotEffect::Return {
-                output: output
-                    .to_vec_with_context(AllocationContext::TraceSnapshot)
-                    .map_err(RunError::from)?,
+                output: ReturnOutput::from_vec(
+                    output
+                        .to_vec_with_context(AllocationContext::TraceSnapshot)
+                        .map_err(RunError::from)?,
+                ),
             }),
         }
     }
@@ -200,17 +204,17 @@ pub enum BorrowedTraceEvent<'program, 'run> {
 impl<'program> BorrowedTraceEvent<'program, '_> {
     /// Byte length carried by this event.
     #[must_use]
-    pub fn len(self) -> usize {
+    pub fn byte_count(self) -> ByteCount {
         match self {
-            Self::Initial { state } => state.len(),
-            Self::Step { effect, .. } => effect.len(),
+            Self::Initial { state } => state.byte_count(),
+            Self::Step { effect, .. } => effect.byte_count(),
         }
     }
 
     /// Whether the carried bytes are empty.
     #[must_use]
     pub fn is_empty(self) -> bool {
-        self.len() == 0
+        self.byte_count().is_zero()
     }
 
     /// Returns whether this event carries exactly the expected bytes.
@@ -230,10 +234,12 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
     /// `RunLimits::trace_snapshot_byte_limit`. Returns `RunError::Allocation` if
     /// snapshot allocation fails.
     pub fn to_snapshot(self, limits: RunLimits) -> Result<TraceSnapshotEvent<'program>, RunError> {
-        ensure_trace_len(self.len(), limits)?;
+        ensure_trace_len(self.byte_count(), limits)?;
         match self {
             Self::Initial { state } => Ok(TraceSnapshotEvent::Initial {
-                state: state.to_vec_with_context(AllocationContext::TraceSnapshot)?,
+                state: RuntimeStateSnapshot::from_vec(
+                    state.to_vec_with_context(AllocationContext::TraceSnapshot)?,
+                ),
             }),
             Self::Step { step, rule, effect } => Ok(TraceSnapshotEvent::Step {
                 step,
@@ -244,9 +250,11 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
     }
 }
 
-fn ensure_trace_len(len: usize, limits: RunLimits) -> Result<(), RunError> {
-    if len > limits.trace_snapshot_byte_limit().get() {
-        return Err(LimitError::trace_snapshot(limits.trace_snapshot_byte_limit(), len).into());
+fn ensure_trace_len(len: ByteCount, limits: RunLimits) -> Result<(), RunError> {
+    if len.get() > limits.trace_snapshot_byte_limit().get() {
+        return Err(
+            LimitError::trace_snapshot(limits.trace_snapshot_byte_limit(), len.get()).into(),
+        );
     }
 
     Ok(())
@@ -254,9 +262,11 @@ fn ensure_trace_len(len: usize, limits: RunLimits) -> Result<(), RunError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_support::{TestFailure, TestResult, expect_event};
+    use crate::test_support::{
+        TestFailure, TestResult, expect_event, expect_return_output, result_bytes,
+    };
     use crate::{
-        BorrowedTraceEvent, Program, RuleActionView, RunLimits, RunTermination, StepLimit,
+        BorrowedTraceEvent, ByteCount, Program, RuleActionView, RunLimits, StepLimit,
         TraceSnapshotEffect, TraceSnapshotEvent, TracedRunError,
     };
     use std::vec::Vec;
@@ -271,7 +281,7 @@ mod tests {
             RunLimits::new(StepLimit::new(10_000)),
             |event| {
                 seen.push((
-                    event.len(),
+                    event.byte_count().get(),
                     event.eq_bytes(match event {
                         BorrowedTraceEvent::Initial { .. } => b"a".as_ref(),
                         BorrowedTraceEvent::Step { step, .. } if step.get() == 1 => b"b".as_ref(),
@@ -281,7 +291,7 @@ mod tests {
             },
         )?;
 
-        assert_eq!(result.output(), b"ok");
+        expect_return_output(&result, b"ok")?;
         assert_eq!(seen.as_slice(), &[(1, true), (1, true), (2, true)]);
         Ok(())
     }
@@ -298,8 +308,7 @@ mod tests {
             },
         )?;
 
-        assert_eq!(result.output(), b"ok");
-        assert_eq!(result.termination(), RunTermination::Return);
+        expect_return_output(&result, b"ok")?;
         assert_eq!(events.len(), 3);
 
         let initial = expect_event(&events, 0)?;
@@ -307,9 +316,9 @@ mod tests {
         let second_step = expect_event(&events, 2)?;
 
         assert!(matches!(initial, TraceSnapshotEvent::Initial { .. }));
-        assert_eq!(initial.bytes(), b"a");
-        assert_eq!(first_step.bytes(), b"b");
-        assert_eq!(second_step.bytes(), b"ok");
+        assert_eq!(initial.as_bytes(), b"a");
+        assert_eq!(first_step.as_bytes(), b"b");
+        assert_eq!(second_step.as_bytes(), b"ok");
         assert!(matches!(
             first_step,
             TraceSnapshotEvent::Step {
@@ -331,8 +340,9 @@ mod tests {
                 effect: TraceSnapshotEffect::Continue { state },
                 ..
             } => {
-                assert_eq!(state.as_slice(), b"b");
-                assert_eq!(rule.position().zero_based(), 0);
+                assert_eq!(state.as_bytes(), b"b");
+                assert_eq!(state.byte_count(), ByteCount::new(1));
+                assert_eq!(rule.position().number().get(), 1);
                 assert_eq!(rule.line_number().get(), 1);
                 assert!(rule.lhs().eq_bytes(b"a"));
                 assert!(matches!(
@@ -378,7 +388,7 @@ mod tests {
         let last = events
             .last()
             .ok_or(TestFailure::Message("expected final trace event"))?;
-        assert_eq!(last.bytes(), result.output());
+        assert_eq!(last.as_bytes(), result_bytes(&result));
         assert_eq!(events.len(), result.steps().get() + 1);
         assert!(matches!(
             last,

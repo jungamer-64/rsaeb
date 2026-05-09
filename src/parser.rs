@@ -500,8 +500,10 @@ fn reject_nested_rhs_action(
 
 #[cfg(test)]
 mod tests {
-    use crate::test_support::{TestResult, expect_parse_error, run_source};
-    use crate::{LeftModifierKind, ParseErrorKind, PayloadKind, Program, RunLimits, StepLimit};
+    use crate::test_support::{TestResult, expect_parse_error, result_bytes, run_source};
+    use crate::{
+        LeftModifierKind, ParseErrorKind, PayloadKind, Program, RuleCount, RunLimits, StepLimit,
+    };
 
     #[test]
     fn code_spaces_are_ignored_in_rules() -> TestResult {
@@ -534,7 +536,7 @@ mod tests {
     #[test]
     fn empty_compact_lines_do_not_become_rules() -> TestResult {
         let program = Program::parse_str(" \t\r\n# comment\n")?;
-        assert_eq!(program.rule_count(), 0);
+        assert_eq!(program.rule_count(), RuleCount::new(0));
         Ok(())
     }
 
@@ -544,7 +546,7 @@ mod tests {
         let source = b"a=b#\xff\xfe\n";
         let program = Program::parse_bytes(source)?;
         let result = program.run(b"a", RunLimits::new(StepLimit::new(10_000)))?;
-        assert_eq!(result.output(), b"b");
+        assert_eq!(result_bytes(&result), b"b");
         Ok(())
     }
 
@@ -701,7 +703,7 @@ mod tests {
         let compact_result = compact.run(b"ac", RunLimits::new(StepLimit::new(10)))?;
         let spaced_result = spaced.run(b"ac", RunLimits::new(StepLimit::new(10)))?;
 
-        assert_eq!(compact_result.output(), spaced_result.output());
+        assert_eq!(result_bytes(&compact_result), result_bytes(&spaced_result));
         Ok(())
     }
 }

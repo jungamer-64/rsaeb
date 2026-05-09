@@ -4,7 +4,9 @@ use core::convert::Infallible;
 use crate::allocation::{AllocationContext, try_push, try_reserve_total_exact};
 use crate::bytes::{Payload, RuntimeByte};
 use crate::error::{LimitError, RunError, StateLimitContext, StateSizeError, TracedRunError};
-use crate::program::{Program, RunLimits, RunResult, StepCount, StepLimit};
+use crate::program::{
+    Program, ReturnOutput, RunLimits, RunResult, RuntimeStateSnapshot, StepCount, StepLimit,
+};
 use crate::rule::{Action, OnceRuleSlot, PayloadView, Rule, RuleAnchor, RulePosition};
 use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
 
@@ -213,9 +215,11 @@ impl State {
         Ok(output)
     }
 
-    fn into_output(self) -> Result<Vec<u8>, RunError> {
-        self.materialize(AllocationContext::FinalOutput)
-            .map_err(RunError::from)
+    fn into_snapshot(self) -> Result<RuntimeStateSnapshot, RunError> {
+        let bytes = self
+            .materialize(AllocationContext::FinalOutput)
+            .map_err(RunError::from)?;
+        Ok(RuntimeStateSnapshot::from_vec(bytes))
     }
 }
 
@@ -469,7 +473,7 @@ impl<'program> Runtime<'program> {
         loop {
             let Some(matched) = self.find_next_match() else {
                 return Ok(RunResult::stable(
-                    self.state.into_output()?,
+                    self.state.into_snapshot()?,
                     self.step_budget.completed_steps(),
                 ));
             };
@@ -562,9 +566,11 @@ impl<'program> Runtime<'program> {
                 )?;
 
                 Ok(Some(RunResult::from_return(
-                    output
-                        .to_vec_with_context(AllocationContext::ReturnOutput)
-                        .map_err(RunError::from)?,
+                    ReturnOutput::from_vec(
+                        output
+                            .to_vec_with_context(AllocationContext::ReturnOutput)
+                            .map_err(RunError::from)?,
+                    ),
                     step,
                 )))
             }
@@ -642,12 +648,12 @@ mod tests {
     use super::*;
     use crate::bytes::{CompactByte, Payload, ProgramByte};
     use crate::test_support::{
-        TestFailure, TestResult, expect_input_error, expect_run_error, expect_step_limit,
-        run_source,
+        TestFailure, TestResult, expect_input_error, expect_return_output, expect_run_error,
+        expect_step_limit, into_result_bytes, result_bytes, run_source,
     };
     use crate::{
-        BorrowedTraceEffect, BorrowedTraceEvent, LimitError, PayloadKind, Program, RunLimits,
-        RunTermination, SourceColumn, SourceLineNumber,
+        BorrowedTraceEffect, BorrowedTraceEvent, ByteCount, LimitError, PayloadKind, Program,
+        RunLimits, SourceColumn, SourceLineNumber,
     };
     use std::string::String;
     use std::vec::Vec;
@@ -695,9 +701,8 @@ mod tests {
         let source = "(once)=x\n(start)x=(return)ok";
         let result = Program::parse_str(source)?.run(b"ab", RunLimits::new(StepLimit::new(2)))?;
 
-        assert_eq!(result.output(), b"ok");
+        expect_return_output(&result, b"ok")?;
         assert_eq!(result.steps().get(), 2);
-        assert_eq!(result.termination(), RunTermination::Return);
         Ok(())
     }
 
@@ -708,8 +713,8 @@ mod tests {
         let end_result = Program::parse_str("(once)(end)=x\nabx=(return)end")?
             .run(b"ab", RunLimits::new(StepLimit::new(2)))?;
 
-        assert_eq!(start_result.output(), b"start");
-        assert_eq!(end_result.output(), b"end");
+        assert_eq!(result_bytes(&start_result), b"start");
+        assert_eq!(result_bytes(&end_result), b"end");
         Ok(())
     }
 
@@ -732,8 +737,7 @@ mod tests {
         assert_eq!(run_source("a=b", "a=()#c")?, "b=()#c");
         let result =
             Program::parse_str("a=(return)x")?.run(b"a=()#c", RunLimits::new(StepLimit::new(1)))?;
-        assert_eq!(result.output(), b"x");
-        assert_eq!(result.termination(), RunTermination::Return);
+        expect_return_output(&result, b"x")?;
         Ok(())
     }
 
@@ -761,7 +765,7 @@ mod tests {
         )?;
         let error = expect_input_error(error)?;
 
-        assert_eq!(error.column(), 2);
+        assert_eq!(error.column().get(), 2);
         Ok(())
     }
 
@@ -773,18 +777,18 @@ mod tests {
         assert!(Program::parse_str("a=b)").is_err());
 
         let result = program.run(b"a=#()", RunLimits::new(StepLimit::new(10_000)))?;
-        assert_eq!(String::from_utf8(result.into_output())?, "b=#()");
+        assert_eq!(String::from_utf8(into_result_bytes(result))?, "b=#()");
         Ok(())
     }
 
     #[test]
     fn step_limit_allows_exact_limit_but_blocks_next_match() -> TestResult {
         let exact = Program::parse_str("a=b")?.run(b"a", RunLimits::new(StepLimit::new(1)))?;
-        assert_eq!(exact.output(), b"b");
+        assert_eq!(result_bytes(&exact), b"b");
         assert_eq!(exact.steps().get(), 1);
 
         let no_match = Program::parse_str("a=b")?.run(b"x", RunLimits::new(StepLimit::new(0)))?;
-        assert_eq!(no_match.output(), b"x");
+        assert_eq!(result_bytes(&no_match), b"x");
         assert_eq!(no_match.steps().get(), 0);
 
         let error = expect_run_error(
@@ -796,7 +800,7 @@ mod tests {
             LimitError::Step {
                 max_steps: StepLimit::new(0),
                 completed_steps: StepCount::ZERO,
-                state_len: 1,
+                state_len: ByteCount::new(1),
             },
         );
         Ok(())
@@ -818,7 +822,7 @@ mod tests {
                     .and_then(StepCount::checked_next)
                     .and_then(StepCount::checked_next)
                     .ok_or(TestFailure::Message("expected step count"))?,
-                state_len: 3,
+                state_len: ByteCount::new(3),
             },
         );
         Ok(())
@@ -858,7 +862,7 @@ mod tests {
                     .and_then(StepCount::checked_next)
                     .and_then(StepCount::checked_next)
                     .ok_or(TestFailure::Message("expected step count"))?,
-                state_len: 3,
+                state_len: ByteCount::new(3),
             },
         );
         assert_eq!(last_state, b"aaa");
@@ -887,7 +891,7 @@ a|-=
         let result =
             Program::parse_str("# no executable rules")?.run(&input, RunLimits::default())?;
 
-        assert_eq!(result.output(), input.as_slice());
+        assert_eq!(result_bytes(&result), input.as_slice());
         assert_eq!(result.steps().get(), 0);
         Ok(())
     }

@@ -12,8 +12,6 @@ pub struct ByteCount {
 }
 
 impl ByteCount {
-    pub(crate) const ZERO: Self = Self { value: 0 };
-
     #[must_use]
     pub const fn new(value: usize) -> Self {
         Self { value }

@@ -1,10 +1,11 @@
 #![cfg(test)]
 
 use std::string::{FromUtf8Error, String};
+use std::vec::Vec;
 
 use crate::{
     AebError, AllocationError, InputError, LimitError, ParseError, Program, RunError, RunLimits,
-    RunResult, StepLimit, TraceSnapshotEvent,
+    RunOutcome, RunResult, StepLimit, TraceSnapshotEvent,
 };
 
 pub(crate) enum TestFailure {
@@ -68,7 +69,43 @@ pub(crate) fn test_limits() -> RunLimits {
 pub(crate) fn run_source(source: &str, input: &str) -> Result<String, TestFailure> {
     let program = Program::parse_str(source)?;
     let result = program.run(input.as_bytes(), test_limits())?;
-    Ok(String::from_utf8(result.into_output())?)
+    Ok(String::from_utf8(into_result_bytes(result))?)
+}
+
+pub(crate) fn result_bytes(result: &RunResult) -> &[u8] {
+    match result.outcome() {
+        RunOutcome::Stable(output) => output.as_bytes(),
+        RunOutcome::Return(output) => output.as_bytes(),
+    }
+}
+
+pub(crate) fn into_result_bytes(result: RunResult) -> Vec<u8> {
+    match result.into_outcome() {
+        RunOutcome::Stable(output) => output.into_vec(),
+        RunOutcome::Return(output) => output.into_vec(),
+    }
+}
+
+pub(crate) fn expect_stable_output<'result>(
+    result: &'result RunResult,
+    expected: &[u8],
+) -> Result<&'result [u8], TestFailure> {
+    match result.outcome() {
+        RunOutcome::Stable(output) if output.as_bytes() == expected => Ok(output.as_bytes()),
+        RunOutcome::Stable(_) => Err(TestFailure::Message("stable output bytes differed")),
+        RunOutcome::Return(_) => Err(TestFailure::Message("expected stable outcome")),
+    }
+}
+
+pub(crate) fn expect_return_output<'result>(
+    result: &'result RunResult,
+    expected: &[u8],
+) -> Result<&'result [u8], TestFailure> {
+    match result.outcome() {
+        RunOutcome::Return(output) if output.as_bytes() == expected => Ok(output.as_bytes()),
+        RunOutcome::Return(_) => Err(TestFailure::Message("return output bytes differed")),
+        RunOutcome::Stable(_) => Err(TestFailure::Message("expected return outcome")),
+    }
 }
 
 pub(crate) fn expect_parse_error(source: &str) -> Result<ParseError, TestFailure> {

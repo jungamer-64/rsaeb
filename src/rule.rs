@@ -13,9 +13,8 @@ pub struct RuleCount {
 }
 
 impl RuleCount {
-    pub(crate) const ZERO: Self = Self { value: 0 };
-
-    pub(crate) const fn new(value: usize) -> Self {
+    #[must_use]
+    pub const fn new(value: usize) -> Self {
         Self { value }
     }
 
@@ -54,10 +53,6 @@ pub struct RulePosition {
 impl RulePosition {
     pub(crate) const fn new(zero_based: usize) -> Self {
         Self { zero_based }
-    }
-
-    pub(crate) const fn zero_based(self) -> usize {
-        self.zero_based
     }
 
     /// One-based rule number for display.

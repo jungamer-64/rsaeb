@@ -65,11 +65,14 @@ A downstream `std` application can use the library normally. A downstream
 One-shot parse and run from UTF-8 source:
 
 ```rust
-use rsaeb::{run_str, RunLimits};
+use rsaeb::{run_str, RunLimits, RunOutcome};
 
 fn main() -> Result<(), rsaeb::AebError> {
     let result = run_str("a=b", b"a", RunLimits::default())?;
-    assert_eq!(result.output(), b"b");
+    assert!(matches!(
+        result.outcome(),
+        RunOutcome::Stable(output) if output.as_bytes() == b"b"
+    ));
     Ok(())
 }
 ```
@@ -77,7 +80,7 @@ fn main() -> Result<(), rsaeb::AebError> {
 One-shot parse and run from raw source bytes:
 
 ```rust
-use rsaeb::{run_bytes, RunLimits, StepLimit};
+use rsaeb::{run_bytes, RunLimits, RunOutcome, StepLimit};
 
 fn main() -> Result<(), rsaeb::AebError> {
     let result = run_bytes(
@@ -85,7 +88,10 @@ fn main() -> Result<(), rsaeb::AebError> {
         b"a",
         RunLimits::new(StepLimit::new(10)),
     )?;
-    assert_eq!(result.output(), b"b");
+    assert!(matches!(
+        result.outcome(),
+        RunOutcome::Stable(output) if output.as_bytes() == b"b"
+    ));
     Ok(())
 }
 ```
@@ -93,7 +99,7 @@ fn main() -> Result<(), rsaeb::AebError> {
 Reusable parsed program:
 
 ```rust
-use rsaeb::{Program, RunLimits, StepLimit};
+use rsaeb::{Program, RunLimits, RunOutcome, StepLimit};
 
 fn main() -> Result<(), rsaeb::AebError> {
     let program = Program::parse_str("(once)a=b\na=c")?;
@@ -101,8 +107,14 @@ fn main() -> Result<(), rsaeb::AebError> {
     let first = program.run(b"aa", RunLimits::new(StepLimit::new(10_000)))?;
     let second = program.run(b"aa", RunLimits::new(StepLimit::new(10_000)))?;
 
-    assert_eq!(first.output(), b"bc");
-    assert_eq!(second.output(), b"bc");
+    assert!(matches!(
+        first.outcome(),
+        RunOutcome::Stable(output) if output.as_bytes() == b"bc"
+    ));
+    assert!(matches!(
+        second.outcome(),
+        RunOutcome::Stable(output) if output.as_bytes() == b"bc"
+    ));
     Ok(())
 }
 ```
@@ -118,11 +130,11 @@ The parser is byte-oriented. Comments are removed before executable-code
 validation, so comments can contain arbitrary non-ASCII bytes:
 
 ```rust
-use rsaeb::Program;
+use rsaeb::{Program, RuleCount};
 
 fn main() -> Result<(), rsaeb::ParseError> {
     let program = Program::parse_bytes(b"a=b#\xff\xfe\n")?;
-    assert_eq!(program.rule_count(), 1);
+    assert_eq!(program.rule_count(), RuleCount::new(1));
     Ok(())
 }
 ```
@@ -131,12 +143,15 @@ ASCII whitespace in program code is ignored, but spaces in runtime input are
 data:
 
 ```rust
-use rsaeb::{Program, RunLimits, StepLimit};
+use rsaeb::{Program, RunLimits, RunOutcome, StepLimit};
 
 fn main() -> Result<(), rsaeb::AebError> {
     let result =
         Program::parse_str("ab=bb")?.run(b"a bc", RunLimits::new(StepLimit::new(10)))?;
-    assert_eq!(result.output(), b"a bc");
+    assert!(matches!(
+        result.outcome(),
+        RunOutcome::Stable(output) if output.as_bytes() == b"a bc"
+    ));
     Ok(())
 }
 ```
@@ -191,11 +206,13 @@ stored as `RuntimeByte`: payload-compatible input and rule output become
 editable program bytes, while whitespace, control bytes, and reserved syntax
 bytes from input become opaque ASCII bytes. Ordinary rules match only editable bytes.
 Opaque input bytes are preserved by surrounding rewrites but cannot be directly
-matched, created, or deleted by program payloads. Runtime state is converted
-back to public `Vec<u8>` only when returning results, traces, or errors. During
-execution, the active state and the rewrite scratch buffer are distinct typed
-buffers; the runtime swaps them only after a successful continuation step, so a
-partially built rewrite cannot become the committed state.
+matched, created, or deleted by program payloads. Runtime state is materialized
+only at output boundaries, and the owned public values keep their purpose in the
+type: stable states use `RuntimeStateSnapshot`, while `(return)` payloads use
+`ReturnOutput`. During execution, the active state and the rewrite scratch
+buffer are distinct typed buffers; the runtime swaps them only after a
+successful continuation step, so a partially built rewrite cannot become the
+committed state.
 
 Examples:
 
@@ -417,7 +434,7 @@ rewrite system because a short run can still expand a state aggressively.
 
 ```rust
 use rsaeb::{
-    LimitError, Program, ReturnByteLimit, RunError, RunLimits, StateByteLimit,
+    ByteCount, LimitError, Program, ReturnByteLimit, RunError, RunLimits, StateByteLimit,
     StateLimitContext, StepLimit, TraceSnapshotByteLimit,
 };
 
@@ -438,7 +455,7 @@ fn main() -> Result<(), rsaeb::AebError> {
         Err(RunError::Limit(LimitError::State {
             context: StateLimitContext::Rewrite,
             limit,
-            attempted_len: 3,
+            attempted_len: ByteCount::new(3),
         })) if limit == StateByteLimit::new(2)
     ));
 
@@ -450,15 +467,21 @@ Execution may succeed exactly at the step limit. The step limit becomes an error
 only when another rule would still apply after the configured number of steps.
 
 ```rust
-use rsaeb::{LimitError, Program, RunError, RunLimits, StepLimit};
+use rsaeb::{ByteCount, LimitError, Program, RunError, RunLimits, RunOutcome, StepLimit};
 
 fn main() -> Result<(), rsaeb::AebError> {
     let exact = Program::parse_str("a=b")?.run(b"a", RunLimits::new(StepLimit::new(1)))?;
-    assert_eq!(exact.output(), b"b");
+    assert!(matches!(
+        exact.outcome(),
+        RunOutcome::Stable(output) if output.as_bytes() == b"b"
+    ));
     assert_eq!(exact.steps().get(), 1);
 
     let no_match = Program::parse_str("a=b")?.run(b"x", RunLimits::new(StepLimit::new(0)))?;
-    assert_eq!(no_match.output(), b"x");
+    assert!(matches!(
+        no_match.outcome(),
+        RunOutcome::Stable(output) if output.as_bytes() == b"x"
+    ));
     assert_eq!(no_match.steps().get(), 0);
 
     let would_apply = Program::parse_str("a=b")?.run(b"a", RunLimits::new(StepLimit::new(0)));
@@ -467,7 +490,7 @@ fn main() -> Result<(), rsaeb::AebError> {
         Err(RunError::Limit(LimitError::Step {
             max_steps,
             completed_steps,
-            state_len: 1,
+            state_len: ByteCount::new(1),
         })) if max_steps == StepLimit::new(0) && completed_steps.get() == 0
     ));
     Ok(())
@@ -488,7 +511,7 @@ fn main() -> Result<(), rsaeb::AebError> {
     let program = Program::parse_str("( once ) ( start ) a = ( end ) b # comment")?;
     let rule = program.rules().next().expect("one parsed rule");
 
-    assert_eq!(rule.position().zero_based(), 0);
+    assert_eq!(rule.position().number().get(), 1);
     assert_eq!(rule.line_number().get(), 1);
     assert_eq!(rule.repeat(), RuleRepeat::Once);
     assert_eq!(rule.anchor(), RuleAnchor::Start);
@@ -513,32 +536,35 @@ Borrowed tracing is the allocation-free primitive. Events borrow the runtime
 state or return payload only for the callback invocation:
 
 ```rust
-use rsaeb::{BorrowedTraceEvent, Program, RunLimits, StepLimit};
+use rsaeb::{BorrowedTraceEvent, Program, RunLimits, RunOutcome, StepLimit};
 
 fn main() -> Result<(), rsaeb::AebError> {
     let program = Program::parse_str("a=b\nb=(return)ok")?;
     let mut lengths = Vec::new();
 
     let result = program.run_with_borrowed_trace(b"a", RunLimits::new(StepLimit::new(10)), |event| {
-        lengths.push(event.len());
+        lengths.push(event.byte_count().get());
         if let BorrowedTraceEvent::Step { rule, .. } = event {
             let _line = rule.line_number();
         }
     })?;
 
-    assert_eq!(result.output(), b"ok");
+    assert!(matches!(
+        result.outcome(),
+        RunOutcome::Return(output) if output.as_bytes() == b"ok"
+    ));
     assert_eq!(lengths.as_slice(), &[1, 1, 2]);
     Ok(())
 }
 ```
 
-Trace snapshotting materializes state/output bytes as `Vec<u8>` under
-`RunLimits::trace_snapshot_byte_limit()`. Step events still borrow `RuleView`
-from the parsed `Program`, so retained trace snapshot events cannot outlive that
-program:
+Trace snapshotting materializes state/output bytes into typed owned snapshots
+under `RunLimits::trace_snapshot_byte_limit()`. Step events still borrow
+`RuleView` from the parsed `Program`, so retained trace snapshot events cannot
+outlive that program:
 
 ```rust
-use rsaeb::{Program, RunLimits, StepLimit, TraceSnapshotEffect, TraceSnapshotEvent};
+use rsaeb::{Program, RunLimits, RunOutcome, StepLimit, TraceSnapshotEffect, TraceSnapshotEvent};
 
 fn main() -> Result<(), rsaeb::AebError> {
     let program = Program::parse_str("a=b\nb=(return)ok")?;
@@ -548,11 +574,14 @@ fn main() -> Result<(), rsaeb::AebError> {
         events.push(event);
     })?;
 
-    assert_eq!(result.output(), b"ok");
+    assert!(matches!(
+        result.outcome(),
+        RunOutcome::Return(output) if output.as_bytes() == b"ok"
+    ));
     assert!(matches!(events.first(), Some(TraceSnapshotEvent::Initial { .. })));
-    assert_eq!(events[0].bytes(), b"a");
-    assert_eq!(events[1].bytes(), b"b");
-    assert_eq!(events[2].bytes(), b"ok");
+    assert_eq!(events[0].as_bytes(), b"a");
+    assert_eq!(events[1].as_bytes(), b"b");
+    assert_eq!(events[2].as_bytes(), b"ok");
     assert!(matches!(
         events[2],
         TraceSnapshotEvent::Step {
@@ -584,7 +613,7 @@ fn main() -> Result<(), rsaeb::AebError> {
     let run_error = Program::parse_str("a=b")?.run("aあ".as_bytes(), RunLimits::default());
 
     if let Err(RunError::Input(input_error)) = run_error {
-        assert_eq!(input_error.column(), 2);
+        assert_eq!(input_error.column().get(), 2);
     }
 
     Ok(())
@@ -648,6 +677,7 @@ Program construction and execution:
 
 Runtime configuration and result:
 
+- `ByteCount`
 - `RunLimits`
 - `StepLimit`
 - `StateByteLimit`
@@ -660,26 +690,29 @@ Runtime configuration and result:
 - `RunLimits::with_return_byte_limit(return_byte_limit)`
 - `RunLimits::with_trace_snapshot_byte_limit(trace_snapshot_byte_limit)`
 - `RunResult`
-- `RunResult::output()`
-- `RunResult::into_output()`
+- `RunResult::outcome()`
+- `RunResult::into_outcome()`
 - `RunResult::steps()`
-- `RunResult::termination()`
-- `RunTermination`
+- `RunOutcome`
+- `RuntimeStateSnapshot` (`as_bytes()`, `into_vec()`, `byte_count()`)
+- `ReturnOutput` (`as_bytes()`, `into_vec()`, `byte_count()`)
 - `StepCount`
 
 Rule data:
 
 - `RulePosition`
+- `RuleNumber`
+- `RuleCount`
 - `RuleRepeat`
 - `RuleAnchor`
-- `PayloadView<'program>` (`bytes() -> impl Iterator<Item = u8>`, `to_vec()`)
+- `PayloadView<'program>` (`byte_count()`, `bytes() -> impl Iterator<Item = u8>`, `to_vec()`)
 - `RuleActionView<'program>`
 - `RuleView<'program>`
 - `RuleView::canonical_source()`
 
 Tracing:
 
-- `RuntimeStateView<'run>` (`bytes() -> impl Iterator<Item = u8>`, `to_vec()`)
+- `RuntimeStateView<'run>` (`byte_count()`, `bytes() -> impl Iterator<Item = u8>`, `to_vec()`)
 - `BorrowedTraceEvent<'program, 'run>`
 - `BorrowedTraceEffect<'program, 'run>`
 - `TraceSnapshotEvent<'program>`
@@ -698,6 +731,7 @@ Errors:
 - `LeftModifierKind`
 - `RightActionKind`
 - `RunError`
+- `InputColumn`
 - `InputError`
 - `AllocationError`
 - `AllocationErrorKind`

@@ -12,7 +12,7 @@ mod traced;
 use core::error::Error;
 
 pub use parse::{LeftModifierKind, ParseError, ParseErrorKind, PayloadKind, RightActionKind};
-pub use run::{InputError, LimitError, RunError, StateLimitContext, StateSizeError};
+pub use run::{InputColumn, InputError, LimitError, RunError, StateLimitContext, StateSizeError};
 pub use traced::TracedRunError;
 
 /// Top-level interpreter error.
