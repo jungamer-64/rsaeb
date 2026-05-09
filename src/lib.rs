@@ -31,6 +31,7 @@ mod parser;
 mod program;
 mod rule;
 mod runtime;
+mod source;
 mod syntax;
 mod trace;
 
@@ -41,10 +42,11 @@ pub use error::{
 };
 pub use program::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
-    DEFAULT_MAX_TRACE_SNAPSHOT_LEN, Program, RunLimits, RunResult, RunTermination, run_bytes,
-    run_str,
+    DEFAULT_MAX_TRACE_SNAPSHOT_LEN, Program, ReturnByteLimit, RunLimits, RunResult, RunTermination,
+    StateByteLimit, StepCount, StepLimit, TraceSnapshotByteLimit, run_bytes, run_str,
 };
 pub use rule::{PayloadView, RuleActionView, RuleAnchor, RulePosition, RuleRepeat, RuleView};
+pub use source::{SourceColumn, SourceLineNumber, SourcePosition};
 pub use trace::{
     BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView, TraceSnapshotEffect,
     TraceSnapshotEvent,

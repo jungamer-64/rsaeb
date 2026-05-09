@@ -1,6 +1,9 @@
 use core::error::Error;
 
 use crate::allocation::AllocationError;
+use crate::program::{
+    ReturnByteLimit, StateByteLimit, StepCount, StepLimit, TraceSnapshotByteLimit,
+};
 
 /// Runtime execution error.
 #[derive(Debug, PartialEq, Eq)]
@@ -132,30 +135,30 @@ pub enum LimitError {
         /// Whether the limit was exceeded by input or by a rewrite.
         context: StateLimitContext,
         /// Configured maximum runtime state length.
-        limit: usize,
+        limit: StateByteLimit,
         /// State length that would have been accepted without this guard.
         attempted_len: usize,
     },
     /// `(return)` output would exceed the configured return-output limit.
     Return {
         /// Configured maximum `(return)` output length.
-        limit: usize,
+        limit: ReturnByteLimit,
         /// Return payload length that would have been allocated.
         attempted_len: usize,
     },
     /// Trace snapshot materialization would exceed the configured trace limit.
     TraceSnapshot {
         /// Configured maximum trace snapshot byte length.
-        limit: usize,
+        limit: TraceSnapshotByteLimit,
         /// Trace state/output snapshot length that would have been allocated.
         attempted_len: usize,
     },
     /// Execution exceeded the configured step limit.
     Step {
         /// Configured maximum step count.
-        max_steps: usize,
+        max_steps: StepLimit,
         /// Number of completed rewrite steps when the next match was found.
-        completed_steps: usize,
+        completed_steps: StepCount,
         /// Runtime state length when the limit was hit.
         state_len: usize,
     },
@@ -164,7 +167,7 @@ pub enum LimitError {
 impl LimitError {
     pub(crate) const fn state(
         context: StateLimitContext,
-        limit: usize,
+        limit: StateByteLimit,
         attempted_len: usize,
     ) -> Self {
         Self::State {
@@ -174,21 +177,28 @@ impl LimitError {
         }
     }
 
-    pub(crate) const fn return_output(limit: usize, attempted_len: usize) -> Self {
+    pub(crate) const fn return_output(limit: ReturnByteLimit, attempted_len: usize) -> Self {
         Self::Return {
             limit,
             attempted_len,
         }
     }
 
-    pub(crate) const fn trace_snapshot(limit: usize, attempted_len: usize) -> Self {
+    pub(crate) const fn trace_snapshot(
+        limit: TraceSnapshotByteLimit,
+        attempted_len: usize,
+    ) -> Self {
         Self::TraceSnapshot {
             limit,
             attempted_len,
         }
     }
 
-    pub(crate) const fn step(max_steps: usize, completed_steps: usize, state_len: usize) -> Self {
+    pub(crate) const fn step(
+        max_steps: StepLimit,
+        completed_steps: StepCount,
+        state_len: usize,
+    ) -> Self {
         Self::Step {
             max_steps,
             completed_steps,

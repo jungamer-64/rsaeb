@@ -1,30 +1,44 @@
 use core::error::Error;
 
 use crate::allocation::AllocationError;
+use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
 
 /// Source program parse error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {
-    line: usize,
-    column: Option<usize>,
+    line: SourceLineNumber,
+    column: Option<SourceColumn>,
     kind: ParseErrorKind,
 }
 
 impl ParseError {
-    pub(crate) fn new(line: usize, column: Option<usize>, kind: ParseErrorKind) -> Self {
+    pub(crate) fn new(
+        line: SourceLineNumber,
+        column: Option<SourceColumn>,
+        kind: ParseErrorKind,
+    ) -> Self {
         Self { line, column, kind }
     }
 
     /// One-based source line number.
     #[must_use]
-    pub const fn line(&self) -> usize {
+    pub const fn line(&self) -> SourceLineNumber {
         self.line
     }
 
     /// One-based source column, when the error has a single byte position.
     #[must_use]
-    pub const fn column(&self) -> Option<usize> {
+    pub const fn column(&self) -> Option<SourceColumn> {
         self.column
+    }
+
+    /// One-based source position, when the error has a single byte position.
+    #[must_use]
+    pub const fn position(&self) -> Option<SourcePosition> {
+        match self.column {
+            Some(column) => Some(SourcePosition::new(self.line, column)),
+            None => None,
+        }
     }
 
     /// Structured parse error reason.

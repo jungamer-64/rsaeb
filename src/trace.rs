@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::RuntimeByte;
 use crate::error::{LimitError, RunError};
-use crate::program::RunLimits;
+use crate::program::{RunLimits, StepCount};
 use crate::rule::{PayloadView, RuleView};
 
 /// Borrowed view of runtime-state bytes.
@@ -94,12 +94,6 @@ impl TraceSnapshotEffect {
             Self::Return { output } => output,
         }
     }
-
-    /// Whether this effect stopped execution by `(return)`.
-    #[must_use]
-    pub const fn is_return(&self) -> bool {
-        matches!(self, Self::Return { .. })
-    }
 }
 
 /// Borrowed trace effect emitted by borrowed tracing APIs.
@@ -112,12 +106,6 @@ pub enum BorrowedTraceEffect<'program, 'run> {
 }
 
 impl BorrowedTraceEffect<'_, '_> {
-    /// Whether this effect stopped execution by `(return)`.
-    #[must_use]
-    pub const fn is_return(self) -> bool {
-        matches!(self, Self::Return { .. })
-    }
-
     /// Byte length carried by this effect.
     #[must_use]
     pub fn len(self) -> usize {
@@ -170,7 +158,7 @@ pub enum TraceSnapshotEvent<'program> {
     /// One applied rule.
     Step {
         /// One-based applied step count.
-        step: usize,
+        step: StepCount,
         /// Structured view of the applied rule.
         rule: RuleView<'program>,
         /// Structured result of the rewrite step.
@@ -187,15 +175,6 @@ impl TraceSnapshotEvent<'_> {
             Self::Step { effect, .. } => effect.bytes(),
         }
     }
-
-    /// Whether this event is a step that stopped execution by `(return)`.
-    #[must_use]
-    pub const fn is_return_step(&self) -> bool {
-        match self {
-            Self::Initial { .. } => false,
-            Self::Step { effect, .. } => effect.is_return(),
-        }
-    }
 }
 
 /// Trace event emitted by borrowed tracing APIs.
@@ -210,7 +189,7 @@ pub enum BorrowedTraceEvent<'program, 'run> {
     /// One applied rule.
     Step {
         /// One-based applied step count.
-        step: usize,
+        step: StepCount,
         /// Structured view of the applied rule.
         rule: RuleView<'program>,
         /// Structured result of the rewrite step.
@@ -243,21 +222,12 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
         }
     }
 
-    /// Whether this event is a step that stopped execution by `(return)`.
-    #[must_use]
-    pub const fn is_return_step(self) -> bool {
-        match self {
-            Self::Initial { .. } => false,
-            Self::Step { effect, .. } => effect.is_return(),
-        }
-    }
-
     /// Materializes this borrowed event as a trace snapshot event.
     ///
     /// # Errors
     ///
     /// Returns `RunError::Limit` if the event bytes exceed
-    /// `RunLimits::max_trace_snapshot_len`. Returns `RunError::Allocation` if
+    /// `RunLimits::trace_snapshot_byte_limit`. Returns `RunError::Allocation` if
     /// snapshot allocation fails.
     pub fn to_snapshot(self, limits: RunLimits) -> Result<TraceSnapshotEvent<'program>, RunError> {
         ensure_trace_len(self.len(), limits)?;
@@ -275,8 +245,8 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
 }
 
 fn ensure_trace_len(len: usize, limits: RunLimits) -> Result<(), RunError> {
-    if len > limits.max_trace_snapshot_len() {
-        return Err(LimitError::trace_snapshot(limits.max_trace_snapshot_len(), len).into());
+    if len > limits.trace_snapshot_byte_limit().get() {
+        return Err(LimitError::trace_snapshot(limits.trace_snapshot_byte_limit(), len).into());
     }
 
     Ok(())
@@ -286,8 +256,8 @@ fn ensure_trace_len(len: usize, limits: RunLimits) -> Result<(), RunError> {
 mod tests {
     use crate::test_support::{TestFailure, TestResult, expect_event};
     use crate::{
-        BorrowedTraceEvent, Program, RuleActionView, RunLimits, TraceSnapshotEffect,
-        TraceSnapshotEvent, TracedRunError,
+        BorrowedTraceEvent, Program, RuleActionView, RunLimits, RunTermination, StepLimit,
+        TraceSnapshotEffect, TraceSnapshotEvent, TracedRunError,
     };
     use std::vec::Vec;
 
@@ -296,16 +266,20 @@ mod tests {
         let program = Program::parse_str("a=b\nb=(return)ok")?;
         let mut seen = Vec::new();
 
-        let result = program.run_with_borrowed_trace(b"a", RunLimits::new(10_000), |event| {
-            seen.push((
-                event.len(),
-                event.eq_bytes(match event {
-                    BorrowedTraceEvent::Initial { .. } => b"a".as_ref(),
-                    BorrowedTraceEvent::Step { step: 1, .. } => b"b".as_ref(),
-                    BorrowedTraceEvent::Step { .. } => b"ok".as_ref(),
-                }),
-            ));
-        })?;
+        let result = program.run_with_borrowed_trace(
+            b"a",
+            RunLimits::new(StepLimit::new(10_000)),
+            |event| {
+                seen.push((
+                    event.len(),
+                    event.eq_bytes(match event {
+                        BorrowedTraceEvent::Initial { .. } => b"a".as_ref(),
+                        BorrowedTraceEvent::Step { step, .. } if step.get() == 1 => b"b".as_ref(),
+                        BorrowedTraceEvent::Step { .. } => b"ok".as_ref(),
+                    }),
+                ));
+            },
+        )?;
 
         assert_eq!(result.output(), b"ok");
         assert_eq!(seen.as_slice(), &[(1, true), (1, true), (2, true)]);
@@ -316,12 +290,16 @@ mod tests {
     fn trace_snapshot_events_are_emitted_without_core_stderr() -> TestResult {
         let program = Program::parse_str("a=b\nb=(return)ok")?;
         let mut events = Vec::new();
-        let result = program.run_with_trace_snapshots(b"a", RunLimits::new(10_000), |event| {
-            events.push(event);
-        })?;
+        let result = program.run_with_trace_snapshots(
+            b"a",
+            RunLimits::new(StepLimit::new(10_000)),
+            |event| {
+                events.push(event);
+            },
+        )?;
 
         assert_eq!(result.output(), b"ok");
-        assert!(result.returned());
+        assert_eq!(result.termination(), RunTermination::Return);
         assert_eq!(events.len(), 3);
 
         let initial = expect_event(&events, 0)?;
@@ -332,8 +310,20 @@ mod tests {
         assert_eq!(initial.bytes(), b"a");
         assert_eq!(first_step.bytes(), b"b");
         assert_eq!(second_step.bytes(), b"ok");
-        assert!(!first_step.is_return_step());
-        assert!(second_step.is_return_step());
+        assert!(matches!(
+            first_step,
+            TraceSnapshotEvent::Step {
+                effect: TraceSnapshotEffect::Continue { .. },
+                ..
+            }
+        ));
+        assert!(matches!(
+            second_step,
+            TraceSnapshotEvent::Step {
+                effect: TraceSnapshotEffect::Return { .. },
+                ..
+            }
+        ));
 
         match first_step {
             TraceSnapshotEvent::Step {
@@ -343,7 +333,7 @@ mod tests {
             } => {
                 assert_eq!(state.as_slice(), b"b");
                 assert_eq!(rule.position().zero_based(), 0);
-                assert_eq!(rule.line_number(), 1);
+                assert_eq!(rule.line_number().get(), 1);
                 assert!(rule.lhs().eq_bytes(b"a"));
                 assert!(matches!(
                     rule.action(),
@@ -362,9 +352,11 @@ mod tests {
     #[test]
     fn fallible_trace_callback_can_abort_execution() -> TestResult {
         let program = Program::parse_str("a=b\nb=c")?;
-        let result = program.try_run_with_trace_snapshots(b"a", RunLimits::new(10_000), |_event| {
-            Err::<(), _>("trace sink full")
-        });
+        let result = program.try_run_with_trace_snapshots(
+            b"a",
+            RunLimits::new(StepLimit::new(10_000)),
+            |_event| Err::<(), _>("trace sink full"),
+        );
 
         assert_eq!(result, Err(TracedRunError::Trace("trace sink full")));
         Ok(())
@@ -375,16 +367,26 @@ mod tests {
         let program = Program::parse_str("a=b\nb=(return)c")?;
         let mut events = Vec::new();
 
-        let result = program.run_with_trace_snapshots(b"a", RunLimits::new(10), |event| {
-            events.push(event);
-        })?;
+        let result = program.run_with_trace_snapshots(
+            b"a",
+            RunLimits::new(StepLimit::new(10)),
+            |event| {
+                events.push(event);
+            },
+        )?;
 
         let last = events
             .last()
             .ok_or(TestFailure::Message("expected final trace event"))?;
         assert_eq!(last.bytes(), result.output());
-        assert_eq!(events.len(), result.steps() + 1);
-        assert!(last.is_return_step());
+        assert_eq!(events.len(), result.steps().get() + 1);
+        assert!(matches!(
+            last,
+            TraceSnapshotEvent::Step {
+                effect: TraceSnapshotEffect::Return { .. },
+                ..
+            }
+        ));
         Ok(())
     }
 }

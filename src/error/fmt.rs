@@ -58,10 +58,10 @@ impl fmt::Display for AebError {
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "parse error at line {}", self.line())?;
+        write!(f, "parse error at line {}", self.line().get())?;
 
         if let Some(column) = self.column() {
-            write!(f, ", column {column}")?;
+            write!(f, ", column {}", column.get())?;
         }
 
         write!(f, ": {}", self.kind())
@@ -193,21 +193,24 @@ impl fmt::Display for LimitError {
                 attempted_len,
             } => write!(
                 f,
-                "state limit exceeded by {context}; attempted length: {attempted_len}, limit: {limit}",
+                "state limit exceeded by {context}; attempted length: {attempted_len}, limit: {}",
+                limit.get(),
             ),
             Self::Return {
                 limit,
                 attempted_len,
             } => write!(
                 f,
-                "return output limit exceeded; attempted length: {attempted_len}, limit: {limit}",
+                "return output limit exceeded; attempted length: {attempted_len}, limit: {}",
+                limit.get(),
             ),
             Self::TraceSnapshot {
                 limit,
                 attempted_len,
             } => write!(
                 f,
-                "trace snapshot limit exceeded; attempted length: {attempted_len}, limit: {limit}",
+                "trace snapshot limit exceeded; attempted length: {attempted_len}, limit: {}",
+                limit.get(),
             ),
             Self::Step {
                 max_steps,
@@ -215,7 +218,9 @@ impl fmt::Display for LimitError {
                 state_len,
             } => write!(
                 f,
-                "step limit exceeded after {completed_steps} steps; max steps: {max_steps}, state length: {state_len} bytes",
+                "step limit exceeded after {} steps; max steps: {}, state length: {state_len} bytes",
+                completed_steps.get(),
+                max_steps.get(),
             ),
         }
     }
@@ -237,7 +242,10 @@ mod tests {
         TestResult, expect_input_error, expect_parse_error, expect_run_error, expect_state_limit,
         expect_step_limit,
     };
-    use crate::{AllocationContext, AllocationError, Program, RunLimits};
+    use crate::{
+        AllocationContext, AllocationError, Program, ReturnByteLimit, RunLimits, StateByteLimit,
+        StepLimit, TraceSnapshotByteLimit,
+    };
 
     #[test]
     fn allocation_display_names_the_failed_context_and_capacity() {
@@ -290,7 +298,12 @@ mod tests {
     #[test]
     fn state_limit_display_names_context_attempted_length_and_limit() -> TestResult {
         let program = Program::parse_str("a=b")?;
-        let limits = RunLimits::bounded(10, 1, 10, 10);
+        let limits = RunLimits::bounded(
+            StepLimit::new(10),
+            StateByteLimit::new(1),
+            ReturnByteLimit::new(10),
+            TraceSnapshotByteLimit::new(10),
+        );
         let error = expect_run_error(program.run(b"aa", limits))?;
         let error = expect_state_limit(error)?;
 
@@ -304,7 +317,7 @@ mod tests {
     #[test]
     fn step_limit_display_reports_limit_and_preserved_state_len() -> TestResult {
         let program = Program::parse_str("a=b")?;
-        let error = expect_run_error(program.run(b"a", RunLimits::new(0)))?;
+        let error = expect_run_error(program.run(b"a", RunLimits::new(StepLimit::new(0))))?;
         let error = expect_step_limit(error)?;
 
         assert_eq!(

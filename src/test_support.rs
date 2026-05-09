@@ -4,7 +4,7 @@ use std::string::{FromUtf8Error, String};
 
 use crate::{
     AebError, AllocationError, InputError, LimitError, ParseError, Program, RunError, RunLimits,
-    RunResult, TraceSnapshotEvent,
+    RunResult, StepLimit, TraceSnapshotEvent,
 };
 
 pub(crate) enum TestFailure {
@@ -62,7 +62,7 @@ impl From<AllocationError> for TestFailure {
 pub(crate) type TestResult = Result<(), TestFailure>;
 
 pub(crate) fn test_limits() -> RunLimits {
-    RunLimits::new(10_000)
+    RunLimits::new(StepLimit::new(10_000))
 }
 
 pub(crate) fn run_source(source: &str, input: &str) -> Result<String, TestFailure> {

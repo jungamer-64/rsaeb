@@ -2,19 +2,109 @@ use alloc::vec::Vec;
 use core::convert::Infallible;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push};
-use crate::bytes::Payload;
 use crate::error::{AebError, ParseError, RunError, TracedRunError};
 use crate::parser::parse_program_impl;
-use crate::rule::{
-    Action, OnceRuleSlot, Rule, RuleAnchor, RulePosition, RuleRepeat, RuleRepeatPlan, RuleView,
-};
+use crate::rule::{OnceRuleSlot, ParsedRule, Rule, RulePosition, RuleRepeatPlan, RuleView};
 use crate::runtime::Runtime;
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
-pub const DEFAULT_MAX_STEPS: usize = 1_000_000;
-pub const DEFAULT_MAX_STATE_LEN: usize = 16 * 1024 * 1024;
-pub const DEFAULT_MAX_RETURN_LEN: usize = 16 * 1024 * 1024;
-pub const DEFAULT_MAX_TRACE_SNAPSHOT_LEN: usize = 16 * 1024 * 1024;
+pub const DEFAULT_MAX_STEPS: StepLimit = StepLimit::new(1_000_000);
+pub const DEFAULT_MAX_STATE_LEN: StateByteLimit = StateByteLimit::new(16 * 1024 * 1024);
+pub const DEFAULT_MAX_RETURN_LEN: ReturnByteLimit = ReturnByteLimit::new(16 * 1024 * 1024);
+pub const DEFAULT_MAX_TRACE_SNAPSHOT_LEN: TraceSnapshotByteLimit =
+    TraceSnapshotByteLimit::new(16 * 1024 * 1024);
+
+/// Maximum number of rewrite steps allowed before the next matching rule fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StepLimit {
+    value: usize,
+}
+
+impl StepLimit {
+    #[must_use]
+    pub const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+}
+
+/// Maximum runtime state length in bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StateByteLimit {
+    value: usize,
+}
+
+impl StateByteLimit {
+    #[must_use]
+    pub const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+}
+
+/// Maximum `(return)` output length in bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ReturnByteLimit {
+    value: usize,
+}
+
+impl ReturnByteLimit {
+    #[must_use]
+    pub const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+}
+
+/// Maximum state/output bytes materialized for one trace snapshot event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TraceSnapshotByteLimit {
+    value: usize,
+}
+
+impl TraceSnapshotByteLimit {
+    #[must_use]
+    pub const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+}
+
+/// Number of completed rewrite steps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StepCount {
+    value: usize,
+}
+
+impl StepCount {
+    pub(crate) const ZERO: Self = Self { value: 0 };
+
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+
+    pub(crate) fn checked_next(self) -> Option<Self> {
+        let value = self.value.checked_add(1)?;
+        Some(Self { value })
+    }
+}
 
 /// Parses source bytes and runs them once with the given input bytes.
 ///
@@ -47,16 +137,16 @@ pub fn run_str(source: &str, input: &[u8], limits: RunLimits) -> Result<RunResul
 /// expand into a very large state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunLimits {
-    steps: usize,
-    state_len: usize,
-    return_len: usize,
-    trace_snapshot_len: usize,
+    steps: StepLimit,
+    state_len: StateByteLimit,
+    return_len: ReturnByteLimit,
+    trace_snapshot_len: TraceSnapshotByteLimit,
 }
 
 impl RunLimits {
     /// Creates limits with an explicit step limit and default byte budgets.
     #[must_use]
-    pub const fn new(max_steps: usize) -> Self {
+    pub const fn new(max_steps: StepLimit) -> Self {
         Self {
             steps: max_steps,
             state_len: DEFAULT_MAX_STATE_LEN,
@@ -68,10 +158,10 @@ impl RunLimits {
     /// Creates limits with every budget specified explicitly.
     #[must_use]
     pub const fn bounded(
-        max_steps: usize,
-        max_state_len: usize,
-        max_return_len: usize,
-        max_trace_snapshot_len: usize,
+        max_steps: StepLimit,
+        max_state_len: StateByteLimit,
+        max_return_len: ReturnByteLimit,
+        max_trace_snapshot_len: TraceSnapshotByteLimit,
     ) -> Self {
         Self {
             steps: max_steps,
@@ -83,52 +173,55 @@ impl RunLimits {
 
     /// Maximum number of rewrite steps that may be applied.
     #[must_use]
-    pub const fn max_steps(self) -> usize {
+    pub const fn step_limit(self) -> StepLimit {
         self.steps
     }
 
     /// Maximum runtime state length, including initial input and rewrite results.
     #[must_use]
-    pub const fn max_state_len(self) -> usize {
+    pub const fn state_byte_limit(self) -> StateByteLimit {
         self.state_len
     }
 
     /// Maximum byte length accepted for `(return)` output.
     #[must_use]
-    pub const fn max_return_len(self) -> usize {
+    pub const fn return_byte_limit(self) -> ReturnByteLimit {
         self.return_len
     }
 
     /// Maximum state/output byte length materialized for one trace snapshot event.
     #[must_use]
-    pub const fn max_trace_snapshot_len(self) -> usize {
+    pub const fn trace_snapshot_byte_limit(self) -> TraceSnapshotByteLimit {
         self.trace_snapshot_len
     }
 
     /// Returns limits with a different step budget.
     #[must_use]
-    pub const fn with_max_steps(mut self, max_steps: usize) -> Self {
+    pub const fn with_step_limit(mut self, max_steps: StepLimit) -> Self {
         self.steps = max_steps;
         self
     }
 
     /// Returns limits with a different runtime-state budget.
     #[must_use]
-    pub const fn with_max_state_len(mut self, max_state_len: usize) -> Self {
+    pub const fn with_state_byte_limit(mut self, max_state_len: StateByteLimit) -> Self {
         self.state_len = max_state_len;
         self
     }
 
     /// Returns limits with a different return-output budget.
     #[must_use]
-    pub const fn with_max_return_len(mut self, max_return_len: usize) -> Self {
+    pub const fn with_return_byte_limit(mut self, max_return_len: ReturnByteLimit) -> Self {
         self.return_len = max_return_len;
         self
     }
 
     /// Returns limits with a different trace snapshot byte budget.
     #[must_use]
-    pub const fn with_max_trace_snapshot_len(mut self, max_trace_snapshot_len: usize) -> Self {
+    pub const fn with_trace_snapshot_byte_limit(
+        mut self,
+        max_trace_snapshot_len: TraceSnapshotByteLimit,
+    ) -> Self {
         self.trace_snapshot_len = max_trace_snapshot_len;
         self
     }
@@ -164,15 +257,8 @@ impl RuleSet {
         Self::default()
     }
 
-    pub(crate) fn push_rule(
-        &mut self,
-        line_number: usize,
-        repeat: RuleRepeat,
-        anchor: RuleAnchor,
-        lhs: Payload,
-        action: Action,
-    ) -> Result<(), AllocationError> {
-        let repeat = if repeat.is_once() {
+    pub(crate) fn push_parsed_rule(&mut self, parsed: ParsedRule) -> Result<(), AllocationError> {
+        let repeat = if parsed.repeat().is_once() {
             RuleRepeatPlan::once(self.next_once_rule_slot())
         } else {
             RuleRepeatPlan::always()
@@ -180,7 +266,7 @@ impl RuleSet {
 
         try_push(
             &mut self.rules,
-            Rule::new(line_number, repeat, anchor, lhs, action),
+            Rule::from_parsed(parsed, repeat),
             AllocationContext::ProgramRules,
         )?;
 
@@ -398,24 +484,16 @@ pub enum RunTermination {
     Return,
 }
 
-impl RunTermination {
-    /// Whether this termination came from `(return)`.
-    #[must_use]
-    pub const fn is_return(self) -> bool {
-        matches!(self, Self::Return)
-    }
-}
-
 /// Result of one program execution.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RunResult {
     output: Vec<u8>,
-    steps: usize,
+    steps: StepCount,
     termination: RunTermination,
 }
 
 impl RunResult {
-    pub(crate) fn stable(output: Vec<u8>, steps: usize) -> Self {
+    pub(crate) fn stable(output: Vec<u8>, steps: StepCount) -> Self {
         Self {
             output,
             steps,
@@ -423,7 +501,7 @@ impl RunResult {
         }
     }
 
-    pub(crate) fn from_return(output: Vec<u8>, steps: usize) -> Self {
+    pub(crate) fn from_return(output: Vec<u8>, steps: StepCount) -> Self {
         Self {
             output,
             steps,
@@ -445,7 +523,7 @@ impl RunResult {
 
     /// Number of rewrite steps applied.
     #[must_use]
-    pub const fn steps(&self) -> usize {
+    pub const fn steps(&self) -> StepCount {
         self.steps
     }
 
@@ -453,12 +531,6 @@ impl RunResult {
     #[must_use]
     pub const fn termination(&self) -> RunTermination {
         self.termination
-    }
-
-    /// Whether execution stopped by `(return)`.
-    #[must_use]
-    pub const fn returned(&self) -> bool {
-        self.termination.is_return()
     }
 }
 
@@ -469,7 +541,8 @@ mod tests {
         TestFailure, TestResult, expect_event, expect_run_error, expect_state_limit,
     };
     use crate::{
-        LimitError, RuleActionView, RuleAnchor, RuleRepeat, StateLimitContext, TraceSnapshotEffect,
+        LimitError, ReturnByteLimit, RuleActionView, RuleAnchor, RuleRepeat, RunTermination,
+        StateByteLimit, StateLimitContext, TraceSnapshotByteLimit, TraceSnapshotEffect,
         TraceSnapshotEvent, run_bytes, run_str,
     };
     use std::vec::Vec;
@@ -485,8 +558,8 @@ mod tests {
     fn public_free_run_works() -> TestResult {
         let result = run_str("a=b", b"a", RunLimits::default())?;
         assert_eq!(result.output(), b"b");
-        assert_eq!(result.steps(), 1);
-        assert!(!result.returned());
+        assert_eq!(result.steps().get(), 1);
+        assert_eq!(result.termination(), RunTermination::Stable);
 
         let result = run_bytes(b"a=b#\xff", b"a", RunLimits::default())?;
         assert_eq!(result.output(), b"b");
@@ -497,8 +570,8 @@ mod tests {
     fn parsed_program_is_reusable_and_once_state_is_per_run() -> TestResult {
         let program = Program::parse_str("(once)a=b\na=c")?;
 
-        let first = program.run(b"aa", RunLimits::new(10_000))?;
-        let second = program.run(b"aa", RunLimits::new(10_000))?;
+        let first = program.run(b"aa", RunLimits::new(StepLimit::new(10_000)))?;
+        let second = program.run(b"aa", RunLimits::new(StepLimit::new(10_000)))?;
 
         assert_eq!(first.output(), b"bc");
         assert_eq!(second.output(), b"bc");
@@ -522,7 +595,7 @@ mod tests {
             .ok_or(TestFailure::Message("expected second rule"))?;
 
         assert_eq!(first.position().zero_based(), 0);
-        assert_eq!(first.line_number(), 1);
+        assert_eq!(first.line_number().get(), 1);
         assert_eq!(first.repeat(), RuleRepeat::Always);
         assert_eq!(first.anchor(), RuleAnchor::Anywhere);
         assert!(first.lhs().eq_bytes(b"a"));
@@ -533,7 +606,7 @@ mod tests {
         assert_eq!(first.canonical_source()?, b"a=b");
 
         assert_eq!(second.position().zero_based(), 1);
-        assert_eq!(second.line_number(), 2);
+        assert_eq!(second.line_number().get(), 2);
         assert_eq!(second.repeat(), RuleRepeat::Always);
         assert_eq!(second.anchor(), RuleAnchor::Start);
         assert!(second.lhs().eq_bytes(b"c"));
@@ -616,7 +689,12 @@ mod tests {
 
     #[test]
     fn state_limit_rejects_oversized_input_before_runtime_allocation() -> TestResult {
-        let limits = RunLimits::bounded(10, 1, 10, 10);
+        let limits = RunLimits::bounded(
+            StepLimit::new(10),
+            StateByteLimit::new(1),
+            ReturnByteLimit::new(10),
+            TraceSnapshotByteLimit::new(10),
+        );
         let error = expect_run_error(Program::parse_str("a=b")?.run(b"aa", limits))?;
         let error = expect_state_limit(error)?;
 
@@ -624,7 +702,7 @@ mod tests {
             error,
             LimitError::State {
                 context: StateLimitContext::Input,
-                limit: 1,
+                limit: StateByteLimit::new(1),
                 attempted_len: 2,
             },
         );
@@ -633,7 +711,12 @@ mod tests {
 
     #[test]
     fn state_limit_rejects_oversized_rewrite_before_allocating_next_state() -> TestResult {
-        let limits = RunLimits::bounded(10, 2, 10, 10);
+        let limits = RunLimits::bounded(
+            StepLimit::new(10),
+            StateByteLimit::new(2),
+            ReturnByteLimit::new(10),
+            TraceSnapshotByteLimit::new(10),
+        );
         let error = expect_run_error(Program::parse_str("=a")?.run(b"aa", limits))?;
         let error = expect_state_limit(error)?;
 
@@ -641,7 +724,7 @@ mod tests {
             error,
             LimitError::State {
                 context: StateLimitContext::Rewrite,
-                limit: 2,
+                limit: StateByteLimit::new(2),
                 attempted_len: 3,
             },
         );
@@ -652,12 +735,16 @@ mod tests {
     fn trace_snapshots_are_derived_from_borrowed_trace() -> TestResult {
         let program = Program::parse_str("a=b\nb=(return)ok")?;
         let mut events = Vec::new();
-        let result = program.run_with_trace_snapshots(b"a", RunLimits::new(10_000), |event| {
-            events.push(event);
-        })?;
+        let result = program.run_with_trace_snapshots(
+            b"a",
+            RunLimits::new(StepLimit::new(10_000)),
+            |event| {
+                events.push(event);
+            },
+        )?;
 
         assert_eq!(result.output(), b"ok");
-        assert!(result.returned());
+        assert_eq!(result.termination(), RunTermination::Return);
         assert_eq!(events.len(), 3);
         assert!(matches!(
             events.first(),
@@ -670,8 +757,20 @@ mod tests {
         assert_eq!(initial.bytes(), b"a");
         assert_eq!(first_step.bytes(), b"b");
         assert_eq!(second_step.bytes(), b"ok");
-        assert!(!first_step.is_return_step());
-        assert!(second_step.is_return_step());
+        assert!(matches!(
+            first_step,
+            TraceSnapshotEvent::Step {
+                effect: TraceSnapshotEffect::Continue { .. },
+                ..
+            }
+        ));
+        assert!(matches!(
+            second_step,
+            TraceSnapshotEvent::Step {
+                effect: TraceSnapshotEffect::Return { .. },
+                ..
+            }
+        ));
 
         match first_step {
             TraceSnapshotEvent::Step {

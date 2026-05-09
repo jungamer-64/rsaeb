@@ -4,7 +4,7 @@ use core::convert::Infallible;
 use crate::allocation::{AllocationContext, try_push, try_reserve_total_exact};
 use crate::bytes::{Payload, RuntimeByte};
 use crate::error::{LimitError, RunError, StateLimitContext, StateSizeError, TracedRunError};
-use crate::program::{Program, RunLimits, RunResult};
+use crate::program::{Program, RunLimits, RunResult, StepCount, StepLimit};
 use crate::rule::{Action, OnceRuleSlot, PayloadView, Rule, RuleAnchor, RulePosition};
 use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
 
@@ -17,10 +17,10 @@ struct State {
 
 impl State {
     fn parse_input(input: &[u8], limits: RunLimits) -> Result<Self, RunError> {
-        if input.len() > limits.max_state_len() {
+        if input.len() > limits.state_byte_limit().get() {
             return Err(LimitError::state(
                 StateLimitContext::Input,
-                limits.max_state_len(),
+                limits.state_byte_limit(),
                 input.len(),
             )
             .into());
@@ -172,10 +172,10 @@ impl State {
     ) -> Result<(), RunError> {
         let capacity = self.replaced_len(state_match, rhs)?;
 
-        if capacity > limits.max_state_len() {
+        if capacity > limits.state_byte_limit().get() {
             return Err(LimitError::state(
                 StateLimitContext::Rewrite,
-                limits.max_state_len(),
+                limits.state_byte_limit(),
                 capacity,
             )
             .into());
@@ -368,24 +368,24 @@ impl OnceRuleStates {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct StepBudget {
-    max_steps: usize,
-    completed_steps: usize,
+    max_steps: StepLimit,
+    completed_steps: StepCount,
 }
 
 impl StepBudget {
-    const fn new(max_steps: usize) -> Self {
+    const fn new(max_steps: StepLimit) -> Self {
         Self {
             max_steps,
-            completed_steps: 0,
+            completed_steps: StepCount::ZERO,
         }
     }
 
-    const fn completed_steps(self) -> usize {
+    const fn completed_steps(self) -> StepCount {
         self.completed_steps
     }
 
     fn ensure_next_step_allowed(self, state_len: usize) -> Result<(), LimitError> {
-        if self.completed_steps >= self.max_steps {
+        if self.completed_steps.get() >= self.max_steps.get() {
             return Err(LimitError::step(
                 self.max_steps,
                 self.completed_steps,
@@ -396,10 +396,10 @@ impl StepBudget {
         Ok(())
     }
 
-    fn complete_step(&mut self, state_len: usize) -> Result<usize, LimitError> {
+    fn complete_step(&mut self, state_len: usize) -> Result<StepCount, LimitError> {
         self.ensure_next_step_allowed(state_len)?;
 
-        let Some(next_steps) = self.completed_steps.checked_add(1) else {
+        let Some(next_steps) = self.completed_steps.checked_next() else {
             return Err(LimitError::step(
                 self.max_steps,
                 self.completed_steps,
@@ -436,7 +436,7 @@ impl<'program> Runtime<'program> {
             program,
             state,
             scratch,
-            step_budget: StepBudget::new(limits.max_steps()),
+            step_budget: StepBudget::new(limits.step_limit()),
             once_states,
             limits,
         })
@@ -593,9 +593,9 @@ impl<'program> Runtime<'program> {
                 Ok(RewriteEffect::Continue)
             }
             Action::Return(output) => {
-                if output.len() > self.limits.max_return_len() {
+                if output.len() > self.limits.return_byte_limit().get() {
                     return Err(LimitError::return_output(
-                        self.limits.max_return_len(),
+                        self.limits.return_byte_limit(),
                         output.len(),
                     )
                     .into());
@@ -608,7 +608,7 @@ impl<'program> Runtime<'program> {
 
     fn emit_step_trace<F, E>(
         trace: &mut Option<F>,
-        step: usize,
+        step: StepCount,
         position: RulePosition,
         rule: &'program Rule,
         effect: BorrowedTraceEffect<'program, '_>,
@@ -647,6 +647,7 @@ mod tests {
     };
     use crate::{
         BorrowedTraceEffect, BorrowedTraceEvent, LimitError, PayloadKind, Program, RunLimits,
+        RunTermination, SourceColumn, SourceLineNumber,
     };
     use std::string::String;
     use std::vec::Vec;
@@ -692,20 +693,20 @@ mod tests {
     #[test]
     fn empty_lhs_anywhere_matches_at_start() -> TestResult {
         let source = "(once)=x\n(start)x=(return)ok";
-        let result = Program::parse_str(source)?.run(b"ab", RunLimits::new(2))?;
+        let result = Program::parse_str(source)?.run(b"ab", RunLimits::new(StepLimit::new(2)))?;
 
         assert_eq!(result.output(), b"ok");
-        assert_eq!(result.steps(), 2);
-        assert!(result.returned());
+        assert_eq!(result.steps().get(), 2);
+        assert_eq!(result.termination(), RunTermination::Return);
         Ok(())
     }
 
     #[test]
     fn empty_lhs_start_and_end_anchors_pick_different_edges() -> TestResult {
         let start_result = Program::parse_str("(once)(start)=x\nxab=(return)start")?
-            .run(b"ab", RunLimits::new(2))?;
-        let end_result =
-            Program::parse_str("(once)(end)=x\nabx=(return)end")?.run(b"ab", RunLimits::new(2))?;
+            .run(b"ab", RunLimits::new(StepLimit::new(2)))?;
+        let end_result = Program::parse_str("(once)(end)=x\nabx=(return)end")?
+            .run(b"ab", RunLimits::new(StepLimit::new(2)))?;
 
         assert_eq!(start_result.output(), b"start");
         assert_eq!(end_result.output(), b"end");
@@ -729,9 +730,10 @@ mod tests {
     #[test]
     fn runtime_only_bytes_are_preserved_until_return_discards_them() -> TestResult {
         assert_eq!(run_source("a=b", "a=()#c")?, "b=()#c");
-        let result = Program::parse_str("a=(return)x")?.run(b"a=()#c", RunLimits::new(1))?;
+        let result =
+            Program::parse_str("a=(return)x")?.run(b"a=()#c", RunLimits::new(StepLimit::new(1)))?;
         assert_eq!(result.output(), b"x");
-        assert!(result.returned());
+        assert_eq!(result.termination(), RunTermination::Return);
         Ok(())
     }
 
@@ -770,28 +772,30 @@ mod tests {
         assert!(Program::parse_str("a=(return)(").is_err());
         assert!(Program::parse_str("a=b)").is_err());
 
-        let result = program.run(b"a=#()", RunLimits::new(10_000))?;
+        let result = program.run(b"a=#()", RunLimits::new(StepLimit::new(10_000)))?;
         assert_eq!(String::from_utf8(result.into_output())?, "b=#()");
         Ok(())
     }
 
     #[test]
     fn step_limit_allows_exact_limit_but_blocks_next_match() -> TestResult {
-        let exact = Program::parse_str("a=b")?.run(b"a", RunLimits::new(1))?;
+        let exact = Program::parse_str("a=b")?.run(b"a", RunLimits::new(StepLimit::new(1)))?;
         assert_eq!(exact.output(), b"b");
-        assert_eq!(exact.steps(), 1);
+        assert_eq!(exact.steps().get(), 1);
 
-        let no_match = Program::parse_str("a=b")?.run(b"x", RunLimits::new(0))?;
+        let no_match = Program::parse_str("a=b")?.run(b"x", RunLimits::new(StepLimit::new(0)))?;
         assert_eq!(no_match.output(), b"x");
-        assert_eq!(no_match.steps(), 0);
+        assert_eq!(no_match.steps().get(), 0);
 
-        let error = expect_run_error(Program::parse_str("a=b")?.run(b"a", RunLimits::new(0)))?;
+        let error = expect_run_error(
+            Program::parse_str("a=b")?.run(b"a", RunLimits::new(StepLimit::new(0))),
+        )?;
         let error = expect_step_limit(error)?;
         assert_eq!(
             error,
             LimitError::Step {
-                max_steps: 0,
-                completed_steps: 0,
+                max_steps: StepLimit::new(0),
+                completed_steps: StepCount::ZERO,
                 state_len: 1,
             },
         );
@@ -800,14 +804,20 @@ mod tests {
 
     #[test]
     fn step_limit_error_reports_state_len_without_owning_state_bytes() -> TestResult {
-        let error = expect_run_error(Program::parse_str("=a")?.run(b"", RunLimits::new(3)))?;
+        let error = expect_run_error(
+            Program::parse_str("=a")?.run(b"", RunLimits::new(StepLimit::new(3))),
+        )?;
         let error = expect_step_limit(error)?;
 
         assert_eq!(
             error,
             LimitError::Step {
-                max_steps: 3,
-                completed_steps: 3,
+                max_steps: StepLimit::new(3),
+                completed_steps: StepCount::ZERO
+                    .checked_next()
+                    .and_then(StepCount::checked_next)
+                    .and_then(StepCount::checked_next)
+                    .ok_or(TestFailure::Message("expected step count"))?,
                 state_len: 3,
             },
         );
@@ -819,30 +829,35 @@ mod tests {
         let program = Program::parse_str("=a")?;
         let mut last_state = Vec::new();
 
-        let error =
-            expect_run_error(
-                program.run_with_borrowed_trace(b"", RunLimits::new(3), |event| {
-                    last_state.clear();
-                    match event {
-                        BorrowedTraceEvent::Initial { state }
-                        | BorrowedTraceEvent::Step {
-                            effect: BorrowedTraceEffect::Continue { state },
-                            ..
-                        } => last_state.extend(state.bytes()),
-                        BorrowedTraceEvent::Step {
-                            effect: BorrowedTraceEffect::Return { output },
-                            ..
-                        } => last_state.extend(output.bytes()),
-                    }
-                }),
-            )?;
+        let error = expect_run_error(program.run_with_borrowed_trace(
+            b"",
+            RunLimits::new(StepLimit::new(3)),
+            |event| {
+                last_state.clear();
+                match event {
+                    BorrowedTraceEvent::Initial { state }
+                    | BorrowedTraceEvent::Step {
+                        effect: BorrowedTraceEffect::Continue { state },
+                        ..
+                    } => last_state.extend(state.bytes()),
+                    BorrowedTraceEvent::Step {
+                        effect: BorrowedTraceEffect::Return { output },
+                        ..
+                    } => last_state.extend(output.bytes()),
+                }
+            },
+        ))?;
         let error = expect_step_limit(error)?;
 
         assert_eq!(
             error,
             LimitError::Step {
-                max_steps: 3,
-                completed_steps: 3,
+                max_steps: StepLimit::new(3),
+                completed_steps: StepCount::ZERO
+                    .checked_next()
+                    .and_then(StepCount::checked_next)
+                    .and_then(StepCount::checked_next)
+                    .ok_or(TestFailure::Message("expected step count"))?,
                 state_len: 3,
             },
         );
@@ -873,7 +888,7 @@ a|-=
             Program::parse_str("# no executable rules")?.run(&input, RunLimits::default())?;
 
         assert_eq!(result.output(), input.as_slice());
-        assert_eq!(result.steps(), 0);
+        assert_eq!(result.steps().get(), 0);
         Ok(())
     }
 
@@ -893,8 +908,15 @@ a|-=
 
     #[test]
     fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
-        let compact = [CompactByte::new(b'a', 1)];
-        let payload = Payload::parse(&compact, 1, PayloadKind::LeftSideData)?;
+        let compact = [CompactByte::new(
+            b'a',
+            SourceColumn::from_one_based_unchecked(1),
+        )];
+        let payload = Payload::parse(
+            &compact,
+            SourceLineNumber::from_one_based_unchecked(1),
+            PayloadKind::LeftSideData,
+        )?;
         let state = State::parse_input(b"a=()# ", RunLimits::default())?;
 
         assert_eq!(expect_payload_byte(&payload, 0)?, b'a');

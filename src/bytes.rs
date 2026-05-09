@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::error::{InputError, ParseError, ParseErrorKind, PayloadKind};
+use crate::source::{SourceColumn, SourceLineNumber};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReservedSyntaxByte {
@@ -34,7 +35,7 @@ pub(crate) struct ProgramByte(u8);
 impl ProgramByte {
     pub(crate) fn parse(
         byte: CompactByte,
-        line_number: usize,
+        line_number: SourceLineNumber,
         payload_kind: PayloadKind,
     ) -> Result<Self, ParseError> {
         let raw = byte.as_u8();
@@ -172,7 +173,7 @@ pub(crate) struct Payload {
 impl Payload {
     pub(crate) fn parse(
         input: &[CompactByte],
-        line_number: usize,
+        line_number: SourceLineNumber,
         payload_kind: PayloadKind,
     ) -> Result<Self, ParseError> {
         for byte in input.iter().copied() {
@@ -248,11 +249,11 @@ impl Payload {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CompactByte {
     byte: u8,
-    source_column: usize,
+    source_column: SourceColumn,
 }
 
 impl CompactByte {
-    pub(crate) const fn new(byte: u8, source_column: usize) -> Self {
+    pub(crate) const fn new(byte: u8, source_column: SourceColumn) -> Self {
         Self {
             byte,
             source_column,
@@ -263,7 +264,7 @@ impl CompactByte {
         self.byte
     }
 
-    pub(crate) const fn source_column(self) -> usize {
+    pub(crate) const fn source_column(self) -> SourceColumn {
         self.source_column
     }
 }
@@ -275,7 +276,7 @@ mod tests {
 
     fn parse_payload_error(
         input: &[CompactByte],
-        line_number: usize,
+        line_number: SourceLineNumber,
         payload_kind: PayloadKind,
     ) -> Result<ParseError, &'static str> {
         match Payload::parse(input, line_number, payload_kind) {
@@ -288,10 +289,17 @@ mod tests {
     fn payload_rejects_every_reserved_syntax_byte_even_if_payload_parser_is_called_directly()
     -> Result<(), &'static str> {
         for reserved in [b'=', b'#', b'(', b')'] {
-            let compact = [CompactByte::new(reserved, 1)];
-            let error = parse_payload_error(&compact, 1, PayloadKind::RightSideData)?;
+            let compact = [CompactByte::new(
+                reserved,
+                SourceColumn::from_one_based_unchecked(1),
+            )];
+            let error = parse_payload_error(
+                &compact,
+                SourceLineNumber::from_one_based_unchecked(1),
+                PayloadKind::RightSideData,
+            )?;
 
-            assert_eq!(error.column(), Some(1));
+            assert_eq!(error.column().map(SourceColumn::get), Some(1));
             assert!(matches!(
                 error.kind(),
                 ParseErrorKind::ReservedSyntaxInPayload {
@@ -305,17 +313,31 @@ mod tests {
 
     #[test]
     fn payload_validates_compact_bytes_at_the_domain_boundary() -> Result<(), &'static str> {
-        let non_ascii = [CompactByte::new(0xff, 1)];
-        let non_graphic = [CompactByte::new(b' ', 2)];
+        let non_ascii = [CompactByte::new(
+            0xff,
+            SourceColumn::from_one_based_unchecked(1),
+        )];
+        let non_graphic = [CompactByte::new(
+            b' ',
+            SourceColumn::from_one_based_unchecked(2),
+        )];
 
-        let error = parse_payload_error(&non_ascii, 1, PayloadKind::RightSideData)?;
+        let error = parse_payload_error(
+            &non_ascii,
+            SourceLineNumber::from_one_based_unchecked(1),
+            PayloadKind::RightSideData,
+        )?;
         assert!(matches!(
             error.kind(),
             ParseErrorKind::NonAsciiInCode { .. }
         ));
 
-        let error = parse_payload_error(&non_graphic, 1, PayloadKind::RightSideData)?;
-        assert_eq!(error.column(), Some(2));
+        let error = parse_payload_error(
+            &non_graphic,
+            SourceLineNumber::from_one_based_unchecked(1),
+            PayloadKind::RightSideData,
+        )?;
+        assert_eq!(error.column().map(SourceColumn::get), Some(2));
         assert!(matches!(
             error.kind(),
             ParseErrorKind::NonPrintableAsciiInCode { .. }
@@ -326,9 +348,16 @@ mod tests {
     #[test]
     fn payload_exposes_validated_bytes_without_leaking_the_internal_domain_type()
     -> Result<(), &'static str> {
-        let compact = [CompactByte::new(b'a', 1), CompactByte::new(b'b', 2)];
-        let payload = Payload::parse(&compact, 1, PayloadKind::LeftSideData)
-            .map_err(|_| "expected payload to parse")?;
+        let compact = [
+            CompactByte::new(b'a', SourceColumn::from_one_based_unchecked(1)),
+            CompactByte::new(b'b', SourceColumn::from_one_based_unchecked(2)),
+        ];
+        let payload = Payload::parse(
+            &compact,
+            SourceLineNumber::from_one_based_unchecked(1),
+            PayloadKind::LeftSideData,
+        )
+        .map_err(|_| "expected payload to parse")?;
 
         assert!(payload.eq_bytes(b"ab"));
         assert_eq!(payload.first_byte().map(ProgramByte::get), Some(b'a'));

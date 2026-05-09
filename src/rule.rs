@@ -3,6 +3,7 @@ use core::fmt;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::Payload;
+use crate::source::SourceLineNumber;
 use crate::syntax::SyntaxToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -234,7 +235,7 @@ impl<'program> RuleView<'program> {
 
     /// One-based source line number.
     #[must_use]
-    pub fn line_number(self) -> usize {
+    pub fn line_number(self) -> SourceLineNumber {
         self.rule.line_number()
     }
 
@@ -306,18 +307,18 @@ impl Action {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct Rule {
-    line_number: usize,
-    repeat: RuleRepeatPlan,
+pub(crate) struct ParsedRule {
+    line_number: SourceLineNumber,
+    repeat: RuleRepeat,
     anchor: RuleAnchor,
     lhs: Payload,
     action: Action,
 }
 
-impl Rule {
+impl ParsedRule {
     pub(crate) fn new(
-        line_number: usize,
-        repeat: RuleRepeatPlan,
+        line_number: SourceLineNumber,
+        repeat: RuleRepeat,
         anchor: RuleAnchor,
         lhs: Payload,
         action: Action,
@@ -331,7 +332,32 @@ impl Rule {
         }
     }
 
-    pub(crate) const fn line_number(&self) -> usize {
+    pub(crate) const fn repeat(&self) -> RuleRepeat {
+        self.repeat
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Rule {
+    line_number: SourceLineNumber,
+    repeat: RuleRepeatPlan,
+    anchor: RuleAnchor,
+    lhs: Payload,
+    action: Action,
+}
+
+impl Rule {
+    pub(crate) fn from_parsed(parsed: ParsedRule, repeat: RuleRepeatPlan) -> Self {
+        Self {
+            line_number: parsed.line_number,
+            repeat,
+            anchor: parsed.anchor,
+            lhs: parsed.lhs,
+            action: parsed.action,
+        }
+    }
+
+    pub(crate) const fn line_number(&self) -> SourceLineNumber {
         self.line_number
     }
 
