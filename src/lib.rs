@@ -3,1302 +3,44 @@
 //! The crate exposes a byte-oriented parser and runtime. Program syntax and
 //! runtime input are separate domains:
 //!
-//! - program code is compact ASCII syntax;
+//! - program code is compact printable ASCII syntax;
 //! - comments are ignored bytes after `#`;
 //! - runtime input is ASCII data and may contain whitespace/reserved bytes;
 //! - program payloads cannot contain whitespace, reserved syntax characters, or
-//!   non-ASCII bytes.
+//!   non-ASCII/control bytes.
 //!
 //! Files, stdout, stderr, argument parsing, and lossy display formatting are
 //! intentionally outside this library. The command-line binary can do command-
-//! line things without smuggling those habits into the interpreter core.
+//! line concerns without coupling them to the interpreter core.
 
 #![no_std]
+#![forbid(unsafe_code)]
+
+#![no_std]
+#![forbid(unsafe_code)]
 
 extern crate alloc;
-
-use alloc::boxed::Box;
-use alloc::vec;
-use alloc::vec::Vec;
-use core::error::Error;
-use core::fmt;
 
 #[cfg(test)]
 extern crate std;
 
-/// Default maximum number of rewrite steps for one execution.
-pub const DEFAULT_MAX_STEPS: usize = 1_000_000;
-
-const TOK_ONCE: &[u8] = b"(once)";
-const TOK_START: &[u8] = b"(start)";
-const TOK_END: &[u8] = b"(end)";
-const TOK_RETURN: &[u8] = b"(return)";
-
-/// Parses and runs source bytes in one call.
-///
-/// Use [`Program::parse`] when the same program will be executed multiple
-/// times.
-pub fn run(
-    source: impl AsRef<[u8]>,
-    input: impl AsRef<[u8]>,
-    options: RunOptions,
-) -> Result<RunResult, AebError> {
-    let program = Program::parse(source).map_err(AebError::Parse)?;
-    program.run(input, options).map_err(AebError::Run)
-}
-
-/// Execution options for one runtime invocation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RunOptions {
-    /// Maximum number of rewrite steps that may be applied.
-    ///
-    /// A run that becomes stable exactly at this count succeeds. The limit is
-    /// an error only when another matching rule would need to be applied after
-    /// this many steps.
-    pub max_steps: usize,
-}
-
-impl RunOptions {
-    /// Creates options with an explicit step limit.
-    #[must_use]
-    pub const fn new(max_steps: usize) -> Self {
-        Self { max_steps }
-    }
-}
-
-impl Default for RunOptions {
-    fn default() -> Self {
-        Self {
-            max_steps: DEFAULT_MAX_STEPS,
-        }
-    }
-}
-
-/// Program-local zero-based index for a parsed rule.
-///
-/// The value is only meaningful together with the [`Program`] that produced it.
-/// It is intentionally named as an index, not a globally valid identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RuleIndex(usize);
-
-impl RuleIndex {
-    /// Zero-based rule position in parse order.
-    #[must_use]
-    pub const fn as_usize(self) -> usize {
-        self.0
-    }
-}
-
-/// Read-only metadata for a parsed rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuleInfo<'program> {
-    index: RuleIndex,
-    line_number: usize,
-    compact_source: &'program [u8],
-}
-
-impl<'program> RuleInfo<'program> {
-    /// Program-local zero-based rule index.
-    #[must_use]
-    pub const fn index(self) -> RuleIndex {
-        self.index
-    }
-
-    /// One-based source line number.
-    #[must_use]
-    pub const fn line_number(self) -> usize {
-        self.line_number
-    }
-
-    /// Whitespace-stripped executable code for this rule.
-    #[must_use]
-    pub const fn compact_source(self) -> &'program [u8] {
-        self.compact_source
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Anchor {
-    Anywhere,
-    Start,
-    End,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuleRepeat {
-    Always,
-    Once,
-}
-
-impl RuleRepeat {
-    fn is_once(self) -> bool {
-        matches!(self, Self::Once)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeRuleState {
-    Fresh,
-    Consumed,
-}
-
-impl RuntimeRuleState {
-    fn is_consumed(self) -> bool {
-        matches!(self, Self::Consumed)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CodeByte(u8);
-
-impl CodeByte {
-    fn parse_compact(
-        byte: CompactByte,
-        line_number: usize,
-        payload_kind: PayloadKind,
-    ) -> Result<Self, ParseError> {
-        debug_assert!(byte.as_u8().is_ascii());
-        debug_assert!(!byte.as_u8().is_ascii_whitespace());
-
-        if is_reserved_code_byte(byte.as_u8()) {
-            return Err(ParseError::new(
-                line_number,
-                Some(byte.source_column()),
-                ParseErrorKind::ReservedByteInPayload {
-                    byte: byte.as_u8(),
-                    payload_kind,
-                },
-            ));
-        }
-
-        Ok(Self(byte.as_u8()))
-    }
-
-    fn as_u8(self) -> u8 {
-        self.0
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct RuntimeByte(u8);
-
-impl RuntimeByte {
-    fn parse_input(byte: u8, zero_based_column: usize) -> Result<Self, InputError> {
-        if !byte.is_ascii() {
-            return Err(InputError {
-                column: zero_based_column + 1,
-                byte,
-            });
-        }
-
-        Ok(Self(byte))
-    }
-
-    fn from_code(byte: CodeByte) -> Self {
-        Self(byte.as_u8())
-    }
-
-    fn as_u8(self) -> u8 {
-        self.0
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Payload {
-    bytes: Vec<CodeByte>,
-}
-
-impl Payload {
-    fn parse(
-        input: &[CompactByte],
-        line_number: usize,
-        payload_kind: PayloadKind,
-    ) -> Result<Self, ParseError> {
-        let bytes = input
-            .iter()
-            .copied()
-            .map(|byte| CodeByte::parse_compact(byte, line_number, payload_kind))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(Self { bytes })
-    }
-
-    fn len(&self) -> usize {
-        self.bytes.len()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
-    }
-
-    fn iter(&self) -> impl Iterator<Item = CodeByte> + '_ {
-        self.bytes.iter().copied()
-    }
-
-    fn runtime_bytes(&self) -> impl Iterator<Item = RuntimeByte> + '_ {
-        self.iter().map(RuntimeByte::from_code)
-    }
-
-    fn to_vec_u8(&self) -> Vec<u8> {
-        self.iter().map(CodeByte::as_u8).collect()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct State {
-    bytes: Vec<RuntimeByte>,
-}
-
-impl State {
-    fn parse_input(input: &[u8]) -> Result<Self, InputError> {
-        let bytes = input
-            .iter()
-            .copied()
-            .enumerate()
-            .map(|(zero_based_column, byte)| RuntimeByte::parse_input(byte, zero_based_column))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(Self { bytes })
-    }
-
-    fn len(&self) -> usize {
-        self.bytes.len()
-    }
-
-    fn starts_with_payload(&self, payload: &Payload) -> Option<StateMatch> {
-        self.matches_payload_at(0, payload)
-    }
-
-    fn ends_with_payload(&self, payload: &Payload) -> Option<StateMatch> {
-        let start = self.len().checked_sub(payload.len())?;
-        self.matches_payload_at(start, payload)
-    }
-
-    fn find_payload(&self, payload: &Payload) -> Option<StateMatch> {
-        if payload.is_empty() {
-            return StateMatch::checked(0, 0, self.len());
-        }
-
-        let last_start = self.len().checked_sub(payload.len())?;
-        (0..=last_start).find_map(|position| self.matches_payload_at(position, payload))
-    }
-
-    fn matches_payload_at(&self, position: usize, payload: &Payload) -> Option<StateMatch> {
-        let end = position.checked_add(payload.len())?;
-        let window = self.bytes.get(position..end)?;
-
-        window
-            .iter()
-            .copied()
-            .zip(payload.iter())
-            .all(|(state_byte, payload_byte)| state_byte.as_u8() == payload_byte.as_u8())
-            .then(|| StateMatch::new_unchecked(position, payload.len(), end))
-    }
-
-    fn replace_at(&self, state_match: StateMatch, rhs: &Payload) -> Result<Self, StateSizeError> {
-        let mut bytes = self.replacement_buffer(state_match, rhs)?;
-        self.push_prefix(&mut bytes, state_match);
-        bytes.extend(rhs.runtime_bytes());
-        self.push_suffix(&mut bytes, state_match);
-        Ok(Self { bytes })
-    }
-
-    fn move_start_at(
-        &self,
-        state_match: StateMatch,
-        rhs: &Payload,
-    ) -> Result<Self, StateSizeError> {
-        let mut bytes = self.replacement_buffer(state_match, rhs)?;
-        bytes.extend(rhs.runtime_bytes());
-        self.push_prefix(&mut bytes, state_match);
-        self.push_suffix(&mut bytes, state_match);
-        Ok(Self { bytes })
-    }
-
-    fn move_end_at(&self, state_match: StateMatch, rhs: &Payload) -> Result<Self, StateSizeError> {
-        let mut bytes = self.replacement_buffer(state_match, rhs)?;
-        self.push_prefix(&mut bytes, state_match);
-        self.push_suffix(&mut bytes, state_match);
-        bytes.extend(rhs.runtime_bytes());
-        Ok(Self { bytes })
-    }
-
-    fn apply_action(
-        &self,
-        state_match: StateMatch,
-        action: &Action,
-    ) -> Result<RewriteEffect, StateSizeError> {
-        match action {
-            Action::Replace(rhs) => Ok(RewriteEffect::Continue(self.replace_at(state_match, rhs)?)),
-            Action::MoveStart(rhs) => Ok(RewriteEffect::Continue(
-                self.move_start_at(state_match, rhs)?,
-            )),
-            Action::MoveEnd(rhs) => {
-                Ok(RewriteEffect::Continue(self.move_end_at(state_match, rhs)?))
-            }
-            Action::Return(output) => Ok(RewriteEffect::Return(output.to_vec_u8())),
-        }
-    }
-
-    fn replaced_len(
-        &self,
-        state_match: StateMatch,
-        rhs: &Payload,
-    ) -> Result<usize, StateSizeError> {
-        self.len()
-            .checked_sub(state_match.lhs_len())
-            .and_then(|base| base.checked_add(rhs.len()))
-            .ok_or_else(|| StateSizeError::new(self.len(), state_match.lhs_len(), rhs.len()))
-    }
-
-    fn replacement_buffer(
-        &self,
-        state_match: StateMatch,
-        rhs: &Payload,
-    ) -> Result<Vec<RuntimeByte>, StateSizeError> {
-        let capacity = self.replaced_len(state_match, rhs)?;
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(capacity)
-            .map_err(|_| StateSizeError::new(self.len(), state_match.lhs_len(), rhs.len()))?;
-        Ok(bytes)
-    }
-
-    fn push_prefix(&self, output: &mut Vec<RuntimeByte>, state_match: StateMatch) {
-        output.extend(self.bytes.iter().take(state_match.position()).copied());
-    }
-
-    fn push_suffix(&self, output: &mut Vec<RuntimeByte>, state_match: StateMatch) {
-        output.extend(self.bytes.iter().skip(state_match.end()).copied());
-    }
-
-    fn to_vec_u8(&self) -> Vec<u8> {
-        self.bytes.iter().copied().map(RuntimeByte::as_u8).collect()
-    }
-
-    fn into_vec_u8(self) -> Vec<u8> {
-        self.bytes.into_iter().map(RuntimeByte::as_u8).collect()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct StateMatch {
-    position: usize,
-    lhs_len: usize,
-    end: usize,
-}
-
-impl StateMatch {
-    fn checked(position: usize, lhs_len: usize, state_len: usize) -> Option<Self> {
-        let end = position.checked_add(lhs_len)?;
-        (position <= state_len && end <= state_len)
-            .then(|| Self::new_unchecked(position, lhs_len, end))
-    }
-
-    const fn new_unchecked(position: usize, lhs_len: usize, end: usize) -> Self {
-        Self {
-            position,
-            lhs_len,
-            end,
-        }
-    }
-
-    const fn position(self) -> usize {
-        self.position
-    }
-
-    const fn lhs_len(self) -> usize {
-        self.lhs_len
-    }
-
-    const fn end(self) -> usize {
-        self.end
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Action {
-    Replace(Payload),
-    MoveStart(Payload),
-    MoveEnd(Payload),
-    Return(Payload),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum RewriteEffect {
-    Continue(State),
-    Return(Vec<u8>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Rule {
-    line_number: usize,
-    compact_source: Vec<u8>,
-    repeat: RuleRepeat,
-    anchor: Anchor,
-    lhs: Payload,
-    action: Action,
-}
-
-impl Rule {
-    fn info(&self, index: usize) -> RuleInfo<'_> {
-        RuleInfo {
-            index: RuleIndex(index),
-            line_number: self.line_number,
-            compact_source: &self.compact_source,
-        }
-    }
-}
-
-/// Parsed A=B rewrite program.
-///
-/// A parsed program is immutable and reusable. Per-run `(once)` state lives in
-/// the runtime invocation, not in this value.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Program {
-    rules: Vec<Rule>,
-}
-
-impl Program {
-    /// Parses program source bytes into a reusable program value.
-    pub fn parse(source: impl AsRef<[u8]>) -> Result<Self, ParseError> {
-        parse_program_impl(source.as_ref())
-    }
-
-    /// Parses program source bytes into a reusable program value.
-    pub fn parse_bytes(source: &[u8]) -> Result<Self, ParseError> {
-        parse_program_impl(source)
-    }
-
-    /// Parses a UTF-8 source string into a reusable program value.
-    pub fn parse_str(source: &str) -> Result<Self, ParseError> {
-        parse_program_impl(source.as_bytes())
-    }
-
-    /// Returns the number of executable rules in the parsed program.
-    #[must_use]
-    pub fn rule_count(&self) -> usize {
-        self.rules.len()
-    }
-
-    /// Returns rule metadata by program-local [`RuleIndex`].
-    #[must_use]
-    pub fn rule(&self, index: RuleIndex) -> Option<RuleInfo<'_>> {
-        self.rules
-            .get(index.as_usize())
-            .map(|rule| rule.info(index.as_usize()))
-    }
-
-    /// Iterates over parsed rule metadata in execution order.
-    pub fn rules(&self) -> impl Iterator<Item = RuleInfo<'_>> + '_ {
-        self.rules
-            .iter()
-            .enumerate()
-            .map(|(index, rule)| rule.info(index))
-    }
-
-    /// Runs this program with the given input bytes.
-    pub fn run(&self, input: impl AsRef<[u8]>, options: RunOptions) -> Result<RunResult, RunError> {
-        Runtime::new(self, input.as_ref())?.run(options.max_steps)
-    }
-
-    /// Runs this program and emits trace events.
-    pub fn run_with_trace<'program, F>(
-        &'program self,
-        input: impl AsRef<[u8]>,
-        options: RunOptions,
-        trace: F,
-    ) -> Result<RunResult, RunError>
-    where
-        F: FnMut(TraceEvent<'program>),
-    {
-        Runtime::new(self, input.as_ref())?.run_with_trace(options.max_steps, trace)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct MatchedRule<'program> {
-    rule_index: RuleIndex,
-    rule: &'program Rule,
-    state_match: StateMatch,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Runtime<'program> {
-    program: &'program Program,
-    state: State,
-    steps: usize,
-    rule_states: Box<[RuntimeRuleState]>,
-}
-
-impl<'program> Runtime<'program> {
-    fn new(program: &'program Program, input: &[u8]) -> Result<Self, InputError> {
-        Ok(Self {
-            program,
-            state: State::parse_input(input)?,
-            steps: 0,
-            rule_states: vec![RuntimeRuleState::Fresh; program.rules.len()].into_boxed_slice(),
-        })
-    }
-
-    fn run(self, max_steps: usize) -> Result<RunResult, RunError> {
-        self.run_impl(max_steps, None::<fn(TraceEvent<'program>)>)
-    }
-
-    fn run_with_trace<F>(self, max_steps: usize, trace: F) -> Result<RunResult, RunError>
-    where
-        F: FnMut(TraceEvent<'program>),
-    {
-        self.run_impl(max_steps, Some(trace))
-    }
-
-    fn run_impl<F>(mut self, max_steps: usize, mut trace: Option<F>) -> Result<RunResult, RunError>
-    where
-        F: FnMut(TraceEvent<'program>),
-    {
-        emit_trace(&mut trace, || TraceEvent::Initial {
-            state: self.state.to_vec_u8(),
-        });
-
-        loop {
-            let Some(matched) = self.find_next_match() else {
-                return Ok(RunResult {
-                    output: self.state.into_vec_u8(),
-                    steps: self.steps,
-                    returned: false,
-                });
-            };
-
-            if self.steps >= max_steps {
-                return Err(StepLimitError {
-                    max_steps,
-                    state: self.state.into_vec_u8(),
-                }
-                .into());
-            }
-
-            if let Some(result) = self.apply_rule(matched, &mut trace)? {
-                return Ok(result);
-            }
-        }
-    }
-
-    fn find_next_match(&self) -> Option<MatchedRule<'program>> {
-        let rules: &'program [Rule] = &self.program.rules;
-
-        rules
-            .iter()
-            .zip(self.rule_states.iter())
-            .enumerate()
-            .find_map(|(rule_index, (rule, state))| {
-                if rule.repeat.is_once() && state.is_consumed() {
-                    return None;
-                }
-
-                find_match(&self.state, rule).map(|state_match| MatchedRule {
-                    rule_index: RuleIndex(rule_index),
-                    rule,
-                    state_match,
-                })
-            })
-    }
-
-    fn consume_rule_if_needed(&mut self, matched: MatchedRule<'_>) {
-        if !matched.rule.repeat.is_once() {
-            return;
-        }
-
-        if let Some(state) = self.rule_states.get_mut(matched.rule_index.as_usize()) {
-            *state = RuntimeRuleState::Consumed;
-        }
-    }
-
-    fn apply_rule<F>(
-        &mut self,
-        matched: MatchedRule<'program>,
-        trace: &mut Option<F>,
-    ) -> Result<Option<RunResult>, RunError>
-    where
-        F: FnMut(TraceEvent<'program>),
-    {
-        self.consume_rule_if_needed(matched);
-
-        let rule = matched.rule;
-        let rule_index = matched.rule_index;
-        let effect = self
-            .state
-            .apply_action(matched.state_match, &matched.rule.action)?;
-
-        self.steps += 1;
-
-        match effect {
-            RewriteEffect::Continue(next_state) => {
-                emit_trace(trace, || TraceEvent::Step {
-                    step: self.steps,
-                    rule: rule.info(rule_index.as_usize()),
-                    output: next_state.to_vec_u8(),
-                    returned: false,
-                });
-
-                self.state = next_state;
-                Ok(None)
-            }
-            RewriteEffect::Return(output) => {
-                emit_trace(trace, || TraceEvent::Step {
-                    step: self.steps,
-                    rule: rule.info(rule_index.as_usize()),
-                    output: output.clone(),
-                    returned: true,
-                });
-
-                Ok(Some(RunResult {
-                    output,
-                    steps: self.steps,
-                    returned: true,
-                }))
-            }
-        }
-    }
-}
-
-fn emit_trace<'program, F, E>(trace: &mut Option<F>, event: E)
-where
-    F: FnMut(TraceEvent<'program>),
-    E: FnOnce() -> TraceEvent<'program>,
-{
-    if let Some(trace) = trace.as_mut() {
-        trace(event());
-    }
-}
-
-fn find_match(state: &State, rule: &Rule) -> Option<StateMatch> {
-    match rule.anchor {
-        Anchor::Anywhere => state.find_payload(&rule.lhs),
-        Anchor::Start => state.starts_with_payload(&rule.lhs),
-        Anchor::End => state.ends_with_payload(&rule.lhs),
-    }
-}
-
-/// Result of one program execution.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunResult {
-    output: Vec<u8>,
-    steps: usize,
-    returned: bool,
-}
-
-impl RunResult {
-    /// Final output bytes.
-    #[must_use]
-    pub fn output(&self) -> &[u8] {
-        &self.output
-    }
-
-    /// Consumes the result and returns final output bytes.
-    #[must_use]
-    pub fn into_output(self) -> Vec<u8> {
-        self.output
-    }
-
-    /// Number of rewrite steps applied.
-    #[must_use]
-    pub fn steps(&self) -> usize {
-        self.steps
-    }
-
-    /// Whether execution stopped by `(return)`.
-    #[must_use]
-    pub fn returned(&self) -> bool {
-        self.returned
-    }
-}
-
-/// Trace event emitted by [`Program::run_with_trace`].
-///
-/// Step events carry borrowed rule metadata tied to the source [`Program`], so a
-/// trace cannot accidentally describe a rule from a different program.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TraceEvent<'program> {
-    /// Initial runtime state before any rewrite step.
-    Initial { state: Vec<u8> },
-    /// One applied rule.
-    Step {
-        step: usize,
-        rule: RuleInfo<'program>,
-        output: Vec<u8>,
-        returned: bool,
-    },
-}
-
-impl TraceEvent<'_> {
-    /// Output/state bytes carried by this event.
-    #[must_use]
-    pub fn bytes(&self) -> &[u8] {
-        match self {
-            Self::Initial { state } => state,
-            Self::Step { output, .. } => output,
-        }
-    }
-}
-
-/// Combined one-shot error used by [`run`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AebError {
-    /// Source program parse error.
-    Parse(ParseError),
-    /// Runtime execution error.
-    Run(RunError),
-}
-
-impl fmt::Display for AebError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Parse(error) => error.fmt(f),
-            Self::Run(error) => error.fmt(f),
-        }
-    }
-}
-
-impl Error for AebError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Parse(error) => Some(error),
-            Self::Run(error) => Some(error),
-        }
-    }
-}
-
-impl From<ParseError> for AebError {
-    fn from(value: ParseError) -> Self {
-        Self::Parse(value)
-    }
-}
-
-impl From<RunError> for AebError {
-    fn from(value: RunError) -> Self {
-        Self::Run(value)
-    }
-}
-
-/// Source program parse error.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseError {
-    line: usize,
-    column: Option<usize>,
-    kind: ParseErrorKind,
-}
-
-impl ParseError {
-    fn new(line: usize, column: Option<usize>, kind: ParseErrorKind) -> Self {
-        Self { line, column, kind }
-    }
-
-    /// One-based source line number.
-    #[must_use]
-    pub const fn line(&self) -> usize {
-        self.line
-    }
-
-    /// One-based source column, when the error has a single byte position.
-    #[must_use]
-    pub const fn column(&self) -> Option<usize> {
-        self.column
-    }
-
-    /// Structured parse error reason.
-    #[must_use]
-    pub const fn kind(&self) -> &ParseErrorKind {
-        &self.kind
-    }
-}
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "parse error at line {}", self.line)?;
-
-        if let Some(column) = self.column {
-            write!(f, ", column {column}")?;
-        }
-
-        write!(f, ": {}", self.kind)
-    }
-}
-
-impl Error for ParseError {}
-
-/// Structured parse error reason.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParseErrorKind {
-    /// A non-ASCII byte appeared before the line comment marker.
-    NonAsciiInCode { byte: u8 },
-    /// A non-empty code line did not contain `=`.
-    MissingEquals,
-    /// A compact code line contained more than one `=`.
-    MultipleEquals,
-    /// A payload attempted to contain syntax bytes such as `=`, `#`, `(`, or `)`.
-    ReservedByteInPayload { byte: u8, payload_kind: PayloadKind },
-    /// Left-side modifiers were duplicated or ordered outside the supported grammar.
-    UnsupportedLeftModifierOrder,
-}
-
-impl fmt::Display for ParseErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NonAsciiInCode { byte } => write!(f, "non-ASCII byte 0x{byte:02x} in code"),
-            Self::MissingEquals => write!(f, "missing '='"),
-            Self::MultipleEquals => write!(f, "multiple '=' characters are not allowed"),
-            Self::ReservedByteInPayload { byte, payload_kind } => write!(
-                f,
-                "reserved character '{}' cannot be represented as {payload_kind}",
-                printable_ascii(*byte),
-            ),
-            Self::UnsupportedLeftModifierOrder => {
-                write!(f, "duplicated or unsupported left-side modifier order")
-            }
-        }
-    }
-}
-
-/// Program payload context used by structured parse errors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PayloadKind {
-    LeftSideData,
-    RightSideData,
-    RightSideMoveStartPayload,
-    RightSideMoveEndPayload,
-    RightSideReturnPayload,
-}
-
-impl fmt::Display for PayloadKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::LeftSideData => write!(f, "left-side data"),
-            Self::RightSideData => write!(f, "right-side data"),
-            Self::RightSideMoveStartPayload => write!(f, "right-side move-to-start payload"),
-            Self::RightSideMoveEndPayload => write!(f, "right-side move-to-end payload"),
-            Self::RightSideReturnPayload => write!(f, "right-side return payload"),
-        }
-    }
-}
-
-/// Runtime execution error.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RunError {
-    /// Runtime input is invalid.
-    Input(InputError),
-    /// A rewrite could not represent or reserve the next runtime state.
-    StateSize(StateSizeError),
-    /// Execution exceeded the configured step limit.
-    StepLimit(StepLimitError),
-}
-
-impl fmt::Display for RunError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Input(error) => error.fmt(f),
-            Self::StateSize(error) => error.fmt(f),
-            Self::StepLimit(error) => error.fmt(f),
-        }
-    }
-}
-
-impl Error for RunError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Input(error) => Some(error),
-            Self::StateSize(error) => Some(error),
-            Self::StepLimit(error) => Some(error),
-        }
-    }
-}
-
-impl From<InputError> for RunError {
-    fn from(value: InputError) -> Self {
-        Self::Input(value)
-    }
-}
-
-impl From<StateSizeError> for RunError {
-    fn from(value: StateSizeError) -> Self {
-        Self::StateSize(value)
-    }
-}
-
-impl From<StepLimitError> for RunError {
-    fn from(value: StepLimitError) -> Self {
-        Self::StepLimit(value)
-    }
-}
-
-/// Runtime input validation error.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InputError {
-    column: usize,
-    byte: u8,
-}
-
-impl InputError {
-    /// One-based input column.
-    #[must_use]
-    pub const fn column(&self) -> usize {
-        self.column
-    }
-
-    /// Rejected byte.
-    #[must_use]
-    pub const fn byte(&self) -> u8 {
-        self.byte
-    }
-}
-
-impl fmt::Display for InputError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "input error: non-ASCII byte 0x{:02x} at column {}",
-            self.byte, self.column,
-        )
-    }
-}
-
-impl Error for InputError {}
-
-/// Runtime state-size failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StateSizeError {
-    state: usize,
-    lhs: usize,
-    rhs: usize,
-}
-
-impl StateSizeError {
-    const fn new(state_len: usize, lhs_len: usize, rhs_len: usize) -> Self {
-        Self {
-            state: state_len,
-            lhs: lhs_len,
-            rhs: rhs_len,
-        }
-    }
-
-    /// Runtime state length before the failing rewrite.
-    #[must_use]
-    pub const fn state_len(&self) -> usize {
-        self.state
-    }
-
-    /// Matched left-side length that would be removed.
-    #[must_use]
-    pub const fn lhs_len(&self) -> usize {
-        self.lhs
-    }
-
-    /// Right-side payload length that would be inserted.
-    #[must_use]
-    pub const fn rhs_len(&self) -> usize {
-        self.rhs
-    }
-}
-
-impl fmt::Display for StateSizeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "state size failure: replacing {} bytes in a {} byte state with {} bytes",
-            self.lhs, self.state, self.rhs,
-        )
-    }
-}
-
-impl Error for StateSizeError {}
-
-/// Step-limit failure with the last runtime state preserved as bytes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StepLimitError {
-    max_steps: usize,
-    state: Vec<u8>,
-}
-
-impl StepLimitError {
-    /// Configured maximum step count.
-    #[must_use]
-    pub const fn max_steps(&self) -> usize {
-        self.max_steps
-    }
-
-    /// Runtime state when the limit was hit.
-    #[must_use]
-    pub fn state(&self) -> &[u8] {
-        &self.state
-    }
-
-    /// Consumes the error and returns the runtime state.
-    #[must_use]
-    pub fn into_state(self) -> Vec<u8> {
-        self.state
-    }
-}
-
-impl fmt::Display for StepLimitError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "step limit exceeded after {} steps; state length: {} bytes",
-            self.max_steps,
-            self.state.len(),
-        )
-    }
-}
-
-impl Error for StepLimitError {}
-
-fn is_reserved_code_byte(byte: u8) -> bool {
-    matches!(byte, b'=' | b'#' | b'(' | b')')
-}
-
-fn printable_ascii(byte: u8) -> char {
-    if byte.is_ascii() {
-        byte as char
-    } else {
-        '\u{fffd}'
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CompactByte {
-    byte: u8,
-    source_column: usize,
-}
-
-impl CompactByte {
-    const fn new(byte: u8, source_column: usize) -> Self {
-        Self {
-            byte,
-            source_column,
-        }
-    }
-
-    const fn as_u8(self) -> u8 {
-        self.byte
-    }
-
-    const fn source_column(self) -> usize {
-        self.source_column
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CodeLine<'source> {
-    line_number: usize,
-    bytes: &'source [u8],
-}
-
-impl<'source> CodeLine<'source> {
-    fn parse(raw_line: &'source [u8], line_number: usize) -> Result<Self, ParseError> {
-        let code_bytes = raw_line
-            .iter()
-            .position(|&byte| byte == b'#')
-            .and_then(|comment_start| raw_line.get(..comment_start))
-            .unwrap_or(raw_line);
-
-        if let Some((zero_based_column, byte)) = code_bytes
-            .iter()
-            .copied()
-            .enumerate()
-            .find(|(_, byte)| !byte.is_ascii())
-        {
-            return Err(ParseError::new(
-                line_number,
-                Some(zero_based_column + 1),
-                ParseErrorKind::NonAsciiInCode { byte },
-            ));
-        }
-
-        Ok(Self {
-            line_number,
-            bytes: code_bytes,
-        })
-    }
-
-    fn compact(self) -> CompactCodeLine {
-        let bytes = self
-            .bytes
-            .iter()
-            .copied()
-            .enumerate()
-            .filter(|(_, byte)| !byte.is_ascii_whitespace())
-            .map(|(zero_based_column, byte)| CompactByte::new(byte, zero_based_column + 1))
-            .collect();
-
-        CompactCodeLine {
-            line_number: self.line_number,
-            bytes,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CompactCodeLine {
-    line_number: usize,
-    bytes: Vec<CompactByte>,
-}
-
-impl CompactCodeLine {
-    fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
-    }
-
-    fn compact_source(&self) -> Vec<u8> {
-        self.bytes.iter().copied().map(CompactByte::as_u8).collect()
-    }
-
-    fn equals_position(&self) -> Result<usize, ParseError> {
-        let Some(first_equals) = self.bytes.iter().position(|byte| byte.as_u8() == b'=') else {
-            return Err(ParseError::new(
-                self.line_number,
-                None,
-                ParseErrorKind::MissingEquals,
-            ));
-        };
-
-        if let Some(second_equals) = self
-            .bytes
-            .iter()
-            .skip(first_equals + 1)
-            .find(|byte| byte.as_u8() == b'=')
-            .copied()
-        {
-            return Err(ParseError::new(
-                self.line_number,
-                Some(second_equals.source_column()),
-                ParseErrorKind::MultipleEquals,
-            ));
-        }
-
-        Ok(first_equals)
-    }
-
-    fn split_at_equals(
-        &self,
-        equals_position: usize,
-    ) -> Result<(&[CompactByte], &[CompactByte]), ParseError> {
-        let (lhs, rhs_with_equals) = self.bytes.split_at(equals_position);
-
-        let Some(rhs) = rhs_with_equals.get(1..) else {
-            return Err(ParseError::new(
-                self.line_number,
-                None,
-                ParseErrorKind::MissingEquals,
-            ));
-        };
-
-        Ok((lhs, rhs))
-    }
-}
-
-fn parse_program_impl(source: &[u8]) -> Result<Program, ParseError> {
-    let mut rules = Vec::new();
-
-    for (zero_based_line, raw_line) in source.split(|&byte| byte == b'\n').enumerate() {
-        let line_number = zero_based_line + 1;
-        let compact_code = CodeLine::parse(raw_line, line_number)?.compact();
-
-        if compact_code.is_empty() {
-            continue;
-        }
-
-        let equals_position = compact_code.equals_position()?;
-        let compact_source = compact_code.compact_source();
-        let (lhs_code, rhs_code) = compact_code.split_at_equals(equals_position)?;
-        let (repeat, anchor, lhs) = parse_lhs(lhs_code, line_number)?;
-        let action = parse_rhs(rhs_code, line_number)?;
-
-        rules.push(Rule {
-            line_number,
-            compact_source,
-            repeat,
-            anchor,
-            lhs,
-            action,
-        });
-    }
-
-    Ok(Program { rules })
-}
-
-fn strip_token<'code>(input: &'code [CompactByte], token: &[u8]) -> Option<&'code [CompactByte]> {
-    if input.len() < token.len() {
-        return None;
-    }
-
-    let starts_with_token = input
-        .iter()
-        .take(token.len())
-        .copied()
-        .map(CompactByte::as_u8)
-        .eq(token.iter().copied());
-
-    if starts_with_token {
-        input.get(token.len()..)
-    } else {
-        None
-    }
-}
-
-fn starts_with_token(input: &[CompactByte], token: &[u8]) -> bool {
-    strip_token(input, token).is_some()
-}
-
-fn parse_lhs(
-    mut input: &[CompactByte],
-    line_number: usize,
-) -> Result<(RuleRepeat, Anchor, Payload), ParseError> {
-    let mut repeat = RuleRepeat::Always;
-
-    if let Some(rest) = strip_token(input, TOK_ONCE) {
-        repeat = RuleRepeat::Once;
-        input = rest;
-    }
-
-    let anchor = if let Some(rest) = strip_token(input, TOK_START) {
-        input = rest;
-        Anchor::Start
-    } else if let Some(rest) = strip_token(input, TOK_END) {
-        input = rest;
-        Anchor::End
-    } else {
-        Anchor::Anywhere
-    };
-
-    if starts_with_token(input, TOK_ONCE)
-        || starts_with_token(input, TOK_START)
-        || starts_with_token(input, TOK_END)
-    {
-        return Err(ParseError::new(
-            line_number,
-            input.first().copied().map(CompactByte::source_column),
-            ParseErrorKind::UnsupportedLeftModifierOrder,
-        ));
-    }
-
-    let lhs = Payload::parse(input, line_number, PayloadKind::LeftSideData)?;
-    Ok((repeat, anchor, lhs))
-}
-
-fn parse_rhs(input: &[CompactByte], line_number: usize) -> Result<Action, ParseError> {
-    if let Some(rest) = strip_token(input, TOK_START) {
-        let payload = Payload::parse(rest, line_number, PayloadKind::RightSideMoveStartPayload)?;
-        Ok(Action::MoveStart(payload))
-    } else if let Some(rest) = strip_token(input, TOK_END) {
-        let payload = Payload::parse(rest, line_number, PayloadKind::RightSideMoveEndPayload)?;
-        Ok(Action::MoveEnd(payload))
-    } else if let Some(rest) = strip_token(input, TOK_RETURN) {
-        let payload = Payload::parse(rest, line_number, PayloadKind::RightSideReturnPayload)?;
-        Ok(Action::Return(payload))
-    } else {
-        let payload = Payload::parse(input, line_number, PayloadKind::RightSideData)?;
-        Ok(Action::Replace(payload))
-    }
-}
+mod allocation;
+mod bytes;
+mod error;
+mod parser;
+mod program;
+mod rule;
+mod runtime;
+mod trace;
+
+pub use allocation::{AllocationContext, AllocationError};
+pub use error::{
+    AebError, InputError, ParseError, ParseErrorKind, PayloadKind, RunError, StateSizeError,
+    StepLimitError, TracedRunError,
+};
+pub use program::{run, Program, RunOptions, RunResult, RunTermination, DEFAULT_MAX_STEPS};
+pub use rule::{RuleInfo, RulePosition};
+pub use trace::{TraceEffect, TraceEvent};
 
 #[cfg(test)]
 mod tests {
@@ -1380,16 +122,10 @@ mod tests {
             .ok_or(TestFailure::Message("expected trace event"))
     }
 
-    fn expect_rule(program: &Program, rule: RuleIndex) -> Result<RuleInfo<'_>, TestFailure> {
-        program
-            .rule(rule)
-            .ok_or(TestFailure::Message("expected rule metadata"))
-    }
-
     fn expect_step_limit(error: RunError) -> Result<StepLimitError, TestFailure> {
         match error {
             RunError::StepLimit(error) => Ok(error),
-            RunError::Input(_) | RunError::StateSize(_) => {
+            RunError::Input(_) | RunError::Allocation(_) | RunError::StateSize(_) => {
                 Err(TestFailure::Message("expected step limit error"))
             }
         }
@@ -1398,7 +134,7 @@ mod tests {
     fn expect_input_error(error: RunError) -> Result<InputError, TestFailure> {
         match error {
             RunError::Input(error) => Ok(error),
-            RunError::StateSize(_) | RunError::StepLimit(_) => {
+            RunError::Allocation(_) | RunError::StateSize(_) | RunError::StepLimit(_) => {
                 Err(TestFailure::Message("expected input error"))
             }
         }
@@ -1445,22 +181,36 @@ mod tests {
         assert_eq!(initial.bytes(), b"a");
         assert_eq!(first_step.bytes(), b"b");
         assert_eq!(second_step.bytes(), b"ok");
+        assert!(!first_step.is_return_step());
+        assert!(second_step.is_return_step());
 
         match first_step {
-            TraceEvent::Step { rule, .. } => {
-                assert_eq!(rule.index().as_usize(), 0);
+            TraceEvent::Step {
+                rule,
+                effect: TraceEffect::Continue { state },
+                ..
+            } => {
+                assert_eq!(state.as_slice(), b"b");
+                assert_eq!(rule.position().zero_based(), 0);
                 assert_eq!(rule.line_number(), 1);
                 assert_eq!(rule.compact_source(), b"a=b");
-                assert_eq!(
-                    expect_rule(&program, rule.index())?.compact_source(),
-                    b"a=b"
-                );
             }
-            TraceEvent::Initial { .. } => {
-                return Err(TestFailure::Message("expected step event"));
+            TraceEvent::Initial { .. } | TraceEvent::Step { .. } => {
+                return Err(TestFailure::Message("expected continuing step event"));
             }
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn fallible_trace_callback_can_abort_execution() -> TestResult {
+        let program = Program::parse("a=b\nb=c")?;
+        let result = program.try_run_with_trace(b"a", RunOptions::new(10_000), |_event| {
+            Err::<(), _>("trace sink full")
+        });
+
+        assert_eq!(result, Err(TracedRunError::Trace("trace sink full")));
         Ok(())
     }
 
@@ -1478,10 +228,10 @@ mod tests {
             .get(1)
             .ok_or(TestFailure::Message("expected second rule"))?;
 
-        assert_eq!(first.index().as_usize(), 0);
+        assert_eq!(first.position().zero_based(), 0);
         assert_eq!(first.line_number(), 1);
         assert_eq!(first.compact_source(), b"a=b");
-        assert_eq!(second.index().as_usize(), 1);
+        assert_eq!(second.position().zero_based(), 1);
         assert_eq!(second.line_number(), 2);
         assert_eq!(second.compact_source(), b"(start)c=(end)d");
         Ok(())
@@ -1657,6 +407,20 @@ mod tests {
     }
 
     #[test]
+    fn code_body_rejects_non_printable_ascii_outside_comments() -> TestResult {
+        let error = expect_parse_error("a=\0")?;
+        assert_eq!(error.line(), 1);
+        assert_eq!(error.column(), Some(3));
+        assert!(matches!(
+            error.kind(),
+            ParseErrorKind::NonPrintableAsciiInCode { .. }
+        ));
+
+        assert!(Program::parse("a=b#\0").is_ok());
+        Ok(())
+    }
+
+    #[test]
     fn second_equals_is_a_parse_error_unless_it_is_in_a_comment() -> TestResult {
         let error = expect_parse_error("a=b=c")?;
         assert_eq!(error.column(), Some(4));
@@ -1691,6 +455,41 @@ mod tests {
         assert!(Program::parse("a=(return)").is_ok());
     }
 
+
+    #[test]
+    fn empty_program_returns_input_unchanged() -> TestResult {
+        let result = Program::parse("")?.run(b"a=()#c", RunOptions::new(0))?;
+
+        assert_eq!(result.output(), b"a=()#c");
+        assert_eq!(result.steps(), 0);
+        assert_eq!(result.termination(), RunTermination::Stable);
+        Ok(())
+    }
+
+    #[test]
+    fn comment_before_non_ascii_code_hides_it() {
+        assert!(Program::parse(b"#\xff\xfe\n").is_ok());
+        assert!(Program::parse(b"a=b#\xff\xfe\n").is_ok());
+    }
+
+    #[test]
+    fn rhs_action_with_empty_payload_is_allowed() -> TestResult {
+        assert_eq!(run_source("a=(start)", "ba")?, "b");
+        assert_eq!(run_source("a=(end)", "ba")?, "b");
+        assert_eq!(run_source("a=(return)", "a")?, "");
+        Ok(())
+    }
+
+    #[test]
+    fn multiline_errors_report_line_and_original_column() -> TestResult {
+        let error = expect_parse_error("a=b\nx = y = z")?;
+
+        assert_eq!(error.line(), 2);
+        assert_eq!(error.column(), Some(7));
+        assert!(matches!(error.kind(), ParseErrorKind::MultipleEquals));
+        Ok(())
+    }
+
     #[test]
     fn right_side_action_payload_cannot_start_with_another_action() {
         for source in [
@@ -1707,17 +506,53 @@ mod tests {
     }
 
     #[test]
-    fn reserved_payload_errors_report_original_source_column_after_compaction() -> TestResult {
+    fn reserved_payload_syntax_errors_keep_original_source_column() -> TestResult {
         let error = expect_parse_error("a = b (")?;
         assert_eq!(error.column(), Some(7));
         assert!(matches!(
             error.kind(),
-            ParseErrorKind::ReservedByteInPayload {
+            ParseErrorKind::ReservedSyntaxInPayload {
                 payload_kind: PayloadKind::RightSideData,
                 ..
             }
         ));
         Ok(())
+    }
+
+    #[test]
+    fn code_byte_rejects_every_reserved_syntax_byte_even_if_payload_parser_is_called_directly() {
+        for reserved in [b'=', b'#', b'(', b')'] {
+            let compact = [CompactByte::new(reserved, 1)];
+            let error = Payload::parse(&compact, 1, PayloadKind::RightSideData)
+                .expect_err("reserved syntax byte should not become CodeByte");
+
+            assert_eq!(error.column(), Some(1));
+            assert!(matches!(
+                error.kind(),
+                ParseErrorKind::ReservedSyntaxInPayload {
+                    payload_kind: PayloadKind::RightSideData,
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn code_byte_revalidates_compact_bytes_instead_of_trusting_the_previous_phase() {
+        let non_ascii = [CompactByte::new(0xff, 1)];
+        let non_graphic = [CompactByte::new(b' ', 2)];
+
+        let error = Payload::parse(&non_ascii, 1, PayloadKind::RightSideData)
+            .expect_err("non-ASCII byte should not become CodeByte");
+        assert!(matches!(error.kind(), ParseErrorKind::NonAsciiInCode { .. }));
+
+        let error = Payload::parse(&non_graphic, 1, PayloadKind::RightSideData)
+            .expect_err("non-graphic byte should not become CodeByte");
+        assert_eq!(error.column(), Some(2));
+        assert!(matches!(
+            error.kind(),
+            ParseErrorKind::NonPrintableAsciiInCode { .. }
+        ));
     }
 
     #[test]
@@ -1828,10 +663,73 @@ mod tests {
         let source = "\
 b=a|a|
 c=a|aa|
-a|-=\n--=(return)false\n(start)a|=(end)-\n(start)a=(end)|-\n=(return)true";
+a|-=
+--=(return)false
+(start)a|=(end)-
+(start)a=(end)|-
+=(return)true";
 
         assert_eq!(run_source(source, "aba")?, "true");
         assert_eq!(run_source(source, "ab")?, "false");
         Ok(())
+    }
+
+    #[test]
+    fn runtime_output_preserves_ascii_control_bytes_from_input() -> TestResult {
+        let result = Program::parse("a=b")?.run(b"a\0", RunOptions::new(1))?;
+        assert_eq!(result.output(), b"b\0");
+        Ok(())
+    }
+
+
+    #[test]
+    fn traced_final_event_matches_run_result() -> TestResult {
+        let program = Program::parse("a=b\nb=(return)c")?;
+        let mut events = Vec::new();
+
+        let result = program.run_with_trace(b"a", RunOptions::new(10), |event| {
+            events.push(event);
+        })?;
+
+        let last = events
+            .last()
+            .ok_or(TestFailure::Message("expected final trace event"))?;
+        assert_eq!(last.bytes(), result.output());
+        assert_eq!(events.len(), result.steps() + 1);
+        assert!(last.is_return_step());
+        Ok(())
+    }
+
+    #[test]
+    fn compacted_source_and_spaced_source_are_equivalent() -> TestResult {
+        let compact = Program::parse("(once)(start)a=(end)b")?;
+        let spaced = Program::parse("( once ) ( start ) a = ( end ) b # comment")?;
+
+        let compact_result = compact.run(b"ac", RunOptions::new(10))?;
+        let spaced_result = spaced.run(b"ac", RunOptions::new(10))?;
+
+        assert_eq!(compact_result.output(), spaced_result.output());
+        Ok(())
+    }
+
+    #[test]
+    fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
+        let compact = [CompactByte::new(b'a', 1)];
+        let payload = Payload::parse(&compact, 1, PayloadKind::LeftSideData)?;
+        let state = State::parse_input(b"a=()# ")?;
+
+        assert_eq!(payload.bytes()[0].as_u8(), b'a');
+        assert_eq!(state.bytes[0].as_u8(), b'a');
+        assert_eq!(state.bytes[1].as_u8(), b'=');
+        assert_eq!(state.bytes[2].as_u8(), b'(');
+        assert_eq!(state.bytes[5].as_u8(), b' ');
+        Ok(())
+    }
+
+    #[test]
+    fn allocation_contexts_are_publicly_inspectable() {
+        let error = AllocationError::new(AllocationContext::TraceSnapshot, 123);
+        assert_eq!(error.context(), AllocationContext::TraceSnapshot);
+        assert_eq!(error.requested_capacity(), 123);
     }
 }
