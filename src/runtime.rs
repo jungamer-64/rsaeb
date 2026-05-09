@@ -2,24 +2,24 @@ use alloc::vec::Vec;
 use core::convert::Infallible;
 
 use crate::allocation::{AllocationContext, try_push, try_reserve_total_exact};
-use crate::bytes::{Payload, RuntimeByte, copy_runtime_bytes, push_runtime_bytes};
+use crate::bytes::{Payload, RuntimeByte};
 use crate::error::{
     ReturnLimitError, RunError, StateLimitContext, StateLimitError, StateSizeError, StepLimitError,
     TracedRunError,
 };
 use crate::program::{Program, RunLimits, RunResult};
-use crate::rule::{Action, PayloadView, Rule, RuleAnchor, RulePosition, RuntimeRuleState};
+use crate::rule::{Action, OnceRuleSlot, PayloadView, Rule, RuleAnchor, RulePosition};
 use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
 
 type NoTrace<'program> = for<'run> fn(BorrowedTraceEvent<'program, 'run>) -> Result<(), Infallible>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct State {
-    pub(crate) bytes: Vec<RuntimeByte>,
+#[derive(Debug, PartialEq, Eq)]
+struct State {
+    bytes: Vec<RuntimeByte>,
 }
 
 impl State {
-    pub(crate) fn parse_input(input: &[u8], limits: RunLimits) -> Result<Self, RunError> {
+    fn parse_input(input: &[u8], limits: RunLimits) -> Result<Self, RunError> {
         if input.len() > limits.max_state_len() {
             return Err(StateLimitError::new(
                 limits.max_state_len(),
@@ -27,6 +27,10 @@ impl State {
                 StateLimitContext::Input,
             )
             .into());
+        }
+
+        for (zero_based_column, byte) in input.iter().copied().enumerate() {
+            RuntimeByte::parse_input(byte, zero_based_column)?;
         }
 
         let mut bytes = Vec::new();
@@ -43,83 +47,111 @@ impl State {
         Ok(Self { bytes })
     }
 
-    pub(crate) fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.bytes.len()
     }
 
-    pub(crate) fn starts_with_payload(&self, payload: &Payload) -> Option<StateMatch> {
+    fn view(&self) -> RuntimeStateView<'_> {
+        RuntimeStateView::new(&self.bytes)
+    }
+
+    fn swap_with_scratch(&mut self, scratch: &mut RewriteScratch) {
+        core::mem::swap(&mut self.bytes, &mut scratch.bytes);
+    }
+
+    #[cfg(test)]
+    fn materialized_byte_at(&self, index: usize) -> Option<u8> {
+        self.bytes.get(index).copied().map(RuntimeByte::materialize)
+    }
+
+    #[cfg(test)]
+    fn byte_at_is_editable(&self, index: usize) -> Option<bool> {
+        self.bytes.get(index).copied().map(RuntimeByte::is_editable)
+    }
+
+    #[cfg(test)]
+    fn byte_at_is_opaque(&self, index: usize) -> Option<bool> {
+        self.bytes.get(index).copied().map(RuntimeByte::is_opaque)
+    }
+
+    fn starts_with_payload(&self, payload: &Payload) -> Option<StateMatch> {
         self.matches_payload_at(0, payload)
     }
 
-    pub(crate) fn ends_with_payload(&self, payload: &Payload) -> Option<StateMatch> {
+    fn ends_with_payload(&self, payload: &Payload) -> Option<StateMatch> {
         let start = self.len().checked_sub(payload.len())?;
         self.matches_payload_at(start, payload)
     }
 
-    pub(crate) fn find_payload(&self, payload: &Payload) -> Option<StateMatch> {
+    fn find_payload(&self, payload: &Payload) -> Option<StateMatch> {
         if payload.is_empty() {
             return StateMatch::checked(0, 0, self.len());
         }
 
+        let first = payload.first_byte()?;
         let last_start = self.len().checked_sub(payload.len())?;
-        (0..=last_start).find_map(|position| self.matches_payload_at(position, payload))
+
+        (0..=last_start)
+            .filter(|&position| {
+                self.bytes
+                    .get(position)
+                    .copied()
+                    .is_some_and(|byte| byte.matches_program_byte(first))
+            })
+            .find_map(|position| self.matches_payload_at(position, payload))
     }
 
-    pub(crate) fn matches_payload_at(
-        &self,
-        position: usize,
-        payload: &Payload,
-    ) -> Option<StateMatch> {
+    fn matches_payload_at(&self, position: usize, payload: &Payload) -> Option<StateMatch> {
         let state_match = StateMatch::checked(position, payload.len(), self.len())?;
         let window = self.bytes.get(state_match.position()..state_match.end())?;
 
         window
             .iter()
             .copied()
-            .zip(payload.bytes().iter().copied())
-            .all(|(state_byte, code_byte)| state_byte.as_u8() == code_byte.as_u8())
+            .zip(payload.program_bytes().iter().copied())
+            .all(|(actual, expected)| actual.matches_program_byte(expected))
             .then_some(state_match)
     }
 
-    pub(crate) fn replace_at_into(
+    fn replace_at_into(
         &self,
         state_match: StateMatch,
         rhs: &Payload,
-        output: &mut Vec<RuntimeByte>,
+        output: &mut RewriteScratch,
         limits: RunLimits,
     ) -> Result<(), RunError> {
         self.prepare_replacement_buffer(state_match, rhs, output, limits)?;
         self.push_prefix(output, state_match)?;
-        push_runtime_bytes(output, rhs.runtime_bytes())?;
+        output.push_payload(rhs)?;
         self.push_suffix(output, state_match)?;
         Ok(())
     }
 
-    pub(crate) fn move_start_at_into(
+    fn move_start_at_into(
         &self,
         state_match: StateMatch,
         rhs: &Payload,
-        output: &mut Vec<RuntimeByte>,
+        output: &mut RewriteScratch,
         limits: RunLimits,
     ) -> Result<(), RunError> {
         self.prepare_replacement_buffer(state_match, rhs, output, limits)?;
-        push_runtime_bytes(output, rhs.runtime_bytes())?;
+        output.push_payload(rhs)?;
         self.push_prefix(output, state_match)?;
         self.push_suffix(output, state_match)?;
         Ok(())
     }
 
-    pub(crate) fn move_end_at_into(
+    fn move_end_at_into(
         &self,
         state_match: StateMatch,
         rhs: &Payload,
-        output: &mut Vec<RuntimeByte>,
+        output: &mut RewriteScratch,
         limits: RunLimits,
     ) -> Result<(), RunError> {
         self.prepare_replacement_buffer(state_match, rhs, output, limits)?;
         self.push_prefix(output, state_match)?;
         self.push_suffix(output, state_match)?;
-        push_runtime_bytes(output, rhs.runtime_bytes())?;
+        output.push_payload(rhs)?;
         Ok(())
     }
 
@@ -138,7 +170,7 @@ impl State {
         &self,
         state_match: StateMatch,
         rhs: &Payload,
-        output: &mut Vec<RuntimeByte>,
+        output: &mut RewriteScratch,
         limits: RunLimits,
     ) -> Result<(), RunError> {
         let capacity = self.replaced_len(state_match, rhs)?;
@@ -152,68 +184,115 @@ impl State {
             .into());
         }
 
-        output.clear();
-        try_reserve_total_exact(output, capacity, AllocationContext::RuntimeState)?;
+        output.clear_and_reserve(capacity)?;
         Ok(())
     }
 
     fn push_prefix(
         &self,
-        output: &mut Vec<RuntimeByte>,
+        output: &mut RewriteScratch,
         state_match: StateMatch,
     ) -> Result<(), crate::allocation::AllocationError> {
-        push_runtime_bytes(
-            output,
-            self.bytes.iter().take(state_match.position()).copied(),
-        )
+        output.push_existing(self.bytes.iter().copied().take(state_match.position()))
     }
 
     fn push_suffix(
         &self,
-        output: &mut Vec<RuntimeByte>,
+        output: &mut RewriteScratch,
         state_match: StateMatch,
     ) -> Result<(), crate::allocation::AllocationError> {
-        push_runtime_bytes(output, self.bytes.iter().skip(state_match.end()).copied())
+        output.push_existing(self.bytes.iter().copied().skip(state_match.end()))
     }
 
-    pub(crate) fn into_output(self) -> Result<Vec<u8>, crate::allocation::AllocationError> {
-        copy_runtime_bytes(&self.bytes, AllocationContext::FinalOutput)
-    }
-
-    pub(crate) fn into_step_limit_state(
-        self,
+    fn materialize(
+        &self,
+        context: AllocationContext,
     ) -> Result<Vec<u8>, crate::allocation::AllocationError> {
-        copy_runtime_bytes(&self.bytes, AllocationContext::StepLimitState)
+        let mut output = Vec::new();
+        try_reserve_total_exact(&mut output, self.len(), context)?;
+        for byte in self.bytes.iter().copied() {
+            try_push(&mut output, byte.materialize(), context)?;
+        }
+        Ok(output)
+    }
+
+    fn into_output(self) -> Result<Vec<u8>, RunError> {
+        self.materialize(AllocationContext::FinalOutput)
+            .map_err(RunError::from)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct RewriteScratch {
+    bytes: Vec<RuntimeByte>,
+}
+
+impl RewriteScratch {
+    fn new() -> Self {
+        Self { bytes: Vec::new() }
+    }
+
+    fn view(&self) -> RuntimeStateView<'_> {
+        RuntimeStateView::new(&self.bytes)
+    }
+
+    fn clear_and_reserve(
+        &mut self,
+        capacity: usize,
+    ) -> Result<(), crate::allocation::AllocationError> {
+        self.bytes.clear();
+        try_reserve_total_exact(&mut self.bytes, capacity, AllocationContext::RuntimeState)
+    }
+
+    fn push_existing(
+        &mut self,
+        source: impl IntoIterator<Item = RuntimeByte>,
+    ) -> Result<(), crate::allocation::AllocationError> {
+        for byte in source {
+            try_push(&mut self.bytes, byte, AllocationContext::RuntimeState)?;
+        }
+
+        Ok(())
+    }
+
+    fn push_payload(
+        &mut self,
+        payload: &Payload,
+    ) -> Result<(), crate::allocation::AllocationError> {
+        self.push_existing(payload.runtime_bytes())
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct StateMatch {
-    position: usize,
-    lhs_len: usize,
+struct StateMatch {
+    start: usize,
+    end: usize,
 }
 
 impl StateMatch {
-    pub(crate) fn checked(position: usize, lhs_len: usize, state_len: usize) -> Option<Self> {
+    fn checked(position: usize, lhs_len: usize, state_len: usize) -> Option<Self> {
         let end = position.checked_add(lhs_len)?;
-        (position <= state_len && end <= state_len).then_some(Self { position, lhs_len })
+        (position <= state_len && end <= state_len).then_some(Self {
+            start: position,
+            end,
+        })
     }
 
-    pub(crate) const fn position(self) -> usize {
-        self.position
+    const fn position(self) -> usize {
+        self.start
     }
 
-    pub(crate) const fn lhs_len(self) -> usize {
-        self.lhs_len
+    const fn lhs_len(self) -> usize {
+        self.end - self.start
     }
 
-    pub(crate) const fn end(self) -> usize {
-        self.position + self.lhs_len
+    const fn end(self) -> usize {
+        self.end
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RewriteEffect<'program> {
+enum RewriteEffect<'program> {
     Continue,
     Return(PayloadView<'program>),
 }
@@ -225,13 +304,78 @@ struct MatchedRule<'program> {
     state_match: StateMatch,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeRuleState {
+    Fresh,
+    Consumed,
+}
+
+impl RuntimeRuleState {
+    const fn is_consumed(self) -> bool {
+        matches!(self, Self::Consumed)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct OnceRuleStates {
+    states: Vec<RuntimeRuleState>,
+}
+
+impl OnceRuleStates {
+    fn new(count: usize) -> Result<Self, crate::allocation::AllocationError> {
+        let mut states = Vec::new();
+        try_reserve_total_exact(&mut states, count, AllocationContext::RuntimeRuleState)?;
+
+        for _ in 0..count {
+            try_push(
+                &mut states,
+                RuntimeRuleState::Fresh,
+                AllocationContext::RuntimeRuleState,
+            )?;
+        }
+
+        Ok(Self { states })
+    }
+
+    fn is_available(&self, slot: Option<OnceRuleSlot>) -> bool {
+        let Some(slot) = slot else {
+            return true;
+        };
+
+        debug_assert!(
+            slot.zero_based() < self.states.len(),
+            "once rule slot must be allocated by RuleSet"
+        );
+
+        self.states
+            .get(slot.zero_based())
+            .copied()
+            .is_some_and(|state| !state.is_consumed())
+    }
+
+    fn consume(&mut self, slot: Option<OnceRuleSlot>) {
+        let Some(slot) = slot else {
+            return;
+        };
+
+        debug_assert!(
+            slot.zero_based() < self.states.len(),
+            "once rule slot must be allocated by RuleSet"
+        );
+
+        if let Some(state) = self.states.get_mut(slot.zero_based()) {
+            *state = RuntimeRuleState::Consumed;
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Runtime<'program> {
     program: &'program Program,
     state: State,
-    scratch: Vec<RuntimeByte>,
+    scratch: RewriteScratch,
     steps: usize,
-    once_states: Vec<RuntimeRuleState>,
+    once_states: OnceRuleStates,
     limits: RunLimits,
 }
 
@@ -242,22 +386,8 @@ impl<'program> Runtime<'program> {
         limits: RunLimits,
     ) -> Result<Self, RunError> {
         let state = State::parse_input(input, limits)?;
-        let mut once_states = Vec::new();
-        try_reserve_total_exact(
-            &mut once_states,
-            program.runtime_once_rule_count(),
-            AllocationContext::RuntimeRuleState,
-        )?;
-
-        for _ in 0..program.runtime_once_rule_count() {
-            try_push(
-                &mut once_states,
-                RuntimeRuleState::Fresh,
-                AllocationContext::RuntimeRuleState,
-            )?;
-        }
-
-        let scratch = Vec::new();
+        let once_states = OnceRuleStates::new(program.runtime_once_rule_count())?;
+        let scratch = RewriteScratch::new();
 
         Ok(Self {
             program,
@@ -295,14 +425,14 @@ impl<'program> Runtime<'program> {
 
         loop {
             let Some(matched) = self.find_next_match() else {
-                return Ok(RunResult::stable(
-                    self.state.into_output().map_err(RunError::from)?,
-                    self.steps,
-                ));
+                return Ok(RunResult::stable(self.state.into_output()?, self.steps));
             };
 
             if self.steps >= self.limits.max_steps() {
-                let state = self.state.into_step_limit_state().map_err(RunError::from)?;
+                let state = self
+                    .state
+                    .materialize(AllocationContext::FinalOutput)
+                    .map_err(RunError::from)?;
                 return Err(RunError::StepLimit(StepLimitError::new(
                     self.limits.max_steps(),
                     state,
@@ -310,7 +440,7 @@ impl<'program> Runtime<'program> {
                 .into());
             }
 
-            self.consume_once_rule(matched.rule);
+            self.once_states.consume(matched.rule.once_slot());
 
             if let Some(result) = self.apply_rule(matched, &mut trace)? {
                 return Ok(result);
@@ -324,7 +454,7 @@ impl<'program> Runtime<'program> {
     {
         if let Some(trace) = trace.as_mut() {
             trace(BorrowedTraceEvent::Initial {
-                state: RuntimeStateView::new(&self.state.bytes),
+                state: self.state.view(),
             })
             .map_err(TracedRunError::Trace)?;
         }
@@ -333,10 +463,8 @@ impl<'program> Runtime<'program> {
     }
 
     fn find_next_match(&self) -> Option<MatchedRule<'program>> {
-        let program = self.program;
-
-        for (index, rule) in program.rule_slice().iter().enumerate() {
-            if !self.is_rule_available(rule) {
+        for (index, rule) in self.program.rule_slice().iter().enumerate() {
+            if !self.once_states.is_available(rule.once_slot()) {
                 continue;
             }
 
@@ -354,25 +482,6 @@ impl<'program> Runtime<'program> {
         None
     }
 
-    fn is_rule_available(&self, rule: &Rule) -> bool {
-        let Some(position) = rule.once_position() else {
-            return true;
-        };
-
-        self.once_states
-            .get(position.zero_based())
-            .copied()
-            .is_some_and(|state| !state.is_consumed())
-    }
-
-    fn consume_once_rule(&mut self, rule: &Rule) {
-        if let Some(position) = rule.once_position()
-            && let Some(state) = self.once_states.get_mut(position.zero_based())
-        {
-            *state = RuntimeRuleState::Consumed;
-        }
-    }
-
     fn apply_rule<F, E>(
         &mut self,
         matched: MatchedRule<'program>,
@@ -382,7 +491,7 @@ impl<'program> Runtime<'program> {
         F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
     {
         let effect = self
-            .apply_action_to_scratch(matched.state_match, &matched.rule.action)
+            .apply_action_to_scratch(matched.state_match, matched.rule.action())
             .map_err(TracedRunError::Run)?;
 
         self.steps += 1;
@@ -395,10 +504,10 @@ impl<'program> Runtime<'program> {
                     matched.position,
                     matched.rule,
                     BorrowedTraceEffect::Continue {
-                        state: RuntimeStateView::new(&self.scratch),
+                        state: self.scratch.view(),
                     },
                 )?;
-                core::mem::swap(&mut self.state.bytes, &mut self.scratch);
+                self.state.swap_with_scratch(&mut self.scratch);
                 Ok(None)
             }
             RewriteEffect::Return(output) => {
@@ -477,17 +586,17 @@ impl<'program> Runtime<'program> {
 }
 
 fn find_match(state: &State, rule: &Rule) -> Option<StateMatch> {
-    match rule.anchor {
-        RuleAnchor::Anywhere => state.find_payload(&rule.lhs),
-        RuleAnchor::Start => state.starts_with_payload(&rule.lhs),
-        RuleAnchor::End => state.ends_with_payload(&rule.lhs),
+    match rule.anchor() {
+        RuleAnchor::Anywhere => state.find_payload(rule.lhs()),
+        RuleAnchor::Start => state.starts_with_payload(rule.lhs()),
+        RuleAnchor::End => state.ends_with_payload(rule.lhs()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bytes::{CodeByte, CompactByte, Payload};
+    use crate::bytes::{CompactByte, Payload, ProgramByte};
     use crate::test_support::{
         TestFailure, TestResult, expect_input_error, expect_run_error, expect_step_limit,
         run_source,
@@ -496,20 +605,18 @@ mod tests {
     use std::string::String;
     use std::vec::Vec;
 
-    fn expect_runtime_byte(state: &State, index: usize) -> Result<RuntimeByte, TestFailure> {
+    fn expect_runtime_byte(state: &State, index: usize) -> Result<u8, TestFailure> {
         state
-            .bytes
-            .get(index)
-            .copied()
+            .materialized_byte_at(index)
             .ok_or(TestFailure::Message("expected runtime byte"))
     }
 
     fn expect_payload_byte(payload: &Payload, index: usize) -> Result<u8, TestFailure> {
         payload
-            .bytes()
+            .program_bytes()
             .get(index)
             .copied()
-            .map(CodeByte::as_u8)
+            .map(ProgramByte::get)
             .ok_or(TestFailure::Message("expected payload byte"))
     }
 
@@ -587,6 +694,15 @@ mod tests {
         assert_eq!(run_source("a= b", "a bc")?, "b bc");
         assert_eq!(run_source("a b=bb", "a bc")?, "a bc");
         assert_eq!(run_source("ab=bb", "a bc")?, "a bc");
+        Ok(())
+    }
+
+    #[test]
+    fn opaque_reserved_input_bytes_do_not_bridge_program_payload_matches() -> TestResult {
+        assert_eq!(run_source("ab=x", "a=b")?, "a=b");
+        assert_eq!(run_source("ab=x", "a#b")?, "a#b");
+        assert_eq!(run_source("ab=x", "a(b")?, "a(b");
+        assert_eq!(run_source("ab=x", "a)b")?, "a)b");
         Ok(())
     }
 
@@ -688,10 +804,14 @@ a|-=
         let state = State::parse_input(b"a=()# ", RunLimits::default())?;
 
         assert_eq!(expect_payload_byte(&payload, 0)?, b'a');
-        assert_eq!(expect_runtime_byte(&state, 0)?.as_u8(), b'a');
-        assert_eq!(expect_runtime_byte(&state, 1)?.as_u8(), b'=');
-        assert_eq!(expect_runtime_byte(&state, 2)?.as_u8(), b'(');
-        assert_eq!(expect_runtime_byte(&state, 5)?.as_u8(), b' ');
+        assert_eq!(expect_runtime_byte(&state, 0)?, b'a');
+        assert_eq!(expect_runtime_byte(&state, 1)?, b'=');
+        assert_eq!(expect_runtime_byte(&state, 2)?, b'(');
+        assert_eq!(expect_runtime_byte(&state, 5)?, b' ');
+        assert_eq!(state.byte_at_is_editable(0), Some(true));
+        assert_eq!(state.byte_at_is_opaque(1), Some(true));
+        assert_eq!(state.byte_at_is_opaque(2), Some(true));
+        assert_eq!(state.byte_at_is_opaque(5), Some(true));
         Ok(())
     }
 }

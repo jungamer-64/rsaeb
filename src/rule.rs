@@ -1,9 +1,8 @@
 use alloc::vec::Vec;
 use core::fmt;
-use core::iter::{DoubleEndedIterator, ExactSizeIterator};
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
-use crate::bytes::{CodeByte, Payload};
+use crate::bytes::Payload;
 use crate::syntax::SyntaxToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -29,21 +28,6 @@ impl RulePosition {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct OnceRulePosition {
-    zero_based: usize,
-}
-
-impl OnceRulePosition {
-    pub(crate) const fn new(zero_based: usize) -> Self {
-        Self { zero_based }
-    }
-
-    pub(crate) const fn zero_based(self) -> usize {
-        self.zero_based
-    }
-}
-
 /// Rule repeat policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleRepeat {
@@ -61,25 +45,53 @@ impl RuleRepeat {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuleMode {
-    Always,
-    Once(OnceRulePosition),
+/// Runtime slot used by one parsed `(once)` rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct OnceRuleSlot {
+    zero_based: usize,
 }
 
-impl RuleMode {
-    pub(crate) const fn repeat(self) -> RuleRepeat {
+impl OnceRuleSlot {
+    pub(crate) const fn new(zero_based: usize) -> Self {
+        Self { zero_based }
+    }
+
+    pub(crate) const fn zero_based(self) -> usize {
+        self.zero_based
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuleRepeatPlan {
+    Always,
+    Once { slot: OnceRuleSlot },
+}
+
+impl RuleRepeatPlan {
+    pub(crate) const fn always() -> Self {
+        Self::Always
+    }
+
+    pub(crate) const fn once(slot: OnceRuleSlot) -> Self {
+        Self::Once { slot }
+    }
+
+    pub(crate) const fn public_repeat(self) -> RuleRepeat {
         match self {
             Self::Always => RuleRepeat::Always,
-            Self::Once(_) => RuleRepeat::Once,
+            Self::Once { .. } => RuleRepeat::Once,
         }
     }
 
-    pub(crate) const fn once_position(self) -> Option<OnceRulePosition> {
+    pub(crate) const fn once_slot(self) -> Option<OnceRuleSlot> {
         match self {
             Self::Always => None,
-            Self::Once(position) => Some(position),
+            Self::Once { slot } => Some(slot),
         }
+    }
+
+    pub(crate) const fn is_once(self) -> bool {
+        matches!(self, Self::Once { .. })
     }
 }
 
@@ -101,7 +113,7 @@ pub enum RuleAnchor {
 /// inside this view because payload construction is owned by the parser.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PayloadView<'program> {
-    pub(crate) payload: &'program Payload,
+    payload: &'program Payload,
 }
 
 impl<'program> PayloadView<'program> {
@@ -121,16 +133,29 @@ impl<'program> PayloadView<'program> {
         self.payload.is_empty()
     }
 
-    /// Iterates over payload bytes.
-    #[must_use]
-    pub fn bytes(self) -> impl DoubleEndedIterator<Item = u8> + ExactSizeIterator + 'program {
-        self.payload.bytes().iter().copied().map(CodeByte::as_u8)
+    /// Payload bytes as a materializing iterator.
+    ///
+    /// This intentionally does not expose a borrowed `&[u8]`: the parsed payload
+    /// is stored as `ProgramByte`, not as untyped bytes. Consumers that need
+    /// ownership should call `to_vec` instead of relying on hidden allocation.
+    pub fn bytes(self) -> impl Iterator<Item = u8> + 'program {
+        self.payload.bytes()
     }
 
     /// Returns whether this payload has exactly the expected bytes.
     #[must_use]
     pub fn eq_bytes(self, expected: &[u8]) -> bool {
-        self.bytes().eq(expected.iter().copied())
+        self.payload.eq_bytes(expected)
+    }
+
+    /// Materializes this payload as owned bytes with explicit fallible
+    /// allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the output buffer cannot be allocated.
+    pub fn to_vec(self) -> Result<Vec<u8>, AllocationError> {
+        self.to_vec_with_context(AllocationContext::Payload)
     }
 
     pub(crate) fn to_vec_with_context(
@@ -210,31 +235,31 @@ impl<'program> RuleView<'program> {
     /// One-based source line number.
     #[must_use]
     pub fn line_number(self) -> usize {
-        self.rule.line_number
+        self.rule.line_number()
     }
 
     /// Rule repeat policy.
     #[must_use]
     pub fn repeat(self) -> RuleRepeat {
-        self.rule.mode.repeat()
+        self.rule.repeat()
     }
 
     /// Rule match anchor.
     #[must_use]
     pub fn anchor(self) -> RuleAnchor {
-        self.rule.anchor
+        self.rule.anchor()
     }
 
     /// Left-side match payload.
     #[must_use]
     pub fn lhs(self) -> PayloadView<'program> {
-        PayloadView::new(&self.rule.lhs)
+        PayloadView::new(self.rule.lhs())
     }
 
     /// Right-side action.
     #[must_use]
     pub fn action(self) -> RuleActionView<'program> {
-        self.rule.action.view()
+        self.rule.action().view()
     }
 
     /// Generates canonical executable source for diagnostics/display.
@@ -252,19 +277,7 @@ impl<'program> RuleView<'program> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuntimeRuleState {
-    Fresh,
-    Consumed,
-}
-
-impl RuntimeRuleState {
-    pub(crate) const fn is_consumed(self) -> bool {
-        matches!(self, Self::Consumed)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Action {
     Replace(Payload),
     MoveStart(Payload),
@@ -273,7 +286,7 @@ pub(crate) enum Action {
 }
 
 impl Action {
-    fn view(&self) -> RuleActionView<'_> {
+    pub(crate) fn view(&self) -> RuleActionView<'_> {
         match self {
             Self::Replace(payload) => RuleActionView::Replace(PayloadView::new(payload)),
             Self::MoveStart(payload) => RuleActionView::MoveStart(PayloadView::new(payload)),
@@ -292,18 +305,54 @@ impl Action {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Rule {
-    pub(crate) line_number: usize,
-    pub(crate) mode: RuleMode,
-    pub(crate) anchor: RuleAnchor,
-    pub(crate) lhs: Payload,
-    pub(crate) action: Action,
+    line_number: usize,
+    repeat: RuleRepeatPlan,
+    anchor: RuleAnchor,
+    lhs: Payload,
+    action: Action,
 }
 
 impl Rule {
-    pub(crate) const fn once_position(&self) -> Option<OnceRulePosition> {
-        self.mode.once_position()
+    pub(crate) fn new(
+        line_number: usize,
+        repeat: RuleRepeatPlan,
+        anchor: RuleAnchor,
+        lhs: Payload,
+        action: Action,
+    ) -> Self {
+        Self {
+            line_number,
+            repeat,
+            anchor,
+            lhs,
+            action,
+        }
+    }
+
+    pub(crate) const fn line_number(&self) -> usize {
+        self.line_number
+    }
+
+    pub(crate) const fn repeat(&self) -> RuleRepeat {
+        self.repeat.public_repeat()
+    }
+
+    pub(crate) const fn once_slot(&self) -> Option<OnceRuleSlot> {
+        self.repeat.once_slot()
+    }
+
+    pub(crate) const fn anchor(&self) -> RuleAnchor {
+        self.anchor
+    }
+
+    pub(crate) const fn lhs(&self) -> &Payload {
+        &self.lhs
+    }
+
+    pub(crate) const fn action(&self) -> &Action {
+        &self.action
     }
 
     pub(crate) fn view(&self, position: RulePosition) -> RuleView<'_> {
@@ -314,7 +363,7 @@ impl Rule {
         let (action_token, payload) = self.action.canonical_parts();
         let mut len = self.lhs.len();
 
-        if self.mode.repeat().is_once() {
+        if self.repeat.is_once() {
             len = len.checked_add(SyntaxToken::Once.len()).ok_or_else(|| {
                 AllocationError::new(AllocationContext::CanonicalSource, usize::MAX)
             })?;
@@ -344,7 +393,7 @@ impl Rule {
             AllocationContext::CanonicalSource,
         )?;
 
-        if self.mode.repeat().is_once() {
+        if self.repeat.is_once() {
             push_token(&mut output, SyntaxToken::Once)?;
         }
 
@@ -376,9 +425,5 @@ fn push_token(output: &mut Vec<u8>, token: SyntaxToken) -> Result<(), Allocation
 }
 
 fn push_payload(output: &mut Vec<u8>, payload: &Payload) -> Result<(), AllocationError> {
-    for byte in payload.bytes().iter().copied() {
-        try_push(output, byte.as_u8(), AllocationContext::CanonicalSource)?;
-    }
-
-    Ok(())
+    payload.push_bytes_to(output, AllocationContext::CanonicalSource)
 }

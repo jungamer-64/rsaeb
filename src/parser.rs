@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::{CompactByte, Payload};
-use crate::error::{ParseError, ParseErrorKind, PayloadKind};
+use crate::error::{LeftModifierKind, ParseError, ParseErrorKind, PayloadKind, RightActionKind};
 use crate::program::{Program, RuleSet};
 use crate::rule::{Action, RuleAnchor, RuleRepeat};
 use crate::syntax::SyntaxToken;
@@ -43,14 +43,7 @@ impl<'source> CodeLine<'source> {
     }
 
     fn compact(self) -> Result<CompactCodeLine, ParseError> {
-        let compact_len = self
-            .bytes
-            .iter()
-            .filter(|byte| !byte.is_ascii_whitespace())
-            .count();
-        let mut bytes = Vec::new();
-        try_reserve_total_exact(&mut bytes, compact_len, AllocationContext::CompactCodeLine)
-            .map_err(|error| parse_allocation_error(self.line_number, error))?;
+        let mut compact_len = 0usize;
 
         for (zero_based_column, byte) in self.bytes.iter().copied().enumerate() {
             if byte.is_ascii_whitespace() {
@@ -63,6 +56,23 @@ impl<'source> CodeLine<'source> {
                     Some(zero_based_column + 1),
                     ParseErrorKind::NonPrintableAsciiInCode { byte },
                 ));
+            }
+
+            compact_len = compact_len.checked_add(1).ok_or_else(|| {
+                parse_allocation_error(
+                    self.line_number,
+                    AllocationError::new(AllocationContext::CompactCodeLine, usize::MAX),
+                )
+            })?;
+        }
+
+        let mut bytes = Vec::new();
+        try_reserve_total_exact(&mut bytes, compact_len, AllocationContext::CompactCodeLine)
+            .map_err(|error| parse_allocation_error(self.line_number, error))?;
+
+        for (zero_based_column, byte) in self.bytes.iter().copied().enumerate() {
+            if byte.is_ascii_whitespace() {
+                continue;
             }
 
             try_push(
@@ -80,7 +90,7 @@ impl<'source> CodeLine<'source> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 struct CompactCodeLine {
     line_number: usize,
     bytes: Vec<CompactByte>,
@@ -184,6 +194,30 @@ fn starts_with_token(input: &[CompactByte], token: SyntaxToken) -> bool {
     strip_token(input, token).is_some()
 }
 
+fn left_modifier_kind(input: &[CompactByte]) -> Option<LeftModifierKind> {
+    if starts_with_token(input, SyntaxToken::Once) {
+        Some(LeftModifierKind::Once)
+    } else if starts_with_token(input, SyntaxToken::Start) {
+        Some(LeftModifierKind::Start)
+    } else if starts_with_token(input, SyntaxToken::End) {
+        Some(LeftModifierKind::End)
+    } else {
+        None
+    }
+}
+
+fn right_action_kind(input: &[CompactByte]) -> Option<RightActionKind> {
+    if starts_with_token(input, SyntaxToken::Start) {
+        Some(RightActionKind::Start)
+    } else if starts_with_token(input, SyntaxToken::End) {
+        Some(RightActionKind::End)
+    } else if starts_with_token(input, SyntaxToken::Return) {
+        Some(RightActionKind::Return)
+    } else {
+        None
+    }
+}
+
 fn parse_lhs(
     mut input: &[CompactByte],
     line_number: usize,
@@ -205,14 +239,11 @@ fn parse_lhs(
         RuleAnchor::Anywhere
     };
 
-    if starts_with_token(input, SyntaxToken::Once)
-        || starts_with_token(input, SyntaxToken::Start)
-        || starts_with_token(input, SyntaxToken::End)
-    {
+    if let Some(modifier) = left_modifier_kind(input) {
         return Err(ParseError::new(
             line_number,
             input.first().copied().map(CompactByte::source_column),
-            ParseErrorKind::UnsupportedLeftModifierOrder,
+            ParseErrorKind::UnsupportedLeftModifierOrder { modifier },
         ));
     }
 
@@ -240,14 +271,11 @@ fn parse_rhs(input: &[CompactByte], line_number: usize) -> Result<Action, ParseE
 }
 
 fn reject_nested_rhs_action(input: &[CompactByte], line_number: usize) -> Result<(), ParseError> {
-    if starts_with_token(input, SyntaxToken::Start)
-        || starts_with_token(input, SyntaxToken::End)
-        || starts_with_token(input, SyntaxToken::Return)
-    {
+    if let Some(action) = right_action_kind(input) {
         return Err(ParseError::new(
             line_number,
             input.first().copied().map(CompactByte::source_column),
-            ParseErrorKind::UnsupportedRightActionSyntax,
+            ParseErrorKind::UnsupportedRightActionSyntax { action },
         ));
     }
 
@@ -257,7 +285,7 @@ fn reject_nested_rhs_action(input: &[CompactByte], line_number: usize) -> Result
 #[cfg(test)]
 mod tests {
     use crate::test_support::{TestResult, expect_parse_error, run_source};
-    use crate::{ParseErrorKind, PayloadKind, Program, RunLimits};
+    use crate::{LeftModifierKind, ParseErrorKind, PayloadKind, Program, RunLimits};
 
     #[test]
     fn code_spaces_are_ignored_in_rules() -> TestResult {
@@ -396,7 +424,10 @@ mod tests {
         ] {
             let error = expect_parse_error(source)?;
             assert!(
-                matches!(error.kind(), ParseErrorKind::UnsupportedRightActionSyntax),
+                matches!(
+                    error.kind(),
+                    ParseErrorKind::UnsupportedRightActionSyntax { .. }
+                ),
                 "source should fail with nested right action syntax: {source}"
             );
         }
@@ -422,7 +453,9 @@ mod tests {
         let error = expect_parse_error("(start)(once)a=b")?;
         assert!(matches!(
             error.kind(),
-            ParseErrorKind::UnsupportedLeftModifierOrder
+            ParseErrorKind::UnsupportedLeftModifierOrder {
+                modifier: LeftModifierKind::Once,
+            }
         ));
         Ok(())
     }

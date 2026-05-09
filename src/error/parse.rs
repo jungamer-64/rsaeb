@@ -43,8 +43,8 @@ impl Error for ParseError {
             | ParseErrorKind::MissingEquals
             | ParseErrorKind::MultipleEquals
             | ParseErrorKind::ReservedSyntaxInPayload { .. }
-            | ParseErrorKind::UnsupportedLeftModifierOrder
-            | ParseErrorKind::UnsupportedRightActionSyntax => None,
+            | ParseErrorKind::UnsupportedLeftModifierOrder { .. }
+            | ParseErrorKind::UnsupportedRightActionSyntax { .. } => None,
         }
     }
 }
@@ -65,9 +65,9 @@ pub enum ParseErrorKind {
     /// Reserved syntax appeared where program payload data was expected.
     ReservedSyntaxInPayload { byte: u8, payload_kind: PayloadKind },
     /// Left-side modifiers were duplicated or ordered outside the supported grammar.
-    UnsupportedLeftModifierOrder,
+    UnsupportedLeftModifierOrder { modifier: LeftModifierKind },
     /// Right-side actions were nested or otherwise used outside the supported grammar.
-    UnsupportedRightActionSyntax,
+    UnsupportedRightActionSyntax { action: RightActionKind },
 }
 
 /// Program payload context used by structured parse errors.
@@ -83,4 +83,26 @@ pub enum PayloadKind {
     RightSideMoveEndPayload,
     /// Right-side payload after `(return)`.
     RightSideReturnPayload,
+}
+
+/// Left-side modifier that caused a structured parse error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeftModifierKind {
+    /// `(once)` repeat modifier.
+    Once,
+    /// `(start)` anchor modifier.
+    Start,
+    /// `(end)` anchor modifier.
+    End,
+}
+
+/// Right-side action token that caused a structured parse error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RightActionKind {
+    /// `(start)` move-to-start action.
+    Start,
+    /// `(end)` move-to-end action.
+    End,
+    /// `(return)` return action.
+    Return,
 }

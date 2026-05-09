@@ -3,7 +3,7 @@ use core::error::Error;
 use super::RunError;
 
 /// Error returned by fallible tracing APIs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum TracedRunError<E> {
     /// Parser/runtime execution failed.
     Run(RunError),

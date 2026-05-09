@@ -1,8 +1,7 @@
 use alloc::vec::Vec;
-use core::iter::{DoubleEndedIterator, ExactSizeIterator};
 
-use crate::allocation::AllocationContext;
-use crate::bytes::{RuntimeByte, copy_runtime_bytes};
+use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
+use crate::bytes::RuntimeByte;
 use crate::error::{RunError, TraceLimitError};
 use crate::program::RunLimits;
 use crate::rule::{PayloadView, RuleView};
@@ -10,7 +9,8 @@ use crate::rule::{PayloadView, RuleView};
 /// Borrowed view of runtime-state bytes.
 ///
 /// This lets trace sinks inspect state without forcing the runtime to allocate a
-/// `Vec<u8>` for every event.
+/// `Vec<u8>` for every event. Internally the runtime state is not stored as raw
+/// `u8`, so public byte access is an iterator/materialization boundary.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeStateView<'run> {
     bytes: &'run [RuntimeByte],
@@ -33,20 +33,41 @@ impl<'run> RuntimeStateView<'run> {
         self.bytes.is_empty()
     }
 
-    /// Iterates over state bytes.
-    #[must_use]
-    pub fn bytes(self) -> impl DoubleEndedIterator<Item = u8> + ExactSizeIterator + 'run {
-        self.bytes.iter().copied().map(RuntimeByte::as_u8)
+    /// Runtime state bytes as a materializing iterator.
+    pub fn bytes(self) -> impl Iterator<Item = u8> + 'run {
+        self.bytes.iter().copied().map(RuntimeByte::materialize)
     }
 
     /// Returns whether this state has exactly the expected bytes.
     #[must_use]
     pub fn eq_bytes(self, expected: &[u8]) -> bool {
-        self.bytes().eq(expected.iter().copied())
+        self.len() == expected.len()
+            && self
+                .bytes()
+                .zip(expected.iter().copied())
+                .all(|(actual, expected)| actual == expected)
     }
 
-    pub(crate) fn to_vec(self) -> Result<Vec<u8>, RunError> {
-        copy_runtime_bytes(self.bytes, AllocationContext::TraceSnapshot).map_err(RunError::from)
+    /// Materializes this runtime-state view as owned bytes with explicit
+    /// fallible allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the output buffer cannot be allocated.
+    pub fn to_vec(self) -> Result<Vec<u8>, AllocationError> {
+        self.to_vec_with_context(AllocationContext::RuntimeStateView)
+    }
+
+    pub(crate) fn to_vec_with_context(
+        self,
+        context: AllocationContext,
+    ) -> Result<Vec<u8>, AllocationError> {
+        let mut output = Vec::new();
+        try_reserve_total_exact(&mut output, self.len(), context)?;
+        for byte in self.bytes() {
+            try_push(&mut output, byte, context)?;
+        }
+        Ok(output)
     }
 }
 
@@ -56,7 +77,7 @@ impl core::fmt::Debug for RuntimeStateView<'_> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum TraceSnapshotEffect {
     /// The step produced the next runtime state and execution may continue.
     Continue { state: Vec<u8> },
@@ -125,7 +146,7 @@ impl BorrowedTraceEffect<'_, '_> {
         ensure_trace_len(self.len(), limits)?;
         match self {
             Self::Continue { state } => Ok(TraceSnapshotEffect::Continue {
-                state: state.to_vec()?,
+                state: state.to_vec_with_context(AllocationContext::TraceSnapshot)?,
             }),
             Self::Return { output } => Ok(TraceSnapshotEffect::Return {
                 output: output
@@ -142,7 +163,7 @@ impl BorrowedTraceEffect<'_, '_> {
 /// Step events still borrow the structured rule view from `Program`, so these
 /// events cannot outlive the parsed program. Return steps cannot be confused
 /// with ordinary continuation steps by forgetting to inspect a boolean flag.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum TraceSnapshotEvent<'program> {
     /// Initial runtime state before any rewrite step.
     Initial { state: Vec<u8> },
@@ -242,7 +263,7 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
         ensure_trace_len(self.len(), limits)?;
         match self {
             Self::Initial { state } => Ok(TraceSnapshotEvent::Initial {
-                state: state.to_vec()?,
+                state: state.to_vec_with_context(AllocationContext::TraceSnapshot)?,
             }),
             Self::Step { step, rule, effect } => Ok(TraceSnapshotEvent::Step {
                 step,

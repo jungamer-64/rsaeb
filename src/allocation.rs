@@ -17,12 +17,12 @@ pub enum AllocationContext {
     RuntimeRuleState,
     /// Building the next runtime state after a rewrite.
     RuntimeState,
+    /// Materializing a borrowed runtime-state view outside trace snapshot APIs.
+    RuntimeStateView,
+    /// Materializing a stable final runtime state as public output bytes.
+    FinalOutput,
     /// Materializing `(return)` output bytes.
     ReturnOutput,
-    /// Materializing the final stable output bytes.
-    FinalOutput,
-    /// Materializing the state stored in a step-limit error.
-    StepLimitState,
     /// Materializing a trace snapshot.
     TraceSnapshot,
 }

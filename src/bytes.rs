@@ -23,12 +23,16 @@ impl ReservedSyntaxByte {
     }
 }
 
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CodeByte(u8);
+/// A byte that is valid executable A=B payload data.
+///
+/// This is deliberately narrower than runtime input. Program bytes can be
+/// matched and constructed by rules. Runtime-only bytes can be preserved, but
+/// cannot be matched, created, or deleted directly by ordinary rewrite payloads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct ProgramByte(u8);
 
-impl CodeByte {
-    pub(crate) fn parse_compact(
+impl ProgramByte {
+    pub(crate) fn parse(
         byte: CompactByte,
         line_number: usize,
         payload_kind: PayloadKind,
@@ -65,75 +69,104 @@ impl CodeByte {
         Ok(Self(raw))
     }
 
-    pub(crate) const fn as_u8(self) -> u8 {
+    pub(crate) const fn get(self) -> u8 {
         self.0
     }
 }
 
-#[repr(transparent)]
+/// ASCII byte accepted by runtime input.
+///
+/// This newtype prevents crate-internal code from constructing an opaque
+/// runtime byte with a non-ASCII value. Runtime input validation owns the only
+/// constructor that can cross from raw `u8` into this domain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RuntimeByte(u8);
+pub(crate) struct AsciiByte(u8);
+
+impl AsciiByte {
+    pub(crate) fn parse(byte: u8, zero_based_column: usize) -> Result<Self, InputError> {
+        if byte.is_ascii() {
+            Ok(Self(byte))
+        } else {
+            Err(InputError::new(zero_based_column + 1, byte))
+        }
+    }
+
+    pub(crate) const fn get(self) -> u8 {
+        self.0
+    }
+}
+
+/// A byte inside the mutable runtime state.
+///
+/// `Editable` bytes came from user input as ordinary payload-compatible bytes or
+/// from rule payloads. `Opaque` bytes came from runtime input only. Rules cannot
+/// directly match opaque bytes, so program syntax bytes like `=` and `#` can
+/// survive in state without becoming part of the program byte domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeByte(RuntimeByteRepr);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeByteRepr {
+    Editable(ProgramByte),
+    Opaque(AsciiByte),
+}
 
 impl RuntimeByte {
     pub(crate) fn parse_input(byte: u8, zero_based_column: usize) -> Result<Self, InputError> {
-        if !byte.is_ascii() {
-            return Err(InputError::new(zero_based_column + 1, byte));
+        let byte = AsciiByte::parse(byte, zero_based_column)?;
+        let raw = byte.get();
+
+        if raw.is_ascii_graphic() && ReservedSyntaxByte::parse(raw).is_none() {
+            Ok(Self(RuntimeByteRepr::Editable(ProgramByte(raw))))
+        } else {
+            Ok(Self(RuntimeByteRepr::Opaque(byte)))
         }
-
-        Ok(Self(byte))
     }
 
-    pub(crate) const fn from_code(byte: CodeByte) -> Self {
-        Self(byte.as_u8())
+    pub(crate) const fn from_program(byte: ProgramByte) -> Self {
+        Self(RuntimeByteRepr::Editable(byte))
     }
 
-    pub(crate) const fn as_u8(self) -> u8 {
-        self.0
+    pub(crate) const fn materialize(self) -> u8 {
+        match self.0 {
+            RuntimeByteRepr::Editable(byte) => byte.get(),
+            RuntimeByteRepr::Opaque(byte) => byte.get(),
+        }
+    }
+
+    pub(crate) const fn matches_program_byte(self, expected: ProgramByte) -> bool {
+        match self.0 {
+            RuntimeByteRepr::Editable(byte) => byte.get() == expected.get(),
+            RuntimeByteRepr::Opaque(_) => false,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn is_editable(self) -> bool {
+        matches!(self.0, RuntimeByteRepr::Editable(_))
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn is_opaque(self) -> bool {
+        matches!(self.0, RuntimeByteRepr::Opaque(_))
     }
 }
 
-fn copy_code_bytes(
-    source: &[CodeByte],
+pub(crate) fn push_bytes(
+    output: &mut Vec<u8>,
+    source: impl IntoIterator<Item = u8>,
     context: AllocationContext,
-) -> Result<Vec<u8>, AllocationError> {
-    let mut output = Vec::new();
-    try_reserve_total_exact(&mut output, source.len(), context)?;
-
-    for byte in source.iter().copied() {
-        try_push(&mut output, byte.as_u8(), context)?;
-    }
-
-    Ok(output)
-}
-
-pub(crate) fn copy_runtime_bytes(
-    source: &[RuntimeByte],
-    context: AllocationContext,
-) -> Result<Vec<u8>, AllocationError> {
-    let mut output = Vec::new();
-    try_reserve_total_exact(&mut output, source.len(), context)?;
-
-    for byte in source.iter().copied() {
-        try_push(&mut output, byte.as_u8(), context)?;
-    }
-
-    Ok(output)
-}
-
-pub(crate) fn push_runtime_bytes(
-    output: &mut Vec<RuntimeByte>,
-    source: impl IntoIterator<Item = RuntimeByte>,
 ) -> Result<(), AllocationError> {
     for byte in source {
-        try_push(output, byte, AllocationContext::RuntimeState)?;
+        try_push(output, byte, context)?;
     }
 
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Payload {
-    bytes: Vec<CodeByte>,
+    bytes: Vec<ProgramByte>,
 }
 
 impl Payload {
@@ -142,18 +175,18 @@ impl Payload {
         line_number: usize,
         payload_kind: PayloadKind,
     ) -> Result<Self, ParseError> {
+        for byte in input.iter().copied() {
+            ProgramByte::parse(byte, line_number, payload_kind)?;
+        }
+
         let mut bytes = Vec::new();
         try_reserve_total_exact(&mut bytes, input.len(), AllocationContext::Payload).map_err(
             |error| ParseError::new(line_number, None, ParseErrorKind::Allocation(error)),
         )?;
 
         for byte in input.iter().copied() {
-            try_push(
-                &mut bytes,
-                CodeByte::parse_compact(byte, line_number, payload_kind)?,
-                AllocationContext::Payload,
-            )
-            .map_err(|error| {
+            let parsed = ProgramByte::parse(byte, line_number, payload_kind)?;
+            try_push(&mut bytes, parsed, AllocationContext::Payload).map_err(|error| {
                 ParseError::new(line_number, None, ParseErrorKind::Allocation(error))
             })?;
         }
@@ -169,19 +202,46 @@ impl Payload {
         self.bytes.is_empty()
     }
 
-    pub(crate) fn bytes(&self) -> &[CodeByte] {
+    pub(crate) fn first_byte(&self) -> Option<ProgramByte> {
+        self.bytes.first().copied()
+    }
+
+    pub(crate) fn program_bytes(&self) -> &[ProgramByte] {
         &self.bytes
     }
 
+    pub(crate) fn bytes(&self) -> impl Iterator<Item = u8> + '_ {
+        self.bytes.iter().copied().map(ProgramByte::get)
+    }
+
+    pub(crate) fn eq_bytes(&self, expected: &[u8]) -> bool {
+        self.len() == expected.len()
+            && self
+                .bytes()
+                .zip(expected.iter().copied())
+                .all(|(actual, expected)| actual == expected)
+    }
+
+    pub(crate) fn push_bytes_to(
+        &self,
+        output: &mut Vec<u8>,
+        context: AllocationContext,
+    ) -> Result<(), AllocationError> {
+        push_bytes(output, self.bytes(), context)
+    }
+
     pub(crate) fn runtime_bytes(&self) -> impl Iterator<Item = RuntimeByte> + '_ {
-        self.bytes.iter().copied().map(RuntimeByte::from_code)
+        self.bytes.iter().copied().map(RuntimeByte::from_program)
     }
 
     pub(crate) fn to_vec_with_context(
         &self,
         context: AllocationContext,
     ) -> Result<Vec<u8>, AllocationError> {
-        copy_code_bytes(&self.bytes, context)
+        let mut output = Vec::new();
+        try_reserve_total_exact(&mut output, self.len(), context)?;
+        self.push_bytes_to(&mut output, context)?;
+        Ok(output)
     }
 }
 
@@ -225,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn code_byte_rejects_every_reserved_syntax_byte_even_if_payload_parser_is_called_directly()
+    fn payload_rejects_every_reserved_syntax_byte_even_if_payload_parser_is_called_directly()
     -> Result<(), &'static str> {
         for reserved in [b'=', b'#', b'(', b')'] {
             let compact = [CompactByte::new(reserved, 1)];
@@ -244,8 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn code_byte_revalidates_compact_bytes_instead_of_trusting_the_previous_phase()
-    -> Result<(), &'static str> {
+    fn payload_validates_compact_bytes_at_the_domain_boundary() -> Result<(), &'static str> {
         let non_ascii = [CompactByte::new(0xff, 1)];
         let non_graphic = [CompactByte::new(b' ', 2)];
 
@@ -261,6 +320,35 @@ mod tests {
             error.kind(),
             ParseErrorKind::NonPrintableAsciiInCode { .. }
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn payload_exposes_validated_bytes_without_leaking_the_internal_domain_type()
+    -> Result<(), &'static str> {
+        let compact = [CompactByte::new(b'a', 1), CompactByte::new(b'b', 2)];
+        let payload = Payload::parse(&compact, 1, PayloadKind::LeftSideData)
+            .map_err(|_| "expected payload to parse")?;
+
+        assert!(payload.eq_bytes(b"ab"));
+        assert_eq!(payload.first_byte().map(ProgramByte::get), Some(b'a'));
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_input_classifies_program_constructible_and_opaque_ascii_separately()
+    -> Result<(), &'static str> {
+        let parsed = RuntimeByte::parse_input(b'a', 0).map_err(|_| "ASCII input should parse")?;
+        assert!(parsed.is_editable());
+        assert_eq!(parsed.materialize(), b'a');
+
+        for byte in [0x00, b' ', b'=', b'#', b'(', b')'] {
+            let parsed =
+                RuntimeByte::parse_input(byte, 0).map_err(|_| "ASCII input should parse")?;
+            assert_eq!(parsed.materialize(), byte);
+            assert!(parsed.is_opaque());
+        }
+
         Ok(())
     }
 }

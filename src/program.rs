@@ -6,7 +6,7 @@ use crate::bytes::Payload;
 use crate::error::{AebError, ParseError, RunError, TracedRunError};
 use crate::parser::parse_program_impl;
 use crate::rule::{
-    Action, OnceRulePosition, Rule, RuleAnchor, RuleMode, RulePosition, RuleRepeat, RuleView,
+    Action, OnceRuleSlot, Rule, RuleAnchor, RulePosition, RuleRepeat, RuleRepeatPlan, RuleView,
 };
 use crate::runtime::Runtime;
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
@@ -149,15 +149,14 @@ enum TraceSnapshotError<E> {
 ///
 /// A parsed program is immutable and reusable. Per-run `(once)` state lives in
 /// the runtime invocation, not in this value.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Program {
     rule_set: RuleSet,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, PartialEq, Eq, Default)]
 pub(crate) struct RuleSet {
     rules: Vec<Rule>,
-    once_rule_count: usize,
 }
 
 impl RuleSet {
@@ -173,33 +172,23 @@ impl RuleSet {
         lhs: Payload,
         action: Action,
     ) -> Result<(), AllocationError> {
-        let (mode, next_once_rule_count) = if repeat.is_once() {
-            let next = self
-                .once_rule_count
-                .checked_add(1)
-                .ok_or_else(|| AllocationError::new(AllocationContext::ProgramRules, usize::MAX))?;
-            (
-                RuleMode::Once(OnceRulePosition::new(self.once_rule_count)),
-                next,
-            )
+        let repeat = if repeat.is_once() {
+            RuleRepeatPlan::once(self.next_once_rule_slot())
         } else {
-            (RuleMode::Always, self.once_rule_count)
+            RuleRepeatPlan::always()
         };
 
         try_push(
             &mut self.rules,
-            Rule {
-                line_number,
-                mode,
-                anchor,
-                lhs,
-                action,
-            },
+            Rule::new(line_number, repeat, anchor, lhs, action),
             AllocationContext::ProgramRules,
         )?;
 
-        self.once_rule_count = next_once_rule_count;
         Ok(())
+    }
+
+    fn next_once_rule_slot(&self) -> OnceRuleSlot {
+        OnceRuleSlot::new(self.once_rule_count())
     }
 
     pub(crate) fn rule_count(&self) -> usize {
@@ -207,7 +196,10 @@ impl RuleSet {
     }
 
     pub(crate) fn once_rule_count(&self) -> usize {
-        self.once_rule_count
+        self.rules
+            .iter()
+            .filter(|rule| rule.repeat().is_once())
+            .count()
     }
 
     pub(crate) fn as_slice(&self) -> &[Rule] {
@@ -415,7 +407,7 @@ impl RunTermination {
 }
 
 /// Result of one program execution.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct RunResult {
     output: Vec<u8>,
     steps: usize,

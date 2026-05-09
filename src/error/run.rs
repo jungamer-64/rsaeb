@@ -4,7 +4,7 @@ use core::error::Error;
 use crate::allocation::AllocationError;
 
 /// Runtime execution error.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum RunError {
     /// Runtime input is invalid.
     Input(InputError),
@@ -255,7 +255,7 @@ impl TraceLimitError {
 impl Error for TraceLimitError {}
 
 /// Step-limit failure with the last runtime state preserved as bytes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct StepLimitError {
     max_steps: usize,
     state: Vec<u8>,

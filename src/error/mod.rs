@@ -11,7 +11,7 @@ mod traced;
 
 use core::error::Error;
 
-pub use parse::{ParseError, ParseErrorKind, PayloadKind};
+pub use parse::{LeftModifierKind, ParseError, ParseErrorKind, PayloadKind, RightActionKind};
 pub use run::{
     InputError, ReturnLimitError, RunError, StateLimitContext, StateLimitError, StateSizeError,
     StepLimitError, TraceLimitError,
@@ -19,7 +19,7 @@ pub use run::{
 pub use traced::TracedRunError;
 
 /// Top-level interpreter error.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum AebError {
     /// Source program parse error.
     Parse(ParseError),

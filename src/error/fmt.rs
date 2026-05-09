@@ -3,9 +3,9 @@ use core::fmt;
 use crate::allocation::{AllocationContext, AllocationError};
 
 use super::{
-    AebError, InputError, ParseError, ParseErrorKind, PayloadKind, ReturnLimitError, RunError,
-    StateLimitContext, StateLimitError, StateSizeError, StepLimitError, TraceLimitError,
-    TracedRunError,
+    AebError, InputError, LeftModifierKind, ParseError, ParseErrorKind, PayloadKind,
+    ReturnLimitError, RightActionKind, RunError, StateLimitContext, StateLimitError,
+    StateSizeError, StepLimitError, TraceLimitError, TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -18,9 +18,9 @@ impl fmt::Display for AllocationContext {
             Self::RuntimeInput => f.write_str("runtime input state"),
             Self::RuntimeRuleState => f.write_str("runtime rule state"),
             Self::RuntimeState => f.write_str("runtime rewrite state"),
+            Self::RuntimeStateView => f.write_str("runtime state view"),
+            Self::FinalOutput => f.write_str("final output"),
             Self::ReturnOutput => f.write_str("return output"),
-            Self::FinalOutput => f.write_str("final stable output"),
-            Self::StepLimitState => f.write_str("step-limit state"),
             Self::TraceSnapshot => f.write_str("trace snapshot"),
         }
     }
@@ -73,12 +73,36 @@ impl fmt::Display for ParseErrorKind {
                 "reserved syntax byte '{}' in {payload_kind}",
                 printable_ascii(*byte),
             ),
-            Self::UnsupportedLeftModifierOrder => {
-                f.write_str("duplicated or unsupported left-side modifier order")
+            Self::UnsupportedLeftModifierOrder { modifier } => write!(
+                f,
+                "duplicated or unsupported left-side modifier order at {modifier}"
+            ),
+            Self::UnsupportedRightActionSyntax { action } => {
+                write!(
+                    f,
+                    "nested or unsupported right-side action syntax at {action}"
+                )
             }
-            Self::UnsupportedRightActionSyntax => {
-                f.write_str("nested or unsupported right-side action syntax")
-            }
+        }
+    }
+}
+
+impl fmt::Display for LeftModifierKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Once => f.write_str("(once)"),
+            Self::Start => f.write_str("(start)"),
+            Self::End => f.write_str("(end)"),
+        }
+    }
+}
+
+impl fmt::Display for RightActionKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Start => f.write_str("(start)"),
+            Self::End => f.write_str("(end)"),
+            Self::Return => f.write_str("(return)"),
         }
     }
 }
@@ -223,6 +247,13 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "allocation failure while building trace snapshot; requested capacity: 123",
+        );
+
+        let error = AllocationError::new(AllocationContext::RuntimeStateView, 456);
+
+        assert_eq!(
+            error.to_string(),
+            "allocation failure while building runtime state view; requested capacity: 456",
         );
     }
 

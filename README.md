@@ -49,7 +49,9 @@ step-limit states, and trace snapshots. It requires an allocator, but not
 Allocation is explicit and fallible. Parser/runtime paths reserve explicitly and
 report `AllocationError` instead of relying on accidental `Vec` growth. Runtime
 expansion is also budgeted through `RunLimits`; the runtime checks size limits
-before allocating oversized states, return outputs, or trace snapshots.
+before allocating oversized states, return outputs, or trace snapshots. Owned
+public values that contain byte buffers intentionally do not implement `Clone`;
+copying bytes is an explicit materialization step, not a hidden infallible API.
 
 ```sh
 cargo check -p rsaeb --lib
@@ -169,15 +171,23 @@ raw line bytes
   -> code bytes        # comment removed, executable code ASCII validated
   -> compact code      # whitespace removed, source columns retained
   -> compact syntax    # tokens such as =, (once), (start), (end), (return)
-  -> program payload   # bytes that program code may construct
+  -> ProgramByte       # bytes that program code may construct and match
 
 runtime input bytes
-  -> runtime state     # ASCII data, including bytes code cannot construct
+  -> AsciiByte         # runtime input domain validation
+  -> RuntimeByte       # private Editable(ProgramByte) or Opaque(AsciiByte)
 ```
 
-Program payloads are converted into runtime bytes only when a rewrite inserts
-bytes into the runtime state. Runtime state is converted back to public
-`Vec<u8>` only when returning results, traces, or errors.
+Program payloads are stored as `ProgramByte`, not raw `u8`. Runtime state is
+stored as `RuntimeByte`: payload-compatible input and rule output become
+editable program bytes, while whitespace, control bytes, and reserved syntax
+bytes from input become opaque ASCII bytes. Ordinary rules match only editable bytes.
+Opaque input bytes are preserved by surrounding rewrites but cannot be directly
+matched, created, or deleted by program payloads. Runtime state is converted
+back to public `Vec<u8>` only when returning results, traces, or errors. During
+execution, the active state and the rewrite scratch buffer are distinct typed
+buffers; the runtime swaps them only after a successful continuation step, so a
+partially built rewrite cannot become the committed state.
 
 Examples:
 
@@ -564,12 +574,6 @@ fn inspect(error: RunError) {
             AllocationContext::RuntimeState => {
                 eprintln!("failed to allocate next rewrite state");
             }
-            AllocationContext::FinalOutput => {
-                eprintln!("failed to materialize final output bytes");
-            }
-            AllocationContext::StepLimitState => {
-                eprintln!("failed to materialize step-limit state bytes");
-            }
             AllocationContext::TraceSnapshot => {
                 eprintln!("failed to allocate trace snapshot");
             }
@@ -581,7 +585,7 @@ fn inspect(error: RunError) {
 
 State length arithmetic overflow is separate from allocation failure and is
 reported as `RunError::StateSize`. Configured byte budgets are reported as
-`RunError::StateLimit`, `RunError::ReturnLimit`, or `RunError::TraceLimit`.
+`RunError::StateLimit`, `RunError::ReturnLimit`, or `RunError::TraceLimit`. Step-limit errors try to materialize the last runtime state as public bytes; because runtime state is internally typed, that diagnostic materialization may allocate and can fail with `RunError::Allocation`.
 Filesystem failures are not part of the library error model. External I/O must
 be handled before bytes enter `Program::parse_bytes`, `Program::parse_str`,
 `run_bytes`, or `run_str`.
@@ -633,14 +637,14 @@ Rule data:
 - `RulePosition`
 - `RuleRepeat`
 - `RuleAnchor`
-- `PayloadView<'program>`
+- `PayloadView<'program>` (`bytes() -> impl Iterator<Item = u8>`, `to_vec()`)
 - `RuleActionView<'program>`
 - `RuleView<'program>`
 - `RuleView::canonical_source()`
 
 Tracing:
 
-- `RuntimeStateView<'run>`
+- `RuntimeStateView<'run>` (`bytes() -> impl Iterator<Item = u8>`, `to_vec()`)
 - `BorrowedTraceEvent<'program, 'run>`
 - `BorrowedTraceEffect<'program, 'run>`
 - `TraceSnapshotEvent<'program>`
@@ -653,6 +657,8 @@ Errors:
 - `ParseError`
 - `ParseErrorKind`
 - `PayloadKind`
+- `LeftModifierKind`
+- `RightActionKind`
 - `RunError`
 - `InputError`
 - `AllocationError`
