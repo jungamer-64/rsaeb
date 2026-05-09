@@ -1,6 +1,5 @@
 use alloc::vec::Vec;
 use core::error::Error;
-use core::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AllocationContext {
@@ -8,8 +7,8 @@ pub enum AllocationContext {
     ProgramRules,
     /// Building a compact code-line byte table.
     CompactCodeLine,
-    /// Storing compact source bytes for rule metadata.
-    CompactSource,
+    /// Building canonical source bytes from structured rule data.
+    CanonicalSource,
     /// Storing a parsed program payload.
     Payload,
     /// Storing validated runtime input.
@@ -26,24 +25,6 @@ pub enum AllocationContext {
     StepLimitState,
     /// Materializing a trace snapshot.
     TraceSnapshot,
-}
-
-impl fmt::Display for AllocationContext {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ProgramRules => write!(f, "program rule table"),
-            Self::CompactCodeLine => write!(f, "compact code line"),
-            Self::CompactSource => write!(f, "compact source metadata"),
-            Self::Payload => write!(f, "program payload"),
-            Self::RuntimeInput => write!(f, "runtime input state"),
-            Self::RuntimeRuleState => write!(f, "runtime rule state"),
-            Self::RuntimeState => write!(f, "runtime rewrite state"),
-            Self::ReturnOutput => write!(f, "return output"),
-            Self::FinalOutput => write!(f, "final stable output"),
-            Self::StepLimitState => write!(f, "step-limit state"),
-            Self::TraceSnapshot => write!(f, "trace snapshot"),
-        }
-    }
 }
 
 /// Fallible allocation failure reported instead of silently relying on
@@ -75,16 +56,6 @@ impl AllocationError {
     }
 }
 
-impl fmt::Display for AllocationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "allocation failure while building {}; requested capacity: {}",
-            self.context, self.requested_capacity,
-        )
-    }
-}
-
 impl Error for AllocationError {}
 
 pub(crate) fn try_reserve_total_exact<T>(
@@ -107,10 +78,13 @@ pub(crate) fn try_push<T>(
     context: AllocationContext,
 ) -> Result<(), AllocationError> {
     if vec.len() == vec.capacity() {
-        let requested_capacity = vec
+        let minimum_capacity = vec
             .len()
             .checked_add(1)
             .ok_or_else(|| AllocationError::new(context, usize::MAX))?;
+        let doubled_capacity = vec.capacity().saturating_mul(2);
+        let requested_capacity =
+            core::cmp::max(minimum_capacity, core::cmp::max(4, doubled_capacity));
         try_reserve_total_exact(vec, requested_capacity, context)?;
     }
 
@@ -118,19 +92,10 @@ pub(crate) fn try_push<T>(
     Ok(())
 }
 
-pub(crate) fn copy_bytes(
-    source: &[u8],
-    context: AllocationContext,
-) -> Result<Vec<u8>, AllocationError> {
-    let mut output = Vec::new();
-    try_reserve_total_exact(&mut output, source.len(), context)?;
-    output.extend_from_slice(source);
-    Ok(output)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn allocation_contexts_are_publicly_inspectable() {
         let error = AllocationError::new(AllocationContext::TraceSnapshot, 123);

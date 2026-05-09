@@ -31,13 +31,22 @@ mod parser;
 mod program;
 mod rule;
 mod runtime;
+mod syntax;
 mod trace;
 
 pub use allocation::{AllocationContext, AllocationError};
 pub use error::{
-    AebError, InputError, ParseError, ParseErrorKind, PayloadKind, RunError, StateSizeError,
-    StepLimitError, TracedRunError,
+    AebError, InputError, ParseError, ParseErrorKind, PayloadKind, ReturnLimitError, RunError,
+    StateLimitContext, StateLimitError, StateSizeError, StepLimitError, TraceLimitError,
+    TracedRunError,
 };
-pub use program::{DEFAULT_MAX_STEPS, Program, RunOptions, RunResult, RunTermination, run};
+pub use program::{
+    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
+    DEFAULT_MAX_TRACE_SNAPSHOT_LEN, Program, RunLimits, RunResult, RunTermination, run_bytes,
+    run_str,
+};
 pub use rule::{PayloadView, RuleActionView, RuleAnchor, RulePosition, RuleRepeat, RuleView};
-pub use trace::{TraceEffect, TraceEvent};
+pub use trace::{
+    BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView, TraceSnapshotEffect,
+    TraceSnapshotEvent,
+};

@@ -3,8 +3,8 @@
 use std::string::{FromUtf8Error, String};
 
 use crate::{
-    AebError, InputError, ParseError, Program, RunError, RunOptions, RunResult, StepLimitError,
-    TraceEvent,
+    AebError, AllocationError, InputError, ParseError, Program, RunError, RunLimits, RunResult,
+    StateLimitError, StepLimitError, TraceSnapshotEvent,
 };
 
 pub(crate) enum TestFailure {
@@ -13,6 +13,7 @@ pub(crate) enum TestFailure {
     Run(RunError),
     Aeb(AebError),
     Utf8(FromUtf8Error),
+    Allocation(AllocationError),
 }
 
 impl core::fmt::Debug for TestFailure {
@@ -23,6 +24,7 @@ impl core::fmt::Debug for TestFailure {
             Self::Run(error) => formatter.debug_tuple("Run").field(error).finish(),
             Self::Aeb(error) => formatter.debug_tuple("Aeb").field(error).finish(),
             Self::Utf8(error) => formatter.debug_tuple("Utf8").field(error).finish(),
+            Self::Allocation(error) => formatter.debug_tuple("Allocation").field(error).finish(),
         }
     }
 }
@@ -51,16 +53,26 @@ impl From<FromUtf8Error> for TestFailure {
     }
 }
 
+impl From<AllocationError> for TestFailure {
+    fn from(value: AllocationError) -> Self {
+        Self::Allocation(value)
+    }
+}
+
 pub(crate) type TestResult = Result<(), TestFailure>;
 
+pub(crate) fn test_limits() -> RunLimits {
+    RunLimits::new(10_000)
+}
+
 pub(crate) fn run_source(source: &str, input: &str) -> Result<String, TestFailure> {
-    let program = Program::parse(source)?;
-    let result = program.run(input.as_bytes(), RunOptions::new(10_000))?;
+    let program = Program::parse_str(source)?;
+    let result = program.run(input.as_bytes(), test_limits())?;
     Ok(String::from_utf8(result.into_output())?)
 }
 
 pub(crate) fn expect_parse_error(source: &str) -> Result<ParseError, TestFailure> {
-    match Program::parse(source) {
+    match Program::parse_str(source) {
         Ok(_) => Err(TestFailure::Message("expected parse error")),
         Err(error) => Ok(error),
     }
@@ -76,9 +88,9 @@ pub(crate) fn expect_run_error(
 }
 
 pub(crate) fn expect_event<'events, 'program>(
-    events: &'events [TraceEvent<'program>],
+    events: &'events [TraceSnapshotEvent<'program>],
     index: usize,
-) -> Result<&'events TraceEvent<'program>, TestFailure> {
+) -> Result<&'events TraceSnapshotEvent<'program>, TestFailure> {
     events
         .get(index)
         .ok_or(TestFailure::Message("expected trace event"))
@@ -87,17 +99,35 @@ pub(crate) fn expect_event<'events, 'program>(
 pub(crate) fn expect_step_limit(error: RunError) -> Result<StepLimitError, TestFailure> {
     match error {
         RunError::StepLimit(error) => Ok(error),
-        RunError::Input(_) | RunError::Allocation(_) | RunError::StateSize(_) => {
-            Err(TestFailure::Message("expected step limit error"))
-        }
+        RunError::Input(_)
+        | RunError::Allocation(_)
+        | RunError::StateSize(_)
+        | RunError::StateLimit(_)
+        | RunError::ReturnLimit(_)
+        | RunError::TraceLimit(_) => Err(TestFailure::Message("expected step limit error")),
+    }
+}
+
+pub(crate) fn expect_state_limit(error: RunError) -> Result<StateLimitError, TestFailure> {
+    match error {
+        RunError::StateLimit(error) => Ok(error),
+        RunError::Input(_)
+        | RunError::Allocation(_)
+        | RunError::StateSize(_)
+        | RunError::ReturnLimit(_)
+        | RunError::TraceLimit(_)
+        | RunError::StepLimit(_) => Err(TestFailure::Message("expected state limit error")),
     }
 }
 
 pub(crate) fn expect_input_error(error: RunError) -> Result<InputError, TestFailure> {
     match error {
         RunError::Input(error) => Ok(error),
-        RunError::Allocation(_) | RunError::StateSize(_) | RunError::StepLimit(_) => {
-            Err(TestFailure::Message("expected input error"))
-        }
+        RunError::Allocation(_)
+        | RunError::StateSize(_)
+        | RunError::StateLimit(_)
+        | RunError::ReturnLimit(_)
+        | RunError::TraceLimit(_)
+        | RunError::StepLimit(_) => Err(TestFailure::Message("expected input error")),
     }
 }

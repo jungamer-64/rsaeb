@@ -1,52 +1,148 @@
 use alloc::vec::Vec;
 use core::convert::Infallible;
 
+use crate::allocation::{AllocationContext, AllocationError, try_push};
+use crate::bytes::Payload;
 use crate::error::{AebError, ParseError, RunError, TracedRunError};
 use crate::parser::parse_program_impl;
-use crate::rule::{Rule, RulePosition, RuleView};
+use crate::rule::{
+    Action, OnceRulePosition, Rule, RuleAnchor, RuleMode, RulePosition, RuleRepeat, RuleView,
+};
 use crate::runtime::Runtime;
-use crate::trace::TraceEvent;
+use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
 pub const DEFAULT_MAX_STEPS: usize = 1_000_000;
-pub fn run(
-    source: impl AsRef<[u8]>,
-    input: impl AsRef<[u8]>,
-    options: RunOptions,
-) -> Result<RunResult, AebError> {
-    let program = Program::parse(source).map_err(AebError::Parse)?;
-    program.run(input, options).map_err(AebError::Run)
+pub const DEFAULT_MAX_STATE_LEN: usize = 16 * 1024 * 1024;
+pub const DEFAULT_MAX_RETURN_LEN: usize = 16 * 1024 * 1024;
+pub const DEFAULT_MAX_TRACE_SNAPSHOT_LEN: usize = 16 * 1024 * 1024;
+
+/// Parses source bytes and runs them once with the given input bytes.
+///
+/// # Errors
+///
+/// Returns `AebError::Parse` when `source` is not valid A=B program syntax.
+/// Returns `AebError::Run` when `input` is invalid, an allocation fails, or a
+/// configured runtime limit would be exceeded.
+pub fn run_bytes(source: &[u8], input: &[u8], limits: RunLimits) -> Result<RunResult, AebError> {
+    let program = Program::parse_bytes(source)?;
+    program.run(input, limits).map_err(AebError::Run)
 }
 
-/// Execution options for one runtime invocation.
+/// Parses a UTF-8 source string and runs it once with the given input bytes.
+///
+/// # Errors
+///
+/// Returns `AebError::Parse` when `source` is not valid A=B program syntax.
+/// Returns `AebError::Run` when `input` is invalid, an allocation fails, or a
+/// configured runtime limit would be exceeded.
+pub fn run_str(source: &str, input: &[u8], limits: RunLimits) -> Result<RunResult, AebError> {
+    run_bytes(source.as_bytes(), input, limits)
+}
+
+/// Resource limits for one runtime invocation.
+///
+/// The interpreter checks these limits before allocating oversized runtime
+/// states, return outputs, or trace snapshots. Step limits alone are not
+/// enough for a rewriting system because a tiny number of steps can still
+/// expand into a very large state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RunOptions {
-    max_steps: usize,
+pub struct RunLimits {
+    steps: usize,
+    state_len: usize,
+    return_len: usize,
+    trace_snapshot_len: usize,
 }
 
-impl RunOptions {
-    /// Creates options with an explicit step limit.
-    ///
-    /// A run that becomes stable exactly at this count succeeds. The limit is
-    /// an error only when another matching rule would need to be applied after
-    /// this many steps.
+impl RunLimits {
+    /// Creates limits with an explicit step limit and default byte budgets.
     #[must_use]
     pub const fn new(max_steps: usize) -> Self {
-        Self { max_steps }
+        Self {
+            steps: max_steps,
+            state_len: DEFAULT_MAX_STATE_LEN,
+            return_len: DEFAULT_MAX_RETURN_LEN,
+            trace_snapshot_len: DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
+        }
+    }
+
+    /// Creates limits with every budget specified explicitly.
+    #[must_use]
+    pub const fn bounded(
+        max_steps: usize,
+        max_state_len: usize,
+        max_return_len: usize,
+        max_trace_snapshot_len: usize,
+    ) -> Self {
+        Self {
+            steps: max_steps,
+            state_len: max_state_len,
+            return_len: max_return_len,
+            trace_snapshot_len: max_trace_snapshot_len,
+        }
     }
 
     /// Maximum number of rewrite steps that may be applied.
     #[must_use]
-    pub const fn max_steps(&self) -> usize {
-        self.max_steps
+    pub const fn max_steps(self) -> usize {
+        self.steps
+    }
+
+    /// Maximum runtime state length, including initial input and rewrite results.
+    #[must_use]
+    pub const fn max_state_len(self) -> usize {
+        self.state_len
+    }
+
+    /// Maximum byte length accepted for `(return)` output.
+    #[must_use]
+    pub const fn max_return_len(self) -> usize {
+        self.return_len
+    }
+
+    /// Maximum state/output byte length materialized for one trace snapshot event.
+    #[must_use]
+    pub const fn max_trace_snapshot_len(self) -> usize {
+        self.trace_snapshot_len
+    }
+
+    /// Returns limits with a different step budget.
+    #[must_use]
+    pub const fn with_max_steps(mut self, max_steps: usize) -> Self {
+        self.steps = max_steps;
+        self
+    }
+
+    /// Returns limits with a different runtime-state budget.
+    #[must_use]
+    pub const fn with_max_state_len(mut self, max_state_len: usize) -> Self {
+        self.state_len = max_state_len;
+        self
+    }
+
+    /// Returns limits with a different return-output budget.
+    #[must_use]
+    pub const fn with_max_return_len(mut self, max_return_len: usize) -> Self {
+        self.return_len = max_return_len;
+        self
+    }
+
+    /// Returns limits with a different trace snapshot byte budget.
+    #[must_use]
+    pub const fn with_max_trace_snapshot_len(mut self, max_trace_snapshot_len: usize) -> Self {
+        self.trace_snapshot_len = max_trace_snapshot_len;
+        self
     }
 }
 
-impl Default for RunOptions {
+impl Default for RunLimits {
     fn default() -> Self {
-        Self {
-            max_steps: DEFAULT_MAX_STEPS,
-        }
+        Self::new(DEFAULT_MAX_STEPS)
     }
+}
+
+enum TraceSnapshotError<E> {
+    Run(RunError),
+    Trace(E),
 }
 
 /// Parsed A=B rewrite program.
@@ -55,55 +151,161 @@ impl Default for RunOptions {
 /// the runtime invocation, not in this value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
-    pub(crate) rules: Vec<Rule>,
+    rule_set: RuleSet,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct RuleSet {
+    rules: Vec<Rule>,
+    once_rule_count: usize,
+}
+
+impl RuleSet {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn push_rule(
+        &mut self,
+        line_number: usize,
+        repeat: RuleRepeat,
+        anchor: RuleAnchor,
+        lhs: Payload,
+        action: Action,
+    ) -> Result<(), AllocationError> {
+        let (mode, next_once_rule_count) = if repeat.is_once() {
+            let next = self
+                .once_rule_count
+                .checked_add(1)
+                .ok_or_else(|| AllocationError::new(AllocationContext::ProgramRules, usize::MAX))?;
+            (
+                RuleMode::Once(OnceRulePosition::new(self.once_rule_count)),
+                next,
+            )
+        } else {
+            (RuleMode::Always, self.once_rule_count)
+        };
+
+        try_push(
+            &mut self.rules,
+            Rule {
+                line_number,
+                mode,
+                anchor,
+                lhs,
+                action,
+            },
+            AllocationContext::ProgramRules,
+        )?;
+
+        self.once_rule_count = next_once_rule_count;
+        Ok(())
+    }
+
+    pub(crate) fn rule_count(&self) -> usize {
+        self.rules.len()
+    }
+
+    pub(crate) fn once_rule_count(&self) -> usize {
+        self.once_rule_count
+    }
+
+    pub(crate) fn as_slice(&self) -> &[Rule] {
+        &self.rules
+    }
 }
 
 impl Program {
-    /// Parses program source bytes into a reusable program value.
-    pub fn parse(source: impl AsRef<[u8]>) -> Result<Self, ParseError> {
-        parse_program_impl(source.as_ref())
+    pub(crate) fn from_rule_set(rule_set: RuleSet) -> Self {
+        Self { rule_set }
     }
 
     /// Parses program source bytes into a reusable program value.
+    ///
+    /// This is the primary constructor because A=B source is a byte format:
+    /// comments may contain non-UTF-8 bytes even though executable code may not.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` when executable code is not ASCII printable syntax,
+    /// when a non-empty code line does not contain exactly one `=`, when
+    /// reserved syntax appears as payload data, or when allocation fails while
+    /// building the parsed program.
     pub fn parse_bytes(source: &[u8]) -> Result<Self, ParseError> {
         parse_program_impl(source)
     }
 
     /// Parses a UTF-8 source string into a reusable program value.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` for the same syntax and allocation failures as
+    /// `Program::parse_bytes`.
     pub fn parse_str(source: &str) -> Result<Self, ParseError> {
-        parse_program_impl(source.as_bytes())
+        Self::parse_bytes(source.as_bytes())
     }
 
     /// Returns the number of executable rules in the parsed program.
     #[must_use]
     pub fn rule_count(&self) -> usize {
-        self.rules.len()
+        self.rule_set.rule_count()
+    }
+
+    /// Returns the number of `(once)` rules that need runtime state.
+    #[must_use]
+    pub fn once_rule_count(&self) -> usize {
+        self.rule_set.once_rule_count()
     }
 
     /// Iterates over structured parsed-rule views in execution order.
     pub fn rules(&self) -> impl Iterator<Item = RuleView<'_>> + '_ {
-        self.rules
+        self.rule_set
+            .as_slice()
             .iter()
             .enumerate()
             .map(|(index, rule)| rule.view(RulePosition::new(index)))
     }
 
-    /// Runs this program with the given input bytes.
-    pub fn run(&self, input: impl AsRef<[u8]>, options: RunOptions) -> Result<RunResult, RunError> {
-        Runtime::new(self, input.as_ref())?.run(options.max_steps())
+    pub(crate) fn rule_slice(&self) -> &[Rule] {
+        self.rule_set.as_slice()
     }
 
-    /// Runs this program and emits infallible trace events.
-    pub fn run_with_trace<'program, F>(
+    pub(crate) fn runtime_once_rule_count(&self) -> usize {
+        self.rule_set.once_rule_count()
+    }
+
+    /// Runs this program with the given input bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` when `input` contains non-ASCII bytes, an allocation
+    /// fails, state-size arithmetic overflows, or a configured `RunLimits`
+    /// budget would be exceeded.
+    pub fn run(&self, input: &[u8], limits: RunLimits) -> Result<RunResult, RunError> {
+        Runtime::new(self, input, limits)?.run()
+    }
+
+    /// Runs this program and emits trace-snapshot, infallible events.
+    ///
+    /// This convenience API materializes `Vec<u8>` snapshots. Use
+    /// `run_with_borrowed_trace` when the trace sink only needs to inspect each
+    /// event during the callback.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` for ordinary runtime failures. Trace snapshot
+    /// materialization is also checked against `RunLimits` and may return
+    /// `RunError::TraceLimit` or `RunError::Allocation`.
+    pub fn run_with_trace_snapshots<'program, F>(
         &'program self,
-        input: impl AsRef<[u8]>,
-        options: RunOptions,
+        input: &[u8],
+        limits: RunLimits,
         mut trace: F,
     ) -> Result<RunResult, RunError>
     where
-        F: FnMut(TraceEvent<'program>),
+        F: FnMut(TraceSnapshotEvent<'program>),
     {
-        match self.try_run_with_trace(input, options, |event| {
+        match self.try_run_with_trace_snapshots(input, limits, |event| {
             trace(event);
             Ok::<(), Infallible>(())
         }) {
@@ -113,24 +315,86 @@ impl Program {
         }
     }
 
-    /// Runs this program and emits fallible trace events.
+    /// Runs this program and emits trace-snapshot, fallible events.
     ///
-    /// Trace snapshots are allocated only when tracing is enabled. A failure to
-    /// allocate such a snapshot is returned as [`RunError::Allocation`]. A
-    /// failure from the user callback is returned separately as
-    /// [`TracedRunError::Trace`].
-    pub fn try_run_with_trace<'program, F, E>(
+    /// # Errors
+    ///
+    /// Returns `TracedRunError::Run` for runtime failures, including trace
+    /// snapshot allocation or snapshot-size failures. Returns
+    /// `TracedRunError::Trace` when the user-provided trace callback returns an
+    /// error.
+    pub fn try_run_with_trace_snapshots<'program, F, E>(
         &'program self,
-        input: impl AsRef<[u8]>,
-        options: RunOptions,
+        input: &[u8],
+        limits: RunLimits,
+        mut trace: F,
+    ) -> Result<RunResult, TracedRunError<E>>
+    where
+        F: FnMut(TraceSnapshotEvent<'program>) -> Result<(), E>,
+    {
+        let result = self.try_run_with_borrowed_trace(input, limits, |event| {
+            let snapshot = event.to_snapshot(limits).map_err(TraceSnapshotError::Run)?;
+            trace(snapshot).map_err(TraceSnapshotError::Trace)
+        });
+
+        match result {
+            Ok(result) => Ok(result),
+            Err(
+                TracedRunError::Run(error) | TracedRunError::Trace(TraceSnapshotError::Run(error)),
+            ) => Err(TracedRunError::Run(error)),
+            Err(TracedRunError::Trace(TraceSnapshotError::Trace(error))) => {
+                Err(TracedRunError::Trace(error))
+            }
+        }
+    }
+
+    /// Runs this program and emits borrowed, infallible trace events.
+    ///
+    /// Borrowed trace events allocate nothing. They are valid only for the
+    /// callback invocation, so a sink that wants to retain bytes must copy them
+    /// explicitly.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` for the same runtime failures as `Program::run`.
+    pub fn run_with_borrowed_trace<'program, F>(
+        &'program self,
+        input: &[u8],
+        limits: RunLimits,
+        mut trace: F,
+    ) -> Result<RunResult, RunError>
+    where
+        F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>),
+    {
+        match self.try_run_with_borrowed_trace(input, limits, |event| {
+            trace(event);
+            Ok::<(), Infallible>(())
+        }) {
+            Ok(result) => Ok(result),
+            Err(TracedRunError::Run(error)) => Err(error),
+            Err(TracedRunError::Trace(error)) => match error {},
+        }
+    }
+
+    /// Runs this program and emits borrowed, fallible trace events.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TracedRunError::Run` for ordinary runtime failures. Returns
+    /// `TracedRunError::Trace` when the user-provided trace callback returns an
+    /// error.
+    pub fn try_run_with_borrowed_trace<'program, F, E>(
+        &'program self,
+        input: &[u8],
+        limits: RunLimits,
         trace: F,
     ) -> Result<RunResult, TracedRunError<E>>
     where
-        F: FnMut(TraceEvent<'program>) -> Result<(), E>,
+        F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
     {
-        Runtime::new(self, input.as_ref())
+        Runtime::new(self, input, limits)
             .map_err(TracedRunError::Run)?
-            .run_with_trace(options.max_steps(), trace)
+            .run_with_borrowed_trace(trace)
     }
 }
 
@@ -209,42 +473,60 @@ impl RunResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{TestFailure, TestResult};
-    use crate::{RuleActionView, RuleAnchor, RuleRepeat, RunTermination, run};
+    use crate::test_support::{
+        TestFailure, TestResult, expect_event, expect_run_error, expect_state_limit,
+    };
+    use crate::{
+        RuleActionView, RuleAnchor, RuleRepeat, StateLimitContext, TraceSnapshotEffect,
+        TraceSnapshotEvent, run_bytes, run_str,
+    };
     use std::vec::Vec;
+
+    fn expect_rule(program: &Program, index: usize) -> Result<RuleView<'_>, TestFailure> {
+        program
+            .rules()
+            .nth(index)
+            .ok_or(TestFailure::Message("expected parsed rule"))
+    }
+
     #[test]
     fn public_free_run_works() -> TestResult {
-        let result = run("a=b", b"a", RunOptions::default())?;
+        let result = run_str("a=b", b"a", RunLimits::default())?;
         assert_eq!(result.output(), b"b");
         assert_eq!(result.steps(), 1);
         assert!(!result.returned());
+
+        let result = run_bytes(b"a=b#\xff", b"a", RunLimits::default())?;
+        assert_eq!(result.output(), b"b");
         Ok(())
     }
 
     #[test]
     fn parsed_program_is_reusable_and_once_state_is_per_run() -> TestResult {
-        let program = Program::parse("(once)a=b\na=c")?;
+        let program = Program::parse_str("(once)a=b\na=c")?;
 
-        let first = program.run(b"aa", RunOptions::new(10_000))?;
-        let second = program.run(b"aa", RunOptions::new(10_000))?;
+        let first = program.run(b"aa", RunLimits::new(10_000))?;
+        let second = program.run(b"aa", RunLimits::new(10_000))?;
 
         assert_eq!(first.output(), b"bc");
         assert_eq!(second.output(), b"bc");
+        assert_eq!(program.once_rule_count(), 1);
         Ok(())
     }
 
     #[test]
-    fn rule_metadata_is_exposed_without_embedding_display_strings_in_trace_events() -> TestResult {
-        let program = Program::parse("a = b # comment\n(start)c=(end)d")?;
+    fn rule_view_generates_canonical_source_without_stored_source_blob() -> TestResult {
+        let program = Program::parse_str("a = b # comment\n(start)c=(end)d")?;
         let rules = program.rules().collect::<Vec<_>>();
 
         assert_eq!(rules.len(), 2);
-
         let first = rules
             .first()
+            .copied()
             .ok_or(TestFailure::Message("expected first rule"))?;
         let second = rules
             .get(1)
+            .copied()
             .ok_or(TestFailure::Message("expected second rule"))?;
 
         assert_eq!(first.position().zero_based(), 0);
@@ -256,7 +538,7 @@ mod tests {
             first.action(),
             RuleActionView::Replace(payload) if payload.eq_bytes(b"b")
         ));
-        assert_eq!(first.compact_source(), b"a=b");
+        assert_eq!(first.canonical_source()?, b"a=b");
 
         assert_eq!(second.position().zero_based(), 1);
         assert_eq!(second.line_number(), 2);
@@ -267,17 +549,141 @@ mod tests {
             second.action(),
             RuleActionView::MoveEnd(payload) if payload.eq_bytes(b"d")
         ));
-        assert_eq!(second.compact_source(), b"(start)c=(end)d");
+        assert_eq!(second.canonical_source()?, b"(start)c=(end)d");
         Ok(())
     }
 
     #[test]
-    fn empty_program_returns_input_unchanged() -> TestResult {
-        let result = Program::parse("")?.run(b"a=()#c", RunOptions::new(0))?;
+    fn canonical_source_reparses_to_the_same_executable_rule() -> TestResult {
+        let program = Program::parse_str("( once ) ( start ) a = ( end ) b # comment")?;
+        let canonical = expect_rule(&program, 0)?.canonical_source()?;
 
-        assert_eq!(result.output(), b"a=()#c");
-        assert_eq!(result.steps(), 0);
-        assert_eq!(result.termination(), RunTermination::Stable);
+        let reparsed = Program::parse_bytes(canonical.as_slice())?;
+        let reparsed_rule = expect_rule(&reparsed, 0)?;
+
+        assert_eq!(reparsed.rule_count(), 1);
+        assert_eq!(reparsed.once_rule_count(), 1);
+        assert_eq!(reparsed_rule.repeat(), RuleRepeat::Once);
+        assert_eq!(reparsed_rule.anchor(), RuleAnchor::Start);
+        assert!(reparsed_rule.lhs().eq_bytes(b"a"));
+        assert_eq!(reparsed_rule.canonical_source()?, b"(once)(start)a=(end)b");
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_source_roundtrips_all_supported_rule_shapes() -> TestResult {
+        const EMPTY: &[u8] = b"";
+        const ONCE: &[u8] = b"(once)";
+        const START: &[u8] = b"(start)";
+        const END: &[u8] = b"(end)";
+        const RETURN: &[u8] = b"(return)";
+        const A: &[u8] = b"a";
+        const B: &[u8] = b"b";
+
+        let repeats: &[&[u8]] = &[EMPTY, ONCE];
+        let anchors: &[&[u8]] = &[EMPTY, START, END];
+        let left_payloads: &[&[u8]] = &[EMPTY, A];
+        let actions: &[&[u8]] = &[EMPTY, START, END, RETURN];
+        let right_payloads: &[&[u8]] = &[EMPTY, B];
+
+        for &repeat in repeats {
+            for &anchor in anchors {
+                for &lhs in left_payloads {
+                    for &action in actions {
+                        for &rhs in right_payloads {
+                            let mut source = Vec::new();
+                            source.extend_from_slice(repeat);
+                            source.extend_from_slice(anchor);
+                            source.extend_from_slice(lhs);
+                            source.push(b'=');
+                            source.extend_from_slice(action);
+                            source.extend_from_slice(rhs);
+
+                            let program = Program::parse_bytes(&source)?;
+                            let rule = expect_rule(&program, 0)?;
+                            let canonical = rule.canonical_source()?;
+
+                            assert_eq!(program.rule_count(), 1);
+                            assert_eq!(canonical, source, "source: {source:?}");
+
+                            let reparsed = Program::parse_bytes(&canonical)?;
+                            let reparsed_rule = expect_rule(&reparsed, 0)?;
+                            assert_eq!(
+                                reparsed_rule.canonical_source()?,
+                                source,
+                                "source: {source:?}",
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn state_limit_rejects_oversized_input_before_runtime_allocation() -> TestResult {
+        let limits = RunLimits::bounded(10, 1, 10, 10);
+        let error = expect_run_error(Program::parse_str("a=b")?.run(b"aa", limits))?;
+        let error = expect_state_limit(error)?;
+
+        assert_eq!(error.context(), StateLimitContext::Input);
+        assert_eq!(error.limit(), 1);
+        assert_eq!(error.attempted_len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn state_limit_rejects_oversized_rewrite_before_allocating_next_state() -> TestResult {
+        let limits = RunLimits::bounded(10, 2, 10, 10);
+        let error = expect_run_error(Program::parse_str("=a")?.run(b"aa", limits))?;
+        let error = expect_state_limit(error)?;
+
+        assert_eq!(error.context(), StateLimitContext::Rewrite);
+        assert_eq!(error.limit(), 2);
+        assert_eq!(error.attempted_len(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn trace_snapshots_are_derived_from_borrowed_trace() -> TestResult {
+        let program = Program::parse_str("a=b\nb=(return)ok")?;
+        let mut events = Vec::new();
+        let result = program.run_with_trace_snapshots(b"a", RunLimits::new(10_000), |event| {
+            events.push(event);
+        })?;
+
+        assert_eq!(result.output(), b"ok");
+        assert!(result.returned());
+        assert_eq!(events.len(), 3);
+        assert!(matches!(
+            events.first(),
+            Some(TraceSnapshotEvent::Initial { .. })
+        ));
+        let initial = expect_event(&events, 0)?;
+        let first_step = expect_event(&events, 1)?;
+        let second_step = expect_event(&events, 2)?;
+
+        assert_eq!(initial.bytes(), b"a");
+        assert_eq!(first_step.bytes(), b"b");
+        assert_eq!(second_step.bytes(), b"ok");
+        assert!(!first_step.is_return_step());
+        assert!(second_step.is_return_step());
+
+        match first_step {
+            TraceSnapshotEvent::Step {
+                rule,
+                effect: TraceSnapshotEffect::Continue { state },
+                ..
+            } => {
+                assert_eq!(state.as_slice(), b"b");
+                assert_eq!(rule.canonical_source()?, b"a=b");
+            }
+            TraceSnapshotEvent::Initial { .. } | TraceSnapshotEvent::Step { .. } => {
+                return Err(TestFailure::Message("expected continue step"));
+            }
+        }
         Ok(())
     }
 }

@@ -2,7 +2,9 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::iter::{DoubleEndedIterator, ExactSizeIterator};
 
-use crate::bytes::Payload;
+use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
+use crate::bytes::{CodeByte, Payload};
+use crate::syntax::SyntaxToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RulePosition {
@@ -27,6 +29,21 @@ impl RulePosition {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OnceRulePosition {
+    zero_based: usize,
+}
+
+impl OnceRulePosition {
+    pub(crate) const fn new(zero_based: usize) -> Self {
+        Self { zero_based }
+    }
+
+    pub(crate) const fn zero_based(self) -> usize {
+        self.zero_based
+    }
+}
+
 /// Rule repeat policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleRepeat {
@@ -41,6 +58,28 @@ impl RuleRepeat {
     #[must_use]
     pub const fn is_once(self) -> bool {
         matches!(self, Self::Once)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuleMode {
+    Always,
+    Once(OnceRulePosition),
+}
+
+impl RuleMode {
+    pub(crate) const fn repeat(self) -> RuleRepeat {
+        match self {
+            Self::Always => RuleRepeat::Always,
+            Self::Once(_) => RuleRepeat::Once,
+        }
+    }
+
+    pub(crate) const fn once_position(self) -> Option<OnceRulePosition> {
+        match self {
+            Self::Always => None,
+            Self::Once(position) => Some(position),
+        }
     }
 }
 
@@ -62,11 +101,11 @@ pub enum RuleAnchor {
 /// inside this view because payload construction is owned by the parser.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PayloadView<'program> {
-    payload: &'program Payload,
+    pub(crate) payload: &'program Payload,
 }
 
 impl<'program> PayloadView<'program> {
-    pub(crate) const fn new(payload: &'program Payload) -> Self {
+    pub(crate) fn new(payload: &'program Payload) -> Self {
         Self { payload }
     }
 
@@ -83,18 +122,22 @@ impl<'program> PayloadView<'program> {
     }
 
     /// Iterates over payload bytes.
+    #[must_use]
     pub fn bytes(self) -> impl DoubleEndedIterator<Item = u8> + ExactSizeIterator + 'program {
-        self.payload
-            .bytes()
-            .iter()
-            .copied()
-            .map(|byte| byte.as_u8())
+        self.payload.bytes().iter().copied().map(CodeByte::as_u8)
     }
 
     /// Returns whether this payload has exactly the expected bytes.
     #[must_use]
     pub fn eq_bytes(self, expected: &[u8]) -> bool {
         self.bytes().eq(expected.iter().copied())
+    }
+
+    pub(crate) fn to_vec_with_context(
+        self,
+        context: AllocationContext,
+    ) -> Result<Vec<u8>, AllocationError> {
+        self.payload.to_vec_with_context(context)
     }
 }
 
@@ -138,22 +181,20 @@ impl<'program> RuleActionView<'program> {
 
 /// Read-only structured view of a parsed rule.
 ///
-/// This exposes the parsed rule shape directly. Callers do not need to parse
-/// `compact_source()` again to discover the repeat policy, anchor, left-side
-/// payload, or right-side action. A text blob is metadata, not the source of
-/// truth.
+/// The view borrows the parsed rule itself. Canonical source text is generated
+/// from the structured rule when requested; it is not stored as a second source
+/// of truth beside the parsed fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuleView<'program> {
     position: RulePosition,
-    line_number: usize,
-    repeat: RuleRepeat,
-    anchor: RuleAnchor,
-    lhs: PayloadView<'program>,
-    action: RuleActionView<'program>,
-    compact_source: &'program [u8],
+    rule: &'program Rule,
 }
 
 impl<'program> RuleView<'program> {
+    pub(crate) fn new(position: RulePosition, rule: &'program Rule) -> Self {
+        Self { position, rule }
+    }
+
     /// Program-local parsed-rule position.
     #[must_use]
     pub const fn position(self) -> RulePosition {
@@ -168,41 +209,46 @@ impl<'program> RuleView<'program> {
 
     /// One-based source line number.
     #[must_use]
-    pub const fn line_number(self) -> usize {
-        self.line_number
+    pub fn line_number(self) -> usize {
+        self.rule.line_number
     }
 
     /// Rule repeat policy.
     #[must_use]
-    pub const fn repeat(self) -> RuleRepeat {
-        self.repeat
+    pub fn repeat(self) -> RuleRepeat {
+        self.rule.mode.repeat()
     }
 
     /// Rule match anchor.
     #[must_use]
-    pub const fn anchor(self) -> RuleAnchor {
-        self.anchor
+    pub fn anchor(self) -> RuleAnchor {
+        self.rule.anchor
     }
 
     /// Left-side match payload.
     #[must_use]
-    pub const fn lhs(self) -> PayloadView<'program> {
-        self.lhs
+    pub fn lhs(self) -> PayloadView<'program> {
+        PayloadView::new(&self.rule.lhs)
     }
 
     /// Right-side action.
     #[must_use]
-    pub const fn action(self) -> RuleActionView<'program> {
-        self.action
+    pub fn action(self) -> RuleActionView<'program> {
+        self.rule.action.view()
     }
 
-    /// Whitespace-stripped executable code for this rule.
+    /// Generates canonical executable source for diagnostics/display.
     ///
-    /// This is useful for diagnostics and display. It is deliberately not the
-    /// only way to inspect a parsed rule.
-    #[must_use]
-    pub const fn compact_source(self) -> &'program [u8] {
-        self.compact_source
+    /// Whitespace and comments are not preserved by design. The canonical text
+    /// is derived from the typed rule fields every time, so there is no stored
+    /// textual metadata that can drift from the executable rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the canonical byte buffer cannot be
+    /// allocated or if its computed length overflows `usize`.
+    pub fn canonical_source(self) -> Result<Vec<u8>, AllocationError> {
+        self.rule.canonical_source()
     }
 }
 
@@ -227,7 +273,7 @@ pub(crate) enum Action {
 }
 
 impl Action {
-    const fn view(&self) -> RuleActionView<'_> {
+    fn view(&self) -> RuleActionView<'_> {
         match self {
             Self::Replace(payload) => RuleActionView::Replace(PayloadView::new(payload)),
             Self::MoveStart(payload) => RuleActionView::MoveStart(PayloadView::new(payload)),
@@ -235,28 +281,104 @@ impl Action {
             Self::Return(payload) => RuleActionView::Return(PayloadView::new(payload)),
         }
     }
+
+    fn canonical_parts(&self) -> (Option<SyntaxToken>, &Payload) {
+        match self {
+            Self::Replace(payload) => (None, payload),
+            Self::MoveStart(payload) => (Some(SyntaxToken::Start), payload),
+            Self::MoveEnd(payload) => (Some(SyntaxToken::End), payload),
+            Self::Return(payload) => (Some(SyntaxToken::Return), payload),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Rule {
     pub(crate) line_number: usize,
-    pub(crate) compact_source: Vec<u8>,
-    pub(crate) repeat: RuleRepeat,
+    pub(crate) mode: RuleMode,
     pub(crate) anchor: RuleAnchor,
     pub(crate) lhs: Payload,
     pub(crate) action: Action,
 }
 
 impl Rule {
-    pub(crate) fn view<'program>(&'program self, position: RulePosition) -> RuleView<'program> {
-        RuleView {
-            position,
-            line_number: self.line_number,
-            repeat: self.repeat,
-            anchor: self.anchor,
-            lhs: PayloadView::new(&self.lhs),
-            action: self.action.view(),
-            compact_source: &self.compact_source,
-        }
+    pub(crate) const fn once_position(&self) -> Option<OnceRulePosition> {
+        self.mode.once_position()
     }
+
+    pub(crate) fn view(&self, position: RulePosition) -> RuleView<'_> {
+        RuleView::new(position, self)
+    }
+
+    fn canonical_source_len(&self) -> Result<usize, AllocationError> {
+        let (action_token, payload) = self.action.canonical_parts();
+        let mut len = self.lhs.len();
+
+        if self.mode.repeat().is_once() {
+            len = len.checked_add(SyntaxToken::Once.len()).ok_or_else(|| {
+                AllocationError::new(AllocationContext::CanonicalSource, usize::MAX)
+            })?;
+        }
+
+        let anchor_len = match self.anchor {
+            RuleAnchor::Anywhere => 0,
+            RuleAnchor::Start => SyntaxToken::Start.len(),
+            RuleAnchor::End => SyntaxToken::End.len(),
+        };
+
+        len = len
+            .checked_add(anchor_len)
+            .and_then(|len| len.checked_add(1))
+            .and_then(|len| len.checked_add(action_token.map_or(0, SyntaxToken::len)))
+            .and_then(|len| len.checked_add(payload.len()))
+            .ok_or_else(|| AllocationError::new(AllocationContext::CanonicalSource, usize::MAX))?;
+
+        Ok(len)
+    }
+
+    fn canonical_source(&self) -> Result<Vec<u8>, AllocationError> {
+        let mut output = Vec::new();
+        try_reserve_total_exact(
+            &mut output,
+            self.canonical_source_len()?,
+            AllocationContext::CanonicalSource,
+        )?;
+
+        if self.mode.repeat().is_once() {
+            push_token(&mut output, SyntaxToken::Once)?;
+        }
+
+        match self.anchor {
+            RuleAnchor::Anywhere => {}
+            RuleAnchor::Start => push_token(&mut output, SyntaxToken::Start)?,
+            RuleAnchor::End => push_token(&mut output, SyntaxToken::End)?,
+        }
+
+        push_payload(&mut output, &self.lhs)?;
+        try_push(&mut output, b'=', AllocationContext::CanonicalSource)?;
+
+        let (action_token, payload) = self.action.canonical_parts();
+        if let Some(token) = action_token {
+            push_token(&mut output, token)?;
+        }
+        push_payload(&mut output, payload)?;
+
+        Ok(output)
+    }
+}
+
+fn push_token(output: &mut Vec<u8>, token: SyntaxToken) -> Result<(), AllocationError> {
+    for byte in token.bytes().iter().copied() {
+        try_push(output, byte, AllocationContext::CanonicalSource)?;
+    }
+
+    Ok(())
+}
+
+fn push_payload(output: &mut Vec<u8>, payload: &Payload) -> Result<(), AllocationError> {
+    for byte in payload.bytes().iter().copied() {
+        try_push(output, byte.as_u8(), AllocationContext::CanonicalSource)?;
+    }
+
+    Ok(())
 }

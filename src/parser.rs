@@ -3,13 +3,9 @@ use alloc::vec::Vec;
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::{CompactByte, Payload};
 use crate::error::{ParseError, ParseErrorKind, PayloadKind};
-use crate::program::Program;
-use crate::rule::{Action, Rule, RuleAnchor, RuleRepeat};
-
-const TOK_ONCE: &[u8] = b"(once)";
-const TOK_START: &[u8] = b"(start)";
-const TOK_END: &[u8] = b"(end)";
-const TOK_RETURN: &[u8] = b"(return)";
+use crate::program::{Program, RuleSet};
+use crate::rule::{Action, RuleAnchor, RuleRepeat};
+use crate::syntax::SyntaxToken;
 
 fn parse_allocation_error(line_number: usize, error: AllocationError) -> ParseError {
     ParseError::new(line_number, None, ParseErrorKind::Allocation(error))
@@ -22,10 +18,10 @@ struct CodeLine<'source> {
 
 impl<'source> CodeLine<'source> {
     fn parse(raw_line: &'source [u8], line_number: usize) -> Result<Self, ParseError> {
-        let code_bytes = match raw_line.iter().position(|&byte| byte == b'#') {
-            Some(comment_start) => &raw_line[..comment_start],
-            None => raw_line,
-        };
+        let code_bytes = raw_line
+            .split(|&byte| byte == b'#')
+            .next()
+            .unwrap_or(raw_line);
 
         if let Some((zero_based_column, byte)) = code_bytes
             .iter()
@@ -69,7 +65,12 @@ impl<'source> CodeLine<'source> {
                 ));
             }
 
-            bytes.push(CompactByte::new(byte, zero_based_column + 1));
+            try_push(
+                &mut bytes,
+                CompactByte::new(byte, zero_based_column + 1),
+                AllocationContext::CompactCodeLine,
+            )
+            .map_err(|error| parse_allocation_error(self.line_number, error))?;
         }
 
         Ok(CompactCodeLine {
@@ -88,21 +89,6 @@ struct CompactCodeLine {
 impl CompactCodeLine {
     fn is_empty(&self) -> bool {
         self.bytes.is_empty()
-    }
-
-    fn compact_source(&self) -> Result<Vec<u8>, AllocationError> {
-        let mut source = Vec::new();
-        try_reserve_total_exact(
-            &mut source,
-            self.bytes.len(),
-            AllocationContext::CompactSource,
-        )?;
-
-        for byte in self.bytes.iter().copied() {
-            source.push(byte.as_u8());
-        }
-
-        Ok(source)
     }
 
     fn equals_position(&self) -> Result<usize, ParseError> {
@@ -150,14 +136,7 @@ impl CompactCodeLine {
 }
 
 pub(crate) fn parse_program_impl(source: &[u8]) -> Result<Program, ParseError> {
-    let mut rules = Vec::new();
-    let rule_upper_bound = source.split(|&byte| byte == b'\n').count();
-    try_reserve_total_exact(
-        &mut rules,
-        rule_upper_bound,
-        AllocationContext::ProgramRules,
-    )
-    .map_err(|error| parse_allocation_error(1, error))?;
+    let mut rule_set = RuleSet::new();
 
     for (zero_based_line, raw_line) in source.split(|&byte| byte == b'\n').enumerate() {
         let line_number = zero_based_line + 1;
@@ -168,51 +147,40 @@ pub(crate) fn parse_program_impl(source: &[u8]) -> Result<Program, ParseError> {
         }
 
         let equals_position = compact_code.equals_position()?;
-        let compact_source = compact_code
-            .compact_source()
-            .map_err(|error| parse_allocation_error(line_number, error))?;
         let (lhs_code, rhs_code) = compact_code.split_at_equals(equals_position)?;
         let (repeat, anchor, lhs) = parse_lhs(lhs_code, line_number)?;
         let action = parse_rhs(rhs_code, line_number)?;
 
-        try_push(
-            &mut rules,
-            Rule {
-                line_number,
-                compact_source,
-                repeat,
-                anchor,
-                lhs,
-                action,
-            },
-            AllocationContext::ProgramRules,
-        )
-        .map_err(|error| parse_allocation_error(line_number, error))?;
+        rule_set
+            .push_rule(line_number, repeat, anchor, lhs, action)
+            .map_err(|error| parse_allocation_error(line_number, error))?;
     }
 
-    Ok(Program { rules })
+    Ok(Program::from_rule_set(rule_set))
 }
 
-fn strip_token<'code>(input: &'code [CompactByte], token: &[u8]) -> Option<&'code [CompactByte]> {
-    if input.len() < token.len() {
+fn strip_token(input: &[CompactByte], token: SyntaxToken) -> Option<&[CompactByte]> {
+    let token_bytes = token.bytes();
+
+    if input.len() < token_bytes.len() {
         return None;
     }
 
     let starts_with_token = input
         .iter()
-        .take(token.len())
+        .take(token_bytes.len())
         .copied()
         .map(CompactByte::as_u8)
-        .eq(token.iter().copied());
+        .eq(token_bytes.iter().copied());
 
     if starts_with_token {
-        input.get(token.len()..)
+        input.get(token_bytes.len()..)
     } else {
         None
     }
 }
 
-fn starts_with_token(input: &[CompactByte], token: &[u8]) -> bool {
+fn starts_with_token(input: &[CompactByte], token: SyntaxToken) -> bool {
     strip_token(input, token).is_some()
 }
 
@@ -222,24 +190,24 @@ fn parse_lhs(
 ) -> Result<(RuleRepeat, RuleAnchor, Payload), ParseError> {
     let mut repeat = RuleRepeat::Always;
 
-    if let Some(rest) = strip_token(input, TOK_ONCE) {
+    if let Some(rest) = strip_token(input, SyntaxToken::Once) {
         repeat = RuleRepeat::Once;
         input = rest;
     }
 
-    let anchor = if let Some(rest) = strip_token(input, TOK_START) {
+    let anchor = if let Some(rest) = strip_token(input, SyntaxToken::Start) {
         input = rest;
         RuleAnchor::Start
-    } else if let Some(rest) = strip_token(input, TOK_END) {
+    } else if let Some(rest) = strip_token(input, SyntaxToken::End) {
         input = rest;
         RuleAnchor::End
     } else {
         RuleAnchor::Anywhere
     };
 
-    if starts_with_token(input, TOK_ONCE)
-        || starts_with_token(input, TOK_START)
-        || starts_with_token(input, TOK_END)
+    if starts_with_token(input, SyntaxToken::Once)
+        || starts_with_token(input, SyntaxToken::Start)
+        || starts_with_token(input, SyntaxToken::End)
     {
         return Err(ParseError::new(
             line_number,
@@ -253,15 +221,15 @@ fn parse_lhs(
 }
 
 fn parse_rhs(input: &[CompactByte], line_number: usize) -> Result<Action, ParseError> {
-    if let Some(rest) = strip_token(input, TOK_START) {
+    if let Some(rest) = strip_token(input, SyntaxToken::Start) {
         reject_nested_rhs_action(rest, line_number)?;
         let payload = Payload::parse(rest, line_number, PayloadKind::RightSideMoveStartPayload)?;
         Ok(Action::MoveStart(payload))
-    } else if let Some(rest) = strip_token(input, TOK_END) {
+    } else if let Some(rest) = strip_token(input, SyntaxToken::End) {
         reject_nested_rhs_action(rest, line_number)?;
         let payload = Payload::parse(rest, line_number, PayloadKind::RightSideMoveEndPayload)?;
         Ok(Action::MoveEnd(payload))
-    } else if let Some(rest) = strip_token(input, TOK_RETURN) {
+    } else if let Some(rest) = strip_token(input, SyntaxToken::Return) {
         reject_nested_rhs_action(rest, line_number)?;
         let payload = Payload::parse(rest, line_number, PayloadKind::RightSideReturnPayload)?;
         Ok(Action::Return(payload))
@@ -272,9 +240,9 @@ fn parse_rhs(input: &[CompactByte], line_number: usize) -> Result<Action, ParseE
 }
 
 fn reject_nested_rhs_action(input: &[CompactByte], line_number: usize) -> Result<(), ParseError> {
-    if starts_with_token(input, TOK_START)
-        || starts_with_token(input, TOK_END)
-        || starts_with_token(input, TOK_RETURN)
+    if starts_with_token(input, SyntaxToken::Start)
+        || starts_with_token(input, SyntaxToken::End)
+        || starts_with_token(input, SyntaxToken::Return)
     {
         return Err(ParseError::new(
             line_number,
@@ -289,7 +257,8 @@ fn reject_nested_rhs_action(input: &[CompactByte], line_number: usize) -> Result
 #[cfg(test)]
 mod tests {
     use crate::test_support::{TestResult, expect_parse_error, run_source};
-    use crate::{ParseErrorKind, PayloadKind, Program, RunOptions};
+    use crate::{ParseErrorKind, PayloadKind, Program, RunLimits};
+
     #[test]
     fn code_spaces_are_ignored_in_rules() -> TestResult {
         assert_eq!(run_source("a b=bb", "abc")?, "bbc");
@@ -322,17 +291,17 @@ mod tests {
     fn comments_may_contain_non_utf8_bytes_because_the_core_parser_is_byte_oriented() -> TestResult
     {
         let source = b"a=b#\xff\xfe\n";
-        let program = Program::parse(source)?;
-        let result = program.run(b"a", RunOptions::new(10_000))?;
+        let program = Program::parse_bytes(source)?;
+        let result = program.run(b"a", RunLimits::new(10_000))?;
         assert_eq!(result.output(), b"b");
         Ok(())
     }
 
     #[test]
     fn code_body_rejects_non_ascii_outside_comments() -> TestResult {
-        assert!(Program::parse("a=あ").is_err());
-        assert!(Program::parse("あ=b# comment").is_err());
-        assert!(Program::parse("a=b#あ").is_ok());
+        assert!(Program::parse_str("a=あ").is_err());
+        assert!(Program::parse_str("あ=b# comment").is_err());
+        assert!(Program::parse_str("a=b#あ").is_ok());
 
         let error = expect_parse_error("a=あ")?;
         assert_eq!(error.line(), 1);
@@ -354,7 +323,7 @@ mod tests {
             ParseErrorKind::NonPrintableAsciiInCode { .. }
         ));
 
-        assert!(Program::parse("a=b#\0").is_ok());
+        assert!(Program::parse_str("a=b#\0").is_ok());
         Ok(())
     }
 
@@ -368,7 +337,7 @@ mod tests {
         assert_eq!(error.column(), Some(5));
         assert!(matches!(error.kind(), ParseErrorKind::MultipleEquals));
 
-        assert!(Program::parse("a=b#=c").is_ok());
+        assert!(Program::parse_str("a=b#=c").is_ok());
         Ok(())
     }
 
@@ -384,19 +353,19 @@ mod tests {
             "a(once)=b",
         ] {
             assert!(
-                Program::parse(source).is_err(),
+                Program::parse_str(source).is_err(),
                 "source should fail: {source}"
             );
         }
 
-        assert!(Program::parse("(once)(start)a=(end)b").is_ok());
-        assert!(Program::parse("a=(return)").is_ok());
+        assert!(Program::parse_str("(once)(start)a=(end)b").is_ok());
+        assert!(Program::parse_str("a=(return)").is_ok());
     }
 
     #[test]
     fn comment_before_non_ascii_code_hides_it() {
-        assert!(Program::parse(b"#\xff\xfe\n").is_ok());
-        assert!(Program::parse(b"a=b#\xff\xfe\n").is_ok());
+        assert!(Program::parse_bytes(b"#\xff\xfe\n").is_ok());
+        assert!(Program::parse_bytes(b"a=b#\xff\xfe\n").is_ok());
     }
 
     #[test]
@@ -460,11 +429,11 @@ mod tests {
 
     #[test]
     fn compacted_source_and_spaced_source_are_equivalent() -> TestResult {
-        let compact = Program::parse("(once)(start)a=(end)b")?;
-        let spaced = Program::parse("( once ) ( start ) a = ( end ) b # comment")?;
+        let compact = Program::parse_str("(once)(start)a=(end)b")?;
+        let spaced = Program::parse_str("( once ) ( start ) a = ( end ) b # comment")?;
 
-        let compact_result = compact.run(b"ac", RunOptions::new(10))?;
-        let spaced_result = spaced.run(b"ac", RunOptions::new(10))?;
+        let compact_result = compact.run(b"ac", RunLimits::new(10))?;
+        let spaced_result = spaced.run(b"ac", RunLimits::new(10))?;
 
         assert_eq!(compact_result.output(), spaced_result.output());
         Ok(())

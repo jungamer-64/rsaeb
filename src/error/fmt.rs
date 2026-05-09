@@ -1,0 +1,279 @@
+use core::fmt;
+
+use crate::allocation::{AllocationContext, AllocationError};
+
+use super::{
+    AebError, InputError, ParseError, ParseErrorKind, PayloadKind, ReturnLimitError, RunError,
+    StateLimitContext, StateLimitError, StateSizeError, StepLimitError, TraceLimitError,
+    TracedRunError,
+};
+
+impl fmt::Display for AllocationContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ProgramRules => f.write_str("program rule table"),
+            Self::CompactCodeLine => f.write_str("compact code line"),
+            Self::CanonicalSource => f.write_str("canonical source bytes"),
+            Self::Payload => f.write_str("program payload"),
+            Self::RuntimeInput => f.write_str("runtime input state"),
+            Self::RuntimeRuleState => f.write_str("runtime rule state"),
+            Self::RuntimeState => f.write_str("runtime rewrite state"),
+            Self::ReturnOutput => f.write_str("return output"),
+            Self::FinalOutput => f.write_str("final stable output"),
+            Self::StepLimitState => f.write_str("step-limit state"),
+            Self::TraceSnapshot => f.write_str("trace snapshot"),
+        }
+    }
+}
+
+impl fmt::Display for AllocationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "allocation failure while building {}; requested capacity: {}",
+            self.context(),
+            self.requested_capacity(),
+        )
+    }
+}
+
+impl fmt::Display for AebError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Parse(error) => error.fmt(f),
+            Self::Run(error) => error.fmt(f),
+        }
+    }
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "parse error at line {}", self.line())?;
+
+        if let Some(column) = self.column() {
+            write!(f, ", column {column}")?;
+        }
+
+        write!(f, ": {}", self.kind())
+    }
+}
+
+impl fmt::Display for ParseErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Allocation(error) => error.fmt(f),
+            Self::NonAsciiInCode { byte } => write!(f, "non-ASCII byte 0x{byte:02x} in code"),
+            Self::NonPrintableAsciiInCode { byte } => {
+                write!(f, "non-printable ASCII byte 0x{byte:02x} in code")
+            }
+            Self::MissingEquals => f.write_str("missing '='"),
+            Self::MultipleEquals => f.write_str("multiple '=' characters are not allowed"),
+            Self::ReservedSyntaxInPayload { byte, payload_kind } => write!(
+                f,
+                "reserved syntax byte '{}' in {payload_kind}",
+                printable_ascii(*byte),
+            ),
+            Self::UnsupportedLeftModifierOrder => {
+                f.write_str("duplicated or unsupported left-side modifier order")
+            }
+            Self::UnsupportedRightActionSyntax => {
+                f.write_str("nested or unsupported right-side action syntax")
+            }
+        }
+    }
+}
+
+impl fmt::Display for PayloadKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LeftSideData => f.write_str("left-side data"),
+            Self::RightSideData => f.write_str("right-side data"),
+            Self::RightSideMoveStartPayload => f.write_str("right-side move-to-start payload"),
+            Self::RightSideMoveEndPayload => f.write_str("right-side move-to-end payload"),
+            Self::RightSideReturnPayload => f.write_str("right-side return payload"),
+        }
+    }
+}
+
+impl fmt::Display for RunError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Input(error) => error.fmt(f),
+            Self::Allocation(error) => error.fmt(f),
+            Self::StateSize(error) => error.fmt(f),
+            Self::StateLimit(error) => error.fmt(f),
+            Self::ReturnLimit(error) => error.fmt(f),
+            Self::TraceLimit(error) => error.fmt(f),
+            Self::StepLimit(error) => error.fmt(f),
+        }
+    }
+}
+
+impl<E> fmt::Display for TracedRunError<E>
+where
+    E: fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Run(error) => error.fmt(f),
+            Self::Trace(error) => write!(f, "trace callback failed: {error}"),
+        }
+    }
+}
+
+impl fmt::Display for InputError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "input error: non-ASCII byte 0x{:02x} at column {}",
+            self.byte(),
+            self.column(),
+        )
+    }
+}
+
+impl fmt::Display for StateSizeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "state size failure: replacing {} bytes in a {} byte state with {} bytes",
+            self.lhs_len(),
+            self.state_len(),
+            self.rhs_len(),
+        )
+    }
+}
+
+impl fmt::Display for StateLimitContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Input => f.write_str("runtime input"),
+            Self::Rewrite => f.write_str("rewrite result"),
+        }
+    }
+}
+
+impl fmt::Display for StateLimitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "state limit exceeded by {}; attempted length: {}, limit: {}",
+            self.context(),
+            self.attempted_len(),
+            self.limit(),
+        )
+    }
+}
+
+impl fmt::Display for ReturnLimitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "return output limit exceeded; attempted length: {}, limit: {}",
+            self.attempted_len(),
+            self.limit(),
+        )
+    }
+}
+
+impl fmt::Display for TraceLimitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "trace snapshot limit exceeded; attempted length: {}, limit: {}",
+            self.attempted_len(),
+            self.limit(),
+        )
+    }
+}
+
+impl fmt::Display for StepLimitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "step limit exceeded after {} steps; state length: {} bytes",
+            self.max_steps(),
+            self.state().len(),
+        )
+    }
+}
+
+fn printable_ascii(byte: u8) -> char {
+    if byte.is_ascii() {
+        byte as char
+    } else {
+        '\u{fffd}'
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::string::ToString;
+
+    use crate::test_support::{
+        TestResult, expect_input_error, expect_parse_error, expect_run_error, expect_state_limit,
+        expect_step_limit,
+    };
+    use crate::{AllocationContext, AllocationError, Program, RunLimits};
+
+    #[test]
+    fn allocation_display_names_the_failed_context_and_capacity() {
+        let error = AllocationError::new(AllocationContext::TraceSnapshot, 123);
+
+        assert_eq!(
+            error.to_string(),
+            "allocation failure while building trace snapshot; requested capacity: 123",
+        );
+    }
+
+    #[test]
+    fn parse_error_display_includes_line_column_and_structured_reason() -> TestResult {
+        let error = expect_parse_error("a=b=c")?;
+
+        assert_eq!(
+            error.to_string(),
+            "parse error at line 1, column 4: multiple '=' characters are not allowed",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn input_error_display_keeps_byte_and_original_column() -> TestResult {
+        let program = Program::parse_str("# no executable rules")?;
+        let error = expect_run_error(program.run(&[0xff], RunLimits::default()))?;
+        let error = expect_input_error(error)?;
+
+        assert_eq!(
+            error.to_string(),
+            "input error: non-ASCII byte 0xff at column 1",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn state_limit_display_names_context_attempted_length_and_limit() -> TestResult {
+        let program = Program::parse_str("a=b")?;
+        let limits = RunLimits::bounded(10, 1, 10, 10);
+        let error = expect_run_error(program.run(b"aa", limits))?;
+        let error = expect_state_limit(error)?;
+
+        assert_eq!(
+            error.to_string(),
+            "state limit exceeded by runtime input; attempted length: 2, limit: 1",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn step_limit_display_reports_limit_and_preserved_state_len() -> TestResult {
+        let program = Program::parse_str("a=b")?;
+        let error = expect_run_error(program.run(b"a", RunLimits::new(0)))?;
+        let error = expect_step_limit(error)?;
+
+        assert_eq!(
+            error.to_string(),
+            "step limit exceeded after 0 steps; state length: 1 bytes",
+        );
+        Ok(())
+    }
+}

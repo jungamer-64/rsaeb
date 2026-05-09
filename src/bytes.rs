@@ -100,7 +100,7 @@ fn copy_code_bytes(
     try_reserve_total_exact(&mut output, source.len(), context)?;
 
     for byte in source.iter().copied() {
-        output.push(byte.as_u8());
+        try_push(&mut output, byte.as_u8(), context)?;
     }
 
     Ok(output)
@@ -114,7 +114,7 @@ pub(crate) fn copy_runtime_bytes(
     try_reserve_total_exact(&mut output, source.len(), context)?;
 
     for byte in source.iter().copied() {
-        output.push(byte.as_u8());
+        try_push(&mut output, byte.as_u8(), context)?;
     }
 
     Ok(output)
@@ -148,7 +148,14 @@ impl Payload {
         )?;
 
         for byte in input.iter().copied() {
-            bytes.push(CodeByte::parse_compact(byte, line_number, payload_kind)?);
+            try_push(
+                &mut bytes,
+                CodeByte::parse_compact(byte, line_number, payload_kind)?,
+                AllocationContext::Payload,
+            )
+            .map_err(|error| {
+                ParseError::new(line_number, None, ParseErrorKind::Allocation(error))
+            })?;
         }
 
         Ok(Self { bytes })
@@ -170,8 +177,11 @@ impl Payload {
         self.bytes.iter().copied().map(RuntimeByte::from_code)
     }
 
-    pub(crate) fn to_output(&self) -> Result<Vec<u8>, AllocationError> {
-        copy_code_bytes(&self.bytes, AllocationContext::ReturnOutput)
+    pub(crate) fn to_vec_with_context(
+        &self,
+        context: AllocationContext,
+    ) -> Result<Vec<u8>, AllocationError> {
+        copy_code_bytes(&self.bytes, context)
     }
 }
 
@@ -201,13 +211,25 @@ impl CompactByte {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ParseErrorKind, PayloadKind};
+    use crate::{ParseError, ParseErrorKind, PayloadKind};
+
+    fn parse_payload_error(
+        input: &[CompactByte],
+        line_number: usize,
+        payload_kind: PayloadKind,
+    ) -> Result<ParseError, &'static str> {
+        match Payload::parse(input, line_number, payload_kind) {
+            Ok(_) => Err("invalid payload bytes were accepted"),
+            Err(error) => Ok(error),
+        }
+    }
+
     #[test]
-    fn code_byte_rejects_every_reserved_syntax_byte_even_if_payload_parser_is_called_directly() {
+    fn code_byte_rejects_every_reserved_syntax_byte_even_if_payload_parser_is_called_directly()
+    -> Result<(), &'static str> {
         for reserved in [b'=', b'#', b'(', b')'] {
             let compact = [CompactByte::new(reserved, 1)];
-            let error = Payload::parse(&compact, 1, PayloadKind::RightSideData)
-                .expect_err("reserved syntax byte should not become CodeByte");
+            let error = parse_payload_error(&compact, 1, PayloadKind::RightSideData)?;
 
             assert_eq!(error.column(), Some(1));
             assert!(matches!(
@@ -218,26 +240,27 @@ mod tests {
                 }
             ));
         }
+        Ok(())
     }
 
     #[test]
-    fn code_byte_revalidates_compact_bytes_instead_of_trusting_the_previous_phase() {
+    fn code_byte_revalidates_compact_bytes_instead_of_trusting_the_previous_phase()
+    -> Result<(), &'static str> {
         let non_ascii = [CompactByte::new(0xff, 1)];
         let non_graphic = [CompactByte::new(b' ', 2)];
 
-        let error = Payload::parse(&non_ascii, 1, PayloadKind::RightSideData)
-            .expect_err("non-ASCII byte should not become CodeByte");
+        let error = parse_payload_error(&non_ascii, 1, PayloadKind::RightSideData)?;
         assert!(matches!(
             error.kind(),
             ParseErrorKind::NonAsciiInCode { .. }
         ));
 
-        let error = Payload::parse(&non_graphic, 1, PayloadKind::RightSideData)
-            .expect_err("non-graphic byte should not become CodeByte");
+        let error = parse_payload_error(&non_graphic, 1, PayloadKind::RightSideData)?;
         assert_eq!(error.column(), Some(2));
         assert!(matches!(
             error.kind(),
             ParseErrorKind::NonPrintableAsciiInCode { .. }
         ));
+        Ok(())
     }
 }
