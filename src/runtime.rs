@@ -717,8 +717,7 @@ impl<'program> Execution<'program> {
                 }
                 ExecutionTerminal::Return { step, output, .. } => {
                     return Ok(RunResult::from_return(
-                        self.materialize_return_output(output)
-                            .map_err(TracedRunError::Run)?,
+                        Self::materialize_return_output(output).map_err(TracedRunError::Run)?,
                         step,
                     ));
                 }
@@ -753,8 +752,7 @@ impl<'program> Execution<'program> {
                         BorrowedTraceEffect::Return { output },
                     )?;
                     return Ok(RunResult::from_return(
-                        self.materialize_return_output(output)
-                            .map_err(TracedRunError::Run)?,
+                        Self::materialize_return_output(output).map_err(TracedRunError::Run)?,
                         applied.step,
                     ));
                 }
@@ -835,10 +833,7 @@ impl<'program> Execution<'program> {
         }
     }
 
-    fn materialize_return_output(
-        &self,
-        output: PayloadView<'program>,
-    ) -> Result<ReturnOutput, RunError> {
+    fn materialize_return_output(output: PayloadView<'program>) -> Result<ReturnOutput, RunError> {
         Ok(ReturnOutput::from_vec(
             output.to_vec_with_context(AllocationContext::ReturnOutput)?,
         ))

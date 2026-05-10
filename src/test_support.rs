@@ -105,13 +105,16 @@ where
     T: PartialEq<U> + core::fmt::Debug,
     U: core::fmt::Debug,
 {
-    if actual == expected {
+    let result = if actual == expected {
         Ok(())
     } else {
         Err(TestFailure::message(format!(
             "values differed\nactual:   {actual:?}\nexpected: {expected:?}",
         )))
-    }
+    };
+
+    core::mem::drop(actual);
+    result
 }
 
 pub(crate) fn test_limits() -> RunLimits {
