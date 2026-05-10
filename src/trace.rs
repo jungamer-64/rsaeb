@@ -75,8 +75,6 @@ pub enum TraceSnapshotEffect {
     Return { output: ReturnOutput },
 }
 
-impl TraceSnapshotEffect {}
-
 /// Borrowed trace effect emitted by borrowed tracing APIs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BorrowedTraceEffect<'program, 'run> {
@@ -144,8 +142,6 @@ pub enum TraceSnapshotEvent<'program> {
         effect: TraceSnapshotEffect,
     },
 }
-
-impl TraceSnapshotEvent<'_> {}
 
 /// Trace event emitted by borrowed tracing APIs.
 ///
@@ -236,21 +232,20 @@ mod tests {
         let mut seen = Vec::new();
         let limits = RunLimits::new(StepLimit::new(10_000));
 
-        let result =
-            program.run_with_borrowed_trace(runtime_input(b"a", limits)?, limits, |event| {
-                let bytes = match event {
-                    BorrowedTraceEvent::Initial { state }
-                    | BorrowedTraceEvent::Step {
-                        effect: BorrowedTraceEffect::Continue { state },
-                        ..
-                    } => state.bytes().collect::<Vec<_>>(),
-                    BorrowedTraceEvent::Step {
-                        effect: BorrowedTraceEffect::Return { output },
-                        ..
-                    } => output.bytes().collect::<Vec<_>>(),
-                };
-                seen.push((event.byte_count().get(), bytes));
-            })?;
+        let result = program.run_with_borrowed_trace(runtime_input(b"a")?, limits, |event| {
+            let bytes = match event {
+                BorrowedTraceEvent::Initial { state }
+                | BorrowedTraceEvent::Step {
+                    effect: BorrowedTraceEffect::Continue { state },
+                    ..
+                } => state.bytes().collect::<Vec<_>>(),
+                BorrowedTraceEvent::Step {
+                    effect: BorrowedTraceEffect::Return { output },
+                    ..
+                } => output.bytes().collect::<Vec<_>>(),
+            };
+            seen.push((event.byte_count().get(), bytes));
+        })?;
 
         expect_return_output(&result, b"ok")?;
         ensure_eq(
@@ -265,10 +260,9 @@ mod tests {
         let program = Program::parse_str("a=b\nb=(return)ok")?;
         let mut events = Vec::new();
         let limits = RunLimits::new(StepLimit::new(10_000));
-        let result =
-            program.run_with_trace_snapshots(runtime_input(b"a", limits)?, limits, |event| {
-                events.push(event);
-            })?;
+        let result = program.run_with_trace_snapshots(runtime_input(b"a")?, limits, |event| {
+            events.push(event);
+        })?;
 
         expect_return_output(&result, b"ok")?;
         ensure_eq(events.len(), 3)?;
@@ -337,10 +331,9 @@ mod tests {
     fn fallible_trace_callback_can_abort_execution() -> TestResult {
         let program = Program::parse_str("a=b\nb=c")?;
         let limits = RunLimits::new(StepLimit::new(10_000));
-        let result =
-            program.try_run_with_trace_snapshots(runtime_input(b"a", limits)?, limits, |_event| {
-                Err::<(), _>("trace sink full")
-            });
+        let result = program.try_run_with_trace_snapshots(runtime_input(b"a")?, limits, |_event| {
+            Err::<(), _>("trace sink full")
+        });
 
         ensure_eq(result, Err(TracedRunError::Trace("trace sink full")))?;
         Ok(())
@@ -352,10 +345,9 @@ mod tests {
         let mut events = Vec::new();
         let limits = RunLimits::new(StepLimit::new(10));
 
-        let result =
-            program.run_with_trace_snapshots(runtime_input(b"a", limits)?, limits, |event| {
-                events.push(event);
-            })?;
+        let result = program.run_with_trace_snapshots(runtime_input(b"a")?, limits, |event| {
+            events.push(event);
+        })?;
 
         let last = events
             .last()

@@ -101,8 +101,8 @@ pub(crate) fn run_source(source: &str, input: &str) -> Result<String, TestFailur
     Ok(String::from_utf8(into_result_bytes(result))?)
 }
 
-pub(crate) fn runtime_input(input: &[u8], limits: RunLimits) -> Result<RuntimeInput, TestFailure> {
-    RuntimeInput::parse(input, limits.state_byte_limit()).map_err(TestFailure::from)
+pub(crate) fn runtime_input(input: &[u8]) -> Result<RuntimeInput, TestFailure> {
+    RuntimeInput::parse(input).map_err(TestFailure::from)
 }
 
 pub(crate) fn run_program(
@@ -110,7 +110,7 @@ pub(crate) fn run_program(
     input: &[u8],
     limits: RunLimits,
 ) -> Result<RunResult, TestFailure> {
-    let input = runtime_input(input, limits)?;
+    let input = runtime_input(input)?;
     program.run(input, limits).map_err(TestFailure::from)
 }
 

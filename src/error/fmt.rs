@@ -256,8 +256,8 @@ mod tests {
         expect_state_limit, expect_step_limit, runtime_input,
     };
     use crate::{
-        AllocationContext, AllocationError, DEFAULT_MAX_STATE_LEN, Program, ReturnByteLimit,
-        RunLimits, RuntimeInput, StateByteLimit, StepLimit, TraceSnapshotByteLimit,
+        AllocationContext, AllocationError, Program, ReturnByteLimit, RunLimits, RuntimeInput,
+        StateByteLimit, StepLimit, TraceSnapshotByteLimit,
     };
 
     #[test]
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn input_error_display_keeps_byte_and_original_column() -> TestResult {
-        let error = expect_run_error(RuntimeInput::parse(&[0xff], DEFAULT_MAX_STATE_LEN))?;
+        let error = expect_run_error(RuntimeInput::parse(&[0xff]))?;
         let error = expect_input_error(error)?;
 
         ensure_eq(
@@ -316,7 +316,9 @@ mod tests {
             ReturnByteLimit::new(10),
             TraceSnapshotByteLimit::new(10),
         );
-        let error = expect_run_error(RuntimeInput::parse(b"aa", limits.state_byte_limit()))?;
+        let error = expect_run_error(
+            Program::parse_str("# no executable rules")?.run(RuntimeInput::parse(b"aa")?, limits),
+        )?;
         let error = expect_state_limit(error)?;
 
         ensure_eq(
@@ -330,7 +332,7 @@ mod tests {
     fn step_limit_display_reports_limit_and_preserved_state_len() -> TestResult {
         let program = Program::parse_str("a=b")?;
         let limits = RunLimits::new(StepLimit::new(0));
-        let error = expect_run_error(program.run(runtime_input(b"a", limits)?, limits))?;
+        let error = expect_run_error(program.run(runtime_input(b"a")?, limits))?;
         let error = expect_step_limit(error)?;
 
         ensure_eq(

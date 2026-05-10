@@ -105,8 +105,8 @@ fn main() -> Result<(), rsaeb::AebError> {
     let program = Program::parse_str("(once)a=b\na=c")?;
     let limits = RunLimits::new(StepLimit::new(10_000));
 
-    let first = program.run(RuntimeInput::parse(b"aa", limits.state_byte_limit())?, limits)?;
-    let second = program.run(RuntimeInput::parse(b"aa", limits.state_byte_limit())?, limits)?;
+    let first = program.run(RuntimeInput::parse(b"aa")?, limits)?;
+    let second = program.run(RuntimeInput::parse(b"aa")?, limits)?;
 
     assert!(matches!(
         first.outcome(),
@@ -144,11 +144,12 @@ ASCII whitespace in program code is ignored, but spaces in runtime input are
 data:
 
 ```rust
-use rsaeb::{Program, RunLimits, RunOutcome, StepLimit};
+use rsaeb::{Program, RunLimits, RunOutcome, RuntimeInput, StepLimit};
 
 fn main() -> Result<(), rsaeb::AebError> {
-    let result =
-        Program::parse_str("ab=bb")?.run(b"a bc", RunLimits::new(StepLimit::new(10)))?;
+    let limits = RunLimits::new(StepLimit::new(10));
+    let input = RuntimeInput::parse(b"a bc")?;
+    let result = Program::parse_str("ab=bb")?.run(input, limits)?;
     assert!(matches!(
         result.outcome(),
         RunOutcome::Stable(output) if output.as_bytes() == b"a bc"
@@ -448,7 +449,7 @@ fn main() -> Result<(), rsaeb::AebError> {
     );
 
     let limits = limits.with_state_byte_limit(StateByteLimit::new(2));
-    let input = RuntimeInput::parse(b"", limits.state_byte_limit())?;
+    let input = RuntimeInput::parse(b"")?;
     let error = Program::parse_str("=a")?.run(input, limits);
     assert!(matches!(
         error,
@@ -472,7 +473,7 @@ use rsaeb::{LimitError, Program, RunError, RunLimits, RunOutcome, RuntimeInput, 
 fn main() -> Result<(), rsaeb::AebError> {
     let exact_limits = RunLimits::new(StepLimit::new(1));
     let exact = Program::parse_str("a=b")?.run(
-        RuntimeInput::parse(b"a", exact_limits.state_byte_limit())?,
+        RuntimeInput::parse(b"a")?,
         exact_limits,
     )?;
     assert!(matches!(
@@ -483,7 +484,7 @@ fn main() -> Result<(), rsaeb::AebError> {
 
     let no_match_limits = RunLimits::new(StepLimit::new(0));
     let no_match = Program::parse_str("a=b")?.run(
-        RuntimeInput::parse(b"x", no_match_limits.state_byte_limit())?,
+        RuntimeInput::parse(b"x")?,
         no_match_limits,
     )?;
     assert!(matches!(
@@ -494,7 +495,7 @@ fn main() -> Result<(), rsaeb::AebError> {
 
     let would_apply_limits = RunLimits::new(StepLimit::new(0));
     let would_apply = Program::parse_str("a=b")?.run(
-        RuntimeInput::parse(b"a", would_apply_limits.state_byte_limit())?,
+        RuntimeInput::parse(b"a")?,
         would_apply_limits,
     );
     assert!(matches!(
@@ -555,7 +556,7 @@ fn main() -> Result<(), rsaeb::AebError> {
     let mut lengths = Vec::new();
 
     let limits = RunLimits::new(StepLimit::new(10));
-    let result = program.run_with_borrowed_trace(RuntimeInput::parse(b"a", limits.state_byte_limit())?, limits, |event| {
+    let result = program.run_with_borrowed_trace(RuntimeInput::parse(b"a")?, limits, |event| {
         lengths.push(event.byte_count().get());
         if let BorrowedTraceEvent::Step { rule, .. } = event {
             let _line = rule.line_number();
@@ -584,7 +585,7 @@ fn main() -> Result<(), rsaeb::AebError> {
     let mut events = Vec::new();
 
     let limits = RunLimits::new(StepLimit::new(10));
-    let result = program.run_with_trace_snapshots(RuntimeInput::parse(b"a", limits.state_byte_limit())?, limits, |event| {
+    let result = program.run_with_trace_snapshots(RuntimeInput::parse(b"a")?, limits, |event| {
         events.push(event);
     })?;
 
@@ -622,7 +623,7 @@ separated by `TracedRunError`.
 The library error model is intentionally split:
 
 ```rust
-use rsaeb::{Program, RunError, RunLimits, RuntimeInput};
+use rsaeb::{Program, RunError, RuntimeInput};
 
 fn main() -> Result<(), rsaeb::AebError> {
     match Program::parse_str("a=b=c") {
@@ -630,7 +631,7 @@ fn main() -> Result<(), rsaeb::AebError> {
         Ok(_) => panic!("expected parse error"),
     }
 
-    let run_error = RuntimeInput::parse("aあ".as_bytes(), RunLimits::default().state_byte_limit());
+    let run_error = RuntimeInput::parse("aあ".as_bytes());
 
     if let Err(RunError::Input(input_error)) = run_error {
         assert_eq!(input_error.column().get(), 2);

@@ -28,6 +28,8 @@ impl RuntimeInput {
     /// Returns `RunError::Input` when `input` contains a non-ASCII byte.
     /// Returns `RunError::Allocation` when storing the validated input fails.
     pub fn parse(input: &[u8]) -> Result<Self, RunError> {
+        // Validate the whole boundary before allocation so input errors keep
+        // precedence over allocation failures.
         for (zero_based_column, byte) in input.iter().copied().enumerate() {
             RuntimeByte::parse_input(byte, zero_based_column)?;
         }
@@ -340,6 +342,7 @@ impl StateIndex {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MatchedStateSpan {
     start: StateIndex,
+    end: StateIndex,
     matched_len: PayloadByteCount,
 }
 
@@ -350,8 +353,11 @@ impl MatchedStateSpan {
         state_len: RuntimeStateByteCount,
     ) -> Option<Self> {
         let end = start.get().checked_add(matched_len.get())?;
-        (start.get() <= state_len.get() && end <= state_len.get())
-            .then_some(Self { start, matched_len })
+        (start.get() <= state_len.get() && end <= state_len.get()).then_some(Self {
+            start,
+            end: StateIndex::new(end),
+            matched_len,
+        })
     }
 
     const fn start(self) -> usize {
@@ -362,8 +368,8 @@ impl MatchedStateSpan {
         self.matched_len
     }
 
-    fn end(self) -> usize {
-        self.start().saturating_add(self.matched_len.get())
+    const fn end(self) -> usize {
+        self.end.get()
     }
 }
 
@@ -376,6 +382,7 @@ enum RewriteEffect<'program> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MatchedRule<'program> {
     rule: &'program Rule,
+    execution: RuleExecution,
     state_match: MatchedStateSpan,
 }
 
@@ -406,22 +413,32 @@ impl OnceRuleStates {
         Ok(Self { states })
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "once rule slots are assigned only by RuleSet and must have matching runtime state"
+    )]
     fn is_available(&self, execution: RuleExecution) -> bool {
         match execution {
             RuleExecution::Always => true,
-            RuleExecution::Once(slot) => self
-                .states
-                .get(slot.get())
-                .copied()
-                .is_some_and(|state| matches!(state, OnceRuleState::Fresh)),
+            RuleExecution::Once(slot) => matches!(
+                self.states
+                    .get(slot.get())
+                    .expect("once rule slot must be allocated by RuleSet"),
+                OnceRuleState::Fresh
+            ),
         }
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "once rule slots are assigned only by RuleSet and must have matching runtime state"
+    )]
     fn consume(&mut self, execution: RuleExecution) {
-        if let RuleExecution::Once(slot) = execution
-            && let Some(state) = self.states.get_mut(slot.get())
-        {
-            *state = OnceRuleState::Consumed;
+        if let RuleExecution::Once(slot) = execution {
+            *self
+                .states
+                .get_mut(slot.get())
+                .expect("once rule slot must be allocated by RuleSet") = OnceRuleState::Consumed;
         }
     }
 }
@@ -558,9 +575,11 @@ impl<'program> Runtime<'program> {
         Ok(())
     }
 
-    fn find_next_match(&mut self) -> Option<MatchedRule<'program>> {
+    fn find_next_match(&self) -> Option<MatchedRule<'program>> {
         for rule in self.program.rule_slice() {
-            if !self.once_states.is_available(rule.execution()) {
+            let execution = rule.execution();
+
+            if !self.once_states.is_available(execution) {
                 continue;
             }
 
@@ -568,8 +587,11 @@ impl<'program> Runtime<'program> {
                 continue;
             };
 
-            self.once_states.consume(rule.execution());
-            return Some(MatchedRule { rule, state_match });
+            return Some(MatchedRule {
+                rule,
+                execution,
+                state_match,
+            });
         }
 
         None
@@ -603,10 +625,18 @@ impl<'program> Runtime<'program> {
                         state: self.scratch.view(),
                     },
                 )?;
+                self.once_states.consume(matched.execution);
                 self.state.swap_with_scratch(&mut self.scratch);
                 Ok(None)
             }
             RewriteEffect::Return(output) => {
+                let owned_output = ReturnOutput::from_vec(
+                    output
+                        .to_vec_with_context(AllocationContext::ReturnOutput)
+                        .map_err(RunError::from)
+                        .map_err(TracedRunError::Run)?,
+                );
+
                 Self::emit_step_trace(
                     trace,
                     step,
@@ -614,14 +644,8 @@ impl<'program> Runtime<'program> {
                     BorrowedTraceEffect::Return { output },
                 )?;
 
-                Ok(Some(RunResult::from_return(
-                    ReturnOutput::from_vec(
-                        output
-                            .to_vec_with_context(AllocationContext::ReturnOutput)
-                            .map_err(RunError::from)?,
-                    ),
-                    step,
-                )))
+                self.once_states.consume(matched.execution);
+                Ok(Some(RunResult::from_return(owned_output, step)))
             }
         }
     }
@@ -787,6 +811,26 @@ mod tests {
     }
 
     #[test]
+    fn once_rule_lookup_does_not_consume_before_step_commit() -> TestResult {
+        let program = Program::parse_str("(once)a=b")?;
+        let runtime = Runtime::new(
+            &program,
+            runtime_input(b"a")?,
+            RunLimits::new(StepLimit::new(1)),
+        )?;
+
+        ensure(
+            runtime.find_next_match().is_some(),
+            "expected first lookup to find the once rule",
+        )?;
+        ensure(
+            runtime.find_next_match().is_some(),
+            "lookup must not consume a once rule before the step commits",
+        )?;
+        Ok(())
+    }
+
+    #[test]
     fn return_discards_current_state() -> TestResult {
         let source = "aa=(return)ok\na=x";
         ensure_eq(run_source(source, "aabb")?, "ok")?;
@@ -824,10 +868,7 @@ mod tests {
 
     #[test]
     fn runtime_input_error_is_structured() -> TestResult {
-        let error = expect_run_error(RuntimeInput::parse(
-            "aあ".as_bytes(),
-            RunLimits::default().state_byte_limit(),
-        ))?;
+        let error = expect_run_error(RuntimeInput::parse("aあ".as_bytes()))?;
         let error = expect_input_error(error)?;
 
         ensure_eq(error.column().get(), 2)?;
@@ -871,8 +912,7 @@ mod tests {
         ensure_eq(no_match.steps().get(), 0)?;
 
         let limits = RunLimits::new(StepLimit::new(0));
-        let error =
-            expect_run_error(Program::parse_str("a=b")?.run(runtime_input(b"a", limits)?, limits))?;
+        let error = expect_run_error(Program::parse_str("a=b")?.run(runtime_input(b"a")?, limits))?;
         let error = expect_step_limit(error)?;
         ensure_eq(
             error,
@@ -888,8 +928,7 @@ mod tests {
     #[test]
     fn step_limit_error_reports_state_len_without_owning_state_bytes() -> TestResult {
         let limits = RunLimits::new(StepLimit::new(3));
-        let error =
-            expect_run_error(Program::parse_str("=a")?.run(runtime_input(b"", limits)?, limits))?;
+        let error = expect_run_error(Program::parse_str("=a")?.run(runtime_input(b"")?, limits))?;
         let error = expect_step_limit(error)?;
 
         ensure_eq(
@@ -914,7 +953,7 @@ mod tests {
         let limits = RunLimits::new(StepLimit::new(3));
 
         let error = expect_run_error(program.run_with_borrowed_trace(
-            runtime_input(b"", limits)?,
+            runtime_input(b"")?,
             limits,
             |event| {
                 last_state.clear();
@@ -983,7 +1022,7 @@ a|-=
     fn runtime_rejects_every_non_ascii_input_byte() -> TestResult {
         for byte in 0x80..=0xff {
             ensure(
-                RuntimeInput::parse(&[byte], RunLimits::default().state_byte_limit()).is_err(),
+                RuntimeInput::parse(&[byte]).is_err(),
                 "byte should be rejected",
             )?;
         }
@@ -995,10 +1034,7 @@ a|-=
     fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
         let compact = [CompactByte::new(b'a', source_column(1)?)];
         let payload = Payload::parse(&compact, source_line_number(1)?, PayloadKind::LeftSideData)?;
-        let state = State::from_input(
-            runtime_input(b"a=()# ", RunLimits::default())?,
-            RunLimits::default(),
-        )?;
+        let state = State::from_input(runtime_input(b"a=()# ")?, RunLimits::default())?;
 
         ensure_eq(expect_payload_byte(&payload, 0)?, b'a')?;
         ensure_eq(expect_runtime_byte(&state, 0)?, b'a')?;

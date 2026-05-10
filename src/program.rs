@@ -118,7 +118,7 @@ impl StepCount {
 /// configured runtime limit would be exceeded.
 pub fn run_bytes(source: &[u8], input: &[u8], limits: RunLimits) -> Result<RunResult, AebError> {
     let program = Program::parse_bytes(source)?;
-    let input = RuntimeInput::parse(input, limits.state_byte_limit())?;
+    let input = RuntimeInput::parse(input)?;
     program.run(input, limits).map_err(AebError::Run)
 }
 
@@ -265,15 +265,17 @@ impl RuleSet {
     pub(crate) fn push_parsed_rule(&mut self, parsed: ParsedRule) -> Result<(), AllocationError> {
         let position = RulePosition::from_zero_based(self.rules.len())
             .ok_or_else(|| AllocationError::capacity_overflow(AllocationContext::ProgramRules))?;
-        let execution = match parsed.repeat() {
+
+        let repeat = parsed.repeat();
+        let next_once_rule_slots = match repeat {
+            RuleRepeat::Always => self.once_rule_slots,
+            RuleRepeat::Once => self.once_rule_slots.checked_add(1).ok_or_else(|| {
+                AllocationError::capacity_overflow(AllocationContext::ProgramRules)
+            })?,
+        };
+        let execution = match repeat {
             RuleRepeat::Always => RuleExecution::Always,
-            RuleRepeat::Once => {
-                let slot = OnceRuleSlot::new(self.once_rule_slots);
-                self.once_rule_slots = self.once_rule_slots.checked_add(1).ok_or_else(|| {
-                    AllocationError::capacity_overflow(AllocationContext::ProgramRules)
-                })?;
-                RuleExecution::Once(slot)
-            }
+            RuleRepeat::Once => RuleExecution::Once(OnceRuleSlot::new(self.once_rule_slots)),
         };
 
         try_push(
@@ -282,6 +284,7 @@ impl RuleSet {
             AllocationContext::ProgramRules,
         )?;
 
+        self.once_rule_slots = next_once_rule_slots;
         Ok(())
     }
 
@@ -349,13 +352,13 @@ impl Program {
         self.rule_set.as_slice()
     }
 
-    /// Runs this program with the given input bytes.
+    /// Runs this program with validated runtime input.
     ///
     /// # Errors
     ///
-    /// Returns `RunError` when `input` contains non-ASCII bytes, an allocation
-    /// fails, state-size arithmetic overflows, or a configured `RunLimits`
-    /// budget would be exceeded.
+    /// Returns `RunError` when the validated input exceeds this run's state
+    /// limit, an allocation fails, state-size arithmetic overflows, or a
+    /// configured `RunLimits` budget would be exceeded.
     pub fn run(&self, input: RuntimeInput, limits: RunLimits) -> Result<RunResult, RunError> {
         Runtime::new(self, input, limits)?.run()
     }
@@ -794,7 +797,9 @@ mod tests {
             ReturnByteLimit::new(10),
             TraceSnapshotByteLimit::new(10),
         );
-        let error = expect_run_error(RuntimeInput::parse(b"aa", limits.state_byte_limit()))?;
+        let error = expect_run_error(
+            Program::parse_str("# no executable rules")?.run(RuntimeInput::parse(b"aa")?, limits),
+        )?;
         let error = expect_state_limit(error)?;
 
         ensure_eq(
@@ -816,8 +821,7 @@ mod tests {
             ReturnByteLimit::new(10),
             TraceSnapshotByteLimit::new(10),
         );
-        let error =
-            expect_run_error(Program::parse_str("=a")?.run(runtime_input(b"aa", limits)?, limits))?;
+        let error = expect_run_error(Program::parse_str("=a")?.run(runtime_input(b"aa")?, limits))?;
         let error = expect_state_limit(error)?;
 
         ensure_eq(
@@ -836,10 +840,9 @@ mod tests {
         let program = Program::parse_str("a=b\nb=(return)ok")?;
         let mut events = Vec::new();
         let limits = RunLimits::new(StepLimit::new(10_000));
-        let result =
-            program.run_with_trace_snapshots(runtime_input(b"a", limits)?, limits, |event| {
-                events.push(event);
-            })?;
+        let result = program.run_with_trace_snapshots(runtime_input(b"a")?, limits, |event| {
+            events.push(event);
+        })?;
 
         expect_return_output(&result, b"ok")?;
         ensure_eq(events.len(), 3)?;

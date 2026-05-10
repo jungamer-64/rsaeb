@@ -91,9 +91,15 @@ pub struct InputColumn {
 }
 
 impl InputColumn {
-    pub(crate) const fn from_zero_based(zero_based: usize) -> Self {
+    #[expect(
+        clippy::expect_used,
+        reason = "slice enumeration cannot produce usize::MAX as a valid byte index"
+    )]
+    pub(crate) fn from_zero_based(zero_based: usize) -> Self {
         Self {
-            one_based: zero_based.saturating_add(1),
+            one_based: zero_based
+                .checked_add(1)
+                .expect("input column index from slice enumeration must fit usize"),
         }
     }
 
