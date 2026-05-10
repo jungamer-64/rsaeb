@@ -5,7 +5,7 @@ use std::vec::Vec;
 
 use crate::{
     AebError, AllocationError, InputError, LimitError, ParseError, Program, RunError, RunLimits,
-    RunOutcome, RunResult, StepLimit, TraceSnapshotEvent,
+    RunOutcome, RunResult, SourceColumn, SourceLineNumber, StepLimit, TraceSnapshotEvent,
 };
 
 pub(crate) enum TestFailure {
@@ -60,7 +60,32 @@ impl From<AllocationError> for TestFailure {
     }
 }
 
+impl From<InputError> for TestFailure {
+    fn from(value: InputError) -> Self {
+        Self::Run(RunError::Input(value))
+    }
+}
+
 pub(crate) type TestResult = Result<(), TestFailure>;
+
+pub(crate) fn ensure(condition: bool, message: &'static str) -> TestResult {
+    if condition {
+        Ok(())
+    } else {
+        Err(TestFailure::Message(message))
+    }
+}
+
+pub(crate) fn ensure_matches(condition: bool, message: &'static str) -> TestResult {
+    ensure(condition, message)
+}
+
+pub(crate) fn ensure_eq<T, U>(actual: T, expected: U) -> TestResult
+where
+    T: PartialEq<U>,
+{
+    ensure(actual == expected, "values differed")
+}
 
 pub(crate) fn test_limits() -> RunLimits {
     RunLimits::new(StepLimit::new(10_000))
@@ -131,6 +156,16 @@ pub(crate) fn expect_event<'events, 'program>(
     events
         .get(index)
         .ok_or(TestFailure::Message("expected trace event"))
+}
+
+pub(crate) fn source_line_number(one_based: usize) -> Result<SourceLineNumber, TestFailure> {
+    SourceLineNumber::from_one_based(one_based)
+        .ok_or(TestFailure::Message("expected non-zero source line"))
+}
+
+pub(crate) fn source_column(one_based: usize) -> Result<SourceColumn, TestFailure> {
+    SourceColumn::from_one_based(one_based)
+        .ok_or(TestFailure::Message("expected non-zero source column"))
 }
 
 pub(crate) fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {

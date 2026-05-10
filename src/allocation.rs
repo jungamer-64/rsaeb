@@ -129,22 +129,24 @@ pub(crate) fn try_push<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{TestResult, ensure_eq};
 
     #[test]
-    fn allocation_contexts_are_publicly_inspectable() {
+    fn allocation_contexts_are_publicly_inspectable() -> TestResult {
         let error = AllocationError::reserve_failed(AllocationContext::TraceSnapshot, 123);
-        assert_eq!(error.context(), AllocationContext::TraceSnapshot);
-        assert_eq!(
+        ensure_eq(error.context(), AllocationContext::TraceSnapshot)?;
+        ensure_eq(
             error.kind(),
             AllocationErrorKind::ReserveFailed {
                 requested_capacity: 123,
             },
-        );
-        assert_eq!(error.requested_capacity(), Some(123));
+        )?;
+        ensure_eq(error.requested_capacity(), Some(123))?;
 
         let error = AllocationError::capacity_overflow(AllocationContext::CanonicalSource);
-        assert_eq!(error.context(), AllocationContext::CanonicalSource);
-        assert_eq!(error.kind(), AllocationErrorKind::CapacityOverflow);
-        assert_eq!(error.requested_capacity(), None);
+        ensure_eq(error.context(), AllocationContext::CanonicalSource)?;
+        ensure_eq(error.kind(), AllocationErrorKind::CapacityOverflow)?;
+        ensure_eq(error.requested_capacity(), None)?;
+        Ok(())
     }
 }

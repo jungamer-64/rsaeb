@@ -263,7 +263,8 @@ fn ensure_trace_len(len: ByteCount, limits: RunLimits) -> Result<(), RunError> {
 #[cfg(test)]
 mod tests {
     use crate::test_support::{
-        TestFailure, TestResult, expect_event, expect_return_output, result_bytes,
+        TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_event,
+        expect_return_output, result_bytes,
     };
     use crate::{
         BorrowedTraceEvent, ByteCount, Program, RuleActionView, RunLimits, StepLimit,
@@ -292,7 +293,7 @@ mod tests {
         )?;
 
         expect_return_output(&result, b"ok")?;
-        assert_eq!(seen.as_slice(), &[(1, true), (1, true), (2, true)]);
+        ensure_eq(seen.as_slice(), &[(1, true), (1, true), (2, true)])?;
         Ok(())
     }
 
@@ -309,30 +310,39 @@ mod tests {
         )?;
 
         expect_return_output(&result, b"ok")?;
-        assert_eq!(events.len(), 3);
+        ensure_eq(events.len(), 3)?;
 
         let initial = expect_event(&events, 0)?;
         let first_step = expect_event(&events, 1)?;
         let second_step = expect_event(&events, 2)?;
 
-        assert!(matches!(initial, TraceSnapshotEvent::Initial { .. }));
-        assert_eq!(initial.as_bytes(), b"a");
-        assert_eq!(first_step.as_bytes(), b"b");
-        assert_eq!(second_step.as_bytes(), b"ok");
-        assert!(matches!(
-            first_step,
-            TraceSnapshotEvent::Step {
-                effect: TraceSnapshotEffect::Continue { .. },
-                ..
-            }
-        ));
-        assert!(matches!(
-            second_step,
-            TraceSnapshotEvent::Step {
-                effect: TraceSnapshotEffect::Return { .. },
-                ..
-            }
-        ));
+        ensure_matches(
+            matches!(initial, TraceSnapshotEvent::Initial { .. }),
+            "expected initial trace event",
+        )?;
+        ensure_eq(initial.as_bytes(), b"a".as_slice())?;
+        ensure_eq(first_step.as_bytes(), b"b".as_slice())?;
+        ensure_eq(second_step.as_bytes(), b"ok".as_slice())?;
+        ensure_matches(
+            matches!(
+                first_step,
+                TraceSnapshotEvent::Step {
+                    effect: TraceSnapshotEffect::Continue { .. },
+                    ..
+                }
+            ),
+            "expected continue step",
+        )?;
+        ensure_matches(
+            matches!(
+                second_step,
+                TraceSnapshotEvent::Step {
+                    effect: TraceSnapshotEffect::Return { .. },
+                    ..
+                }
+            ),
+            "expected return step",
+        )?;
 
         match first_step {
             TraceSnapshotEvent::Step {
@@ -340,16 +350,19 @@ mod tests {
                 effect: TraceSnapshotEffect::Continue { state },
                 ..
             } => {
-                assert_eq!(state.as_bytes(), b"b");
-                assert_eq!(state.byte_count(), ByteCount::new(1));
-                assert_eq!(rule.position().number().get(), 1);
-                assert_eq!(rule.line_number().get(), 1);
-                assert!(rule.lhs().eq_bytes(b"a"));
-                assert!(matches!(
-                    rule.action(),
-                    RuleActionView::Replace(payload) if payload.eq_bytes(b"b")
-                ));
-                assert_eq!(rule.canonical_source()?, b"a=b");
+                ensure_eq(state.as_bytes(), b"b".as_slice())?;
+                ensure_eq(state.byte_count(), ByteCount::new(1))?;
+                ensure_eq(rule.position().number().get(), 1)?;
+                ensure_eq(rule.line_number().get(), 1)?;
+                ensure(rule.lhs().eq_bytes(b"a"), "expected lhs")?;
+                ensure_matches(
+                    matches!(
+                        rule.action(),
+                        RuleActionView::Replace(payload) if payload.eq_bytes(b"b")
+                    ),
+                    "expected replace action",
+                )?;
+                ensure_eq(rule.canonical_source()?, b"a=b".as_slice())?;
             }
             TraceSnapshotEvent::Initial { .. } | TraceSnapshotEvent::Step { .. } => {
                 return Err(TestFailure::Message("expected continuing step event"));
@@ -368,7 +381,7 @@ mod tests {
             |_event| Err::<(), _>("trace sink full"),
         );
 
-        assert_eq!(result, Err(TracedRunError::Trace("trace sink full")));
+        ensure_eq(result, Err(TracedRunError::Trace("trace sink full")))?;
         Ok(())
     }
 
@@ -388,15 +401,22 @@ mod tests {
         let last = events
             .last()
             .ok_or(TestFailure::Message("expected final trace event"))?;
-        assert_eq!(last.as_bytes(), result_bytes(&result));
-        assert_eq!(events.len(), result.steps().get() + 1);
-        assert!(matches!(
-            last,
-            TraceSnapshotEvent::Step {
-                effect: TraceSnapshotEffect::Return { .. },
-                ..
-            }
-        ));
+        ensure_eq(last.as_bytes(), result_bytes(&result))?;
+        let expected_events = result
+            .steps()
+            .checked_next()
+            .ok_or(TestFailure::Message("expected trace event count"))?;
+        ensure_eq(events.len(), expected_events.get())?;
+        ensure_matches(
+            matches!(
+                last,
+                TraceSnapshotEvent::Step {
+                    effect: TraceSnapshotEffect::Return { .. },
+                    ..
+                }
+            ),
+            "expected final return step",
+        )?;
         Ok(())
     }
 }

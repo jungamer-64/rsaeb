@@ -147,62 +147,59 @@ struct NonEmptyCompactCodeLine {
 
 impl NonEmptyCompactCodeLine {
     fn into_rule_syntax(self) -> Result<RuleSyntaxLine, ParseError> {
-        let Some(first_equals) = self.bytes.iter().position(|byte| byte.as_u8() == b'=') else {
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        let mut side = RuleSyntaxSide::Left;
+
+        for byte in self.bytes {
+            if byte.as_u8() == b'=' {
+                if side == RuleSyntaxSide::Right {
+                    return Err(ParseError::new(
+                        self.line_number,
+                        Some(byte.source_column()),
+                        ParseErrorKind::MultipleEquals,
+                    ));
+                }
+
+                side = RuleSyntaxSide::Right;
+                continue;
+            }
+
+            let target = match side {
+                RuleSyntaxSide::Left => &mut left,
+                RuleSyntaxSide::Right => &mut right,
+            };
+            try_push(target, byte, AllocationContext::CompactCodeLine)
+                .map_err(|error| parse_allocation_error(self.line_number, error))?;
+        }
+
+        if side == RuleSyntaxSide::Left {
             return Err(ParseError::new(
                 self.line_number,
                 None,
                 ParseErrorKind::MissingEquals,
             ));
-        };
-
-        let equals = EqualsPosition::new(first_equals);
-
-        if let Some(second_equals) = self
-            .bytes
-            .iter()
-            .skip(equals.next_index())
-            .find(|byte| byte.as_u8() == b'=')
-            .copied()
-        {
-            return Err(ParseError::new(
-                self.line_number,
-                Some(second_equals.source_column()),
-                ParseErrorKind::MultipleEquals,
-            ));
         }
 
         Ok(RuleSyntaxLine {
             line_number: self.line_number,
-            bytes: self.bytes,
-            equals,
+            left,
+            right,
         })
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct EqualsPosition {
-    index: usize,
-}
-
-impl EqualsPosition {
-    const fn new(index: usize) -> Self {
-        Self { index }
-    }
-
-    const fn index(self) -> usize {
-        self.index
-    }
-
-    const fn next_index(self) -> usize {
-        self.index + 1
-    }
+enum RuleSyntaxSide {
+    Left,
+    Right,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 struct RuleSyntaxLine {
     line_number: SourceLineNumber,
-    bytes: Vec<CompactByte>,
-    equals: EqualsPosition,
+    left: Vec<CompactByte>,
+    right: Vec<CompactByte>,
 }
 
 impl RuleSyntaxLine {
@@ -222,14 +219,14 @@ impl RuleSyntaxLine {
     fn left(&self) -> LeftSyntax<'_> {
         LeftSyntax {
             line_number: self.line_number,
-            bytes: &self.bytes[..self.equals.index()],
+            bytes: &self.left,
         }
     }
 
     fn right(&self) -> RightSyntax<'_> {
         RightSyntax {
             line_number: self.line_number,
-            bytes: &self.bytes[self.equals.next_index()..],
+            bytes: &self.right,
         }
     }
 }
@@ -500,43 +497,45 @@ fn reject_nested_rhs_action(
 
 #[cfg(test)]
 mod tests {
-    use crate::test_support::{TestResult, expect_parse_error, result_bytes, run_source};
+    use crate::test_support::{
+        TestResult, ensure, ensure_eq, ensure_matches, expect_parse_error, result_bytes, run_source,
+    };
     use crate::{
         LeftModifierKind, ParseErrorKind, PayloadKind, Program, RuleCount, RunLimits, StepLimit,
     };
 
     #[test]
     fn code_spaces_are_ignored_in_rules() -> TestResult {
-        assert_eq!(run_source("a b=bb", "abc")?, "bbc");
-        assert_eq!(run_source("a = b", "a")?, "b");
-        assert_eq!(run_source("( once ) a = ( end ) b", "ca")?, "cb");
+        ensure_eq(run_source("a b=bb", "abc")?, "bbc")?;
+        ensure_eq(run_source("a = b", "a")?, "b")?;
+        ensure_eq(run_source("( once ) a = ( end ) b", "ca")?, "cb")?;
         Ok(())
     }
 
     #[test]
     fn crlf_source_is_accepted_as_code_whitespace() -> TestResult {
-        assert_eq!(run_source("a=b\r\nb=c\r\n", "a")?, "c");
+        ensure_eq(run_source("a=b\r\nb=c\r\n", "a")?, "c")?;
         Ok(())
     }
 
     #[test]
     fn tab_whitespace_is_ignored_in_code() -> TestResult {
-        assert_eq!(run_source("a\tb = c\tc", "ab")?, "cc");
+        ensure_eq(run_source("a\tb = c\tc", "ab")?, "cc")?;
         Ok(())
     }
 
     #[test]
     fn hash_starts_a_comment() -> TestResult {
-        assert_eq!(run_source("a=b#c", "a")?, "b");
-        assert_eq!(run_source("#a=b", "a")?, "a");
-        assert_eq!(run_source("a=b#コメント内の非ASCIIは許可", "a")?, "b");
+        ensure_eq(run_source("a=b#c", "a")?, "b")?;
+        ensure_eq(run_source("#a=b", "a")?, "a")?;
+        ensure_eq(run_source("a=b#コメント内の非ASCIIは許可", "a")?, "b")?;
         Ok(())
     }
 
     #[test]
     fn empty_compact_lines_do_not_become_rules() -> TestResult {
         let program = Program::parse_str(" \t\r\n# comment\n")?;
-        assert_eq!(program.rule_count(), RuleCount::new(0));
+        ensure_eq(program.rule_count(), RuleCount::new(0))?;
         Ok(())
     }
 
@@ -546,56 +545,74 @@ mod tests {
         let source = b"a=b#\xff\xfe\n";
         let program = Program::parse_bytes(source)?;
         let result = program.run(b"a", RunLimits::new(StepLimit::new(10_000)))?;
-        assert_eq!(result_bytes(&result), b"b");
+        ensure_eq(result_bytes(&result), b"b".as_slice())?;
         Ok(())
     }
 
     #[test]
     fn code_body_rejects_non_ascii_outside_comments() -> TestResult {
-        assert!(Program::parse_str("a=あ").is_err());
-        assert!(Program::parse_str("あ=b# comment").is_err());
-        assert!(Program::parse_str("a=b#あ").is_ok());
+        ensure(Program::parse_str("a=あ").is_err(), "expected parse error")?;
+        ensure(
+            Program::parse_str("あ=b# comment").is_err(),
+            "expected parse error",
+        )?;
+        ensure(
+            Program::parse_str("a=b#あ").is_ok(),
+            "expected comment text to parse",
+        )?;
 
         let error = expect_parse_error("a=あ")?;
-        assert_eq!(error.line().get(), 1);
-        assert_eq!(error.column().map(crate::SourceColumn::get), Some(3));
-        assert!(matches!(
-            error.kind(),
-            ParseErrorKind::NonAsciiInCode { .. }
-        ));
+        ensure_eq(error.line().get(), 1)?;
+        ensure_eq(error.column().map(crate::SourceColumn::get), Some(3))?;
+        ensure_matches(
+            matches!(error.kind(), ParseErrorKind::NonAsciiInCode { .. }),
+            "expected non-ASCII parse error",
+        )?;
         Ok(())
     }
 
     #[test]
     fn code_body_rejects_non_printable_ascii_outside_comments() -> TestResult {
         let error = expect_parse_error("a=\0")?;
-        assert_eq!(error.line().get(), 1);
-        assert_eq!(error.column().map(crate::SourceColumn::get), Some(3));
-        assert!(matches!(
-            error.kind(),
-            ParseErrorKind::NonPrintableAsciiInCode { .. }
-        ));
+        ensure_eq(error.line().get(), 1)?;
+        ensure_eq(error.column().map(crate::SourceColumn::get), Some(3))?;
+        ensure_matches(
+            matches!(error.kind(), ParseErrorKind::NonPrintableAsciiInCode { .. }),
+            "expected non-printable parse error",
+        )?;
 
-        assert!(Program::parse_str("a=b#\0").is_ok());
+        ensure(
+            Program::parse_str("a=b#\0").is_ok(),
+            "expected comment control byte to parse",
+        )?;
         Ok(())
     }
 
     #[test]
     fn second_equals_is_a_parse_error_unless_it_is_in_a_comment() -> TestResult {
         let error = expect_parse_error("a=b=c")?;
-        assert_eq!(error.column().map(crate::SourceColumn::get), Some(4));
-        assert!(matches!(error.kind(), ParseErrorKind::MultipleEquals));
+        ensure_eq(error.column().map(crate::SourceColumn::get), Some(4))?;
+        ensure_matches(
+            matches!(error.kind(), ParseErrorKind::MultipleEquals),
+            "expected multiple equals parse error",
+        )?;
 
         let error = expect_parse_error("a=b =c")?;
-        assert_eq!(error.column().map(crate::SourceColumn::get), Some(5));
-        assert!(matches!(error.kind(), ParseErrorKind::MultipleEquals));
+        ensure_eq(error.column().map(crate::SourceColumn::get), Some(5))?;
+        ensure_matches(
+            matches!(error.kind(), ParseErrorKind::MultipleEquals),
+            "expected multiple equals parse error",
+        )?;
 
-        assert!(Program::parse_str("a=b#=c").is_ok());
+        ensure(
+            Program::parse_str("a=b#=c").is_ok(),
+            "expected equals in comment to parse",
+        )?;
         Ok(())
     }
 
     #[test]
-    fn unsupported_parentheses_are_parse_errors() {
+    fn unsupported_parentheses_are_parse_errors() -> TestResult {
         for source in [
             "a=b(",
             "a=b)",
@@ -605,27 +622,38 @@ mod tests {
             "a=(once)b",
             "a(once)=b",
         ] {
-            assert!(
-                Program::parse_str(source).is_err(),
-                "source should fail: {source}"
-            );
+            ensure(Program::parse_str(source).is_err(), "source should fail")?;
         }
 
-        assert!(Program::parse_str("(once)(start)a=(end)b").is_ok());
-        assert!(Program::parse_str("a=(return)").is_ok());
+        ensure(
+            Program::parse_str("(once)(start)a=(end)b").is_ok(),
+            "expected valid parenthesized modifiers",
+        )?;
+        ensure(
+            Program::parse_str("a=(return)").is_ok(),
+            "expected empty return payload",
+        )?;
+        Ok(())
     }
 
     #[test]
-    fn comment_before_non_ascii_code_hides_it() {
-        assert!(Program::parse_bytes(b"#\xff\xfe\n").is_ok());
-        assert!(Program::parse_bytes(b"a=b#\xff\xfe\n").is_ok());
+    fn comment_before_non_ascii_code_hides_it() -> TestResult {
+        ensure(
+            Program::parse_bytes(b"#\xff\xfe\n").is_ok(),
+            "expected non-ASCII comment to parse",
+        )?;
+        ensure(
+            Program::parse_bytes(b"a=b#\xff\xfe\n").is_ok(),
+            "expected non-ASCII trailing comment to parse",
+        )?;
+        Ok(())
     }
 
     #[test]
     fn rhs_action_with_empty_payload_is_allowed() -> TestResult {
-        assert_eq!(run_source("a=(start)", "ba")?, "b");
-        assert_eq!(run_source("a=(end)", "ba")?, "b");
-        assert_eq!(run_source("a=(return)", "a")?, "");
+        ensure_eq(run_source("a=(start)", "ba")?, "b")?;
+        ensure_eq(run_source("a=(end)", "ba")?, "b")?;
+        ensure_eq(run_source("a=(return)", "a")?, "")?;
         Ok(())
     }
 
@@ -633,9 +661,12 @@ mod tests {
     fn multiline_errors_report_line_and_original_column() -> TestResult {
         let error = expect_parse_error("a=b\nx = y = z")?;
 
-        assert_eq!(error.line().get(), 2);
-        assert_eq!(error.column().map(crate::SourceColumn::get), Some(7));
-        assert!(matches!(error.kind(), ParseErrorKind::MultipleEquals));
+        ensure_eq(error.line().get(), 2)?;
+        ensure_eq(error.column().map(crate::SourceColumn::get), Some(7))?;
+        ensure_matches(
+            matches!(error.kind(), ParseErrorKind::MultipleEquals),
+            "expected multiple equals parse error",
+        )?;
         Ok(())
     }
 
@@ -648,50 +679,59 @@ mod tests {
             "a=(return)(start)b",
         ] {
             let error = expect_parse_error(source)?;
-            assert!(
+            ensure_matches(
                 matches!(
                     error.kind(),
                     ParseErrorKind::UnsupportedRightActionSyntax { .. }
                 ),
-                "source should fail with nested right action syntax: {source}"
-            );
+                "expected nested right action syntax error",
+            )?;
         }
 
         let error = expect_parse_error("a=(start)(return)b")?;
-        assert_eq!(error.column().map(crate::SourceColumn::get), Some(10));
-        assert!(matches!(
-            error.kind(),
-            ParseErrorKind::UnsupportedRightActionSyntax {
-                action: crate::RightActionKind::Return,
-            }
-        ));
+        ensure_eq(error.column().map(crate::SourceColumn::get), Some(10))?;
+        ensure_matches(
+            matches!(
+                error.kind(),
+                ParseErrorKind::UnsupportedRightActionSyntax {
+                    action: crate::RightActionKind::Return,
+                }
+            ),
+            "expected return action syntax error",
+        )?;
         Ok(())
     }
 
     #[test]
     fn reserved_payload_syntax_errors_keep_original_source_column() -> TestResult {
         let error = expect_parse_error("a = b (")?;
-        assert_eq!(error.column().map(crate::SourceColumn::get), Some(7));
-        assert!(matches!(
-            error.kind(),
-            ParseErrorKind::ReservedSyntaxInPayload {
-                payload_kind: PayloadKind::RightSideData,
-                ..
-            }
-        ));
+        ensure_eq(error.column().map(crate::SourceColumn::get), Some(7))?;
+        ensure_matches(
+            matches!(
+                error.kind(),
+                ParseErrorKind::ReservedSyntaxInPayload {
+                    payload_kind: PayloadKind::RightSideData,
+                    ..
+                }
+            ),
+            "expected reserved syntax payload error",
+        )?;
         Ok(())
     }
 
     #[test]
     fn invalid_left_modifier_order_is_structured() -> TestResult {
         let error = expect_parse_error("(start)(once)a=b")?;
-        assert_eq!(error.column().map(crate::SourceColumn::get), Some(8));
-        assert!(matches!(
-            error.kind(),
-            ParseErrorKind::UnsupportedLeftModifierOrder {
-                modifier: LeftModifierKind::Once,
-            }
-        ));
+        ensure_eq(error.column().map(crate::SourceColumn::get), Some(8))?;
+        ensure_matches(
+            matches!(
+                error.kind(),
+                ParseErrorKind::UnsupportedLeftModifierOrder {
+                    modifier: LeftModifierKind::Once,
+                }
+            ),
+            "expected left modifier order error",
+        )?;
         Ok(())
     }
 
@@ -703,7 +743,7 @@ mod tests {
         let compact_result = compact.run(b"ac", RunLimits::new(StepLimit::new(10)))?;
         let spaced_result = spaced.run(b"ac", RunLimits::new(StepLimit::new(10)))?;
 
-        assert_eq!(result_bytes(&compact_result), result_bytes(&spaced_result));
+        ensure_eq(result_bytes(&compact_result), result_bytes(&spaced_result))?;
         Ok(())
     }
 }

@@ -10,8 +10,8 @@ impl SourceLineNumber {
     };
 
     #[cfg(test)]
-    pub(crate) const fn from_one_based_unchecked(one_based: usize) -> Self {
-        Self { one_based }
+    pub(crate) fn from_one_based(one_based: usize) -> Option<Self> {
+        (one_based != 0).then_some(Self { one_based })
     }
 
     pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
@@ -39,8 +39,8 @@ impl SourceColumn {
     }
 
     #[cfg(test)]
-    pub(crate) const fn from_one_based_unchecked(one_based: usize) -> Self {
-        Self { one_based }
+    pub(crate) fn from_one_based(one_based: usize) -> Option<Self> {
+        (one_based != 0).then_some(Self { one_based })
     }
 
     /// One-based source column as a primitive value.

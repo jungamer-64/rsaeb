@@ -32,10 +32,9 @@ pub struct RuleNumber {
 }
 
 impl RuleNumber {
-    const fn from_zero_based(zero_based: usize) -> Self {
-        Self {
-            one_based: zero_based + 1,
-        }
+    fn from_zero_based(zero_based: usize) -> Option<Self> {
+        let one_based = zero_based.checked_add(1)?;
+        Some(Self { one_based })
     }
 
     /// One-based rule number as a primitive value.
@@ -47,18 +46,19 @@ impl RuleNumber {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RulePosition {
-    zero_based: usize,
+    number: RuleNumber,
 }
 
 impl RulePosition {
-    pub(crate) const fn new(zero_based: usize) -> Self {
-        Self { zero_based }
+    pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
+        let number = RuleNumber::from_zero_based(zero_based)?;
+        Some(Self { number })
     }
 
     /// One-based rule number for display.
     #[must_use]
     pub const fn number(self) -> RuleNumber {
-        RuleNumber::from_zero_based(self.zero_based)
+        self.number
     }
 }
 
@@ -76,56 +76,6 @@ impl RuleRepeat {
     #[must_use]
     pub const fn is_once(self) -> bool {
         matches!(self, Self::Once)
-    }
-}
-
-/// Runtime slot used by one parsed `(once)` rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct OnceRuleSlot {
-    zero_based: usize,
-}
-
-impl OnceRuleSlot {
-    pub(crate) const fn new(zero_based: usize) -> Self {
-        Self { zero_based }
-    }
-
-    pub(crate) const fn zero_based(self) -> usize {
-        self.zero_based
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuleRepeatPlan {
-    Always,
-    Once { slot: OnceRuleSlot },
-}
-
-impl RuleRepeatPlan {
-    pub(crate) const fn always() -> Self {
-        Self::Always
-    }
-
-    pub(crate) const fn once(slot: OnceRuleSlot) -> Self {
-        Self::Once { slot }
-    }
-
-    pub(crate) const fn public_repeat(self) -> RuleRepeat {
-        match self {
-            Self::Always => RuleRepeat::Always,
-            Self::Once { .. } => RuleRepeat::Once,
-        }
-    }
-
-    pub(crate) const fn once_slot(self) -> Option<OnceRuleSlot> {
-        match self {
-            Self::Always => None,
-            Self::Once { slot } => Some(slot),
-        }
-    }
-
-    pub(crate) const fn is_once(self) -> bool {
-        matches!(self, Self::Once { .. })
     }
 }
 
@@ -245,19 +195,18 @@ impl<'program> RuleActionView<'program> {
 /// of truth beside the parsed fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuleView<'program> {
-    position: RulePosition,
     rule: &'program Rule,
 }
 
 impl<'program> RuleView<'program> {
-    pub(crate) fn new(position: RulePosition, rule: &'program Rule) -> Self {
-        Self { position, rule }
+    pub(crate) fn new(rule: &'program Rule) -> Self {
+        Self { rule }
     }
 
     /// Program-local parsed-rule position.
     #[must_use]
     pub const fn position(self) -> RulePosition {
-        self.position
+        self.rule.position()
     }
 
     /// One-based source line number.
@@ -358,30 +307,32 @@ impl ParsedRule {
             action,
         }
     }
-
-    pub(crate) const fn repeat(&self) -> RuleRepeat {
-        self.repeat
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Rule {
+    position: RulePosition,
     line_number: SourceLineNumber,
-    repeat: RuleRepeatPlan,
+    repeat: RuleRepeat,
     anchor: RuleAnchor,
     lhs: Payload,
     action: Action,
 }
 
 impl Rule {
-    pub(crate) fn from_parsed(parsed: ParsedRule, repeat: RuleRepeatPlan) -> Self {
+    pub(crate) fn from_parsed(parsed: ParsedRule, position: RulePosition) -> Self {
         Self {
+            position,
             line_number: parsed.line_number,
-            repeat,
+            repeat: parsed.repeat,
             anchor: parsed.anchor,
             lhs: parsed.lhs,
             action: parsed.action,
         }
+    }
+
+    pub(crate) const fn position(&self) -> RulePosition {
+        self.position
     }
 
     pub(crate) const fn line_number(&self) -> SourceLineNumber {
@@ -389,11 +340,7 @@ impl Rule {
     }
 
     pub(crate) const fn repeat(&self) -> RuleRepeat {
-        self.repeat.public_repeat()
-    }
-
-    pub(crate) const fn once_slot(&self) -> Option<OnceRuleSlot> {
-        self.repeat.once_slot()
+        self.repeat
     }
 
     pub(crate) const fn anchor(&self) -> RuleAnchor {
@@ -408,8 +355,8 @@ impl Rule {
         &self.action
     }
 
-    pub(crate) fn view(&self, position: RulePosition) -> RuleView<'_> {
-        RuleView::new(position, self)
+    pub(crate) fn view(&self) -> RuleView<'_> {
+        RuleView::new(self)
     }
 
     fn canonical_source_len(&self) -> Result<usize, AllocationError> {

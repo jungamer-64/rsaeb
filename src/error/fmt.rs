@@ -245,8 +245,8 @@ mod tests {
     use alloc::string::ToString;
 
     use crate::test_support::{
-        TestResult, expect_input_error, expect_parse_error, expect_run_error, expect_state_limit,
-        expect_step_limit,
+        TestResult, ensure_eq, expect_input_error, expect_parse_error, expect_run_error,
+        expect_state_limit, expect_step_limit,
     };
     use crate::{
         AllocationContext, AllocationError, Program, ReturnByteLimit, RunLimits, StateByteLimit,
@@ -254,37 +254,38 @@ mod tests {
     };
 
     #[test]
-    fn allocation_display_names_the_failed_context_and_capacity() {
+    fn allocation_display_names_the_failed_context_and_capacity() -> TestResult {
         let error = AllocationError::reserve_failed(AllocationContext::TraceSnapshot, 123);
 
-        assert_eq!(
+        ensure_eq(
             error.to_string(),
             "allocation failure while building trace snapshot; requested capacity: 123",
-        );
+        )?;
 
         let error = AllocationError::reserve_failed(AllocationContext::RuntimeStateView, 456);
 
-        assert_eq!(
+        ensure_eq(
             error.to_string(),
             "allocation failure while building runtime state view; requested capacity: 456",
-        );
+        )?;
 
         let error = AllocationError::capacity_overflow(AllocationContext::CanonicalSource);
 
-        assert_eq!(
+        ensure_eq(
             error.to_string(),
             "allocation capacity overflow while building canonical source bytes",
-        );
+        )?;
+        Ok(())
     }
 
     #[test]
     fn parse_error_display_includes_line_column_and_structured_reason() -> TestResult {
         let error = expect_parse_error("a=b=c")?;
 
-        assert_eq!(
+        ensure_eq(
             error.to_string(),
             "parse error at line 1, column 4: multiple '=' characters are not allowed",
-        );
+        )?;
         Ok(())
     }
 
@@ -294,10 +295,10 @@ mod tests {
         let error = expect_run_error(program.run(&[0xff], RunLimits::default()))?;
         let error = expect_input_error(error)?;
 
-        assert_eq!(
+        ensure_eq(
             error.to_string(),
             "input error: non-ASCII byte 0xff at column 1",
-        );
+        )?;
         Ok(())
     }
 
@@ -313,10 +314,10 @@ mod tests {
         let error = expect_run_error(program.run(b"aa", limits))?;
         let error = expect_state_limit(error)?;
 
-        assert_eq!(
+        ensure_eq(
             error.to_string(),
             "state limit exceeded by runtime input; attempted length: 2, limit: 1",
-        );
+        )?;
         Ok(())
     }
 
@@ -326,10 +327,10 @@ mod tests {
         let error = expect_run_error(program.run(b"a", RunLimits::new(StepLimit::new(0))))?;
         let error = expect_step_limit(error)?;
 
-        assert_eq!(
+        ensure_eq(
             error.to_string(),
             "step limit exceeded after 0 steps; max steps: 0, state length: 1 bytes",
-        );
+        )?;
         Ok(())
     }
 }

@@ -5,9 +5,7 @@ use crate::allocation::{AllocationContext, AllocationError, try_push};
 use crate::bytes::ByteCount;
 use crate::error::{AebError, ParseError, RunError, TracedRunError};
 use crate::parser::parse_program_impl;
-use crate::rule::{
-    OnceRuleSlot, ParsedRule, Rule, RuleCount, RulePosition, RuleRepeatPlan, RuleView,
-};
+use crate::rule::{ParsedRule, Rule, RuleCount, RulePosition, RuleView};
 use crate::runtime::Runtime;
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
@@ -261,23 +259,16 @@ impl RuleSet {
     }
 
     pub(crate) fn push_parsed_rule(&mut self, parsed: ParsedRule) -> Result<(), AllocationError> {
-        let repeat = if parsed.repeat().is_once() {
-            RuleRepeatPlan::once(self.next_once_rule_slot())
-        } else {
-            RuleRepeatPlan::always()
-        };
+        let position = RulePosition::from_zero_based(self.rules.len())
+            .ok_or_else(|| AllocationError::capacity_overflow(AllocationContext::ProgramRules))?;
 
         try_push(
             &mut self.rules,
-            Rule::from_parsed(parsed, repeat),
+            Rule::from_parsed(parsed, position),
             AllocationContext::ProgramRules,
         )?;
 
         Ok(())
-    }
-
-    fn next_once_rule_slot(&self) -> OnceRuleSlot {
-        OnceRuleSlot::new(self.once_rule_count().get())
     }
 
     pub(crate) fn rule_count(&self) -> RuleCount {
@@ -342,19 +333,11 @@ impl Program {
 
     /// Iterates over structured parsed-rule views in execution order.
     pub fn rules(&self) -> impl Iterator<Item = RuleView<'_>> + '_ {
-        self.rule_set
-            .as_slice()
-            .iter()
-            .enumerate()
-            .map(|(index, rule)| rule.view(RulePosition::new(index)))
+        self.rule_set.as_slice().iter().map(Rule::view)
     }
 
     pub(crate) fn rule_slice(&self) -> &[Rule] {
         self.rule_set.as_slice()
-    }
-
-    pub(crate) fn runtime_once_rule_count(&self) -> usize {
-        self.rule_set.once_rule_count().get()
     }
 
     /// Runs this program with the given input bytes.
@@ -604,8 +587,9 @@ impl RunResult {
 mod tests {
     use super::*;
     use crate::test_support::{
-        TestFailure, TestResult, expect_event, expect_return_output, expect_run_error,
-        expect_stable_output, expect_state_limit, result_bytes,
+        TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_event,
+        expect_return_output, expect_run_error, expect_stable_output, expect_state_limit,
+        result_bytes,
     };
     use crate::{
         ByteCount, LimitError, ReturnByteLimit, RuleActionView, RuleAnchor, RuleCount, RuleRepeat,
@@ -625,7 +609,7 @@ mod tests {
     fn public_free_run_works() -> TestResult {
         let result = run_str("a=b", b"a", RunLimits::default())?;
         expect_stable_output(&result, b"b")?;
-        assert_eq!(result.steps().get(), 1);
+        ensure_eq(result.steps().get(), 1)?;
 
         let result = run_bytes(b"a=b#\xff", b"a", RunLimits::default())?;
         expect_stable_output(&result, b"b")?;
@@ -639,9 +623,9 @@ mod tests {
         let first = program.run(b"aa", RunLimits::new(StepLimit::new(10_000)))?;
         let second = program.run(b"aa", RunLimits::new(StepLimit::new(10_000)))?;
 
-        assert_eq!(result_bytes(&first), b"bc");
-        assert_eq!(result_bytes(&second), b"bc");
-        assert_eq!(program.once_rule_count(), RuleCount::new(1));
+        ensure_eq(result_bytes(&first), b"bc".as_slice())?;
+        ensure_eq(result_bytes(&second), b"bc".as_slice())?;
+        ensure_eq(program.once_rule_count(), RuleCount::new(1))?;
         Ok(())
     }
 
@@ -653,16 +637,16 @@ mod tests {
 
         match stable.into_outcome() {
             RunOutcome::Stable(output) => {
-                assert_eq!(output.as_bytes(), b"b");
-                assert_eq!(output.byte_count(), ByteCount::new(1));
+                ensure_eq(output.as_bytes(), b"b".as_slice())?;
+                ensure_eq(output.byte_count(), ByteCount::new(1))?;
             }
             RunOutcome::Return(_) => return Err(TestFailure::Message("expected stable outcome")),
         }
 
         match returned.into_outcome() {
             RunOutcome::Return(output) => {
-                assert_eq!(output.as_bytes(), b"b");
-                assert_eq!(output.byte_count(), ByteCount::new(1));
+                ensure_eq(output.as_bytes(), b"b".as_slice())?;
+                ensure_eq(output.byte_count(), ByteCount::new(1))?;
             }
             RunOutcome::Stable(_) => return Err(TestFailure::Message("expected return outcome")),
         }
@@ -675,7 +659,7 @@ mod tests {
         let program = Program::parse_str("a = b # comment\n(start)c=(end)d")?;
         let rules = program.rules().collect::<Vec<_>>();
 
-        assert_eq!(rules.len(), 2);
+        ensure_eq(rules.len(), 2)?;
         let first = rules
             .first()
             .copied()
@@ -685,27 +669,33 @@ mod tests {
             .copied()
             .ok_or(TestFailure::Message("expected second rule"))?;
 
-        assert_eq!(first.position().number().get(), 1);
-        assert_eq!(first.line_number().get(), 1);
-        assert_eq!(first.repeat(), RuleRepeat::Always);
-        assert_eq!(first.anchor(), RuleAnchor::Anywhere);
-        assert!(first.lhs().eq_bytes(b"a"));
-        assert!(matches!(
-            first.action(),
-            RuleActionView::Replace(payload) if payload.eq_bytes(b"b")
-        ));
-        assert_eq!(first.canonical_source()?, b"a=b");
+        ensure_eq(first.position().number().get(), 1)?;
+        ensure_eq(first.line_number().get(), 1)?;
+        ensure_eq(first.repeat(), RuleRepeat::Always)?;
+        ensure_eq(first.anchor(), RuleAnchor::Anywhere)?;
+        ensure(first.lhs().eq_bytes(b"a"), "expected first lhs")?;
+        ensure_matches(
+            matches!(
+                first.action(),
+                RuleActionView::Replace(payload) if payload.eq_bytes(b"b")
+            ),
+            "expected replace action",
+        )?;
+        ensure_eq(first.canonical_source()?, b"a=b".as_slice())?;
 
-        assert_eq!(second.position().number().get(), 2);
-        assert_eq!(second.line_number().get(), 2);
-        assert_eq!(second.repeat(), RuleRepeat::Always);
-        assert_eq!(second.anchor(), RuleAnchor::Start);
-        assert!(second.lhs().eq_bytes(b"c"));
-        assert!(matches!(
-            second.action(),
-            RuleActionView::MoveEnd(payload) if payload.eq_bytes(b"d")
-        ));
-        assert_eq!(second.canonical_source()?, b"(start)c=(end)d");
+        ensure_eq(second.position().number().get(), 2)?;
+        ensure_eq(second.line_number().get(), 2)?;
+        ensure_eq(second.repeat(), RuleRepeat::Always)?;
+        ensure_eq(second.anchor(), RuleAnchor::Start)?;
+        ensure(second.lhs().eq_bytes(b"c"), "expected second lhs")?;
+        ensure_matches(
+            matches!(
+                second.action(),
+                RuleActionView::MoveEnd(payload) if payload.eq_bytes(b"d")
+            ),
+            "expected move-end action",
+        )?;
+        ensure_eq(second.canonical_source()?, b"(start)c=(end)d".as_slice())?;
         Ok(())
     }
 
@@ -717,12 +707,15 @@ mod tests {
         let reparsed = Program::parse_bytes(canonical.as_slice())?;
         let reparsed_rule = expect_rule(&reparsed, 0)?;
 
-        assert_eq!(reparsed.rule_count(), RuleCount::new(1));
-        assert_eq!(reparsed.once_rule_count(), RuleCount::new(1));
-        assert_eq!(reparsed_rule.repeat(), RuleRepeat::Once);
-        assert_eq!(reparsed_rule.anchor(), RuleAnchor::Start);
-        assert!(reparsed_rule.lhs().eq_bytes(b"a"));
-        assert_eq!(reparsed_rule.canonical_source()?, b"(once)(start)a=(end)b");
+        ensure_eq(reparsed.rule_count(), RuleCount::new(1))?;
+        ensure_eq(reparsed.once_rule_count(), RuleCount::new(1))?;
+        ensure_eq(reparsed_rule.repeat(), RuleRepeat::Once)?;
+        ensure_eq(reparsed_rule.anchor(), RuleAnchor::Start)?;
+        ensure(reparsed_rule.lhs().eq_bytes(b"a"), "expected lhs")?;
+        ensure_eq(
+            reparsed_rule.canonical_source()?,
+            b"(once)(start)a=(end)b".as_slice(),
+        )?;
         Ok(())
     }
 
@@ -759,16 +752,12 @@ mod tests {
                             let rule = expect_rule(&program, 0)?;
                             let canonical = rule.canonical_source()?;
 
-                            assert_eq!(program.rule_count(), RuleCount::new(1));
-                            assert_eq!(canonical, source, "source: {source:?}");
+                            ensure_eq(program.rule_count(), RuleCount::new(1))?;
+                            ensure_eq(canonical.as_slice(), source.as_slice())?;
 
                             let reparsed = Program::parse_bytes(&canonical)?;
                             let reparsed_rule = expect_rule(&reparsed, 0)?;
-                            assert_eq!(
-                                reparsed_rule.canonical_source()?,
-                                source,
-                                "source: {source:?}",
-                            );
+                            ensure_eq(reparsed_rule.canonical_source()?, source.as_slice())?;
                         }
                     }
                 }
@@ -789,14 +778,14 @@ mod tests {
         let error = expect_run_error(Program::parse_str("a=b")?.run(b"aa", limits))?;
         let error = expect_state_limit(error)?;
 
-        assert_eq!(
+        ensure_eq(
             error,
             LimitError::State {
                 context: StateLimitContext::Input,
                 limit: StateByteLimit::new(1),
                 attempted_len: ByteCount::new(2),
             },
-        );
+        )?;
         Ok(())
     }
 
@@ -811,14 +800,14 @@ mod tests {
         let error = expect_run_error(Program::parse_str("=a")?.run(b"aa", limits))?;
         let error = expect_state_limit(error)?;
 
-        assert_eq!(
+        ensure_eq(
             error,
             LimitError::State {
                 context: StateLimitContext::Rewrite,
                 limit: StateByteLimit::new(2),
                 attempted_len: ByteCount::new(3),
             },
-        );
+        )?;
         Ok(())
     }
 
@@ -835,32 +824,38 @@ mod tests {
         )?;
 
         expect_return_output(&result, b"ok")?;
-        assert_eq!(events.len(), 3);
-        assert!(matches!(
-            events.first(),
-            Some(TraceSnapshotEvent::Initial { .. })
-        ));
+        ensure_eq(events.len(), 3)?;
+        ensure_matches(
+            matches!(events.first(), Some(TraceSnapshotEvent::Initial { .. })),
+            "expected initial trace event",
+        )?;
         let initial = expect_event(&events, 0)?;
         let first_step = expect_event(&events, 1)?;
         let second_step = expect_event(&events, 2)?;
 
-        assert_eq!(initial.as_bytes(), b"a");
-        assert_eq!(first_step.as_bytes(), b"b");
-        assert_eq!(second_step.as_bytes(), b"ok");
-        assert!(matches!(
-            first_step,
-            TraceSnapshotEvent::Step {
-                effect: TraceSnapshotEffect::Continue { .. },
-                ..
-            }
-        ));
-        assert!(matches!(
-            second_step,
-            TraceSnapshotEvent::Step {
-                effect: TraceSnapshotEffect::Return { .. },
-                ..
-            }
-        ));
+        ensure_eq(initial.as_bytes(), b"a".as_slice())?;
+        ensure_eq(first_step.as_bytes(), b"b".as_slice())?;
+        ensure_eq(second_step.as_bytes(), b"ok".as_slice())?;
+        ensure_matches(
+            matches!(
+                first_step,
+                TraceSnapshotEvent::Step {
+                    effect: TraceSnapshotEffect::Continue { .. },
+                    ..
+                }
+            ),
+            "expected continue step",
+        )?;
+        ensure_matches(
+            matches!(
+                second_step,
+                TraceSnapshotEvent::Step {
+                    effect: TraceSnapshotEffect::Return { .. },
+                    ..
+                }
+            ),
+            "expected return step",
+        )?;
 
         match first_step {
             TraceSnapshotEvent::Step {
@@ -868,8 +863,8 @@ mod tests {
                 effect: TraceSnapshotEffect::Continue { state },
                 ..
             } => {
-                assert_eq!(state.as_bytes(), b"b");
-                assert_eq!(rule.canonical_source()?, b"a=b");
+                ensure_eq(state.as_bytes(), b"b".as_slice())?;
+                ensure_eq(rule.canonical_source()?, b"a=b".as_slice())?;
             }
             TraceSnapshotEvent::Initial { .. } | TraceSnapshotEvent::Step { .. } => {
                 return Err(TestFailure::Message("expected continue step"));

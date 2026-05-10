@@ -26,7 +26,7 @@
     clippy::todo,
     clippy::unimplemented,
     clippy::unreachable,
-    clippy::arithmetic_side_effects,
+    clippy::arithmetic_side_effects
 )]
 
 extern crate alloc;

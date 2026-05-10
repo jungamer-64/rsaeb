@@ -305,110 +305,98 @@ impl CompactByte {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{
+        TestFailure, TestResult, ensure, ensure_eq, ensure_matches, source_column,
+        source_line_number,
+    };
     use crate::{ParseError, ParseErrorKind, PayloadKind};
 
     fn parse_payload_error(
         input: &[CompactByte],
         line_number: SourceLineNumber,
         payload_kind: PayloadKind,
-    ) -> Result<ParseError, &'static str> {
+    ) -> Result<ParseError, TestFailure> {
         match Payload::parse(input, line_number, payload_kind) {
-            Ok(_) => Err("invalid payload bytes were accepted"),
+            Ok(_) => Err(TestFailure::Message("invalid payload bytes were accepted")),
             Err(error) => Ok(error),
         }
     }
 
     #[test]
     fn payload_rejects_every_reserved_syntax_byte_even_if_payload_parser_is_called_directly()
-    -> Result<(), &'static str> {
+    -> TestResult {
         for reserved in [b'=', b'#', b'(', b')'] {
-            let compact = [CompactByte::new(
-                reserved,
-                SourceColumn::from_one_based_unchecked(1),
-            )];
-            let error = parse_payload_error(
-                &compact,
-                SourceLineNumber::from_one_based_unchecked(1),
-                PayloadKind::RightSideData,
-            )?;
+            let compact = [CompactByte::new(reserved, source_column(1)?)];
+            let error =
+                parse_payload_error(&compact, source_line_number(1)?, PayloadKind::RightSideData)?;
 
-            assert_eq!(error.column().map(SourceColumn::get), Some(1));
-            assert!(matches!(
-                error.kind(),
-                ParseErrorKind::ReservedSyntaxInPayload {
-                    payload_kind: PayloadKind::RightSideData,
-                    ..
-                }
-            ));
+            ensure_eq(error.column().map(SourceColumn::get), Some(1))?;
+            ensure_matches(
+                matches!(
+                    error.kind(),
+                    ParseErrorKind::ReservedSyntaxInPayload {
+                        payload_kind: PayloadKind::RightSideData,
+                        ..
+                    }
+                ),
+                "expected reserved syntax payload error",
+            )?;
         }
         Ok(())
     }
 
     #[test]
-    fn payload_validates_compact_bytes_at_the_domain_boundary() -> Result<(), &'static str> {
-        let non_ascii = [CompactByte::new(
-            0xff,
-            SourceColumn::from_one_based_unchecked(1),
-        )];
-        let non_graphic = [CompactByte::new(
-            b' ',
-            SourceColumn::from_one_based_unchecked(2),
-        )];
+    fn payload_validates_compact_bytes_at_the_domain_boundary() -> TestResult {
+        let non_ascii = [CompactByte::new(0xff, source_column(1)?)];
+        let non_graphic = [CompactByte::new(b' ', source_column(2)?)];
 
         let error = parse_payload_error(
             &non_ascii,
-            SourceLineNumber::from_one_based_unchecked(1),
+            source_line_number(1)?,
             PayloadKind::RightSideData,
         )?;
-        assert!(matches!(
-            error.kind(),
-            ParseErrorKind::NonAsciiInCode { .. }
-        ));
+        ensure_matches(
+            matches!(error.kind(), ParseErrorKind::NonAsciiInCode { .. }),
+            "expected non-ASCII parse error",
+        )?;
 
         let error = parse_payload_error(
             &non_graphic,
-            SourceLineNumber::from_one_based_unchecked(1),
+            source_line_number(1)?,
             PayloadKind::RightSideData,
         )?;
-        assert_eq!(error.column().map(SourceColumn::get), Some(2));
-        assert!(matches!(
-            error.kind(),
-            ParseErrorKind::NonPrintableAsciiInCode { .. }
-        ));
+        ensure_eq(error.column().map(SourceColumn::get), Some(2))?;
+        ensure_matches(
+            matches!(error.kind(), ParseErrorKind::NonPrintableAsciiInCode { .. }),
+            "expected non-printable parse error",
+        )?;
         Ok(())
     }
 
     #[test]
-    fn payload_exposes_validated_bytes_without_leaking_the_internal_domain_type()
-    -> Result<(), &'static str> {
+    fn payload_exposes_validated_bytes_without_leaking_the_internal_domain_type() -> TestResult {
         let compact = [
-            CompactByte::new(b'a', SourceColumn::from_one_based_unchecked(1)),
-            CompactByte::new(b'b', SourceColumn::from_one_based_unchecked(2)),
+            CompactByte::new(b'a', source_column(1)?),
+            CompactByte::new(b'b', source_column(2)?),
         ];
-        let payload = Payload::parse(
-            &compact,
-            SourceLineNumber::from_one_based_unchecked(1),
-            PayloadKind::LeftSideData,
-        )
-        .map_err(|_| "expected payload to parse")?;
+        let payload = Payload::parse(&compact, source_line_number(1)?, PayloadKind::LeftSideData)
+            .map_err(TestFailure::from)?;
 
-        assert!(payload.eq_bytes(b"ab"));
-        assert_eq!(payload.first_byte().map(ProgramByte::get), Some(b'a'));
+        ensure(payload.eq_bytes(b"ab"), "expected payload bytes")?;
+        ensure_eq(payload.first_byte().map(ProgramByte::get), Some(b'a'))?;
         Ok(())
     }
 
     #[test]
-    fn runtime_input_classifies_program_constructible_and_opaque_ascii_separately()
-    -> Result<(), &'static str> {
-        let parsed = RuntimeByte::parse_input(b'a', 0).map_err(|_| "ASCII input should parse")?;
-        assert!(parsed.is_editable());
-        assert_eq!(parsed.materialize(), b'a');
+    fn runtime_input_classifies_program_constructible_and_opaque_ascii_separately() -> TestResult {
+        let parsed = RuntimeByte::parse_input(b'a', 0).map_err(TestFailure::from)?;
+        ensure(parsed.is_editable(), "expected editable input byte")?;
+        ensure_eq(parsed.materialize(), b'a')?;
 
         for byte in [0x00, b' ', b'=', b'#', b'(', b')'] {
-            let parsed =
-                RuntimeByte::parse_input(byte, 0).map_err(|_| "ASCII input should parse")?;
-            assert_eq!(parsed.materialize(), byte);
-            assert!(parsed.is_opaque());
+            let parsed = RuntimeByte::parse_input(byte, 0).map_err(TestFailure::from)?;
+            ensure_eq(parsed.materialize(), byte)?;
+            ensure(parsed.is_opaque(), "expected opaque input byte")?;
         }
 
         Ok(())
