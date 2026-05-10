@@ -2,8 +2,10 @@ use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeStateByteCount, TraceSnapshotByteCount};
-use crate::error::{LimitError, RunError};
-use crate::program::{ReturnOutput, RunLimits, RuntimeStateSnapshot, StepCount};
+use crate::error::RunError;
+use crate::program::{
+    ReturnOutput, RuntimeStateSnapshot, StepCount, TraceSnapshotByteLimit,
+};
 use crate::rule::{PayloadView, RuleView};
 
 /// Borrowed view of runtime-state bytes.
@@ -116,8 +118,8 @@ impl BorrowedTraceEffect<'_, '_> {
         }
     }
 
-    fn to_snapshot(self, limits: RunLimits) -> Result<TraceSnapshotEffect, RunError> {
-        ensure_trace_len(self.byte_count(), limits)?;
+    fn to_snapshot(self, limit: TraceSnapshotByteLimit) -> Result<TraceSnapshotEffect, TraceSnapshotError> {
+        ensure_trace_len(self.byte_count(), limit)?;
         match self {
             Self::Continue { state } => Ok(TraceSnapshotEffect::Continue {
                 state: RuntimeStateSnapshot::from_vec(
@@ -128,7 +130,7 @@ impl BorrowedTraceEffect<'_, '_> {
                 output: ReturnOutput::from_vec(
                     output
                         .to_vec_with_context(AllocationContext::TraceSnapshot)
-                        .map_err(RunError::from)?,
+                        .map_err(TraceSnapshotError::from)?,
                 ),
             }),
         }
@@ -208,8 +210,11 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
     /// Returns `RunError::Limit` if the event bytes exceed
     /// `RunLimits::trace_snapshot_byte_limit`. Returns `RunError::Allocation` if
     /// snapshot allocation fails.
-    pub fn to_snapshot(self, limits: RunLimits) -> Result<TraceSnapshotEvent<'program>, RunError> {
-        ensure_trace_len(self.byte_count(), limits)?;
+    pub fn to_snapshot(
+        self,
+        limit: TraceSnapshotByteLimit,
+    ) -> Result<TraceSnapshotEvent<'program>, TraceSnapshotError> {
+        ensure_trace_len(self.byte_count(), limit)?;
         match self {
             Self::Initial { state } => Ok(TraceSnapshotEvent::Initial {
                 state: RuntimeStateSnapshot::from_vec(
@@ -219,15 +224,21 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
             Self::Step { step, rule, effect } => Ok(TraceSnapshotEvent::Step {
                 step,
                 rule,
-                effect: effect.to_snapshot(limits)?,
+                effect: effect.to_snapshot(limit)?,
             }),
         }
     }
 }
 
-fn ensure_trace_len(len: TraceSnapshotByteCount, limits: RunLimits) -> Result<(), RunError> {
-    if len.get() > limits.trace_snapshot_byte_limit().get() {
-        return Err(LimitError::trace_snapshot(limits.trace_snapshot_byte_limit(), len).into());
+fn ensure_trace_len(
+    len: TraceSnapshotByteCount,
+    limit: TraceSnapshotByteLimit,
+) -> Result<(), TraceSnapshotError> {
+    if len.get() > limit.get() {
+        return Err(TraceSnapshotError::Limit {
+            limit,
+            attempted_len: len,
+        });
     }
 
     Ok(())

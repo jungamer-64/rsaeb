@@ -52,6 +52,7 @@ impl fmt::Display for AebError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Parse(error) => error.fmt(f),
+            Self::Input(error) => error.fmt(f),
             Self::Run(error) => error.fmt(f),
         }
     }
@@ -139,7 +140,6 @@ impl fmt::Display for PayloadKind {
 impl fmt::Display for RunError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Input(error) => error.fmt(f),
             Self::Allocation(error) => error.fmt(f),
             Self::StateSize(error) => error.fmt(f),
             Self::Limit(error) => error.fmt(f),
@@ -215,14 +215,6 @@ impl fmt::Display for LimitError {
             } => write!(
                 f,
                 "return output limit exceeded; attempted length: {attempted_len}, limit: {}",
-                limit.get(),
-            ),
-            Self::TraceSnapshot {
-                limit,
-                attempted_len,
-            } => write!(
-                f,
-                "trace snapshot limit exceeded; attempted length: {attempted_len}, limit: {}",
                 limit.get(),
             ),
             Self::Step {

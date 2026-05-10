@@ -5,7 +5,9 @@ use crate::allocation::{AllocationContext, try_push, try_reserve_total_exact};
 use crate::bytes::{
     Payload, PayloadByteCount, ReturnOutputByteCount, RuntimeByte, RuntimeStateByteCount,
 };
-use crate::error::{LimitError, RunError, StateLimitContext, StateSizeError, TracedRunError};
+use crate::error::{
+    InputError, LimitError, RunError, StateLimitContext, StateSizeError, TracedRunError,
+};
 use crate::program::{
     Program, ReturnOutput, RunLimits, RunResult, RuntimeStateSnapshot, StepCount, StepLimit,
 };
@@ -25,9 +27,10 @@ impl RuntimeInput {
     ///
     /// # Errors
     ///
-    /// Returns `RunError::Input` when `input` contains a non-ASCII byte.
-    /// Returns `RunError::Allocation` when storing the validated input fails.
-    pub fn parse(input: &[u8]) -> Result<Self, RunError> {
+    /// Returns `InputError` when `input` contains a non-ASCII byte.
+    /// Returns `InputError` before allocation so invalid bytes remain an input
+    /// boundary failure rather than a runtime execution failure.
+    pub fn parse(input: &[u8]) -> Result<Self, InputError> {
         // Validate the whole boundary before allocation so input errors keep
         // precedence over allocation failures.
         for (zero_based_column, byte) in input.iter().copied().enumerate() {

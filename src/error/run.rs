@@ -3,17 +3,12 @@ use core::error::Error;
 use crate::allocation::AllocationError;
 use crate::bytes::{
     NonAsciiInputByte, PayloadByteCount, ReturnOutputByteCount, RuntimeStateByteCount,
-    TraceSnapshotByteCount,
 };
-use crate::program::{
-    ReturnByteLimit, StateByteLimit, StepCount, StepLimit, TraceSnapshotByteLimit,
-};
+use crate::program::{ReturnByteLimit, StateByteLimit, StepCount, StepLimit};
 
 /// Runtime execution error.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RunError {
-    /// Runtime input is invalid.
-    Input(InputError),
     /// A fallible allocation failed during runtime execution.
     Allocation(AllocationError),
     /// A rewrite length could not be represented.
@@ -25,17 +20,10 @@ pub enum RunError {
 impl Error for RunError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Input(error) => Some(error),
             Self::Allocation(error) => Some(error),
             Self::StateSize(error) => Some(error),
             Self::Limit(error) => Some(error),
         }
-    }
-}
-
-impl From<InputError> for RunError {
-    fn from(value: InputError) -> Self {
-        Self::Input(value)
     }
 }
 
@@ -180,13 +168,6 @@ pub enum LimitError {
         /// Return payload length that would have been allocated.
         attempted_len: ReturnOutputByteCount,
     },
-    /// Trace snapshot materialization would exceed the configured trace limit.
-    TraceSnapshot {
-        /// Configured maximum trace snapshot byte length.
-        limit: TraceSnapshotByteLimit,
-        /// Trace state/output snapshot length that would have been allocated.
-        attempted_len: TraceSnapshotByteCount,
-    },
     /// Execution exceeded the configured step limit.
     Step {
         /// Configured maximum step count.
@@ -216,16 +197,6 @@ impl LimitError {
         attempted_len: ReturnOutputByteCount,
     ) -> Self {
         Self::Return {
-            limit,
-            attempted_len,
-        }
-    }
-
-    pub(crate) const fn trace_snapshot(
-        limit: TraceSnapshotByteLimit,
-        attempted_len: TraceSnapshotByteCount,
-    ) -> Self {
-        Self::TraceSnapshot {
             limit,
             attempted_len,
         }
