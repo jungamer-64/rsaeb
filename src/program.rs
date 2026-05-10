@@ -20,7 +20,7 @@ pub const DEFAULT_MAX_STEPS: StepLimit = StepLimit::new(1_000_000);
 pub const DEFAULT_MAX_STATE_LEN: StateByteLimit = StateByteLimit::new(16 * 1024 * 1024);
 /// Default `(return)` output byte budget used by [`RunLimits::new`] and [`RunLimits::default`].
 pub const DEFAULT_MAX_RETURN_LEN: ReturnByteLimit = ReturnByteLimit::new(16 * 1024 * 1024);
-/// Default trace snapshot byte budget used by [`RunLimits::new`] and [`RunLimits::default`].
+/// Default trace snapshot byte budget for callers that want the crate default.
 pub const DEFAULT_MAX_TRACE_SNAPSHOT_LEN: TraceSnapshotByteLimit =
     TraceSnapshotByteLimit::new(16 * 1024 * 1024);
 
@@ -160,7 +160,6 @@ pub struct RunLimits {
     steps: StepLimit,
     state_len: StateByteLimit,
     return_len: ReturnByteLimit,
-    trace_snapshot_len: TraceSnapshotByteLimit,
 }
 
 impl RunLimits {
@@ -171,7 +170,6 @@ impl RunLimits {
             steps: max_steps,
             state_len: DEFAULT_MAX_STATE_LEN,
             return_len: DEFAULT_MAX_RETURN_LEN,
-            trace_snapshot_len: DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
         }
     }
 
@@ -181,13 +179,11 @@ impl RunLimits {
         max_steps: StepLimit,
         max_state_len: StateByteLimit,
         max_return_len: ReturnByteLimit,
-        max_trace_snapshot_len: TraceSnapshotByteLimit,
     ) -> Self {
         Self {
             steps: max_steps,
             state_len: max_state_len,
             return_len: max_return_len,
-            trace_snapshot_len: max_trace_snapshot_len,
         }
     }
 
@@ -207,12 +203,6 @@ impl RunLimits {
     #[must_use]
     pub const fn return_byte_limit(self) -> ReturnByteLimit {
         self.return_len
-    }
-
-    /// Maximum state/output byte length materialized for one trace snapshot event.
-    #[must_use]
-    pub const fn trace_snapshot_byte_limit(self) -> TraceSnapshotByteLimit {
-        self.trace_snapshot_len
     }
 
     /// Returns limits with a different step budget.
@@ -236,15 +226,6 @@ impl RunLimits {
         self
     }
 
-    /// Returns limits with a different trace snapshot byte budget.
-    #[must_use]
-    pub const fn with_trace_snapshot_byte_limit(
-        mut self,
-        max_trace_snapshot_len: TraceSnapshotByteLimit,
-    ) -> Self {
-        self.trace_snapshot_len = max_trace_snapshot_len;
-        self
-    }
 }
 
 impl Default for RunLimits {
