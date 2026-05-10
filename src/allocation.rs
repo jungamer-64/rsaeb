@@ -8,20 +8,16 @@ use core::error::Error;
 /// materialization, and trace snapshot materialization without parsing strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AllocationContext {
-    /// Building the parsed program rule table.
-    ProgramRules,
-    /// Building a compact code-line byte table.
-    CompactCodeLine,
+    /// Parsing and storing a program.
+    ProgramParse,
     /// Building canonical source bytes from structured rule data.
     CanonicalSource,
-    /// Storing a parsed program payload.
-    Payload,
     /// Storing validated runtime input.
     RuntimeInput,
-    /// Storing per-run `(once)` slot state.
-    OnceRuleState,
-    /// Building the next runtime state after a rewrite.
-    RuntimeState,
+    /// Running a program.
+    RuntimeExecution,
+    /// Materializing a payload view outside parser/runtime execution.
+    PayloadView,
     /// Materializing a borrowed runtime-state view outside trace snapshot APIs.
     RuntimeStateView,
     /// Materializing a stable final runtime state as public output bytes.

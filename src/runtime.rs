@@ -27,9 +27,8 @@ impl RuntimeInput {
     ///
     /// # Errors
     ///
-    /// Returns `InputError` when `input` contains a non-ASCII byte.
-    /// Returns `InputError` before allocation so invalid bytes remain an input
-    /// boundary failure rather than a runtime execution failure.
+    /// Returns `InputError::NonAscii` when `input` contains a non-ASCII byte.
+    /// Returns `InputError::Allocation` when storing validated input fails.
     pub fn parse(input: &[u8]) -> Result<Self, InputError> {
         // Validate the whole boundary before allocation so input errors keep
         // precedence over allocation failures.
@@ -305,7 +304,11 @@ impl RewriteScratch {
         capacity: usize,
     ) -> Result<(), crate::allocation::AllocationError> {
         self.bytes.clear();
-        try_reserve_total_exact(&mut self.bytes, capacity, AllocationContext::RuntimeState)
+        try_reserve_total_exact(
+            &mut self.bytes,
+            capacity,
+            AllocationContext::RuntimeExecution,
+        )
     }
 
     fn push_existing(
@@ -313,7 +316,7 @@ impl RewriteScratch {
         source: impl IntoIterator<Item = RuntimeByte>,
     ) -> Result<(), crate::allocation::AllocationError> {
         for byte in source {
-            try_push(&mut self.bytes, byte, AllocationContext::RuntimeState)?;
+            try_push(&mut self.bytes, byte, AllocationContext::RuntimeExecution)?;
         }
 
         Ok(())
@@ -403,13 +406,17 @@ struct OnceRuleStates {
 impl OnceRuleStates {
     fn new(count: crate::rule::RuleCount) -> Result<Self, crate::allocation::AllocationError> {
         let mut states = Vec::new();
-        try_reserve_total_exact(&mut states, count.get(), AllocationContext::OnceRuleState)?;
+        try_reserve_total_exact(
+            &mut states,
+            count.get(),
+            AllocationContext::RuntimeExecution,
+        )?;
 
         for _ in 0..count.get() {
             try_push(
                 &mut states,
                 OnceRuleState::Fresh,
-                AllocationContext::OnceRuleState,
+                AllocationContext::RuntimeExecution,
             )?;
         }
 
@@ -724,9 +731,9 @@ mod tests {
     use super::*;
     use crate::bytes::{CompactByte, Payload, ProgramByte};
     use crate::test_support::{
-        TestFailure, TestResult, ensure, ensure_eq, expect_input_error, expect_return_output,
-        expect_run_error, expect_step_limit, into_result_bytes, result_bytes, run_program,
-        run_source, runtime_input, source_column, source_line_number,
+        TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_input_error,
+        expect_return_output, expect_run_error, expect_step_limit, into_result_bytes, result_bytes,
+        run_program, run_source, runtime_input, source_column, source_line_number,
     };
     use crate::{
         BorrowedTraceEffect, BorrowedTraceEvent, LimitError, PayloadKind, Program, RunLimits,
@@ -871,10 +878,15 @@ mod tests {
 
     #[test]
     fn runtime_input_error_is_structured() -> TestResult {
-        let error = expect_run_error(RuntimeInput::parse("aあ".as_bytes()))?;
-        let error = expect_input_error(error)?;
+        let error = expect_input_error(RuntimeInput::parse("aあ".as_bytes()))?;
 
-        ensure_eq(error.column().get(), 2)?;
+        ensure_matches(
+            matches!(
+                error,
+                InputError::NonAscii { column, .. } if column.get() == 2
+            ),
+            "expected non-ASCII input error at the original column",
+        )?;
         Ok(())
     }
 

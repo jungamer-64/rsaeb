@@ -45,32 +45,40 @@ impl From<LimitError> for RunError {
     }
 }
 
-/// Runtime input validation error.
+/// Runtime input boundary error.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InputError {
-    column: InputColumn,
-    byte: NonAsciiInputByte,
+pub enum InputError {
+    /// Runtime input contained a non-ASCII byte.
+    NonAscii {
+        /// One-based input column.
+        column: InputColumn,
+        /// Rejected byte.
+        byte: NonAsciiInputByte,
+    },
+    /// Storing validated runtime input failed.
+    Allocation(AllocationError),
 }
 
 impl InputError {
-    pub(crate) const fn new(column: InputColumn, byte: NonAsciiInputByte) -> Self {
-        Self { column, byte }
-    }
-
-    /// One-based input column.
-    #[must_use]
-    pub const fn column(&self) -> InputColumn {
-        self.column
-    }
-
-    /// Rejected byte.
-    #[must_use]
-    pub const fn byte(&self) -> NonAsciiInputByte {
-        self.byte
+    pub(crate) const fn non_ascii(column: InputColumn, byte: NonAsciiInputByte) -> Self {
+        Self::NonAscii { column, byte }
     }
 }
 
-impl Error for InputError {}
+impl From<AllocationError> for InputError {
+    fn from(value: AllocationError) -> Self {
+        Self::Allocation(value)
+    }
+}
+
+impl Error for InputError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::NonAscii { .. } => None,
+            Self::Allocation(error) => Some(error),
+        }
+    }
+}
 
 /// One-based runtime input column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

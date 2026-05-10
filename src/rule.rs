@@ -154,7 +154,7 @@ impl<'program> PayloadView<'program> {
     ///
     /// Returns `AllocationError` if the output buffer cannot be allocated.
     pub fn to_vec(self) -> Result<Vec<u8>, AllocationError> {
-        self.to_vec_with_context(AllocationContext::Payload)
+        self.to_vec_with_context(AllocationContext::PayloadView)
     }
 
     pub(crate) fn to_vec_with_context(

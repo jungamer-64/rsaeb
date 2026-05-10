@@ -3,7 +3,10 @@ use core::convert::Infallible;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push};
 use crate::bytes::{ReturnOutputByteCount, RuntimeStateByteCount};
-use crate::error::{AebError, ParseError, RunError, TracedRunError};
+use crate::error::{
+    AebError, FallibleTraceSnapshotRunError, ParseError, RunError, TraceSnapshotError,
+    TraceSnapshotRunError, TracedRunError,
+};
 use crate::parser::parse_program_impl;
 use crate::rule::{
     OnceRuleSlot, ParsedRule, Rule, RuleCount, RuleExecution, RulePosition, RuleRepeat, RuleView,
@@ -127,8 +130,8 @@ impl StepCount {
 /// # Errors
 ///
 /// Returns `AebError::Parse` when `source` is not valid A=B program syntax.
-/// Returns `AebError::Run` when `input` is invalid, an allocation fails, or a
-/// configured runtime limit would be exceeded.
+/// Returns `AebError::Input` when `input` is invalid or cannot be stored.
+/// Returns `AebError::Run` when runtime execution fails.
 pub fn run_bytes(source: &[u8], input: &[u8], limits: RunLimits) -> Result<RunResult, AebError> {
     let program = Program::parse_bytes(source)?;
     let input = RuntimeInput::parse(input)?;
@@ -140,8 +143,8 @@ pub fn run_bytes(source: &[u8], input: &[u8], limits: RunLimits) -> Result<RunRe
 /// # Errors
 ///
 /// Returns `AebError::Parse` when `source` is not valid A=B program syntax.
-/// Returns `AebError::Run` when `input` is invalid, an allocation fails, or a
-/// configured runtime limit would be exceeded.
+/// Returns `AebError::Input` when `input` is invalid or cannot be stored.
+/// Returns `AebError::Run` when runtime execution fails.
 pub fn run_str(source: &str, input: &[u8], limits: RunLimits) -> Result<RunResult, AebError> {
     run_bytes(source.as_bytes(), input, limits)
 }
@@ -250,8 +253,8 @@ impl Default for RunLimits {
     }
 }
 
-enum TraceSnapshotError<E> {
-    Run(RunError),
+enum SnapshotTraceCallbackError<E> {
+    Snapshot(TraceSnapshotError),
     Trace(E),
 }
 
@@ -277,13 +280,13 @@ impl RuleSet {
 
     pub(crate) fn push_parsed_rule(&mut self, parsed: ParsedRule) -> Result<(), AllocationError> {
         let position = RulePosition::from_zero_based(self.rules.len())
-            .ok_or_else(|| AllocationError::capacity_overflow(AllocationContext::ProgramRules))?;
+            .ok_or_else(|| AllocationError::capacity_overflow(AllocationContext::ProgramParse))?;
 
         let repeat = parsed.repeat();
         let next_once_rule_slots = match repeat {
             RuleRepeat::Always => self.once_rule_slots,
             RuleRepeat::Once => self.once_rule_slots.checked_add(1).ok_or_else(|| {
-                AllocationError::capacity_overflow(AllocationContext::ProgramRules)
+                AllocationError::capacity_overflow(AllocationContext::ProgramParse)
             })?,
         };
         let execution = match repeat {
@@ -294,7 +297,7 @@ impl RuleSet {
         try_push(
             &mut self.rules,
             Rule::from_parsed(parsed, position, execution),
-            AllocationContext::ProgramRules,
+            AllocationContext::ProgramParse,
         )?;
 
         self.once_rule_slots = next_once_rule_slots;
@@ -384,15 +387,15 @@ impl Program {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` for ordinary runtime failures. Trace snapshot
-    /// materialization is also checked against `RunLimits` and may return
-    /// `RunError::Limit` or `RunError::Allocation`.
+    /// Returns `TraceSnapshotRunError::Run` for ordinary runtime failures.
+    /// Returns `TraceSnapshotRunError::Snapshot` when snapshot materialization
+    /// exceeds `RunLimits::trace_snapshot_byte_limit` or allocation fails.
     pub fn run_with_trace_snapshots<'program, F>(
         &'program self,
         input: RuntimeInput,
         limits: RunLimits,
         mut trace: F,
-    ) -> Result<RunResult, RunError>
+    ) -> Result<RunResult, TraceSnapshotRunError>
     where
         F: FnMut(TraceSnapshotEvent<'program>),
     {
@@ -401,8 +404,13 @@ impl Program {
             Ok::<(), Infallible>(())
         }) {
             Ok(result) => Ok(result),
-            Err(TracedRunError::Run(error)) => Err(error),
-            Err(TracedRunError::Trace(error)) => match error {},
+            Err(FallibleTraceSnapshotRunError::Run(error)) => {
+                Err(TraceSnapshotRunError::Run(error))
+            }
+            Err(FallibleTraceSnapshotRunError::Snapshot(error)) => {
+                Err(TraceSnapshotRunError::Snapshot(error))
+            }
+            Err(FallibleTraceSnapshotRunError::Trace(error)) => match error {},
         }
     }
 
@@ -410,31 +418,35 @@ impl Program {
     ///
     /// # Errors
     ///
-    /// Returns `TracedRunError::Run` for runtime failures, including trace
-    /// snapshot allocation or snapshot-size failures. Returns
-    /// `TracedRunError::Trace` when the user-provided trace callback returns an
-    /// error.
+    /// Returns `FallibleTraceSnapshotRunError::Run` for runtime failures.
+    /// Returns `FallibleTraceSnapshotRunError::Snapshot` for snapshot
+    /// materialization failures. Returns
+    /// `FallibleTraceSnapshotRunError::Trace` when the user-provided trace
+    /// callback returns an error.
     pub fn try_run_with_trace_snapshots<'program, F, E>(
         &'program self,
         input: RuntimeInput,
         limits: RunLimits,
         mut trace: F,
-    ) -> Result<RunResult, TracedRunError<E>>
+    ) -> Result<RunResult, FallibleTraceSnapshotRunError<E>>
     where
         F: FnMut(TraceSnapshotEvent<'program>) -> Result<(), E>,
     {
         let result = self.try_run_with_borrowed_trace(input, limits, |event| {
-            let snapshot = event.to_snapshot(limits).map_err(TraceSnapshotError::Run)?;
-            trace(snapshot).map_err(TraceSnapshotError::Trace)
+            let snapshot = event
+                .to_snapshot(limits.trace_snapshot_byte_limit())
+                .map_err(SnapshotTraceCallbackError::Snapshot)?;
+            trace(snapshot).map_err(SnapshotTraceCallbackError::Trace)
         });
 
         match result {
             Ok(result) => Ok(result),
-            Err(
-                TracedRunError::Run(error) | TracedRunError::Trace(TraceSnapshotError::Run(error)),
-            ) => Err(TracedRunError::Run(error)),
-            Err(TracedRunError::Trace(TraceSnapshotError::Trace(error))) => {
-                Err(TracedRunError::Trace(error))
+            Err(TracedRunError::Run(error)) => Err(FallibleTraceSnapshotRunError::Run(error)),
+            Err(TracedRunError::Trace(SnapshotTraceCallbackError::Snapshot(error))) => {
+                Err(FallibleTraceSnapshotRunError::Snapshot(error))
+            }
+            Err(TracedRunError::Trace(SnapshotTraceCallbackError::Trace(error))) => {
+                Err(FallibleTraceSnapshotRunError::Trace(error))
             }
         }
     }
@@ -620,9 +632,10 @@ mod tests {
         result_bytes, run_program, runtime_input, trace_event_bytes,
     };
     use crate::{
-        LimitError, ReturnByteLimit, ReturnOutputByteCount, RuleActionView, RuleAnchor, RuleCount,
-        RuleRepeat, RuntimeInput, RuntimeStateByteCount, StateByteLimit, StateLimitContext,
-        TraceSnapshotByteLimit, TraceSnapshotEffect, TraceSnapshotEvent, run_bytes, run_str,
+        AebError, InputError, LimitError, ReturnByteLimit, ReturnOutputByteCount, RuleActionView,
+        RuleAnchor, RuleCount, RuleRepeat, RuntimeInput, RuntimeStateByteCount, StateByteLimit,
+        StateLimitContext, TraceSnapshotByteLimit, TraceSnapshotEffect, TraceSnapshotEvent,
+        run_bytes, run_str,
     };
     use std::vec::Vec;
 
@@ -642,6 +655,20 @@ mod tests {
         let result = run_bytes(b"a=b#\xff", b"a", RunLimits::default())?;
         expect_stable_output(&result, b"b")?;
         Ok(())
+    }
+
+    #[test]
+    fn public_free_run_reports_input_boundary_errors_separately() -> TestResult {
+        let result = run_bytes(b"a=b", &[0xff], RunLimits::default());
+
+        ensure_matches(
+            matches!(
+                result,
+                Err(AebError::Input(InputError::NonAscii { column, .. }))
+                    if column.get() == 1
+            ),
+            "expected one-shot run input error",
+        )
     }
 
     #[test]

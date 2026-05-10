@@ -3,21 +3,19 @@ use core::fmt;
 use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind};
 
 use super::{
-    AebError, InputColumn, InputError, LeftModifierKind, LimitError, ParseError, ParseErrorKind,
-    ParseErrorLocation, PayloadKind, RightActionKind, RunError, StateLimitContext, StateSizeError,
-    TracedRunError,
+    AebError, FallibleTraceSnapshotRunError, InputColumn, InputError, LeftModifierKind, LimitError,
+    ParseError, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind, RunError,
+    StateLimitContext, StateSizeError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ProgramRules => f.write_str("program rule table"),
-            Self::CompactCodeLine => f.write_str("compact code line"),
+            Self::ProgramParse => f.write_str("program parse"),
             Self::CanonicalSource => f.write_str("canonical source bytes"),
-            Self::Payload => f.write_str("program payload"),
             Self::RuntimeInput => f.write_str("runtime input state"),
-            Self::OnceRuleState => f.write_str("once rule state"),
-            Self::RuntimeState => f.write_str("runtime rewrite state"),
+            Self::RuntimeExecution => f.write_str("runtime execution"),
+            Self::PayloadView => f.write_str("payload view"),
             Self::RuntimeStateView => f.write_str("runtime state view"),
             Self::FinalOutput => f.write_str("final output"),
             Self::ReturnOutput => f.write_str("return output"),
@@ -159,14 +157,54 @@ where
     }
 }
 
+impl fmt::Display for TraceSnapshotError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Limit {
+                limit,
+                attempted_len,
+            } => write!(
+                f,
+                "trace snapshot limit exceeded; attempted length: {attempted_len}, limit: {}",
+                limit.get(),
+            ),
+            Self::Allocation(error) => error.fmt(f),
+        }
+    }
+}
+
+impl fmt::Display for TraceSnapshotRunError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Run(error) => error.fmt(f),
+            Self::Snapshot(error) => error.fmt(f),
+        }
+    }
+}
+
+impl<E> fmt::Display for FallibleTraceSnapshotRunError<E>
+where
+    E: fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Run(error) => error.fmt(f),
+            Self::Snapshot(error) => error.fmt(f),
+            Self::Trace(error) => write!(f, "trace callback failed: {error}"),
+        }
+    }
+}
+
 impl fmt::Display for InputError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "input error: non-ASCII byte 0x{:02x} at column {}",
-            self.byte().get(),
-            self.column(),
-        )
+        match self {
+            Self::NonAscii { column, byte } => write!(
+                f,
+                "input error: non-ASCII byte 0x{:02x} at column {column}",
+                byte.get(),
+            ),
+            Self::Allocation(error) => error.fmt(f),
+        }
     }
 }
 
@@ -290,8 +328,7 @@ mod tests {
 
     #[test]
     fn input_error_display_keeps_byte_and_original_column() -> TestResult {
-        let error = expect_run_error(RuntimeInput::parse(&[0xff]))?;
-        let error = expect_input_error(error)?;
+        let error = expect_input_error(RuntimeInput::parse(&[0xff]))?;
 
         ensure_eq(
             error.to_string(),

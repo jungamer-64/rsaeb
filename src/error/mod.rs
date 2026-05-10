@@ -15,7 +15,9 @@ pub use parse::{
     LeftModifierKind, ParseError, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind,
 };
 pub use run::{InputColumn, InputError, LimitError, RunError, StateLimitContext, StateSizeError};
-pub use traced::TracedRunError;
+pub use traced::{
+    FallibleTraceSnapshotRunError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
+};
 
 /// Top-level interpreter error.
 #[derive(Debug, PartialEq, Eq)]

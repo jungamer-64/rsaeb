@@ -580,7 +580,7 @@ outlive that program:
 ```rust
 use rsaeb::{Program, RunLimits, RunOutcome, RuntimeInput, StepLimit, TraceSnapshotEffect, TraceSnapshotEvent};
 
-fn main() -> Result<(), rsaeb::AebError> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse_str("a=b\nb=(return)ok")?;
     let mut events = Vec::new();
 
@@ -614,16 +614,19 @@ fn main() -> Result<(), rsaeb::AebError> {
 }
 ```
 
-Fallible sinks use `try_run_with_borrowed_trace` or
-`try_run_with_trace_snapshots`. Runtime errors and trace-sink errors are
-separated by `TracedRunError`.
+Fallible borrowed sinks use `try_run_with_borrowed_trace`, which separates
+runtime errors and trace-sink errors with `TracedRunError`. Snapshot tracing has
+one more failure domain: `run_with_trace_snapshots` returns
+`TraceSnapshotRunError`, and `try_run_with_trace_snapshots` returns
+`FallibleTraceSnapshotRunError` so runtime failures, snapshot materialization
+failures, and callback failures cannot collapse into one variant.
 
 ## Error model
 
 The library error model is intentionally split:
 
 ```rust
-use rsaeb::{Program, RunError, RuntimeInput};
+use rsaeb::{InputError, Program, RuntimeInput};
 
 fn main() -> Result<(), rsaeb::AebError> {
     match Program::parse_str("a=b=c") {
@@ -631,10 +634,10 @@ fn main() -> Result<(), rsaeb::AebError> {
         Ok(_) => panic!("expected parse error"),
     }
 
-    let run_error = RuntimeInput::parse("aあ".as_bytes());
+    let input_error = RuntimeInput::parse("aあ".as_bytes());
 
-    if let Err(RunError::Input(input_error)) = run_error {
-        assert_eq!(input_error.column().get(), 2);
+    if let Err(InputError::NonAscii { column, .. }) = input_error {
+        assert_eq!(column.get(), 2);
     }
 
     Ok(())
@@ -644,18 +647,23 @@ fn main() -> Result<(), rsaeb::AebError> {
 Allocation failures are structured:
 
 ```rust
-use rsaeb::{AllocationContext, RunError};
+use rsaeb::{AllocationContext, RunError, TraceSnapshotError};
 
-fn inspect(error: RunError) {
+fn inspect_run(error: RunError) {
     if let RunError::Allocation(error) = error {
         match error.context() {
-            AllocationContext::RuntimeState => {
+            AllocationContext::RuntimeExecution => {
                 eprintln!("failed to allocate next rewrite state");
             }
-            AllocationContext::TraceSnapshot => {
-                eprintln!("failed to allocate trace snapshot");
-            }
             _ => {}
+        }
+    }
+}
+
+fn inspect_snapshot(error: TraceSnapshotError) {
+    if let TraceSnapshotError::Allocation(error) = error {
+        if error.context() == AllocationContext::TraceSnapshot {
+            eprintln!("failed to allocate trace snapshot");
         }
     }
 }
@@ -665,7 +673,9 @@ State length arithmetic overflow is separate from allocation failure and is
 reported as `RunError::StateSize`. Configured byte budgets and step budgets are
 reported as `RunError::Limit(LimitError::...)`. Step-limit errors report the
 last state length, not the state bytes, so reporting the step limit cannot turn
-into an allocation failure. Use borrowed tracing when the last state bytes are
+into an allocation failure. Trace snapshot byte limits are reported through
+`TraceSnapshotError`, not `RunError::Limit`, because snapshot materialization is
+outside runtime execution. Use borrowed tracing when the last state bytes are
 needed for diagnostics.
 Filesystem failures are not part of the library error model. External I/O must
 be handled before bytes enter `Program::parse_bytes`, `Program::parse_str`,
@@ -699,6 +709,7 @@ Program construction and execution:
 Runtime configuration and result:
 
 - `RuntimeInput`
+- `RuntimeInput::parse(input)`
 - `PayloadByteCount`
 - `RuntimeStateByteCount`
 - `ReturnOutputByteCount`
@@ -742,7 +753,11 @@ Tracing:
 - `BorrowedTraceEffect<'program, 'run>`
 - `TraceSnapshotEvent<'program>`
 - `TraceSnapshotEffect`
+- `BorrowedTraceEvent::to_snapshot(trace_snapshot_limit)`
 - `TracedRunError<E>`
+- `TraceSnapshotError`
+- `TraceSnapshotRunError`
+- `FallibleTraceSnapshotRunError<E>`
 
 Errors:
 
@@ -763,6 +778,9 @@ Errors:
 - `RunError`
 - `InputColumn`
 - `InputError`
+- `TraceSnapshotError`
+- `TraceSnapshotRunError`
+- `FallibleTraceSnapshotRunError<E>`
 - `AllocationError`
 - `AllocationErrorKind`
 - `AllocationContext`

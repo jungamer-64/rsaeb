@@ -294,7 +294,7 @@ pub(crate) struct AsciiByte(u8);
 impl AsciiByte {
     pub(crate) fn parse(byte: u8, zero_based_column: usize) -> Result<Self, InputError> {
         if let Some(rejected) = NonAsciiInputByte::parse(byte) {
-            Err(InputError::new(
+            Err(InputError::non_ascii(
                 InputColumn::from_zero_based(zero_based_column),
                 rejected,
             ))
@@ -394,12 +394,12 @@ impl Payload {
         }
 
         let mut bytes = Vec::new();
-        try_reserve_total_exact(&mut bytes, input.len(), AllocationContext::Payload)
+        try_reserve_total_exact(&mut bytes, input.len(), AllocationContext::ProgramParse)
             .map_err(|error| ParseError::at_line(line_number, ParseErrorKind::Allocation(error)))?;
 
         for byte in input.iter().copied() {
             let parsed = ProgramByte::parse(byte, line_number, payload_kind)?;
-            try_push(&mut bytes, parsed, AllocationContext::Payload).map_err(|error| {
+            try_push(&mut bytes, parsed, AllocationContext::ProgramParse).map_err(|error| {
                 ParseError::at_line(line_number, ParseErrorKind::Allocation(error))
             })?;
         }

@@ -6,13 +6,15 @@ use std::vec::Vec;
 use crate::{
     AebError, AllocationError, InputError, LimitError, ParseError, ParseErrorLocation, Program,
     RunError, RunLimits, RunOutcome, RunResult, RuntimeInput, SourceColumn, SourceLineNumber,
-    SourcePosition, StepLimit, TraceSnapshotEffect, TraceSnapshotEvent,
+    SourcePosition, StepLimit, TraceSnapshotEffect, TraceSnapshotEvent, TraceSnapshotRunError,
 };
 
 pub(crate) enum TestFailure {
     Message(&'static str),
     Parse(ParseError),
+    Input(InputError),
     Run(RunError),
+    TraceSnapshot(TraceSnapshotRunError),
     Aeb(AebError),
     Utf8(FromUtf8Error),
     Allocation(AllocationError),
@@ -23,7 +25,11 @@ impl core::fmt::Debug for TestFailure {
         match self {
             Self::Message(message) => formatter.debug_tuple("Message").field(message).finish(),
             Self::Parse(error) => formatter.debug_tuple("Parse").field(error).finish(),
+            Self::Input(error) => formatter.debug_tuple("Input").field(error).finish(),
             Self::Run(error) => formatter.debug_tuple("Run").field(error).finish(),
+            Self::TraceSnapshot(error) => {
+                formatter.debug_tuple("TraceSnapshot").field(error).finish()
+            }
             Self::Aeb(error) => formatter.debug_tuple("Aeb").field(error).finish(),
             Self::Utf8(error) => formatter.debug_tuple("Utf8").field(error).finish(),
             Self::Allocation(error) => formatter.debug_tuple("Allocation").field(error).finish(),
@@ -40,6 +46,12 @@ impl From<ParseError> for TestFailure {
 impl From<RunError> for TestFailure {
     fn from(value: RunError) -> Self {
         Self::Run(value)
+    }
+}
+
+impl From<TraceSnapshotRunError> for TestFailure {
+    fn from(value: TraceSnapshotRunError) -> Self {
+        Self::TraceSnapshot(value)
     }
 }
 
@@ -63,7 +75,7 @@ impl From<AllocationError> for TestFailure {
 
 impl From<InputError> for TestFailure {
     fn from(value: InputError) -> Self {
-        Self::Run(RunError::Input(value))
+        Self::Input(value)
     }
 }
 
@@ -205,28 +217,26 @@ pub(crate) fn source_column(one_based: usize) -> Result<SourceColumn, TestFailur
 pub(crate) fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::Step { .. }) => Ok(error),
-        RunError::Input(_)
-        | RunError::Allocation(_)
-        | RunError::StateSize(_)
-        | RunError::Limit(_) => Err(TestFailure::Message("expected step limit error")),
+        RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_) => {
+            Err(TestFailure::Message("expected step limit error"))
+        }
     }
 }
 
 pub(crate) fn expect_state_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::State { .. }) => Ok(error),
-        RunError::Input(_)
-        | RunError::Allocation(_)
-        | RunError::StateSize(_)
-        | RunError::Limit(_) => Err(TestFailure::Message("expected state limit error")),
+        RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_) => {
+            Err(TestFailure::Message("expected state limit error"))
+        }
     }
 }
 
-pub(crate) fn expect_input_error(error: RunError) -> Result<InputError, TestFailure> {
-    match error {
-        RunError::Input(error) => Ok(error),
-        RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_) => {
-            Err(TestFailure::Message("expected input error"))
-        }
+pub(crate) fn expect_input_error<T>(
+    result: Result<T, InputError>,
+) -> Result<InputError, TestFailure> {
+    match result {
+        Ok(_) => Err(TestFailure::Message("expected input error")),
+        Err(error) => Ok(error),
     }
 }

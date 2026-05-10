@@ -135,10 +135,12 @@
 //!
 //! # Error model
 //!
-//! Source parsing, runtime execution, allocation failure, configured limits, and
-//! user trace-sink failures are reported with structured error types such as
-//! [`ParseError`], [`RunError`], [`LimitError`], and [`TracedRunError`].
-//! [`AebError`] is the convenience umbrella used by one-shot helpers.
+//! Source parsing, runtime input validation, runtime execution, trace snapshot
+//! materialization, and user trace-sink failures are reported with structured
+//! error types such as [`ParseError`], [`InputError`], [`RunError`],
+//! [`TraceSnapshotError`], [`TraceSnapshotRunError`],
+//! [`FallibleTraceSnapshotRunError`], and [`TracedRunError`]. [`AebError`] is
+//! the convenience umbrella used by one-shot helpers.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -184,9 +186,9 @@ pub use bytes::{
     ReservedSyntaxByte, ReturnOutputByteCount, RuntimeStateByteCount, TraceSnapshotByteCount,
 };
 pub use error::{
-    AebError, InputColumn, InputError, LeftModifierKind, LimitError, ParseError, ParseErrorKind,
-    ParseErrorLocation, PayloadKind, RightActionKind, RunError, StateLimitContext, StateSizeError,
-    TracedRunError,
+    AebError, FallibleTraceSnapshotRunError, InputColumn, InputError, LeftModifierKind, LimitError,
+    ParseError, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind, RunError,
+    StateLimitContext, StateSizeError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
 };
 pub use program::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,

@@ -16,7 +16,7 @@ fn source_line_number(zero_based_line: usize) -> Result<SourceLineNumber, ParseE
     SourceLineNumber::from_zero_based(zero_based_line).ok_or_else(|| {
         parse_allocation_error(
             SourceLineNumber::MAX,
-            AllocationError::capacity_overflow(AllocationContext::CompactCodeLine),
+            AllocationError::capacity_overflow(AllocationContext::ProgramParse),
         )
     })
 }
@@ -28,7 +28,7 @@ fn source_column(
     SourceColumn::from_zero_based(zero_based_column).ok_or_else(|| {
         parse_allocation_error(
             line_number,
-            AllocationError::capacity_overflow(AllocationContext::CompactCodeLine),
+            AllocationError::capacity_overflow(AllocationContext::ProgramParse),
         )
     })
 }
@@ -59,7 +59,7 @@ impl<'source> RawSourceLine<'source> {
             let rejected = NonAsciiCodeByte::parse(byte).ok_or_else(|| {
                 parse_allocation_error(
                     self.line_number,
-                    AllocationError::capacity_overflow(AllocationContext::CompactCodeLine),
+                    AllocationError::capacity_overflow(AllocationContext::ProgramParse),
                 )
             })?;
             return Err(ParseError::at_position(
@@ -105,13 +105,13 @@ impl CodeLine<'_> {
             compact_len = compact_len.checked_add(1).ok_or_else(|| {
                 parse_allocation_error(
                     self.line_number,
-                    AllocationError::capacity_overflow(AllocationContext::CompactCodeLine),
+                    AllocationError::capacity_overflow(AllocationContext::ProgramParse),
                 )
             })?;
         }
 
         let mut bytes = Vec::new();
-        try_reserve_total_exact(&mut bytes, compact_len, AllocationContext::CompactCodeLine)
+        try_reserve_total_exact(&mut bytes, compact_len, AllocationContext::ProgramParse)
             .map_err(|error| parse_allocation_error(self.line_number, error))?;
 
         for (zero_based_column, byte) in self.bytes.iter().copied().enumerate() {
@@ -122,7 +122,7 @@ impl CodeLine<'_> {
             try_push(
                 &mut bytes,
                 CompactByte::new(byte, source_column(zero_based_column, self.line_number)?),
-                AllocationContext::CompactCodeLine,
+                AllocationContext::ProgramParse,
             )
             .map_err(|error| parse_allocation_error(self.line_number, error))?;
         }
@@ -178,7 +178,7 @@ impl NonEmptyCompactCodeLine {
                 RuleSyntaxSide::Left => &mut left,
                 RuleSyntaxSide::Right => &mut right,
             };
-            try_push(target, byte, AllocationContext::CompactCodeLine)
+            try_push(target, byte, AllocationContext::ProgramParse)
                 .map_err(|error| parse_allocation_error(self.line_number, error))?;
         }
 
@@ -302,7 +302,7 @@ impl<'code> LeftAfterRepeat<'code> {
                 .ok_or_else(|| {
                     parse_allocation_error(
                         self.line_number,
-                        AllocationError::capacity_overflow(AllocationContext::CompactCodeLine),
+                        AllocationError::capacity_overflow(AllocationContext::ProgramParse),
                     )
                 })?;
             return Err(ParseError::at_position(
@@ -509,7 +509,7 @@ fn reject_nested_rhs_action(
             .ok_or_else(|| {
                 parse_allocation_error(
                     line_number,
-                    AllocationError::capacity_overflow(AllocationContext::CompactCodeLine),
+                    AllocationError::capacity_overflow(AllocationContext::ProgramParse),
                 )
             })?;
         return Err(ParseError::at_position(

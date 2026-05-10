@@ -2,10 +2,8 @@ use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeStateByteCount, TraceSnapshotByteCount};
-use crate::error::RunError;
-use crate::program::{
-    ReturnOutput, RuntimeStateSnapshot, StepCount, TraceSnapshotByteLimit,
-};
+use crate::error::TraceSnapshotError;
+use crate::program::{ReturnOutput, RuntimeStateSnapshot, StepCount, TraceSnapshotByteLimit};
 use crate::rule::{PayloadView, RuleView};
 
 /// Borrowed view of runtime-state bytes.
@@ -118,7 +116,10 @@ impl BorrowedTraceEffect<'_, '_> {
         }
     }
 
-    fn to_snapshot(self, limit: TraceSnapshotByteLimit) -> Result<TraceSnapshotEffect, TraceSnapshotError> {
+    fn to_snapshot(
+        self,
+        limit: TraceSnapshotByteLimit,
+    ) -> Result<TraceSnapshotEffect, TraceSnapshotError> {
         ensure_trace_len(self.byte_count(), limit)?;
         match self {
             Self::Continue { state } => Ok(TraceSnapshotEffect::Continue {
@@ -207,9 +208,8 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
     ///
     /// # Errors
     ///
-    /// Returns `RunError::Limit` if the event bytes exceed
-    /// `RunLimits::trace_snapshot_byte_limit`. Returns `RunError::Allocation` if
-    /// snapshot allocation fails.
+    /// Returns `TraceSnapshotError::Limit` if the event bytes exceed `limit`.
+    /// Returns `TraceSnapshotError::Allocation` if snapshot allocation fails.
     pub fn to_snapshot(
         self,
         limit: TraceSnapshotByteLimit,
@@ -251,8 +251,10 @@ mod tests {
         expect_return_output, result_bytes, runtime_input, trace_event_bytes,
     };
     use crate::{
-        BorrowedTraceEffect, BorrowedTraceEvent, Program, RuleActionView, RunLimits,
-        RuntimeStateByteCount, StepLimit, TraceSnapshotEffect, TraceSnapshotEvent, TracedRunError,
+        BorrowedTraceEffect, BorrowedTraceEvent, FallibleTraceSnapshotRunError, Program,
+        RuleActionView, RunError, RunLimits, RuntimeStateByteCount, StepLimit,
+        TraceSnapshotByteCount, TraceSnapshotByteLimit, TraceSnapshotEffect, TraceSnapshotError,
+        TraceSnapshotEvent, TraceSnapshotRunError,
     };
     use std::vec::Vec;
 
@@ -358,6 +360,78 @@ mod tests {
     }
 
     #[test]
+    fn borrowed_trace_to_snapshot_uses_only_snapshot_limit() -> TestResult {
+        let program = Program::parse_str("a=b")?;
+        let mut materialization = None;
+
+        program.run_with_borrowed_trace(
+            runtime_input(b"a")?,
+            RunLimits::new(StepLimit::new(10)),
+            |event| {
+                if materialization.is_none() {
+                    materialization = Some(event.to_snapshot(TraceSnapshotByteLimit::new(0)));
+                }
+            },
+        )?;
+
+        ensure_eq(
+            materialization.ok_or(TestFailure::Message("expected trace event"))?,
+            Err(TraceSnapshotError::Limit {
+                limit: TraceSnapshotByteLimit::new(0),
+                attempted_len: TraceSnapshotByteCount::new(1),
+            }),
+        )
+    }
+
+    #[test]
+    fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult {
+        let program = Program::parse_str("a=b")?;
+        let runtime_error = program.run_with_trace_snapshots(
+            runtime_input(b"a")?,
+            RunLimits::new(StepLimit::new(0)),
+            |_event| {},
+        );
+
+        ensure_matches(
+            matches!(
+                runtime_error,
+                Err(TraceSnapshotRunError::Run(RunError::Limit(_)))
+            ),
+            "expected runtime failure variant",
+        )?;
+
+        let snapshot_error = program.run_with_trace_snapshots(
+            runtime_input(b"a")?,
+            RunLimits::bounded(
+                StepLimit::new(10),
+                crate::StateByteLimit::new(10),
+                crate::ReturnByteLimit::new(10),
+                TraceSnapshotByteLimit::new(0),
+            ),
+            |_event| {},
+        );
+
+        ensure_eq(
+            snapshot_error,
+            Err(TraceSnapshotRunError::Snapshot(TraceSnapshotError::Limit {
+                limit: TraceSnapshotByteLimit::new(0),
+                attempted_len: TraceSnapshotByteCount::new(1),
+            })),
+        )?;
+
+        let sink_error = program.try_run_with_trace_snapshots(
+            runtime_input(b"a")?,
+            RunLimits::new(StepLimit::new(10)),
+            |_event| Err::<(), _>("trace sink full"),
+        );
+
+        ensure_eq(
+            sink_error,
+            Err(FallibleTraceSnapshotRunError::Trace("trace sink full")),
+        )
+    }
+
+    #[test]
     fn fallible_trace_callback_can_abort_execution() -> TestResult {
         let program = Program::parse_str("a=b\nb=c")?;
         let limits = RunLimits::new(StepLimit::new(10_000));
@@ -365,7 +439,10 @@ mod tests {
             Err::<(), _>("trace sink full")
         });
 
-        ensure_eq(result, Err(TracedRunError::Trace("trace sink full")))?;
+        ensure_eq(
+            result,
+            Err(FallibleTraceSnapshotRunError::Trace("trace sink full")),
+        )?;
         Ok(())
     }
 
