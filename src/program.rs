@@ -11,7 +11,7 @@ use crate::parser::parse_program_impl;
 use crate::rule::{
     OnceRuleSlot, ParsedRule, Rule, RuleCount, RuleExecution, RulePosition, RuleRepeat, RuleView,
 };
-use crate::runtime::{Runtime, RuntimeInput};
+use crate::runtime::{Execution, RuntimeInput};
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
 const DEFAULT_BYTE_BUDGET: usize = 16_777_216;
@@ -359,7 +359,7 @@ impl Program {
     /// limit, an allocation fails, state-size arithmetic overflows, or a
     /// configured `RunLimits` budget would be exceeded.
     pub fn run(&self, input: RuntimeInput, limits: RunLimits) -> Result<RunResult, RunError> {
-        Runtime::new(self, input, limits)?.run()
+        Execution::new(self, input, limits)?.run()
     }
 
     /// Runs this program and emits trace-snapshot, infallible events.
@@ -480,7 +480,7 @@ impl Program {
     where
         F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
     {
-        Runtime::new(self, input, limits)
+        Execution::new(self, input, limits)
             .map_err(TracedRunError::Run)?
             .run_with_borrowed_trace(trace)
     }

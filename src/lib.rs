@@ -200,7 +200,7 @@ pub use rule::{
     PayloadView, RuleActionView, RuleAnchor, RuleCount, RuleNumber, RulePosition, RuleRepeat,
     RuleView,
 };
-pub use runtime::RuntimeInput;
+pub use runtime::{Execution, RuntimeInput};
 pub use source::{SourceColumn, SourceLineNumber, SourcePosition};
 pub use trace::{
     BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView, TraceSnapshotEffect,

@@ -503,8 +503,12 @@ impl StepBudget {
     }
 }
 
+/// Stateful execution of one parsed program against one runtime input.
+///
+/// An execution owns the mutable runtime state, rewrite scratch buffer,
+/// completed-step budget, and per-run `(once)` state for one invocation.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct Runtime<'program> {
+pub struct Execution<'program> {
     program: &'program Program,
     state: State,
     scratch: RewriteScratch,
@@ -513,7 +517,7 @@ pub(crate) struct Runtime<'program> {
     limits: RunLimits,
 }
 
-impl<'program> Runtime<'program> {
+impl<'program> Execution<'program> {
     pub(crate) fn new(
         program: &'program Program,
         input: RuntimeInput,
