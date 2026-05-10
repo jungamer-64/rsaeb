@@ -78,22 +78,36 @@ pub enum ParseErrorKind {
     /// A fallible allocation failed while parsing source.
     Allocation(AllocationError),
     /// A non-ASCII byte appeared before the line comment marker.
-    NonAsciiInCode { byte: NonAsciiCodeByte },
+    NonAsciiInCode {
+        /// Rejected non-ASCII executable-code byte.
+        byte: NonAsciiCodeByte,
+    },
     /// A non-whitespace ASCII control byte appeared in executable code.
-    NonPrintableAsciiInCode { byte: NonPrintableCodeByte },
+    NonPrintableAsciiInCode {
+        /// Rejected non-printable executable-code byte.
+        byte: NonPrintableCodeByte,
+    },
     /// A non-empty code line did not contain `=`.
     MissingEquals,
     /// A compact code line contained more than one `=`.
     MultipleEquals,
     /// Reserved syntax appeared where program payload data was expected.
     ReservedSyntaxInPayload {
+        /// Reserved syntax byte that was rejected as payload data.
         byte: ReservedSyntaxByte,
+        /// Payload domain that received the reserved byte.
         payload_kind: PayloadKind,
     },
     /// Left-side modifiers were duplicated or ordered outside the supported grammar.
-    UnsupportedLeftModifierOrder { modifier: LeftModifierKind },
+    UnsupportedLeftModifierOrder {
+        /// Modifier that made the left side unsupported.
+        modifier: LeftModifierKind,
+    },
     /// Right-side actions were nested or otherwise used outside the supported grammar.
-    UnsupportedRightActionSyntax { action: RightActionKind },
+    UnsupportedRightActionSyntax {
+        /// Action token that made the right side unsupported.
+        action: RightActionKind,
+    },
 }
 
 /// Program payload context used by structured parse errors.

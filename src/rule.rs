@@ -13,6 +13,7 @@ pub struct RuleCount {
 }
 
 impl RuleCount {
+    /// Creates a rule count from a primitive count.
     #[must_use]
     pub const fn new(value: usize) -> Self {
         Self { value }
@@ -44,6 +45,7 @@ impl RuleNumber {
     }
 }
 
+/// Program-local position of a parsed rule in execution order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RulePosition {
     number: RuleNumber,

@@ -67,21 +67,34 @@ impl core::fmt::Debug for RuntimeStateView<'_> {
     }
 }
 
+/// Owned trace effect emitted by trace snapshot APIs.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TraceSnapshotEffect {
     /// The step produced the next runtime state and execution may continue.
-    Continue { state: RuntimeStateSnapshot },
+    Continue {
+        /// Materialized runtime state after the rewrite step.
+        state: RuntimeStateSnapshot,
+    },
     /// The step executed `(return)` and produced final output bytes.
-    Return { output: ReturnOutput },
+    Return {
+        /// Materialized `(return)` output bytes.
+        output: ReturnOutput,
+    },
 }
 
 /// Borrowed trace effect emitted by borrowed tracing APIs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BorrowedTraceEffect<'program, 'run> {
     /// The step produced the next runtime state and execution may continue.
-    Continue { state: RuntimeStateView<'run> },
+    Continue {
+        /// Borrowed runtime state after the rewrite step.
+        state: RuntimeStateView<'run>,
+    },
     /// The step executed `(return)` and produced final output bytes.
-    Return { output: PayloadView<'program> },
+    Return {
+        /// Borrowed `(return)` payload bytes from the parsed program.
+        output: PayloadView<'program>,
+    },
 }
 
 impl BorrowedTraceEffect<'_, '_> {
@@ -131,7 +144,10 @@ impl BorrowedTraceEffect<'_, '_> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum TraceSnapshotEvent<'program> {
     /// Initial runtime state before any rewrite step.
-    Initial { state: RuntimeStateSnapshot },
+    Initial {
+        /// Materialized initial runtime state.
+        state: RuntimeStateSnapshot,
+    },
     /// One applied rule.
     Step {
         /// One-based applied step count.
@@ -151,7 +167,10 @@ pub enum TraceSnapshotEvent<'program> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BorrowedTraceEvent<'program, 'run> {
     /// Initial runtime state before any rewrite step.
-    Initial { state: RuntimeStateView<'run> },
+    Initial {
+        /// Borrowed initial runtime state.
+        state: RuntimeStateView<'run>,
+    },
     /// One applied rule.
     Step {
         /// One-based applied step count.

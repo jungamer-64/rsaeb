@@ -11,9 +11,13 @@ use crate::rule::{
 use crate::runtime::{Runtime, RuntimeInput};
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
+/// Default rewrite step budget used by [`RunLimits::default`].
 pub const DEFAULT_MAX_STEPS: StepLimit = StepLimit::new(1_000_000);
+/// Default runtime-state byte budget used by [`RunLimits::new`] and [`RunLimits::default`].
 pub const DEFAULT_MAX_STATE_LEN: StateByteLimit = StateByteLimit::new(16 * 1024 * 1024);
+/// Default `(return)` output byte budget used by [`RunLimits::new`] and [`RunLimits::default`].
 pub const DEFAULT_MAX_RETURN_LEN: ReturnByteLimit = ReturnByteLimit::new(16 * 1024 * 1024);
+/// Default trace snapshot byte budget used by [`RunLimits::new`] and [`RunLimits::default`].
 pub const DEFAULT_MAX_TRACE_SNAPSHOT_LEN: TraceSnapshotByteLimit =
     TraceSnapshotByteLimit::new(16 * 1024 * 1024);
 
@@ -24,11 +28,13 @@ pub struct StepLimit {
 }
 
 impl StepLimit {
+    /// Creates a step limit from a primitive count.
     #[must_use]
     pub const fn new(value: usize) -> Self {
         Self { value }
     }
 
+    /// Returns this limit as a primitive count.
     #[must_use]
     pub const fn get(self) -> usize {
         self.value
@@ -42,11 +48,13 @@ pub struct StateByteLimit {
 }
 
 impl StateByteLimit {
+    /// Creates a runtime-state byte limit from a primitive length.
     #[must_use]
     pub const fn new(value: usize) -> Self {
         Self { value }
     }
 
+    /// Returns this limit as a primitive length.
     #[must_use]
     pub const fn get(self) -> usize {
         self.value
@@ -60,11 +68,13 @@ pub struct ReturnByteLimit {
 }
 
 impl ReturnByteLimit {
+    /// Creates a `(return)` output byte limit from a primitive length.
     #[must_use]
     pub const fn new(value: usize) -> Self {
         Self { value }
     }
 
+    /// Returns this limit as a primitive length.
     #[must_use]
     pub const fn get(self) -> usize {
         self.value
@@ -78,11 +88,13 @@ pub struct TraceSnapshotByteLimit {
 }
 
 impl TraceSnapshotByteLimit {
+    /// Creates a trace snapshot byte limit from a primitive length.
     #[must_use]
     pub const fn new(value: usize) -> Self {
         Self { value }
     }
 
+    /// Returns this limit as a primitive length.
     #[must_use]
     pub const fn get(self) -> usize {
         self.value
@@ -98,6 +110,7 @@ pub struct StepCount {
 impl StepCount {
     pub(crate) const ZERO: Self = Self { value: 0 };
 
+    /// Returns this completed-step count as a primitive count.
     #[must_use]
     pub const fn get(self) -> usize {
         self.value
@@ -476,6 +489,7 @@ impl Program {
     }
 }
 
+/// Structured result category for one completed run.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RunOutcome {
     /// No rule matched the final runtime state.
@@ -484,6 +498,7 @@ pub enum RunOutcome {
     Return(ReturnOutput),
 }
 
+/// Materialized final runtime state for a run that ended without `(return)`.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RuntimeStateSnapshot {
     bytes: Vec<u8>,
@@ -519,6 +534,7 @@ impl RuntimeStateSnapshot {
     }
 }
 
+/// Materialized final output from a matched `(return)` rule.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ReturnOutput {
     bytes: Vec<u8>,

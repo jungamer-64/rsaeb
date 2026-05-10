@@ -6,6 +6,7 @@ rust-version = "1.90"
 description = "A no_std + alloc interpreter for A=B ordered rewrite programs."
 readme = "README.md"
 repository = "https://github.com/jungamer-64/rsaeb"
+documentation = "https://docs.rs/rsaeb"
 license = "MIT OR Apache-2.0"
 keywords = ["a-b", "interpreter", "rewrite", "no-std"]
 include = [
@@ -14,3 +15,7 @@ include = [
     "/LICENSE-MIT",
     "/LICENSE-APACHE",
 ]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

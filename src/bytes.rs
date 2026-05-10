@@ -12,16 +12,19 @@ pub struct PayloadByteCount {
 }
 
 impl PayloadByteCount {
+    /// Creates a payload byte count from a primitive length.
     #[must_use]
     pub const fn new(value: usize) -> Self {
         Self { value }
     }
 
+    /// Returns this byte count as a primitive length.
     #[must_use]
     pub const fn get(self) -> usize {
         self.value
     }
 
+    /// Returns whether this count is zero.
     #[must_use]
     pub const fn is_zero(self) -> bool {
         self.value == 0
@@ -41,16 +44,19 @@ pub struct RuntimeStateByteCount {
 }
 
 impl RuntimeStateByteCount {
+    /// Creates a runtime-state byte count from a primitive length.
     #[must_use]
     pub const fn new(value: usize) -> Self {
         Self { value }
     }
 
+    /// Returns this byte count as a primitive length.
     #[must_use]
     pub const fn get(self) -> usize {
         self.value
     }
 
+    /// Returns whether this count is zero.
     #[must_use]
     pub const fn is_zero(self) -> bool {
         self.value == 0
@@ -70,16 +76,19 @@ pub struct ReturnOutputByteCount {
 }
 
 impl ReturnOutputByteCount {
+    /// Creates a `(return)` output byte count from a primitive length.
     #[must_use]
     pub const fn new(value: usize) -> Self {
         Self { value }
     }
 
+    /// Returns this byte count as a primitive length.
     #[must_use]
     pub const fn get(self) -> usize {
         self.value
     }
 
+    /// Returns whether this count is zero.
     #[must_use]
     pub const fn is_zero(self) -> bool {
         self.value == 0
@@ -99,16 +108,19 @@ pub struct TraceSnapshotByteCount {
 }
 
 impl TraceSnapshotByteCount {
+    /// Creates a trace snapshot byte count from a primitive length.
     #[must_use]
     pub const fn new(value: usize) -> Self {
         Self { value }
     }
 
+    /// Returns this byte count as a primitive length.
     #[must_use]
     pub const fn get(self) -> usize {
         self.value
     }
 
+    /// Returns whether this count is zero.
     #[must_use]
     pub const fn is_zero(self) -> bool {
         self.value == 0
@@ -136,6 +148,7 @@ impl NonAsciiCodeByte {
         }
     }
 
+    /// Returns the rejected raw byte.
     #[must_use]
     pub const fn get(self) -> u8 {
         self.byte
@@ -157,6 +170,7 @@ impl NonPrintableCodeByte {
         }
     }
 
+    /// Returns the rejected raw byte.
     #[must_use]
     pub const fn get(self) -> u8 {
         self.byte
@@ -178,6 +192,7 @@ impl NonAsciiInputByte {
         }
     }
 
+    /// Returns the rejected raw byte.
     #[must_use]
     pub const fn get(self) -> u8 {
         self.byte
@@ -187,9 +202,13 @@ impl NonAsciiInputByte {
 /// Reserved executable syntax byte rejected from program payload data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ReservedSyntaxByte {
+    /// The `=` rule separator byte.
     Equals,
+    /// The `#` line-comment byte.
     Comment,
+    /// The `(` modifier/action opening byte.
     OpenParen,
+    /// The `)` modifier/action closing byte.
     CloseParen,
 }
 
@@ -204,6 +223,7 @@ impl ReservedSyntaxByte {
         }
     }
 
+    /// Returns the reserved raw syntax byte.
     #[must_use]
     pub const fn get(self) -> u8 {
         match self {

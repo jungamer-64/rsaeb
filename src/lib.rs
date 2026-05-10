@@ -1,21 +1,151 @@
-//! Library API for the A=B rewrite interpreter.
+//! Byte-oriented interpreter for A=B ordered rewrite programs.
 //!
-//! The crate exposes a byte-oriented parser and runtime. Program syntax and
-//! runtime input are separate domains:
+//! `rsaeb` is a `no_std + alloc` library crate. It parses compact A=B source
+//! into an immutable [`Program`] and runs that program against validated
+//! [`RuntimeInput`]. Files, stdout, stderr, arguments, environment variables,
+//! and lossy display formatting are outside the interpreter core.
+//!
+//! # Domain boundary
+//!
+//! Program syntax and runtime input are intentionally different byte domains:
 //!
 //! - program code is compact printable ASCII syntax;
-//! - comments are ignored bytes after `#`;
+//! - comments are ignored bytes after `#` and may contain arbitrary bytes;
 //! - runtime input is ASCII data and may contain whitespace/reserved bytes;
 //! - program payloads cannot contain whitespace, reserved syntax characters, or
 //!   non-ASCII/control bytes.
 //!
-//! Files, stdout, stderr, argument parsing, and lossy display formatting are
-//! intentionally outside this library. The command-line binary can do command-
-//! line concerns without coupling them to the interpreter core.
+//! # Basic execution
+//!
+//! Use [`run_str`] or [`run_bytes`] for a one-shot parse and run:
+//!
+//! ```
+//! use rsaeb::{RunLimits, RunOutcome, run_str};
+//!
+//! # fn main() -> Result<(), rsaeb::AebError> {
+//! let result = run_str("a=b", b"a", RunLimits::default())?;
+//!
+//! assert!(matches!(
+//!     result.outcome(),
+//!     RunOutcome::Stable(output) if output.as_bytes() == b"b"
+//! ));
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Parse [`Program`] once when the same rules should be reused. Per-run
+//! `(once)` state is owned by each runtime invocation, not by the program:
+//!
+//! ```
+//! use rsaeb::{Program, RunLimits, RunOutcome, RuntimeInput, StepLimit};
+//!
+//! # fn main() -> Result<(), rsaeb::AebError> {
+//! let program = Program::parse_str("(once)a=b\na=c")?;
+//! let limits = RunLimits::new(StepLimit::new(10_000));
+//!
+//! let first = program.run(RuntimeInput::parse(b"aa")?, limits)?;
+//! let second = program.run(RuntimeInput::parse(b"aa")?, limits)?;
+//!
+//! assert!(matches!(
+//!     first.outcome(),
+//!     RunOutcome::Stable(output) if output.as_bytes() == b"bc"
+//! ));
+//! assert!(matches!(
+//!     second.outcome(),
+//!     RunOutcome::Stable(output) if output.as_bytes() == b"bc"
+//! ));
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Limits
+//!
+//! [`RunLimits`] carries the step budget and byte budgets for runtime states,
+//! `(return)` outputs, and trace snapshots. Step limits are checked only when
+//! another matching rule would apply after the configured number of completed
+//! steps:
+//!
+//! ```
+//! use rsaeb::{LimitError, Program, RunError, RunLimits, RuntimeInput, StepLimit};
+//!
+//! # fn main() -> Result<(), rsaeb::AebError> {
+//! let result = Program::parse_str("a=b")?.run(
+//!     RuntimeInput::parse(b"a")?,
+//!     RunLimits::new(StepLimit::new(0)),
+//! );
+//!
+//! assert!(matches!(
+//!     result,
+//!     Err(RunError::Limit(LimitError::Step { completed_steps, .. }))
+//!         if completed_steps.get() == 0
+//! ));
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Rule inspection and tracing
+//!
+//! Parsed rules are exposed as borrowed structured views, not as stored source
+//! strings:
+//!
+//! ```
+//! use rsaeb::{Program, RuleActionView, RuleAnchor, RuleRepeat};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let program = Program::parse_str("( once ) ( start ) a = ( end ) b # comment")?;
+//! let rule = program.rules().next().expect("one parsed rule");
+//!
+//! assert_eq!(rule.repeat(), RuleRepeat::Once);
+//! assert_eq!(rule.anchor(), RuleAnchor::Start);
+//! assert!(rule.lhs().eq_bytes(b"a"));
+//! assert!(matches!(
+//!     rule.action(),
+//!     RuleActionView::MoveEnd(payload) if payload.eq_bytes(b"b")
+//! ));
+//! assert_eq!(rule.canonical_source()?, b"(once)(start)a=(end)b");
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Borrowed trace events allocate no snapshots. Snapshot tracing is layered on
+//! top when a caller needs owned event bytes:
+//!
+//! ```
+//! use rsaeb::{BorrowedTraceEvent, Program, RunLimits, RuntimeInput, StepLimit};
+//!
+//! # fn main() -> Result<(), rsaeb::AebError> {
+//! let program = Program::parse_str("a=b\nb=(return)ok")?;
+//! let mut byte_counts = Vec::new();
+//!
+//! program.run_with_borrowed_trace(
+//!     RuntimeInput::parse(b"a")?,
+//!     RunLimits::new(StepLimit::new(10)),
+//!     |event| {
+//!         byte_counts.push(event.byte_count().get());
+//!         if let BorrowedTraceEvent::Step { rule, .. } = event {
+//!             let _line = rule.line_number();
+//!         }
+//!     },
+//! )?;
+//!
+//! assert_eq!(byte_counts, [1, 1, 2]);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Error model
+//!
+//! Source parsing, runtime execution, allocation failure, configured limits, and
+//! user trace-sink failures are reported with structured error types such as
+//! [`ParseError`], [`RunError`], [`LimitError`], and [`TracedRunError`].
+//! [`AebError`] is the convenience umbrella used by one-shot helpers.
 
 #![no_std]
 #![forbid(unsafe_code)]
 #![deny(
+    missing_docs,
+    rustdoc::broken_intra_doc_links,
+    rustdoc::bare_urls,
     unconditional_panic,
     clippy::panic,
     clippy::panic_in_result_fn,

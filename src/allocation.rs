@@ -1,6 +1,11 @@
 use alloc::vec::Vec;
 use core::error::Error;
 
+/// Interpreter allocation site reported by [`AllocationError`].
+///
+/// The value identifies the domain boundary that was allocating, so callers can
+/// distinguish parser storage, runtime state growth, final output
+/// materialization, and trace snapshot materialization without parsing strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AllocationContext {
     /// Building the parsed program rule table.
