@@ -58,6 +58,47 @@
 //! # }
 //! ```
 //!
+//! # Stepwise execution
+//!
+//! Use [`Program::start_execution`] when a host wants to wait after each
+//! applied rule:
+//!
+//! ```
+//! use rsaeb::{
+//!     ExecutionCompletion, ExecutionStep, Program, RunLimits, RuntimeInput, StepLimit,
+//! };
+//!
+//! # fn main() -> Result<(), rsaeb::AebError> {
+//! let program = Program::parse_str("a=b\nb=c")?;
+//! let mut execution = program.start_execution(
+//!     RuntimeInput::parse(b"a")?,
+//!     RunLimits::new(StepLimit::new(10)),
+//! )?;
+//!
+//! let first = execution.step()?;
+//! assert!(matches!(
+//!     first,
+//!     ExecutionStep::Applied { effect, .. }
+//!         if effect.state().bytes().eq(b"b".iter().copied())
+//! ));
+//!
+//! let second = execution.step()?;
+//! assert!(matches!(
+//!     second,
+//!     ExecutionStep::Applied { effect, .. }
+//!         if effect.state().bytes().eq(b"c".iter().copied())
+//! ));
+//!
+//! let completed = execution.step()?;
+//! assert!(matches!(
+//!     completed,
+//!     ExecutionStep::Complete(ExecutionCompletion::Stable { steps, state })
+//!         if steps.get() == 2 && state.bytes().eq(b"c".iter().copied())
+//! ));
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Limits
 //!
 //! [`RunLimits`] carries the step budget and byte budgets for runtime states
@@ -200,7 +241,7 @@ pub use rule::{
     PayloadView, RuleActionView, RuleAnchor, RuleCount, RuleNumber, RulePosition, RuleRepeat,
     RuleView,
 };
-pub use runtime::{Execution, RuntimeInput};
+pub use runtime::{Execution, ExecutionCompletion, ExecutionEffect, ExecutionStep, RuntimeInput};
 pub use source::{SourceColumn, SourceLineNumber, SourcePosition};
 pub use trace::{
     BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView, TraceSnapshotEffect,

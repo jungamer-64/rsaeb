@@ -351,6 +351,24 @@ impl Program {
         self.rule_set.as_slice()
     }
 
+    /// Starts a stateful execution session for this program.
+    ///
+    /// The returned [`Execution`] can be advanced one matching rule at a time.
+    /// Use [`Program::run`] when the caller wants to run to completion in one
+    /// call.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` when the validated input exceeds this run's state
+    /// limit or when allocating per-run `(once)` state fails.
+    pub fn start_execution(
+        &self,
+        input: RuntimeInput,
+        limits: RunLimits,
+    ) -> Result<Execution<'_>, RunError> {
+        Execution::new(self, input, limits)
+    }
+
     /// Runs this program with validated runtime input.
     ///
     /// # Errors

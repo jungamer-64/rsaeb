@@ -126,6 +126,52 @@ programs are immutable; each run owns its own compact `(once)` state table. Only
 `(once)` rules get state entries, so ordinary rules do not inflate runtime state
 just by existing.
 
+## Stepwise execution
+
+Use `Program::start_execution` when a host needs to regain control after each
+applied rule instead of running to completion in one call:
+
+```rust
+use rsaeb::{
+    ExecutionCompletion, ExecutionStep, Program, RunLimits, RuntimeInput,
+    StepLimit,
+};
+
+fn main() -> Result<(), rsaeb::AebError> {
+    let program = Program::parse_str("a=b\nb=c")?;
+    let mut execution = program.start_execution(
+        RuntimeInput::parse(b"a")?,
+        RunLimits::new(StepLimit::new(10)),
+    )?;
+
+    let first = execution.step()?;
+    assert!(matches!(
+        first,
+        ExecutionStep::Applied { effect, .. }
+            if effect.state().bytes().eq(b"b".iter().copied())
+    ));
+
+    let second = execution.step()?;
+    assert!(matches!(
+        second,
+        ExecutionStep::Applied { effect, .. }
+            if effect.state().bytes().eq(b"c".iter().copied())
+    ));
+
+    let completed = execution.step()?;
+    assert!(matches!(
+        completed,
+        ExecutionStep::Complete(ExecutionCompletion::Stable { steps, state })
+            if steps.get() == 2 && state.bytes().eq(b"c".iter().copied())
+    ));
+    Ok(())
+}
+```
+
+`(return)` is a completion state, not an ordinary continuation step. Its output
+is exposed as a borrowed parsed payload; callers that need ownership can
+materialize it explicitly from the payload view.
+
 ## Parser behavior
 
 The parser is byte-oriented. Comments are removed before executable-code
@@ -718,6 +764,7 @@ Program construction and execution:
 - `Program::rule_count()`
 - `Program::once_rule_count()`
 - `Program::rules()`
+- `Program::start_execution(input, limits)`
 - `Program::run(input, limits)`
 - `Program::run_with_borrowed_trace(input, limits, callback)`
 - `Program::try_run_with_borrowed_trace(input, limits, callback)`
@@ -744,6 +791,11 @@ Runtime configuration and result:
 - `RunLimits::with_step_limit(step_limit)`
 - `RunLimits::with_state_byte_limit(state_byte_limit)`
 - `RunLimits::with_return_byte_limit(return_byte_limit)`
+- `Execution`
+- `Execution::step()`
+- `ExecutionStep<'program, 'run>`
+- `ExecutionCompletion<'program, 'run>`
+- `ExecutionEffect<'run>` (`state()`, `byte_count()`, `is_empty()`)
 - `RunResult`
 - `RunResult::outcome()`
 - `RunResult::into_outcome()`
