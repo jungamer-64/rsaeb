@@ -49,9 +49,14 @@ mod syntax;
 mod trace;
 
 pub use allocation::{AllocationContext, AllocationError, AllocationErrorKind};
+pub use bytes::{
+    NonAsciiCodeByte, NonAsciiInputByte, NonPrintableCodeByte, PayloadByteCount,
+    ReservedSyntaxByte, ReturnOutputByteCount, RuntimeStateByteCount, TraceSnapshotByteCount,
+};
 pub use error::{
     AebError, InputColumn, InputError, LeftModifierKind, LimitError, ParseError, ParseErrorKind,
-    PayloadKind, RightActionKind, RunError, StateLimitContext, StateSizeError, TracedRunError,
+    ParseErrorLocation, PayloadKind, RightActionKind, RunError, StateLimitContext, StateSizeError,
+    TracedRunError,
 };
 pub use program::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
@@ -63,6 +68,7 @@ pub use rule::{
     PayloadView, RuleActionView, RuleAnchor, RuleCount, RuleNumber, RulePosition, RuleRepeat,
     RuleView,
 };
+pub use runtime::RuntimeInput;
 pub use source::{SourceColumn, SourceLineNumber, SourcePosition};
 pub use trace::{
     BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView, TraceSnapshotEffect,

@@ -1,7 +1,10 @@
 use core::error::Error;
 
 use crate::allocation::AllocationError;
-use crate::bytes::ByteCount;
+use crate::bytes::{
+    NonAsciiInputByte, PayloadByteCount, ReturnOutputByteCount, RuntimeStateByteCount,
+    TraceSnapshotByteCount,
+};
 use crate::program::{
     ReturnByteLimit, StateByteLimit, StepCount, StepLimit, TraceSnapshotByteLimit,
 };
@@ -58,11 +61,11 @@ impl From<LimitError> for RunError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputError {
     column: InputColumn,
-    byte: u8,
+    byte: NonAsciiInputByte,
 }
 
 impl InputError {
-    pub(crate) const fn new(column: InputColumn, byte: u8) -> Self {
+    pub(crate) const fn new(column: InputColumn, byte: NonAsciiInputByte) -> Self {
         Self { column, byte }
     }
 
@@ -74,7 +77,7 @@ impl InputError {
 
     /// Rejected byte.
     #[must_use]
-    pub const fn byte(&self) -> u8 {
+    pub const fn byte(&self) -> NonAsciiInputByte {
         self.byte
     }
 }
@@ -104,35 +107,39 @@ impl InputColumn {
 /// Runtime state-size failure caused by arithmetic overflow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateSizeError {
-    state: ByteCount,
-    lhs: ByteCount,
-    rhs: ByteCount,
+    state: RuntimeStateByteCount,
+    lhs: PayloadByteCount,
+    rhs: PayloadByteCount,
 }
 
 impl StateSizeError {
-    pub(crate) const fn new(state_len: usize, lhs_len: usize, rhs_len: usize) -> Self {
+    pub(crate) const fn new(
+        state_len: RuntimeStateByteCount,
+        lhs_len: PayloadByteCount,
+        rhs_len: PayloadByteCount,
+    ) -> Self {
         Self {
-            state: ByteCount::new(state_len),
-            lhs: ByteCount::new(lhs_len),
-            rhs: ByteCount::new(rhs_len),
+            state: state_len,
+            lhs: lhs_len,
+            rhs: rhs_len,
         }
     }
 
     /// Runtime state length before the failing rewrite.
     #[must_use]
-    pub const fn state_len(&self) -> ByteCount {
+    pub const fn state_len(&self) -> RuntimeStateByteCount {
         self.state
     }
 
     /// Matched left-side length that would be removed.
     #[must_use]
-    pub const fn lhs_len(&self) -> ByteCount {
+    pub const fn lhs_len(&self) -> PayloadByteCount {
         self.lhs
     }
 
     /// Right-side payload length that would be inserted.
     #[must_use]
-    pub const fn rhs_len(&self) -> ByteCount {
+    pub const fn rhs_len(&self) -> PayloadByteCount {
         self.rhs
     }
 }
@@ -158,21 +165,21 @@ pub enum LimitError {
         /// Configured maximum runtime state length.
         limit: StateByteLimit,
         /// State length that would have been accepted without this guard.
-        attempted_len: ByteCount,
+        attempted_len: RuntimeStateByteCount,
     },
     /// `(return)` output would exceed the configured return-output limit.
     Return {
         /// Configured maximum `(return)` output length.
         limit: ReturnByteLimit,
         /// Return payload length that would have been allocated.
-        attempted_len: ByteCount,
+        attempted_len: ReturnOutputByteCount,
     },
     /// Trace snapshot materialization would exceed the configured trace limit.
     TraceSnapshot {
         /// Configured maximum trace snapshot byte length.
         limit: TraceSnapshotByteLimit,
         /// Trace state/output snapshot length that would have been allocated.
-        attempted_len: ByteCount,
+        attempted_len: TraceSnapshotByteCount,
     },
     /// Execution exceeded the configured step limit.
     Step {
@@ -181,7 +188,7 @@ pub enum LimitError {
         /// Number of completed rewrite steps when the next match was found.
         completed_steps: StepCount,
         /// Runtime state length when the limit was hit.
-        state_len: ByteCount,
+        state_len: RuntimeStateByteCount,
     },
 }
 
@@ -189,41 +196,44 @@ impl LimitError {
     pub(crate) const fn state(
         context: StateLimitContext,
         limit: StateByteLimit,
-        attempted_len: usize,
+        attempted_len: RuntimeStateByteCount,
     ) -> Self {
         Self::State {
             context,
             limit,
-            attempted_len: ByteCount::new(attempted_len),
+            attempted_len,
         }
     }
 
-    pub(crate) const fn return_output(limit: ReturnByteLimit, attempted_len: usize) -> Self {
+    pub(crate) const fn return_output(
+        limit: ReturnByteLimit,
+        attempted_len: ReturnOutputByteCount,
+    ) -> Self {
         Self::Return {
             limit,
-            attempted_len: ByteCount::new(attempted_len),
+            attempted_len,
         }
     }
 
     pub(crate) const fn trace_snapshot(
         limit: TraceSnapshotByteLimit,
-        attempted_len: usize,
+        attempted_len: TraceSnapshotByteCount,
     ) -> Self {
         Self::TraceSnapshot {
             limit,
-            attempted_len: ByteCount::new(attempted_len),
+            attempted_len,
         }
     }
 
     pub(crate) const fn step(
         max_steps: StepLimit,
         completed_steps: StepCount,
-        state_len: usize,
+        state_len: RuntimeStateByteCount,
     ) -> Self {
         Self::Step {
             max_steps,
             completed_steps,
-            state_len: ByteCount::new(state_len),
+            state_len,
         }
     }
 }

@@ -4,7 +4,8 @@ use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind}
 
 use super::{
     AebError, InputColumn, InputError, LeftModifierKind, LimitError, ParseError, ParseErrorKind,
-    PayloadKind, RightActionKind, RunError, StateLimitContext, StateSizeError, TracedRunError,
+    ParseErrorLocation, PayloadKind, RightActionKind, RunError, StateLimitContext, StateSizeError,
+    TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -15,7 +16,7 @@ impl fmt::Display for AllocationContext {
             Self::CanonicalSource => f.write_str("canonical source bytes"),
             Self::Payload => f.write_str("program payload"),
             Self::RuntimeInput => f.write_str("runtime input state"),
-            Self::RuntimeRuleState => f.write_str("runtime rule state"),
+            Self::OnceRuleState => f.write_str("once rule state"),
             Self::RuntimeState => f.write_str("runtime rewrite state"),
             Self::RuntimeStateView => f.write_str("runtime state view"),
             Self::FinalOutput => f.write_str("final output"),
@@ -58,10 +59,14 @@ impl fmt::Display for AebError {
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "parse error at line {}", self.line().get())?;
-
-        if let Some(column) = self.column() {
-            write!(f, ", column {}", column.get())?;
+        match self.location() {
+            ParseErrorLocation::Line(line) => write!(f, "parse error at line {}", line.get())?,
+            ParseErrorLocation::Position(position) => write!(
+                f,
+                "parse error at line {}, column {}",
+                position.line().get(),
+                position.column().get()
+            )?,
         }
 
         write!(f, ": {}", self.kind())
@@ -72,16 +77,18 @@ impl fmt::Display for ParseErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Allocation(error) => error.fmt(f),
-            Self::NonAsciiInCode { byte } => write!(f, "non-ASCII byte 0x{byte:02x} in code"),
+            Self::NonAsciiInCode { byte } => {
+                write!(f, "non-ASCII byte 0x{:02x} in code", byte.get())
+            }
             Self::NonPrintableAsciiInCode { byte } => {
-                write!(f, "non-printable ASCII byte 0x{byte:02x} in code")
+                write!(f, "non-printable ASCII byte 0x{:02x} in code", byte.get())
             }
             Self::MissingEquals => f.write_str("missing '='"),
             Self::MultipleEquals => f.write_str("multiple '=' characters are not allowed"),
             Self::ReservedSyntaxInPayload { byte, payload_kind } => write!(
                 f,
                 "reserved syntax byte '{}' in {payload_kind}",
-                printable_ascii(*byte),
+                printable_ascii(byte.get()),
             ),
             Self::UnsupportedLeftModifierOrder { modifier } => write!(
                 f,
@@ -157,7 +164,7 @@ impl fmt::Display for InputError {
         write!(
             f,
             "input error: non-ASCII byte 0x{:02x} at column {}",
-            self.byte(),
+            self.byte().get(),
             self.column(),
         )
     }
@@ -246,11 +253,11 @@ mod tests {
 
     use crate::test_support::{
         TestResult, ensure_eq, expect_input_error, expect_parse_error, expect_run_error,
-        expect_state_limit, expect_step_limit,
+        expect_state_limit, expect_step_limit, runtime_input,
     };
     use crate::{
-        AllocationContext, AllocationError, Program, ReturnByteLimit, RunLimits, StateByteLimit,
-        StepLimit, TraceSnapshotByteLimit,
+        AllocationContext, AllocationError, DEFAULT_MAX_STATE_LEN, Program, ReturnByteLimit,
+        RunLimits, RuntimeInput, StateByteLimit, StepLimit, TraceSnapshotByteLimit,
     };
 
     #[test]
@@ -291,8 +298,7 @@ mod tests {
 
     #[test]
     fn input_error_display_keeps_byte_and_original_column() -> TestResult {
-        let program = Program::parse_str("# no executable rules")?;
-        let error = expect_run_error(program.run(&[0xff], RunLimits::default()))?;
+        let error = expect_run_error(RuntimeInput::parse(&[0xff], DEFAULT_MAX_STATE_LEN))?;
         let error = expect_input_error(error)?;
 
         ensure_eq(
@@ -304,14 +310,13 @@ mod tests {
 
     #[test]
     fn state_limit_display_names_context_attempted_length_and_limit() -> TestResult {
-        let program = Program::parse_str("a=b")?;
         let limits = RunLimits::bounded(
             StepLimit::new(10),
             StateByteLimit::new(1),
             ReturnByteLimit::new(10),
             TraceSnapshotByteLimit::new(10),
         );
-        let error = expect_run_error(program.run(b"aa", limits))?;
+        let error = expect_run_error(RuntimeInput::parse(b"aa", limits.state_byte_limit()))?;
         let error = expect_state_limit(error)?;
 
         ensure_eq(
@@ -324,7 +329,8 @@ mod tests {
     #[test]
     fn step_limit_display_reports_limit_and_preserved_state_len() -> TestResult {
         let program = Program::parse_str("a=b")?;
-        let error = expect_run_error(program.run(b"a", RunLimits::new(StepLimit::new(0))))?;
+        let limits = RunLimits::new(StepLimit::new(0));
+        let error = expect_run_error(program.run(runtime_input(b"a", limits)?, limits))?;
         let error = expect_step_limit(error)?;
 
         ensure_eq(

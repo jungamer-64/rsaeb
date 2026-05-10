@@ -1,43 +1,43 @@
 use core::error::Error;
 
 use crate::allocation::AllocationError;
-use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
+use crate::bytes::{NonAsciiCodeByte, NonPrintableCodeByte, ReservedSyntaxByte};
+use crate::source::{SourceLineNumber, SourcePosition};
 
 /// Source program parse error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {
-    line: SourceLineNumber,
-    column: Option<SourceColumn>,
+    location: ParseErrorLocation,
     kind: ParseErrorKind,
 }
 
 impl ParseError {
-    pub(crate) fn new(
-        line: SourceLineNumber,
-        column: Option<SourceColumn>,
-        kind: ParseErrorKind,
-    ) -> Self {
-        Self { line, column, kind }
+    pub(crate) const fn at_line(line: SourceLineNumber, kind: ParseErrorKind) -> Self {
+        Self {
+            location: ParseErrorLocation::Line(line),
+            kind,
+        }
+    }
+
+    pub(crate) const fn at_position(position: SourcePosition, kind: ParseErrorKind) -> Self {
+        Self {
+            location: ParseErrorLocation::Position(position),
+            kind,
+        }
+    }
+
+    /// Structured source location for this parse failure.
+    #[must_use]
+    pub const fn location(&self) -> ParseErrorLocation {
+        self.location
     }
 
     /// One-based source line number.
     #[must_use]
     pub const fn line(&self) -> SourceLineNumber {
-        self.line
-    }
-
-    /// One-based source column, when the error has a single byte position.
-    #[must_use]
-    pub const fn column(&self) -> Option<SourceColumn> {
-        self.column
-    }
-
-    /// One-based source position, when the error has a single byte position.
-    #[must_use]
-    pub const fn position(&self) -> Option<SourcePosition> {
-        match self.column {
-            Some(column) => Some(SourcePosition::new(self.line, column)),
-            None => None,
+        match self.location {
+            ParseErrorLocation::Line(line) => line,
+            ParseErrorLocation::Position(position) => position.line(),
         }
     }
 
@@ -63,21 +63,33 @@ impl Error for ParseError {
     }
 }
 
+/// Source location carried by a parse error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseErrorLocation {
+    /// The whole source line is the relevant location.
+    Line(SourceLineNumber),
+    /// A specific source byte position is the relevant location.
+    Position(SourcePosition),
+}
+
 /// Structured parse error reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseErrorKind {
     /// A fallible allocation failed while parsing source.
     Allocation(AllocationError),
     /// A non-ASCII byte appeared before the line comment marker.
-    NonAsciiInCode { byte: u8 },
+    NonAsciiInCode { byte: NonAsciiCodeByte },
     /// A non-whitespace ASCII control byte appeared in executable code.
-    NonPrintableAsciiInCode { byte: u8 },
+    NonPrintableAsciiInCode { byte: NonPrintableCodeByte },
     /// A non-empty code line did not contain `=`.
     MissingEquals,
     /// A compact code line contained more than one `=`.
     MultipleEquals,
     /// Reserved syntax appeared where program payload data was expected.
-    ReservedSyntaxInPayload { byte: u8, payload_kind: PayloadKind },
+    ReservedSyntaxInPayload {
+        byte: ReservedSyntaxByte,
+        payload_kind: PayloadKind,
+    },
     /// Left-side modifiers were duplicated or ordered outside the supported grammar.
     UnsupportedLeftModifierOrder { modifier: LeftModifierKind },
     /// Right-side actions were nested or otherwise used outside the supported grammar.

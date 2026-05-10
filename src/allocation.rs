@@ -13,8 +13,8 @@ pub enum AllocationContext {
     Payload,
     /// Storing validated runtime input.
     RuntimeInput,
-    /// Storing per-run `(once)` rule state.
-    RuntimeRuleState,
+    /// Storing per-run `(once)` slot state.
+    OnceRuleState,
     /// Building the next runtime state after a rewrite.
     RuntimeState,
     /// Materializing a borrowed runtime-state view outside trace snapshot APIs.

@@ -2,31 +2,36 @@ use alloc::vec::Vec;
 use core::convert::Infallible;
 
 use crate::allocation::{AllocationContext, try_push, try_reserve_total_exact};
-use crate::bytes::{Payload, RuntimeByte};
+use crate::bytes::{
+    Payload, PayloadByteCount, ReturnOutputByteCount, RuntimeByte, RuntimeStateByteCount,
+};
 use crate::error::{LimitError, RunError, StateLimitContext, StateSizeError, TracedRunError};
 use crate::program::{
-    Program, ReturnOutput, RunLimits, RunResult, RuntimeStateSnapshot, StepCount, StepLimit,
+    Program, ReturnOutput, RunLimits, RunResult, RuntimeStateSnapshot, StateByteLimit, StepCount,
+    StepLimit,
 };
-use crate::rule::{Action, PayloadView, Rule, RuleAnchor, RuleRepeat};
+use crate::rule::{Action, PayloadView, Rule, RuleAnchor, RuleExecution};
 use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
 
 type NoTrace<'program> = for<'run> fn(BorrowedTraceEvent<'program, 'run>) -> Result<(), Infallible>;
 
+/// Runtime input after ASCII validation and runtime-byte classification.
 #[derive(Debug, PartialEq, Eq)]
-struct State {
+pub struct RuntimeInput {
     bytes: Vec<RuntimeByte>,
 }
 
-impl State {
-    fn parse_input(input: &[u8], limits: RunLimits) -> Result<Self, RunError> {
-        if input.len() > limits.state_byte_limit().get() {
-            return Err(LimitError::state(
-                StateLimitContext::Input,
-                limits.state_byte_limit(),
-                input.len(),
-            )
-            .into());
-        }
+impl RuntimeInput {
+    /// Validates raw runtime input bytes and checks the initial state budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError::Input` when `input` contains a non-ASCII byte.
+    /// Returns `RunError::Limit` when the input length exceeds `state_limit`.
+    /// Returns `RunError::Allocation` when storing the validated input fails.
+    pub fn parse(input: &[u8], state_limit: StateByteLimit) -> Result<Self, RunError> {
+        let byte_count = RuntimeStateByteCount::new(input.len());
+        Self::ensure_count_within_limit(byte_count, state_limit)?;
 
         for (zero_based_column, byte) in input.iter().copied().enumerate() {
             RuntimeByte::parse_input(byte, zero_based_column)?;
@@ -46,8 +51,58 @@ impl State {
         Ok(Self { bytes })
     }
 
+    /// Runtime input length.
+    #[must_use]
+    pub fn byte_count(&self) -> RuntimeStateByteCount {
+        RuntimeStateByteCount::new(self.bytes.len())
+    }
+
+    /// Whether this input contains no bytes.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    /// Runtime input bytes as a materializing iterator.
+    pub fn bytes(&self) -> impl Iterator<Item = u8> + '_ {
+        self.bytes.iter().copied().map(RuntimeByte::materialize)
+    }
+
+    fn ensure_within_limit(&self, state_limit: StateByteLimit) -> Result<(), RunError> {
+        Self::ensure_count_within_limit(self.byte_count(), state_limit)
+    }
+
+    fn ensure_count_within_limit(
+        byte_count: RuntimeStateByteCount,
+        state_limit: StateByteLimit,
+    ) -> Result<(), RunError> {
+        if byte_count.get() > state_limit.get() {
+            return Err(
+                LimitError::state(StateLimitContext::Input, state_limit, byte_count).into(),
+            );
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct State {
+    bytes: Vec<RuntimeByte>,
+}
+
+impl State {
+    fn from_input(input: RuntimeInput, limits: RunLimits) -> Result<Self, RunError> {
+        input.ensure_within_limit(limits.state_byte_limit())?;
+        Ok(Self { bytes: input.bytes })
+    }
+
     fn len(&self) -> usize {
         self.bytes.len()
+    }
+
+    fn byte_count(&self) -> RuntimeStateByteCount {
+        RuntimeStateByteCount::new(self.bytes.len())
     }
 
     fn view(&self) -> RuntimeStateView<'_> {
@@ -73,18 +128,22 @@ impl State {
         self.bytes.get(index).copied().map(RuntimeByte::is_opaque)
     }
 
-    fn starts_with_payload(&self, payload: &Payload) -> Option<StateMatch> {
-        self.matches_payload_at(0, payload)
+    fn starts_with_payload(&self, payload: &Payload) -> Option<MatchedStateSpan> {
+        self.matches_payload_at(StateIndex::new(0), payload)
     }
 
-    fn ends_with_payload(&self, payload: &Payload) -> Option<StateMatch> {
+    fn ends_with_payload(&self, payload: &Payload) -> Option<MatchedStateSpan> {
         let start = self.len().checked_sub(payload.len())?;
-        self.matches_payload_at(start, payload)
+        self.matches_payload_at(StateIndex::new(start), payload)
     }
 
-    fn find_payload(&self, payload: &Payload) -> Option<StateMatch> {
+    fn find_payload(&self, payload: &Payload) -> Option<MatchedStateSpan> {
         if payload.is_empty() {
-            return StateMatch::checked(0, 0, self.len());
+            return MatchedStateSpan::checked(
+                StateIndex::new(0),
+                payload.byte_count(),
+                self.byte_count(),
+            );
         }
 
         let first = payload.first_byte()?;
@@ -97,12 +156,17 @@ impl State {
                     .copied()
                     .is_some_and(|byte| byte.matches_program_byte(first))
             })
-            .find_map(|position| self.matches_payload_at(position, payload))
+            .find_map(|position| self.matches_payload_at(StateIndex::new(position), payload))
     }
 
-    fn matches_payload_at(&self, position: usize, payload: &Payload) -> Option<StateMatch> {
-        let state_match = StateMatch::checked(position, payload.len(), self.len())?;
-        let window = self.bytes.get(state_match.position()..state_match.end())?;
+    fn matches_payload_at(
+        &self,
+        position: StateIndex,
+        payload: &Payload,
+    ) -> Option<MatchedStateSpan> {
+        let state_match =
+            MatchedStateSpan::checked(position, payload.byte_count(), self.byte_count())?;
+        let window = self.bytes.get(state_match.start()..state_match.end())?;
 
         window
             .iter()
@@ -114,7 +178,7 @@ impl State {
 
     fn replace_at_into(
         &self,
-        state_match: StateMatch,
+        state_match: MatchedStateSpan,
         rhs: &Payload,
         output: &mut RewriteScratch,
         limits: RunLimits,
@@ -128,7 +192,7 @@ impl State {
 
     fn move_start_at_into(
         &self,
-        state_match: StateMatch,
+        state_match: MatchedStateSpan,
         rhs: &Payload,
         output: &mut RewriteScratch,
         limits: RunLimits,
@@ -142,7 +206,7 @@ impl State {
 
     fn move_end_at_into(
         &self,
-        state_match: StateMatch,
+        state_match: MatchedStateSpan,
         rhs: &Payload,
         output: &mut RewriteScratch,
         limits: RunLimits,
@@ -154,27 +218,33 @@ impl State {
         Ok(())
     }
 
-    fn replaced_len(
+    fn replaced_byte_count(
         &self,
-        state_match: StateMatch,
+        state_match: MatchedStateSpan,
         rhs: &Payload,
-    ) -> Result<usize, StateSizeError> {
-        self.len()
-            .checked_sub(state_match.lhs_len())
-            .and_then(|base| base.checked_add(rhs.len()))
-            .ok_or_else(|| StateSizeError::new(self.len(), state_match.lhs_len(), rhs.len()))
+    ) -> Result<RuntimeStateByteCount, StateSizeError> {
+        let state_len = self.byte_count();
+        let lhs_len = state_match.matched_len();
+        let rhs_len = rhs.byte_count();
+
+        state_len
+            .get()
+            .checked_sub(lhs_len.get())
+            .and_then(|base| base.checked_add(rhs_len.get()))
+            .map(RuntimeStateByteCount::new)
+            .ok_or_else(|| StateSizeError::new(state_len, lhs_len, rhs_len))
     }
 
     fn prepare_replacement_buffer(
         &self,
-        state_match: StateMatch,
+        state_match: MatchedStateSpan,
         rhs: &Payload,
         output: &mut RewriteScratch,
         limits: RunLimits,
     ) -> Result<(), RunError> {
-        let capacity = self.replaced_len(state_match, rhs)?;
+        let capacity = self.replaced_byte_count(state_match, rhs)?;
 
-        if capacity > limits.state_byte_limit().get() {
+        if capacity.get() > limits.state_byte_limit().get() {
             return Err(LimitError::state(
                 StateLimitContext::Rewrite,
                 limits.state_byte_limit(),
@@ -183,22 +253,22 @@ impl State {
             .into());
         }
 
-        output.clear_and_reserve(capacity)?;
+        output.clear_and_reserve(capacity.get())?;
         Ok(())
     }
 
     fn push_prefix(
         &self,
         output: &mut RewriteScratch,
-        state_match: StateMatch,
+        state_match: MatchedStateSpan,
     ) -> Result<(), crate::allocation::AllocationError> {
-        output.push_existing(self.bytes.iter().copied().take(state_match.position()))
+        output.push_existing(self.bytes.iter().copied().take(state_match.start()))
     }
 
     fn push_suffix(
         &self,
         output: &mut RewriteScratch,
-        state_match: StateMatch,
+        state_match: MatchedStateSpan,
     ) -> Result<(), crate::allocation::AllocationError> {
         output.push_existing(self.bytes.iter().copied().skip(state_match.end()))
     }
@@ -265,32 +335,47 @@ impl RewriteScratch {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct StateMatch {
-    start: usize,
-    end: usize,
-    lhs_len: usize,
+struct StateIndex {
+    zero_based: usize,
 }
 
-impl StateMatch {
-    fn checked(position: usize, lhs_len: usize, state_len: usize) -> Option<Self> {
-        let end = position.checked_add(lhs_len)?;
-        (position <= state_len && end <= state_len).then_some(Self {
-            start: position,
-            end,
-            lhs_len,
-        })
+impl StateIndex {
+    const fn new(zero_based: usize) -> Self {
+        Self { zero_based }
     }
 
-    const fn position(self) -> usize {
-        self.start
+    const fn get(self) -> usize {
+        self.zero_based
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MatchedStateSpan {
+    start: StateIndex,
+    matched_len: PayloadByteCount,
+}
+
+impl MatchedStateSpan {
+    fn checked(
+        start: StateIndex,
+        matched_len: PayloadByteCount,
+        state_len: RuntimeStateByteCount,
+    ) -> Option<Self> {
+        let end = start.get().checked_add(matched_len.get())?;
+        (start.get() <= state_len.get() && end <= state_len.get())
+            .then_some(Self { start, matched_len })
     }
 
-    const fn lhs_len(self) -> usize {
-        self.lhs_len
+    const fn start(self) -> usize {
+        self.start.get()
     }
 
-    const fn end(self) -> usize {
-        self.end
+    const fn matched_len(self) -> PayloadByteCount {
+        self.matched_len
+    }
+
+    fn end(self) -> usize {
+        self.start().saturating_add(self.matched_len.get())
     }
 }
 
@@ -303,62 +388,53 @@ enum RewriteEffect<'program> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MatchedRule<'program> {
     rule: &'program Rule,
-    state_match: StateMatch,
+    state_match: MatchedStateSpan,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeRuleState {
-    Always,
-    OnceFresh,
-    OnceConsumed,
-}
-
-impl RuntimeRuleState {
-    const fn from_repeat(repeat: RuleRepeat) -> Self {
-        match repeat {
-            RuleRepeat::Always => Self::Always,
-            RuleRepeat::Once => Self::OnceFresh,
-        }
-    }
-
-    const fn is_available(self) -> bool {
-        !matches!(self, Self::OnceConsumed)
-    }
-
-    fn consume(&mut self) {
-        if matches!(self, Self::OnceFresh) {
-            *self = Self::OnceConsumed;
-        }
-    }
+enum OnceRuleState {
+    Fresh,
+    Consumed,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 struct OnceRuleStates {
-    states: Vec<RuntimeRuleState>,
+    states: Vec<OnceRuleState>,
 }
 
 impl OnceRuleStates {
-    fn new(rules: &[Rule]) -> Result<Self, crate::allocation::AllocationError> {
+    fn new(count: crate::rule::RuleCount) -> Result<Self, crate::allocation::AllocationError> {
         let mut states = Vec::new();
-        try_reserve_total_exact(
-            &mut states,
-            rules.len(),
-            AllocationContext::RuntimeRuleState,
-        )?;
+        try_reserve_total_exact(&mut states, count.get(), AllocationContext::OnceRuleState)?;
 
-        for rule in rules {
+        for _ in 0..count.get() {
             try_push(
                 &mut states,
-                RuntimeRuleState::from_repeat(rule.repeat()),
-                AllocationContext::RuntimeRuleState,
+                OnceRuleState::Fresh,
+                AllocationContext::OnceRuleState,
             )?;
         }
 
         Ok(Self { states })
     }
 
-    fn iter_mut(&mut self) -> impl Iterator<Item = &mut RuntimeRuleState> {
-        self.states.iter_mut()
+    fn is_available(&self, execution: RuleExecution) -> bool {
+        match execution {
+            RuleExecution::Always => true,
+            RuleExecution::Once(slot) => self
+                .states
+                .get(slot.get())
+                .copied()
+                .is_some_and(|state| matches!(state, OnceRuleState::Fresh)),
+        }
+    }
+
+    fn consume(&mut self, execution: RuleExecution) {
+        if let RuleExecution::Once(slot) = execution
+            && let Some(state) = self.states.get_mut(slot.get())
+        {
+            *state = OnceRuleState::Consumed;
+        }
     }
 }
 
@@ -380,7 +456,7 @@ impl StepBudget {
         self.completed_steps
     }
 
-    fn ensure_next_step_allowed(self, state_len: usize) -> Result<(), LimitError> {
+    fn ensure_next_step_allowed(self, state_len: RuntimeStateByteCount) -> Result<(), LimitError> {
         if self.completed_steps.get() >= self.max_steps.get() {
             return Err(LimitError::step(
                 self.max_steps,
@@ -392,7 +468,7 @@ impl StepBudget {
         Ok(())
     }
 
-    fn complete_step(&mut self, state_len: usize) -> Result<StepCount, LimitError> {
+    fn complete_step(&mut self, state_len: RuntimeStateByteCount) -> Result<StepCount, LimitError> {
         self.ensure_next_step_allowed(state_len)?;
 
         let Some(next_steps) = self.completed_steps.checked_next() else {
@@ -421,11 +497,11 @@ pub(crate) struct Runtime<'program> {
 impl<'program> Runtime<'program> {
     pub(crate) fn new(
         program: &'program Program,
-        input: &[u8],
+        input: RuntimeInput,
         limits: RunLimits,
     ) -> Result<Self, RunError> {
-        let state = State::parse_input(input, limits)?;
-        let once_states = OnceRuleStates::new(program.rule_slice())?;
+        let state = State::from_input(input, limits)?;
+        let once_states = OnceRuleStates::new(program.once_rule_count())?;
         let scratch = RewriteScratch::new();
 
         Ok(Self {
@@ -471,7 +547,7 @@ impl<'program> Runtime<'program> {
             };
 
             self.step_budget
-                .ensure_next_step_allowed(self.state.len())
+                .ensure_next_step_allowed(self.state.byte_count())
                 .map_err(RunError::from)?;
 
             if let Some(result) = self.apply_rule(matched, &mut trace)? {
@@ -495,13 +571,8 @@ impl<'program> Runtime<'program> {
     }
 
     fn find_next_match(&mut self) -> Option<MatchedRule<'program>> {
-        for (rule, state) in self
-            .program
-            .rule_slice()
-            .iter()
-            .zip(self.once_states.iter_mut())
-        {
-            if !state.is_available() {
+        for rule in self.program.rule_slice() {
+            if !self.once_states.is_available(rule.execution()) {
                 continue;
             }
 
@@ -509,7 +580,7 @@ impl<'program> Runtime<'program> {
                 continue;
             };
 
-            state.consume();
+            self.once_states.consume(rule.execution());
             return Some(MatchedRule { rule, state_match });
         }
 
@@ -530,7 +601,7 @@ impl<'program> Runtime<'program> {
 
         let step = self
             .step_budget
-            .complete_step(self.state.len())
+            .complete_step(self.state.byte_count())
             .map_err(RunError::from)
             .map_err(TracedRunError::Run)?;
 
@@ -569,7 +640,7 @@ impl<'program> Runtime<'program> {
 
     fn apply_action_to_scratch(
         &mut self,
-        state_match: StateMatch,
+        state_match: MatchedStateSpan,
         action: &'program Action,
     ) -> Result<RewriteEffect<'program>, RunError> {
         match action {
@@ -589,10 +660,11 @@ impl<'program> Runtime<'program> {
                 Ok(RewriteEffect::Continue)
             }
             Action::Return(output) => {
-                if output.len() > self.limits.return_byte_limit().get() {
+                let output_len = ReturnOutputByteCount::new(output.len());
+                if output_len.get() > self.limits.return_byte_limit().get() {
                     return Err(LimitError::return_output(
                         self.limits.return_byte_limit(),
-                        output.len(),
+                        output_len,
                     )
                     .into());
                 }
@@ -624,7 +696,7 @@ impl<'program> Runtime<'program> {
     }
 }
 
-fn find_match(state: &State, rule: &Rule) -> Option<StateMatch> {
+fn find_match(state: &State, rule: &Rule) -> Option<MatchedStateSpan> {
     match rule.anchor() {
         RuleAnchor::Anywhere => state.find_payload(rule.lhs()),
         RuleAnchor::Start => state.starts_with_payload(rule.lhs()),
@@ -638,12 +710,12 @@ mod tests {
     use crate::bytes::{CompactByte, Payload, ProgramByte};
     use crate::test_support::{
         TestFailure, TestResult, ensure, ensure_eq, expect_input_error, expect_return_output,
-        expect_run_error, expect_step_limit, into_result_bytes, result_bytes, run_source,
-        source_column, source_line_number,
+        expect_run_error, expect_step_limit, into_result_bytes, result_bytes, run_program,
+        run_source, runtime_input, source_column, source_line_number,
     };
     use crate::{
-        BorrowedTraceEffect, BorrowedTraceEvent, ByteCount, LimitError, PayloadKind, Program,
-        RunLimits,
+        BorrowedTraceEffect, BorrowedTraceEvent, LimitError, PayloadKind, Program, RunLimits,
+        RuntimeStateByteCount,
     };
     use std::string::String;
     use std::vec::Vec;
@@ -689,7 +761,11 @@ mod tests {
     #[test]
     fn empty_lhs_anywhere_matches_at_start() -> TestResult {
         let source = "(once)=x\n(start)x=(return)ok";
-        let result = Program::parse_str(source)?.run(b"ab", RunLimits::new(StepLimit::new(2)))?;
+        let result = run_program(
+            &Program::parse_str(source)?,
+            b"ab",
+            RunLimits::new(StepLimit::new(2)),
+        )?;
 
         expect_return_output(&result, b"ok")?;
         ensure_eq(result.steps().get(), 2)?;
@@ -698,10 +774,17 @@ mod tests {
 
     #[test]
     fn empty_lhs_start_and_end_anchors_pick_different_edges() -> TestResult {
-        let start_result = Program::parse_str("(once)(start)=x\nxab=(return)start")?
-            .run(b"ab", RunLimits::new(StepLimit::new(2)))?;
-        let end_result = Program::parse_str("(once)(end)=x\nabx=(return)end")?
-            .run(b"ab", RunLimits::new(StepLimit::new(2)))?;
+        let limits = RunLimits::new(StepLimit::new(2));
+        let start_result = run_program(
+            &Program::parse_str("(once)(start)=x\nxab=(return)start")?,
+            b"ab",
+            limits,
+        )?;
+        let end_result = run_program(
+            &Program::parse_str("(once)(end)=x\nabx=(return)end")?,
+            b"ab",
+            limits,
+        )?;
 
         ensure_eq(result_bytes(&start_result), b"start".as_slice())?;
         ensure_eq(result_bytes(&end_result), b"end".as_slice())?;
@@ -725,8 +808,11 @@ mod tests {
     #[test]
     fn runtime_only_bytes_are_preserved_until_return_discards_them() -> TestResult {
         ensure_eq(run_source("a=b", "a=()#c")?, "b=()#c")?;
-        let result =
-            Program::parse_str("a=(return)x")?.run(b"a=()#c", RunLimits::new(StepLimit::new(1)))?;
+        let result = run_program(
+            &Program::parse_str("a=(return)x")?,
+            b"a=()#c",
+            RunLimits::new(StepLimit::new(1)),
+        )?;
         expect_return_output(&result, b"x")?;
         Ok(())
     }
@@ -750,9 +836,10 @@ mod tests {
 
     #[test]
     fn runtime_input_error_is_structured() -> TestResult {
-        let error = expect_run_error(
-            Program::parse_str("a=b")?.run("aあ".as_bytes(), RunLimits::default()),
-        )?;
+        let error = expect_run_error(RuntimeInput::parse(
+            "aあ".as_bytes(),
+            RunLimits::default().state_byte_limit(),
+        ))?;
         let error = expect_input_error(error)?;
 
         ensure_eq(error.column().get(), 2)?;
@@ -772,31 +859,39 @@ mod tests {
             "expected invalid payload",
         )?;
 
-        let result = program.run(b"a=#()", RunLimits::new(StepLimit::new(10_000)))?;
+        let result = run_program(&program, b"a=#()", RunLimits::new(StepLimit::new(10_000)))?;
         ensure_eq(String::from_utf8(into_result_bytes(result))?, "b=#()")?;
         Ok(())
     }
 
     #[test]
     fn step_limit_allows_exact_limit_but_blocks_next_match() -> TestResult {
-        let exact = Program::parse_str("a=b")?.run(b"a", RunLimits::new(StepLimit::new(1)))?;
+        let exact = run_program(
+            &Program::parse_str("a=b")?,
+            b"a",
+            RunLimits::new(StepLimit::new(1)),
+        )?;
         ensure_eq(result_bytes(&exact), b"b".as_slice())?;
         ensure_eq(exact.steps().get(), 1)?;
 
-        let no_match = Program::parse_str("a=b")?.run(b"x", RunLimits::new(StepLimit::new(0)))?;
+        let no_match = run_program(
+            &Program::parse_str("a=b")?,
+            b"x",
+            RunLimits::new(StepLimit::new(0)),
+        )?;
         ensure_eq(result_bytes(&no_match), b"x".as_slice())?;
         ensure_eq(no_match.steps().get(), 0)?;
 
-        let error = expect_run_error(
-            Program::parse_str("a=b")?.run(b"a", RunLimits::new(StepLimit::new(0))),
-        )?;
+        let limits = RunLimits::new(StepLimit::new(0));
+        let error =
+            expect_run_error(Program::parse_str("a=b")?.run(runtime_input(b"a", limits)?, limits))?;
         let error = expect_step_limit(error)?;
         ensure_eq(
             error,
             LimitError::Step {
                 max_steps: StepLimit::new(0),
                 completed_steps: StepCount::ZERO,
-                state_len: ByteCount::new(1),
+                state_len: RuntimeStateByteCount::new(1),
             },
         )?;
         Ok(())
@@ -804,9 +899,9 @@ mod tests {
 
     #[test]
     fn step_limit_error_reports_state_len_without_owning_state_bytes() -> TestResult {
-        let error = expect_run_error(
-            Program::parse_str("=a")?.run(b"", RunLimits::new(StepLimit::new(3))),
-        )?;
+        let limits = RunLimits::new(StepLimit::new(3));
+        let error =
+            expect_run_error(Program::parse_str("=a")?.run(runtime_input(b"", limits)?, limits))?;
         let error = expect_step_limit(error)?;
 
         ensure_eq(
@@ -818,7 +913,7 @@ mod tests {
                     .and_then(StepCount::checked_next)
                     .and_then(StepCount::checked_next)
                     .ok_or(TestFailure::Message("expected step count"))?,
-                state_len: ByteCount::new(3),
+                state_len: RuntimeStateByteCount::new(3),
             },
         )?;
         Ok(())
@@ -828,10 +923,11 @@ mod tests {
     fn borrowed_trace_exposes_last_state_before_step_limit() -> TestResult {
         let program = Program::parse_str("=a")?;
         let mut last_state = Vec::new();
+        let limits = RunLimits::new(StepLimit::new(3));
 
         let error = expect_run_error(program.run_with_borrowed_trace(
-            b"",
-            RunLimits::new(StepLimit::new(3)),
+            runtime_input(b"", limits)?,
+            limits,
             |event| {
                 last_state.clear();
                 match event {
@@ -858,7 +954,7 @@ mod tests {
                     .and_then(StepCount::checked_next)
                     .and_then(StepCount::checked_next)
                     .ok_or(TestFailure::Message("expected step count"))?,
-                state_len: ByteCount::new(3),
+                state_len: RuntimeStateByteCount::new(3),
             },
         )?;
         ensure_eq(last_state.as_slice(), b"aaa".as_slice())?;
@@ -884,8 +980,11 @@ a|-=
     #[test]
     fn runtime_accepts_every_ascii_input_byte() -> TestResult {
         let input: Vec<u8> = (0x00..=0x7f).collect();
-        let result =
-            Program::parse_str("# no executable rules")?.run(&input, RunLimits::default())?;
+        let result = run_program(
+            &Program::parse_str("# no executable rules")?,
+            &input,
+            RunLimits::default(),
+        )?;
 
         ensure_eq(result_bytes(&result), input.as_slice())?;
         ensure_eq(result.steps().get(), 0)?;
@@ -894,11 +993,9 @@ a|-=
 
     #[test]
     fn runtime_rejects_every_non_ascii_input_byte() -> TestResult {
-        let program = Program::parse_str("# no executable rules")?;
-
         for byte in 0x80..=0xff {
             ensure(
-                program.run(&[byte], RunLimits::default()).is_err(),
+                RuntimeInput::parse(&[byte], RunLimits::default().state_byte_limit()).is_err(),
                 "byte should be rejected",
             )?;
         }
@@ -910,7 +1007,10 @@ a|-=
     fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
         let compact = [CompactByte::new(b'a', source_column(1)?)];
         let payload = Payload::parse(&compact, source_line_number(1)?, PayloadKind::LeftSideData)?;
-        let state = State::parse_input(b"a=()# ", RunLimits::default())?;
+        let state = State::from_input(
+            runtime_input(b"a=()# ", RunLimits::default())?,
+            RunLimits::default(),
+        )?;
 
         ensure_eq(expect_payload_byte(&payload, 0)?, b'a')?;
         ensure_eq(expect_runtime_byte(&state, 0)?, b'a')?;

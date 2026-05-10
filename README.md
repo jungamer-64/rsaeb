@@ -96,16 +96,17 @@ fn main() -> Result<(), rsaeb::AebError> {
 }
 ```
 
-Reusable parsed program:
+Reusable parsed program with validated runtime input:
 
 ```rust
-use rsaeb::{Program, RunLimits, RunOutcome, StepLimit};
+use rsaeb::{Program, RunLimits, RunOutcome, RuntimeInput, StepLimit};
 
 fn main() -> Result<(), rsaeb::AebError> {
     let program = Program::parse_str("(once)a=b\na=c")?;
+    let limits = RunLimits::new(StepLimit::new(10_000));
 
-    let first = program.run(b"aa", RunLimits::new(StepLimit::new(10_000)))?;
-    let second = program.run(b"aa", RunLimits::new(StepLimit::new(10_000)))?;
+    let first = program.run(RuntimeInput::parse(b"aa", limits.state_byte_limit())?, limits)?;
+    let second = program.run(RuntimeInput::parse(b"aa", limits.state_byte_limit())?, limits)?;
 
     assert!(matches!(
         first.outcome(),
@@ -434,8 +435,8 @@ rewrite system because a short run can still expand a state aggressively.
 
 ```rust
 use rsaeb::{
-    ByteCount, LimitError, Program, ReturnByteLimit, RunError, RunLimits, StateByteLimit,
-    StateLimitContext, StepLimit, TraceSnapshotByteLimit,
+    LimitError, Program, ReturnByteLimit, RunError, RunLimits, RuntimeInput,
+    RuntimeStateByteCount, StateByteLimit, StateLimitContext, StepLimit, TraceSnapshotByteLimit,
 };
 
 fn main() -> Result<(), rsaeb::AebError> {
@@ -446,16 +447,15 @@ fn main() -> Result<(), rsaeb::AebError> {
         TraceSnapshotByteLimit::new(1024),
     );
 
-    let error = Program::parse_str("=a")?.run(
-        b"",
-        limits.with_state_byte_limit(StateByteLimit::new(2)),
-    );
+    let limits = limits.with_state_byte_limit(StateByteLimit::new(2));
+    let input = RuntimeInput::parse(b"", limits.state_byte_limit())?;
+    let error = Program::parse_str("=a")?.run(input, limits);
     assert!(matches!(
         error,
         Err(RunError::Limit(LimitError::State {
             context: StateLimitContext::Rewrite,
             limit,
-            attempted_len: ByteCount::new(3),
+            attempted_len: RuntimeStateByteCount::new(3),
         })) if limit == StateByteLimit::new(2)
     ));
 
@@ -467,30 +467,42 @@ Execution may succeed exactly at the step limit. The step limit becomes an error
 only when another rule would still apply after the configured number of steps.
 
 ```rust
-use rsaeb::{ByteCount, LimitError, Program, RunError, RunLimits, RunOutcome, StepLimit};
+use rsaeb::{LimitError, Program, RunError, RunLimits, RunOutcome, RuntimeInput, RuntimeStateByteCount, StepLimit};
 
 fn main() -> Result<(), rsaeb::AebError> {
-    let exact = Program::parse_str("a=b")?.run(b"a", RunLimits::new(StepLimit::new(1)))?;
+    let exact_limits = RunLimits::new(StepLimit::new(1));
+    let exact = Program::parse_str("a=b")?.run(
+        RuntimeInput::parse(b"a", exact_limits.state_byte_limit())?,
+        exact_limits,
+    )?;
     assert!(matches!(
         exact.outcome(),
         RunOutcome::Stable(output) if output.as_bytes() == b"b"
     ));
     assert_eq!(exact.steps().get(), 1);
 
-    let no_match = Program::parse_str("a=b")?.run(b"x", RunLimits::new(StepLimit::new(0)))?;
+    let no_match_limits = RunLimits::new(StepLimit::new(0));
+    let no_match = Program::parse_str("a=b")?.run(
+        RuntimeInput::parse(b"x", no_match_limits.state_byte_limit())?,
+        no_match_limits,
+    )?;
     assert!(matches!(
         no_match.outcome(),
         RunOutcome::Stable(output) if output.as_bytes() == b"x"
     ));
     assert_eq!(no_match.steps().get(), 0);
 
-    let would_apply = Program::parse_str("a=b")?.run(b"a", RunLimits::new(StepLimit::new(0)));
+    let would_apply_limits = RunLimits::new(StepLimit::new(0));
+    let would_apply = Program::parse_str("a=b")?.run(
+        RuntimeInput::parse(b"a", would_apply_limits.state_byte_limit())?,
+        would_apply_limits,
+    );
     assert!(matches!(
         would_apply,
         Err(RunError::Limit(LimitError::Step {
             max_steps,
             completed_steps,
-            state_len: ByteCount::new(1),
+            state_len: RuntimeStateByteCount::new(1),
         })) if max_steps == StepLimit::new(0) && completed_steps.get() == 0
     ));
     Ok(())
@@ -536,13 +548,14 @@ Borrowed tracing is the allocation-free primitive. Events borrow the runtime
 state or return payload only for the callback invocation:
 
 ```rust
-use rsaeb::{BorrowedTraceEvent, Program, RunLimits, RunOutcome, StepLimit};
+use rsaeb::{BorrowedTraceEvent, Program, RunLimits, RunOutcome, RuntimeInput, StepLimit};
 
 fn main() -> Result<(), rsaeb::AebError> {
     let program = Program::parse_str("a=b\nb=(return)ok")?;
     let mut lengths = Vec::new();
 
-    let result = program.run_with_borrowed_trace(b"a", RunLimits::new(StepLimit::new(10)), |event| {
+    let limits = RunLimits::new(StepLimit::new(10));
+    let result = program.run_with_borrowed_trace(RuntimeInput::parse(b"a", limits.state_byte_limit())?, limits, |event| {
         lengths.push(event.byte_count().get());
         if let BorrowedTraceEvent::Step { rule, .. } = event {
             let _line = rule.line_number();
@@ -564,13 +577,14 @@ under `RunLimits::trace_snapshot_byte_limit()`. Step events still borrow
 outlive that program:
 
 ```rust
-use rsaeb::{Program, RunLimits, RunOutcome, StepLimit, TraceSnapshotEffect, TraceSnapshotEvent};
+use rsaeb::{Program, RunLimits, RunOutcome, RuntimeInput, StepLimit, TraceSnapshotEffect, TraceSnapshotEvent};
 
 fn main() -> Result<(), rsaeb::AebError> {
     let program = Program::parse_str("a=b\nb=(return)ok")?;
     let mut events = Vec::new();
 
-    let result = program.run_with_trace_snapshots(b"a", RunLimits::new(StepLimit::new(10)), |event| {
+    let limits = RunLimits::new(StepLimit::new(10));
+    let result = program.run_with_trace_snapshots(RuntimeInput::parse(b"a", limits.state_byte_limit())?, limits, |event| {
         events.push(event);
     })?;
 
@@ -579,9 +593,15 @@ fn main() -> Result<(), rsaeb::AebError> {
         RunOutcome::Return(output) if output.as_bytes() == b"ok"
     ));
     assert!(matches!(events.first(), Some(TraceSnapshotEvent::Initial { .. })));
-    assert_eq!(events[0].as_bytes(), b"a");
-    assert_eq!(events[1].as_bytes(), b"b");
-    assert_eq!(events[2].as_bytes(), b"ok");
+    assert!(matches!(&events[0], TraceSnapshotEvent::Initial { state } if state.as_bytes() == b"a"));
+    assert!(matches!(&events[1], TraceSnapshotEvent::Step {
+        effect: TraceSnapshotEffect::Continue { state },
+        ..
+    } if state.as_bytes() == b"b"));
+    assert!(matches!(&events[2], TraceSnapshotEvent::Step {
+        effect: TraceSnapshotEffect::Return { output },
+        ..
+    } if output.as_bytes() == b"ok"));
     assert!(matches!(
         events[2],
         TraceSnapshotEvent::Step {
@@ -602,7 +622,7 @@ separated by `TracedRunError`.
 The library error model is intentionally split:
 
 ```rust
-use rsaeb::{Program, RunError, RunLimits};
+use rsaeb::{Program, RunError, RunLimits, RuntimeInput};
 
 fn main() -> Result<(), rsaeb::AebError> {
     match Program::parse_str("a=b=c") {
@@ -610,7 +630,7 @@ fn main() -> Result<(), rsaeb::AebError> {
         Ok(_) => panic!("expected parse error"),
     }
 
-    let run_error = Program::parse_str("a=b")?.run("aあ".as_bytes(), RunLimits::default());
+    let run_error = RuntimeInput::parse("aあ".as_bytes(), RunLimits::default().state_byte_limit());
 
     if let Err(RunError::Input(input_error)) = run_error {
         assert_eq!(input_error.column().get(), 2);
@@ -677,7 +697,11 @@ Program construction and execution:
 
 Runtime configuration and result:
 
-- `ByteCount`
+- `RuntimeInput`
+- `PayloadByteCount`
+- `RuntimeStateByteCount`
+- `ReturnOutputByteCount`
+- `TraceSnapshotByteCount`
 - `RunLimits`
 - `StepLimit`
 - `StateByteLimit`
@@ -724,9 +748,14 @@ Errors:
 - `AebError`
 - `ParseError`
 - `ParseErrorKind`
+- `ParseErrorLocation`
 - `SourceLineNumber`
 - `SourceColumn`
 - `SourcePosition`
+- `NonAsciiCodeByte`
+- `NonPrintableCodeByte`
+- `NonAsciiInputByte`
+- `ReservedSyntaxByte`
 - `PayloadKind`
 - `LeftModifierKind`
 - `RightActionKind`

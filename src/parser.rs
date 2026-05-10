@@ -1,15 +1,15 @@
 use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
-use crate::bytes::{CompactByte, Payload};
+use crate::bytes::{CompactByte, NonAsciiCodeByte, NonPrintableCodeByte, Payload};
 use crate::error::{LeftModifierKind, ParseError, ParseErrorKind, PayloadKind, RightActionKind};
 use crate::program::{Program, RuleSet};
 use crate::rule::{Action, ParsedRule, RuleAnchor, RuleRepeat};
-use crate::source::{SourceColumn, SourceLineNumber};
+use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
 use crate::syntax::SyntaxToken;
 
 fn parse_allocation_error(line_number: SourceLineNumber, error: AllocationError) -> ParseError {
-    ParseError::new(line_number, None, ParseErrorKind::Allocation(error))
+    ParseError::at_line(line_number, ParseErrorKind::Allocation(error))
 }
 
 fn source_line_number(zero_based_line: usize) -> Result<SourceLineNumber, ParseError> {
@@ -56,10 +56,18 @@ impl<'source> RawSourceLine<'source> {
             .enumerate()
             .find(|(_, byte)| !byte.is_ascii())
         {
-            return Err(ParseError::new(
-                self.line_number,
-                Some(source_column(zero_based_column, self.line_number)?),
-                ParseErrorKind::NonAsciiInCode { byte },
+            let rejected = NonAsciiCodeByte::parse(byte).ok_or_else(|| {
+                parse_allocation_error(
+                    self.line_number,
+                    AllocationError::capacity_overflow(AllocationContext::CompactCodeLine),
+                )
+            })?;
+            return Err(ParseError::at_position(
+                SourcePosition::new(
+                    self.line_number,
+                    source_column(zero_based_column, self.line_number)?,
+                ),
+                ParseErrorKind::NonAsciiInCode { byte: rejected },
             ));
         }
 
@@ -84,11 +92,13 @@ impl<'source> CodeLine<'source> {
                 continue;
             }
 
-            if !byte.is_ascii_graphic() {
-                return Err(ParseError::new(
-                    self.line_number,
-                    Some(source_column(zero_based_column, self.line_number)?),
-                    ParseErrorKind::NonPrintableAsciiInCode { byte },
+            if let Some(rejected) = NonPrintableCodeByte::parse(byte) {
+                return Err(ParseError::at_position(
+                    SourcePosition::new(
+                        self.line_number,
+                        source_column(zero_based_column, self.line_number)?,
+                    ),
+                    ParseErrorKind::NonPrintableAsciiInCode { byte: rejected },
                 ));
             }
 
@@ -154,9 +164,8 @@ impl NonEmptyCompactCodeLine {
         for byte in self.bytes {
             if byte.as_u8() == b'=' {
                 if side == RuleSyntaxSide::Right {
-                    return Err(ParseError::new(
-                        self.line_number,
-                        Some(byte.source_column()),
+                    return Err(ParseError::at_position(
+                        SourcePosition::new(self.line_number, byte.source_column()),
                         ParseErrorKind::MultipleEquals,
                     ));
                 }
@@ -174,9 +183,8 @@ impl NonEmptyCompactCodeLine {
         }
 
         if side == RuleSyntaxSide::Left {
-            return Err(ParseError::new(
+            return Err(ParseError::at_line(
                 self.line_number,
-                None,
                 ParseErrorKind::MissingEquals,
             ));
         }
@@ -287,9 +295,18 @@ impl<'code> LeftAfterRepeat<'code> {
         };
 
         if let Some(modifier) = left_modifier_kind(bytes) {
-            return Err(ParseError::new(
-                self.line_number,
-                bytes.first().copied().map(CompactByte::source_column),
+            let column = bytes
+                .first()
+                .copied()
+                .map(CompactByte::source_column)
+                .ok_or_else(|| {
+                    parse_allocation_error(
+                        self.line_number,
+                        AllocationError::capacity_overflow(AllocationContext::CompactCodeLine),
+                    )
+                })?;
+            return Err(ParseError::at_position(
+                SourcePosition::new(self.line_number, column),
                 ParseErrorKind::UnsupportedLeftModifierOrder { modifier },
             ));
         }
@@ -485,9 +502,18 @@ fn reject_nested_rhs_action(
     line_number: SourceLineNumber,
 ) -> Result<(), ParseError> {
     if let Some(action) = right_action_kind(input) {
-        return Err(ParseError::new(
-            line_number,
-            input.first().copied().map(CompactByte::source_column),
+        let column = input
+            .first()
+            .copied()
+            .map(CompactByte::source_column)
+            .ok_or_else(|| {
+                parse_allocation_error(
+                    line_number,
+                    AllocationError::capacity_overflow(AllocationContext::CompactCodeLine),
+                )
+            })?;
+        return Err(ParseError::at_position(
+            SourcePosition::new(line_number, column),
             ParseErrorKind::UnsupportedRightActionSyntax { action },
         ));
     }
@@ -498,10 +524,12 @@ fn reject_nested_rhs_action(
 #[cfg(test)]
 mod tests {
     use crate::test_support::{
-        TestResult, ensure, ensure_eq, ensure_matches, expect_parse_error, result_bytes, run_source,
+        TestResult, ensure, ensure_eq, ensure_matches, expect_error_position, expect_parse_error,
+        result_bytes, run_program, run_source, source_line_number,
     };
     use crate::{
-        LeftModifierKind, ParseErrorKind, PayloadKind, Program, RuleCount, RunLimits, StepLimit,
+        LeftModifierKind, ParseErrorKind, ParseErrorLocation, PayloadKind, Program, RuleCount,
+        RunLimits, StepLimit,
     };
 
     #[test]
@@ -544,7 +572,7 @@ mod tests {
     {
         let source = b"a=b#\xff\xfe\n";
         let program = Program::parse_bytes(source)?;
-        let result = program.run(b"a", RunLimits::new(StepLimit::new(10_000)))?;
+        let result = run_program(&program, b"a", RunLimits::new(StepLimit::new(10_000)))?;
         ensure_eq(result_bytes(&result), b"b".as_slice())?;
         Ok(())
     }
@@ -563,7 +591,7 @@ mod tests {
 
         let error = expect_parse_error("a=あ")?;
         ensure_eq(error.line().get(), 1)?;
-        ensure_eq(error.column().map(crate::SourceColumn::get), Some(3))?;
+        expect_error_position(&error, 1, 3)?;
         ensure_matches(
             matches!(error.kind(), ParseErrorKind::NonAsciiInCode { .. }),
             "expected non-ASCII parse error",
@@ -575,7 +603,7 @@ mod tests {
     fn code_body_rejects_non_printable_ascii_outside_comments() -> TestResult {
         let error = expect_parse_error("a=\0")?;
         ensure_eq(error.line().get(), 1)?;
-        ensure_eq(error.column().map(crate::SourceColumn::get), Some(3))?;
+        expect_error_position(&error, 1, 3)?;
         ensure_matches(
             matches!(error.kind(), ParseErrorKind::NonPrintableAsciiInCode { .. }),
             "expected non-printable parse error",
@@ -591,14 +619,14 @@ mod tests {
     #[test]
     fn second_equals_is_a_parse_error_unless_it_is_in_a_comment() -> TestResult {
         let error = expect_parse_error("a=b=c")?;
-        ensure_eq(error.column().map(crate::SourceColumn::get), Some(4))?;
+        expect_error_position(&error, 1, 4)?;
         ensure_matches(
             matches!(error.kind(), ParseErrorKind::MultipleEquals),
             "expected multiple equals parse error",
         )?;
 
         let error = expect_parse_error("a=b =c")?;
-        ensure_eq(error.column().map(crate::SourceColumn::get), Some(5))?;
+        expect_error_position(&error, 1, 5)?;
         ensure_matches(
             matches!(error.kind(), ParseErrorKind::MultipleEquals),
             "expected multiple equals parse error",
@@ -607,6 +635,21 @@ mod tests {
         ensure(
             Program::parse_str("a=b#=c").is_ok(),
             "expected equals in comment to parse",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn missing_equals_error_uses_line_location() -> TestResult {
+        let error = expect_parse_error("abc")?;
+
+        ensure_eq(
+            error.location(),
+            ParseErrorLocation::Line(source_line_number(1)?),
+        )?;
+        ensure_matches(
+            matches!(error.kind(), ParseErrorKind::MissingEquals),
+            "expected missing equals parse error",
         )?;
         Ok(())
     }
@@ -662,7 +705,7 @@ mod tests {
         let error = expect_parse_error("a=b\nx = y = z")?;
 
         ensure_eq(error.line().get(), 2)?;
-        ensure_eq(error.column().map(crate::SourceColumn::get), Some(7))?;
+        expect_error_position(&error, 2, 7)?;
         ensure_matches(
             matches!(error.kind(), ParseErrorKind::MultipleEquals),
             "expected multiple equals parse error",
@@ -689,7 +732,7 @@ mod tests {
         }
 
         let error = expect_parse_error("a=(start)(return)b")?;
-        ensure_eq(error.column().map(crate::SourceColumn::get), Some(10))?;
+        expect_error_position(&error, 1, 10)?;
         ensure_matches(
             matches!(
                 error.kind(),
@@ -705,7 +748,7 @@ mod tests {
     #[test]
     fn reserved_payload_syntax_errors_keep_original_source_column() -> TestResult {
         let error = expect_parse_error("a = b (")?;
-        ensure_eq(error.column().map(crate::SourceColumn::get), Some(7))?;
+        expect_error_position(&error, 1, 7)?;
         ensure_matches(
             matches!(
                 error.kind(),
@@ -722,7 +765,7 @@ mod tests {
     #[test]
     fn invalid_left_modifier_order_is_structured() -> TestResult {
         let error = expect_parse_error("(start)(once)a=b")?;
-        ensure_eq(error.column().map(crate::SourceColumn::get), Some(8))?;
+        expect_error_position(&error, 1, 8)?;
         ensure_matches(
             matches!(
                 error.kind(),
@@ -740,8 +783,8 @@ mod tests {
         let compact = Program::parse_str("(once)(start)a=(end)b")?;
         let spaced = Program::parse_str("( once ) ( start ) a = ( end ) b # comment")?;
 
-        let compact_result = compact.run(b"ac", RunLimits::new(StepLimit::new(10)))?;
-        let spaced_result = spaced.run(b"ac", RunLimits::new(StepLimit::new(10)))?;
+        let compact_result = run_program(&compact, b"ac", RunLimits::new(StepLimit::new(10)))?;
+        let spaced_result = run_program(&spaced, b"ac", RunLimits::new(StepLimit::new(10)))?;
 
         ensure_eq(result_bytes(&compact_result), result_bytes(&spaced_result))?;
         Ok(())

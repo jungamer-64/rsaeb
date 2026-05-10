@@ -1,10 +1,192 @@
 use alloc::vec::Vec;
+use core::fmt;
+
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::error::{InputColumn, InputError, ParseError, ParseErrorKind, PayloadKind};
-use crate::source::{SourceColumn, SourceLineNumber};
+use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReservedSyntaxByte {
+/// Byte length of executable program payload data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PayloadByteCount {
+    value: usize,
+}
+
+impl PayloadByteCount {
+    #[must_use]
+    pub const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+
+    #[must_use]
+    pub const fn is_zero(self) -> bool {
+        self.value == 0
+    }
+}
+
+impl fmt::Display for PayloadByteCount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
+/// Byte length of materialized runtime state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RuntimeStateByteCount {
+    value: usize,
+}
+
+impl RuntimeStateByteCount {
+    #[must_use]
+    pub const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+
+    #[must_use]
+    pub const fn is_zero(self) -> bool {
+        self.value == 0
+    }
+}
+
+impl fmt::Display for RuntimeStateByteCount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
+/// Byte length of a `(return)` output payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ReturnOutputByteCount {
+    value: usize,
+}
+
+impl ReturnOutputByteCount {
+    #[must_use]
+    pub const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+
+    #[must_use]
+    pub const fn is_zero(self) -> bool {
+        self.value == 0
+    }
+}
+
+impl fmt::Display for ReturnOutputByteCount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
+/// Byte length budgeted for one trace snapshot event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TraceSnapshotByteCount {
+    value: usize,
+}
+
+impl TraceSnapshotByteCount {
+    #[must_use]
+    pub const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+
+    #[must_use]
+    pub const fn is_zero(self) -> bool {
+        self.value == 0
+    }
+}
+
+impl fmt::Display for TraceSnapshotByteCount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
+/// Non-ASCII byte rejected from executable program code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NonAsciiCodeByte {
+    byte: u8,
+}
+
+impl NonAsciiCodeByte {
+    pub(crate) const fn parse(byte: u8) -> Option<Self> {
+        if byte.is_ascii() {
+            None
+        } else {
+            Some(Self { byte })
+        }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u8 {
+        self.byte
+    }
+}
+
+/// Non-printable ASCII byte rejected from executable program code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NonPrintableCodeByte {
+    byte: u8,
+}
+
+impl NonPrintableCodeByte {
+    pub(crate) const fn parse(byte: u8) -> Option<Self> {
+        if byte.is_ascii() && !byte.is_ascii_graphic() {
+            Some(Self { byte })
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u8 {
+        self.byte
+    }
+}
+
+/// Non-ASCII byte rejected from runtime input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NonAsciiInputByte {
+    byte: u8,
+}
+
+impl NonAsciiInputByte {
+    pub(crate) const fn parse(byte: u8) -> Option<Self> {
+        if byte.is_ascii() {
+            None
+        } else {
+            Some(Self { byte })
+        }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u8 {
+        self.byte
+    }
+}
+
+/// Reserved executable syntax byte rejected from program payload data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ReservedSyntaxByte {
     Equals,
     Comment,
     OpenParen,
@@ -12,13 +194,23 @@ enum ReservedSyntaxByte {
 }
 
 impl ReservedSyntaxByte {
-    const fn parse(byte: u8) -> Option<Self> {
+    pub(crate) const fn parse(byte: u8) -> Option<Self> {
         match byte {
             b'=' => Some(Self::Equals),
             b'#' => Some(Self::Comment),
             b'(' => Some(Self::OpenParen),
             b')' => Some(Self::CloseParen),
             _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u8 {
+        match self {
+            Self::Equals => b'=',
+            Self::Comment => b'#',
+            Self::OpenParen => b'(',
+            Self::CloseParen => b')',
         }
     }
 }
@@ -39,28 +231,25 @@ impl ProgramByte {
     ) -> Result<Self, ParseError> {
         let raw = byte.as_u8();
 
-        if !raw.is_ascii() {
-            return Err(ParseError::new(
-                line_number,
-                Some(byte.source_column()),
-                ParseErrorKind::NonAsciiInCode { byte: raw },
+        if let Some(rejected) = NonAsciiCodeByte::parse(raw) {
+            return Err(ParseError::at_position(
+                SourcePosition::new(line_number, byte.source_column()),
+                ParseErrorKind::NonAsciiInCode { byte: rejected },
             ));
         }
 
-        if !raw.is_ascii_graphic() {
-            return Err(ParseError::new(
-                line_number,
-                Some(byte.source_column()),
-                ParseErrorKind::NonPrintableAsciiInCode { byte: raw },
+        if let Some(rejected) = NonPrintableCodeByte::parse(raw) {
+            return Err(ParseError::at_position(
+                SourcePosition::new(line_number, byte.source_column()),
+                ParseErrorKind::NonPrintableAsciiInCode { byte: rejected },
             ));
         }
 
-        if ReservedSyntaxByte::parse(raw).is_some() {
-            return Err(ParseError::new(
-                line_number,
-                Some(byte.source_column()),
+        if let Some(rejected) = ReservedSyntaxByte::parse(raw) {
+            return Err(ParseError::at_position(
+                SourcePosition::new(line_number, byte.source_column()),
                 ParseErrorKind::ReservedSyntaxInPayload {
-                    byte: raw,
+                    byte: rejected,
                     payload_kind,
                 },
             ));
@@ -84,13 +273,13 @@ pub(crate) struct AsciiByte(u8);
 
 impl AsciiByte {
     pub(crate) fn parse(byte: u8, zero_based_column: usize) -> Result<Self, InputError> {
-        if byte.is_ascii() {
-            Ok(Self(byte))
-        } else {
+        if let Some(rejected) = NonAsciiInputByte::parse(byte) {
             Err(InputError::new(
                 InputColumn::from_zero_based(zero_based_column),
-                byte,
+                rejected,
             ))
+        } else {
+            Ok(Self(byte))
         }
     }
 
@@ -183,14 +372,13 @@ impl Payload {
         }
 
         let mut bytes = Vec::new();
-        try_reserve_total_exact(&mut bytes, input.len(), AllocationContext::Payload).map_err(
-            |error| ParseError::new(line_number, None, ParseErrorKind::Allocation(error)),
-        )?;
+        try_reserve_total_exact(&mut bytes, input.len(), AllocationContext::Payload)
+            .map_err(|error| ParseError::at_line(line_number, ParseErrorKind::Allocation(error)))?;
 
         for byte in input.iter().copied() {
             let parsed = ProgramByte::parse(byte, line_number, payload_kind)?;
             try_push(&mut bytes, parsed, AllocationContext::Payload).map_err(|error| {
-                ParseError::new(line_number, None, ParseErrorKind::Allocation(error))
+                ParseError::at_line(line_number, ParseErrorKind::Allocation(error))
             })?;
         }
 
@@ -199,6 +387,10 @@ impl Payload {
 
     pub(crate) fn len(&self) -> usize {
         self.bytes.len()
+    }
+
+    pub(crate) fn byte_count(&self) -> PayloadByteCount {
+        PayloadByteCount::new(self.bytes.len())
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -275,8 +467,8 @@ impl CompactByte {
 mod tests {
     use super::*;
     use crate::test_support::{
-        TestFailure, TestResult, ensure, ensure_eq, ensure_matches, source_column,
-        source_line_number,
+        TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_error_position,
+        source_column, source_line_number,
     };
     use crate::{ParseError, ParseErrorKind, PayloadKind};
 
@@ -299,7 +491,15 @@ mod tests {
             let error =
                 parse_payload_error(&compact, source_line_number(1)?, PayloadKind::RightSideData)?;
 
-            ensure_eq(error.column().map(SourceColumn::get), Some(1))?;
+            expect_error_position(&error, 1, 1)?;
+            ensure_matches(
+                matches!(
+                    error.kind(),
+                    ParseErrorKind::ReservedSyntaxInPayload { byte, .. }
+                        if byte.get() == reserved
+                ),
+                "expected concrete reserved syntax byte",
+            )?;
             ensure_matches(
                 matches!(
                     error.kind(),
@@ -334,7 +534,7 @@ mod tests {
             source_line_number(1)?,
             PayloadKind::RightSideData,
         )?;
-        ensure_eq(error.column().map(SourceColumn::get), Some(2))?;
+        expect_error_position(&error, 1, 2)?;
         ensure_matches(
             matches!(error.kind(), ParseErrorKind::NonPrintableAsciiInCode { .. }),
             "expected non-printable parse error",

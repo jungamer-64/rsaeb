@@ -2,11 +2,13 @@ use alloc::vec::Vec;
 use core::convert::Infallible;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push};
-use crate::bytes::ByteCount;
+use crate::bytes::{ReturnOutputByteCount, RuntimeStateByteCount};
 use crate::error::{AebError, ParseError, RunError, TracedRunError};
 use crate::parser::parse_program_impl;
-use crate::rule::{ParsedRule, Rule, RuleCount, RulePosition, RuleView};
-use crate::runtime::Runtime;
+use crate::rule::{
+    OnceRuleSlot, ParsedRule, Rule, RuleCount, RuleExecution, RulePosition, RuleRepeat, RuleView,
+};
+use crate::runtime::{Runtime, RuntimeInput};
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
 pub const DEFAULT_MAX_STEPS: StepLimit = StepLimit::new(1_000_000);
@@ -116,6 +118,7 @@ impl StepCount {
 /// configured runtime limit would be exceeded.
 pub fn run_bytes(source: &[u8], input: &[u8], limits: RunLimits) -> Result<RunResult, AebError> {
     let program = Program::parse_bytes(source)?;
+    let input = RuntimeInput::parse(input, limits.state_byte_limit())?;
     program.run(input, limits).map_err(AebError::Run)
 }
 
@@ -251,6 +254,7 @@ pub struct Program {
 #[derive(Debug, PartialEq, Eq, Default)]
 pub(crate) struct RuleSet {
     rules: Vec<Rule>,
+    once_rule_slots: usize,
 }
 
 impl RuleSet {
@@ -261,10 +265,20 @@ impl RuleSet {
     pub(crate) fn push_parsed_rule(&mut self, parsed: ParsedRule) -> Result<(), AllocationError> {
         let position = RulePosition::from_zero_based(self.rules.len())
             .ok_or_else(|| AllocationError::capacity_overflow(AllocationContext::ProgramRules))?;
+        let execution = match parsed.repeat() {
+            RuleRepeat::Always => RuleExecution::Always,
+            RuleRepeat::Once => {
+                let slot = OnceRuleSlot::new(self.once_rule_slots);
+                self.once_rule_slots = self.once_rule_slots.checked_add(1).ok_or_else(|| {
+                    AllocationError::capacity_overflow(AllocationContext::ProgramRules)
+                })?;
+                RuleExecution::Once(slot)
+            }
+        };
 
         try_push(
             &mut self.rules,
-            Rule::from_parsed(parsed, position),
+            Rule::from_parsed(parsed, position, execution),
             AllocationContext::ProgramRules,
         )?;
 
@@ -276,12 +290,7 @@ impl RuleSet {
     }
 
     pub(crate) fn once_rule_count(&self) -> RuleCount {
-        RuleCount::new(
-            self.rules
-                .iter()
-                .filter(|rule| rule.repeat().is_once())
-                .count(),
-        )
+        RuleCount::new(self.once_rule_slots)
     }
 
     pub(crate) fn as_slice(&self) -> &[Rule] {
@@ -347,7 +356,7 @@ impl Program {
     /// Returns `RunError` when `input` contains non-ASCII bytes, an allocation
     /// fails, state-size arithmetic overflows, or a configured `RunLimits`
     /// budget would be exceeded.
-    pub fn run(&self, input: &[u8], limits: RunLimits) -> Result<RunResult, RunError> {
+    pub fn run(&self, input: RuntimeInput, limits: RunLimits) -> Result<RunResult, RunError> {
         Runtime::new(self, input, limits)?.run()
     }
 
@@ -364,7 +373,7 @@ impl Program {
     /// `RunError::Limit` or `RunError::Allocation`.
     pub fn run_with_trace_snapshots<'program, F>(
         &'program self,
-        input: &[u8],
+        input: RuntimeInput,
         limits: RunLimits,
         mut trace: F,
     ) -> Result<RunResult, RunError>
@@ -391,7 +400,7 @@ impl Program {
     /// error.
     pub fn try_run_with_trace_snapshots<'program, F, E>(
         &'program self,
-        input: &[u8],
+        input: RuntimeInput,
         limits: RunLimits,
         mut trace: F,
     ) -> Result<RunResult, TracedRunError<E>>
@@ -425,7 +434,7 @@ impl Program {
     /// Returns `RunError` for the same runtime failures as `Program::run`.
     pub fn run_with_borrowed_trace<'program, F>(
         &'program self,
-        input: &[u8],
+        input: RuntimeInput,
         limits: RunLimits,
         mut trace: F,
     ) -> Result<RunResult, RunError>
@@ -451,7 +460,7 @@ impl Program {
     /// error.
     pub fn try_run_with_borrowed_trace<'program, F, E>(
         &'program self,
-        input: &[u8],
+        input: RuntimeInput,
         limits: RunLimits,
         trace: F,
     ) -> Result<RunResult, TracedRunError<E>>
@@ -496,8 +505,8 @@ impl RuntimeStateSnapshot {
 
     /// Materialized byte length.
     #[must_use]
-    pub fn byte_count(&self) -> ByteCount {
-        ByteCount::new(self.bytes.len())
+    pub fn byte_count(&self) -> RuntimeStateByteCount {
+        RuntimeStateByteCount::new(self.bytes.len())
     }
 
     /// Whether this snapshot contains no bytes.
@@ -531,8 +540,8 @@ impl ReturnOutput {
 
     /// Materialized byte length.
     #[must_use]
-    pub fn byte_count(&self) -> ByteCount {
-        ByteCount::new(self.bytes.len())
+    pub fn byte_count(&self) -> ReturnOutputByteCount {
+        ReturnOutputByteCount::new(self.bytes.len())
     }
 
     /// Whether this return output contains no bytes.
@@ -589,12 +598,12 @@ mod tests {
     use crate::test_support::{
         TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_event,
         expect_return_output, expect_run_error, expect_stable_output, expect_state_limit,
-        result_bytes,
+        result_bytes, run_program, runtime_input, trace_event_bytes,
     };
     use crate::{
-        ByteCount, LimitError, ReturnByteLimit, RuleActionView, RuleAnchor, RuleCount, RuleRepeat,
-        StateByteLimit, StateLimitContext, TraceSnapshotByteLimit, TraceSnapshotEffect,
-        TraceSnapshotEvent, run_bytes, run_str,
+        LimitError, ReturnByteLimit, ReturnOutputByteCount, RuleActionView, RuleAnchor, RuleCount,
+        RuleRepeat, RuntimeInput, RuntimeStateByteCount, StateByteLimit, StateLimitContext,
+        TraceSnapshotByteLimit, TraceSnapshotEffect, TraceSnapshotEvent, run_bytes, run_str,
     };
     use std::vec::Vec;
 
@@ -620,8 +629,9 @@ mod tests {
     fn parsed_program_is_reusable_and_once_state_is_per_run() -> TestResult {
         let program = Program::parse_str("(once)a=b\na=c")?;
 
-        let first = program.run(b"aa", RunLimits::new(StepLimit::new(10_000)))?;
-        let second = program.run(b"aa", RunLimits::new(StepLimit::new(10_000)))?;
+        let limits = RunLimits::new(StepLimit::new(10_000));
+        let first = run_program(&program, b"aa", limits)?;
+        let second = run_program(&program, b"aa", limits)?;
 
         ensure_eq(result_bytes(&first), b"bc".as_slice())?;
         ensure_eq(result_bytes(&second), b"bc".as_slice())?;
@@ -630,15 +640,24 @@ mod tests {
     }
 
     #[test]
+    fn always_rules_do_not_allocate_once_slots() -> TestResult {
+        let program = Program::parse_str("a=b\nb=c\n(start)c=d")?;
+
+        ensure_eq(program.rule_count(), RuleCount::new(3))?;
+        ensure_eq(program.once_rule_count(), RuleCount::new(0))?;
+        Ok(())
+    }
+
+    #[test]
     fn run_outcome_separates_stable_state_from_return_output() -> TestResult {
-        let stable = Program::parse_str("a=b")?.run(b"a", RunLimits::new(StepLimit::new(1)))?;
-        let returned =
-            Program::parse_str("a=(return)b")?.run(b"a", RunLimits::new(StepLimit::new(1)))?;
+        let limits = RunLimits::new(StepLimit::new(1));
+        let stable = run_program(&Program::parse_str("a=b")?, b"a", limits)?;
+        let returned = run_program(&Program::parse_str("a=(return)b")?, b"a", limits)?;
 
         match stable.into_outcome() {
             RunOutcome::Stable(output) => {
                 ensure_eq(output.as_bytes(), b"b".as_slice())?;
-                ensure_eq(output.byte_count(), ByteCount::new(1))?;
+                ensure_eq(output.byte_count(), RuntimeStateByteCount::new(1))?;
             }
             RunOutcome::Return(_) => return Err(TestFailure::Message("expected stable outcome")),
         }
@@ -646,7 +665,7 @@ mod tests {
         match returned.into_outcome() {
             RunOutcome::Return(output) => {
                 ensure_eq(output.as_bytes(), b"b".as_slice())?;
-                ensure_eq(output.byte_count(), ByteCount::new(1))?;
+                ensure_eq(output.byte_count(), ReturnOutputByteCount::new(1))?;
             }
             RunOutcome::Stable(_) => return Err(TestFailure::Message("expected return outcome")),
         }
@@ -775,7 +794,7 @@ mod tests {
             ReturnByteLimit::new(10),
             TraceSnapshotByteLimit::new(10),
         );
-        let error = expect_run_error(Program::parse_str("a=b")?.run(b"aa", limits))?;
+        let error = expect_run_error(RuntimeInput::parse(b"aa", limits.state_byte_limit()))?;
         let error = expect_state_limit(error)?;
 
         ensure_eq(
@@ -783,7 +802,7 @@ mod tests {
             LimitError::State {
                 context: StateLimitContext::Input,
                 limit: StateByteLimit::new(1),
-                attempted_len: ByteCount::new(2),
+                attempted_len: RuntimeStateByteCount::new(2),
             },
         )?;
         Ok(())
@@ -797,7 +816,8 @@ mod tests {
             ReturnByteLimit::new(10),
             TraceSnapshotByteLimit::new(10),
         );
-        let error = expect_run_error(Program::parse_str("=a")?.run(b"aa", limits))?;
+        let error =
+            expect_run_error(Program::parse_str("=a")?.run(runtime_input(b"aa", limits)?, limits))?;
         let error = expect_state_limit(error)?;
 
         ensure_eq(
@@ -805,7 +825,7 @@ mod tests {
             LimitError::State {
                 context: StateLimitContext::Rewrite,
                 limit: StateByteLimit::new(2),
-                attempted_len: ByteCount::new(3),
+                attempted_len: RuntimeStateByteCount::new(3),
             },
         )?;
         Ok(())
@@ -815,13 +835,11 @@ mod tests {
     fn trace_snapshots_are_derived_from_borrowed_trace() -> TestResult {
         let program = Program::parse_str("a=b\nb=(return)ok")?;
         let mut events = Vec::new();
-        let result = program.run_with_trace_snapshots(
-            b"a",
-            RunLimits::new(StepLimit::new(10_000)),
-            |event| {
+        let limits = RunLimits::new(StepLimit::new(10_000));
+        let result =
+            program.run_with_trace_snapshots(runtime_input(b"a", limits)?, limits, |event| {
                 events.push(event);
-            },
-        )?;
+            })?;
 
         expect_return_output(&result, b"ok")?;
         ensure_eq(events.len(), 3)?;
@@ -833,9 +851,9 @@ mod tests {
         let first_step = expect_event(&events, 1)?;
         let second_step = expect_event(&events, 2)?;
 
-        ensure_eq(initial.as_bytes(), b"a".as_slice())?;
-        ensure_eq(first_step.as_bytes(), b"b".as_slice())?;
-        ensure_eq(second_step.as_bytes(), b"ok".as_slice())?;
+        ensure_eq(trace_event_bytes(initial), b"a".as_slice())?;
+        ensure_eq(trace_event_bytes(first_step), b"b".as_slice())?;
+        ensure_eq(trace_event_bytes(second_step), b"ok".as_slice())?;
         ensure_matches(
             matches!(
                 first_step,

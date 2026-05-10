@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
-use crate::bytes::Payload;
+use crate::bytes::{Payload, PayloadByteCount};
 use crate::source::SourceLineNumber;
 use crate::syntax::SyntaxToken;
 
@@ -62,6 +62,21 @@ impl RulePosition {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OnceRuleSlot {
+    zero_based: usize,
+}
+
+impl OnceRuleSlot {
+    pub(crate) const fn new(zero_based: usize) -> Self {
+        Self { zero_based }
+    }
+
+    pub(crate) const fn get(self) -> usize {
+        self.zero_based
+    }
+}
+
 /// Rule repeat policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleRepeat {
@@ -71,7 +86,10 @@ pub enum RuleRepeat {
     Once,
 }
 
-impl RuleRepeat {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuleExecution {
+    Always,
+    Once(OnceRuleSlot),
 }
 
 /// Rule match anchor.
@@ -100,10 +118,16 @@ impl<'program> PayloadView<'program> {
         Self { payload }
     }
 
+    /// Payload length in bytes.
+    #[must_use]
+    pub fn byte_count(self) -> PayloadByteCount {
+        self.payload.byte_count()
+    }
+
     /// Whether the payload is empty.
     #[must_use]
     pub fn is_empty(self) -> bool {
-        self.payload.is_empty()
+        self.byte_count().is_zero()
     }
 
     /// Payload bytes as a materializing iterator.
@@ -158,8 +182,7 @@ pub enum RuleActionView<'program> {
     Return(PayloadView<'program>),
 }
 
-impl<'program> RuleActionView<'program> {
-}
+impl<'program> RuleActionView<'program> {}
 
 /// Read-only structured view of a parsed rule.
 ///
@@ -280,6 +303,10 @@ impl ParsedRule {
             action,
         }
     }
+
+    pub(crate) const fn repeat(&self) -> RuleRepeat {
+        self.repeat
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -287,17 +314,23 @@ pub(crate) struct Rule {
     position: RulePosition,
     line_number: SourceLineNumber,
     repeat: RuleRepeat,
+    execution: RuleExecution,
     anchor: RuleAnchor,
     lhs: Payload,
     action: Action,
 }
 
 impl Rule {
-    pub(crate) fn from_parsed(parsed: ParsedRule, position: RulePosition) -> Self {
+    pub(crate) fn from_parsed(
+        parsed: ParsedRule,
+        position: RulePosition,
+        execution: RuleExecution,
+    ) -> Self {
         Self {
             position,
             line_number: parsed.line_number,
             repeat: parsed.repeat,
+            execution,
             anchor: parsed.anchor,
             lhs: parsed.lhs,
             action: parsed.action,
@@ -314,6 +347,10 @@ impl Rule {
 
     pub(crate) const fn repeat(&self) -> RuleRepeat {
         self.repeat
+    }
+
+    pub(crate) const fn execution(&self) -> RuleExecution {
+        self.execution
     }
 
     pub(crate) const fn anchor(&self) -> RuleAnchor {
@@ -336,7 +373,7 @@ impl Rule {
         let (action_token, payload) = self.action.canonical_parts();
         let mut len = self.lhs.len();
 
-        if self.repeat.is_once() {
+        if matches!(self.repeat, RuleRepeat::Once) {
             len = len.checked_add(SyntaxToken::Once.len()).ok_or_else(|| {
                 AllocationError::capacity_overflow(AllocationContext::CanonicalSource)
             })?;
@@ -368,7 +405,7 @@ impl Rule {
             AllocationContext::CanonicalSource,
         )?;
 
-        if self.repeat.is_once() {
+        if matches!(self.repeat, RuleRepeat::Once) {
             push_token(&mut output, SyntaxToken::Once)?;
         }
 
