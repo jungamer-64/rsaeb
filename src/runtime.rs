@@ -7,8 +7,7 @@ use crate::bytes::{
 };
 use crate::error::{LimitError, RunError, StateLimitContext, StateSizeError, TracedRunError};
 use crate::program::{
-    Program, ReturnOutput, RunLimits, RunResult, RuntimeStateSnapshot, StateByteLimit, StepCount,
-    StepLimit,
+    Program, ReturnOutput, RunLimits, RunResult, RuntimeStateSnapshot, StepCount, StepLimit,
 };
 use crate::rule::{Action, PayloadView, Rule, RuleAnchor, RuleExecution};
 use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
@@ -22,17 +21,13 @@ pub struct RuntimeInput {
 }
 
 impl RuntimeInput {
-    /// Validates raw runtime input bytes and checks the initial state budget.
+    /// Validates raw runtime input bytes.
     ///
     /// # Errors
     ///
     /// Returns `RunError::Input` when `input` contains a non-ASCII byte.
-    /// Returns `RunError::Limit` when the input length exceeds `state_limit`.
     /// Returns `RunError::Allocation` when storing the validated input fails.
-    pub fn parse(input: &[u8], state_limit: StateByteLimit) -> Result<Self, RunError> {
-        let byte_count = RuntimeStateByteCount::new(input.len());
-        Self::ensure_count_within_limit(byte_count, state_limit)?;
-
+    pub fn parse(input: &[u8]) -> Result<Self, RunError> {
         for (zero_based_column, byte) in input.iter().copied().enumerate() {
             RuntimeByte::parse_input(byte, zero_based_column)?;
         }
@@ -67,23 +62,6 @@ impl RuntimeInput {
     pub fn bytes(&self) -> impl Iterator<Item = u8> + '_ {
         self.bytes.iter().copied().map(RuntimeByte::materialize)
     }
-
-    fn ensure_within_limit(&self, state_limit: StateByteLimit) -> Result<(), RunError> {
-        Self::ensure_count_within_limit(self.byte_count(), state_limit)
-    }
-
-    fn ensure_count_within_limit(
-        byte_count: RuntimeStateByteCount,
-        state_limit: StateByteLimit,
-    ) -> Result<(), RunError> {
-        if byte_count.get() > state_limit.get() {
-            return Err(
-                LimitError::state(StateLimitContext::Input, state_limit, byte_count).into(),
-            );
-        }
-
-        Ok(())
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -93,7 +71,17 @@ struct State {
 
 impl State {
     fn from_input(input: RuntimeInput, limits: RunLimits) -> Result<Self, RunError> {
-        input.ensure_within_limit(limits.state_byte_limit())?;
+        let byte_count = input.byte_count();
+
+        if byte_count.get() > limits.state_byte_limit().get() {
+            return Err(LimitError::state(
+                StateLimitContext::Input,
+                limits.state_byte_limit(),
+                byte_count,
+            )
+            .into());
+        }
+
         Ok(Self { bytes: input.bytes })
     }
 
