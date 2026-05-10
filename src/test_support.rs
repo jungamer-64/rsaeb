@@ -85,7 +85,10 @@ pub(crate) fn ensure_eq<T, U>(actual: T, expected: U) -> TestResult
 where
     T: PartialEq<U>,
 {
-    ensure(actual == expected, "values differed")
+    let values_are_equal = actual == expected;
+    core::mem::drop(actual);
+    core::mem::drop(expected);
+    ensure(values_are_equal, "values differed")
 }
 
 pub(crate) fn test_limits() -> RunLimits {
@@ -179,9 +182,7 @@ pub(crate) fn expect_error_position(error: &ParseError, line: usize, column: usi
     )
 }
 
-pub(crate) fn trace_event_bytes<'event, 'program>(
-    event: &'event TraceSnapshotEvent<'program>,
-) -> &'event [u8] {
+pub(crate) fn trace_event_bytes<'event>(event: &'event TraceSnapshotEvent<'_>) -> &'event [u8] {
     match event {
         TraceSnapshotEvent::Initial { state } => state.as_bytes(),
         TraceSnapshotEvent::Step { effect, .. } => match effect {

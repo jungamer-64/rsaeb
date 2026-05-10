@@ -83,7 +83,7 @@ struct CodeLine<'source> {
     bytes: &'source [u8],
 }
 
-impl<'source> CodeLine<'source> {
+impl CodeLine<'_> {
     fn into_compact_line(self) -> Result<CompactCodeLine, ParseError> {
         let mut compact_len = 0usize;
 

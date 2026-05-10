@@ -182,8 +182,6 @@ pub enum RuleActionView<'program> {
     Return(PayloadView<'program>),
 }
 
-impl<'program> RuleActionView<'program> {}
-
 /// Read-only structured view of a parsed rule.
 ///
 /// The view borrows the parsed rule itself. Canonical source text is generated

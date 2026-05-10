@@ -239,8 +239,8 @@ mod tests {
         let result =
             program.run_with_borrowed_trace(runtime_input(b"a", limits)?, limits, |event| {
                 let bytes = match event {
-                    BorrowedTraceEvent::Initial { state } => state.bytes().collect::<Vec<_>>(),
-                    BorrowedTraceEvent::Step {
+                    BorrowedTraceEvent::Initial { state }
+                    | BorrowedTraceEvent::Step {
                         effect: BorrowedTraceEffect::Continue { state },
                         ..
                     } => state.bytes().collect::<Vec<_>>(),
