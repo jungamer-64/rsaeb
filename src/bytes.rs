@@ -1,38 +1,7 @@
 use alloc::vec::Vec;
-use core::fmt;
-
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::error::{InputColumn, InputError, ParseError, ParseErrorKind, PayloadKind};
 use crate::source::{SourceColumn, SourceLineNumber};
-
-/// Byte length in a public interpreter domain.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ByteCount {
-    value: usize,
-}
-
-impl ByteCount {
-    #[must_use]
-    pub const fn new(value: usize) -> Self {
-        Self { value }
-    }
-
-    #[must_use]
-    pub const fn get(self) -> usize {
-        self.value
-    }
-
-    #[must_use]
-    pub const fn is_zero(self) -> bool {
-        self.value == 0
-    }
-}
-
-impl fmt::Display for ByteCount {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.value.fmt(f)
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReservedSyntaxByte {

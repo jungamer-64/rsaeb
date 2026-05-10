@@ -49,7 +49,6 @@ mod syntax;
 mod trace;
 
 pub use allocation::{AllocationContext, AllocationError, AllocationErrorKind};
-pub use bytes::ByteCount;
 pub use error::{
     AebError, InputColumn, InputError, LeftModifierKind, LimitError, ParseError, ParseErrorKind,
     PayloadKind, RightActionKind, RunError, StateLimitContext, StateSizeError, TracedRunError,

@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
-use crate::bytes::{ByteCount, RuntimeByte};
+use crate::bytes::RuntimeByte;
 use crate::error::{LimitError, RunError};
 use crate::program::{ReturnOutput, RunLimits, RuntimeStateSnapshot, StepCount};
 use crate::rule::{PayloadView, RuleView};
@@ -21,12 +21,6 @@ impl<'run> RuntimeStateView<'run> {
         Self { bytes }
     }
 
-    /// Runtime state length in bytes.
-    #[must_use]
-    pub const fn byte_count(self) -> ByteCount {
-        ByteCount::new(self.bytes.len())
-    }
-
     /// Whether the state is empty.
     #[must_use]
     pub const fn is_empty(self) -> bool {
@@ -36,16 +30,6 @@ impl<'run> RuntimeStateView<'run> {
     /// Runtime state bytes as a materializing iterator.
     pub fn bytes(self) -> impl Iterator<Item = u8> + 'run {
         self.bytes.iter().copied().map(RuntimeByte::materialize)
-    }
-
-    /// Returns whether this state has exactly the expected bytes.
-    #[must_use]
-    pub fn eq_bytes(self, expected: &[u8]) -> bool {
-        self.byte_count().get() == expected.len()
-            && self
-                .bytes()
-                .zip(expected.iter().copied())
-                .all(|(actual, expected)| actual == expected)
     }
 
     /// Materializes this runtime-state view as owned bytes with explicit
@@ -63,7 +47,7 @@ impl<'run> RuntimeStateView<'run> {
         context: AllocationContext,
     ) -> Result<Vec<u8>, AllocationError> {
         let mut output = Vec::new();
-        try_reserve_total_exact(&mut output, self.byte_count().get(), context)?;
+        try_reserve_total_exact(&mut output, self.bytes.len(), context)?;
         for byte in self.bytes() {
             try_push(&mut output, byte, context)?;
         }
@@ -86,14 +70,6 @@ pub enum TraceSnapshotEffect {
 }
 
 impl TraceSnapshotEffect {
-    /// State/output bytes carried by this effect.
-    #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
-        match self {
-            Self::Continue { state } => state.as_bytes(),
-            Self::Return { output } => output.as_bytes(),
-        }
-    }
 }
 
 /// Borrowed trace effect emitted by borrowed tracing APIs.
@@ -106,27 +82,12 @@ pub enum BorrowedTraceEffect<'program, 'run> {
 }
 
 impl BorrowedTraceEffect<'_, '_> {
-    /// Byte length carried by this effect.
-    #[must_use]
-    pub fn byte_count(self) -> ByteCount {
-        match self {
-            Self::Continue { state } => state.byte_count(),
-            Self::Return { output } => output.byte_count(),
-        }
-    }
-
     /// Whether the carried bytes are empty.
     #[must_use]
     pub fn is_empty(self) -> bool {
-        self.byte_count().is_zero()
-    }
-
-    /// Returns whether this effect carries exactly the expected bytes.
-    #[must_use]
-    pub fn eq_bytes(self, expected: &[u8]) -> bool {
         match self {
-            Self::Continue { state } => state.eq_bytes(expected),
-            Self::Return { output } => output.eq_bytes(expected),
+            Self::Continue { state } => state.is_empty(),
+            Self::Return { output } => output.is_empty(),
         }
     }
 
@@ -171,14 +132,6 @@ pub enum TraceSnapshotEvent<'program> {
 }
 
 impl TraceSnapshotEvent<'_> {
-    /// State/output bytes carried by this event.
-    #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
-        match self {
-            Self::Initial { state } => state.as_bytes(),
-            Self::Step { effect, .. } => effect.as_bytes(),
-        }
-    }
 }
 
 /// Trace event emitted by borrowed tracing APIs.
@@ -202,27 +155,12 @@ pub enum BorrowedTraceEvent<'program, 'run> {
 }
 
 impl<'program> BorrowedTraceEvent<'program, '_> {
-    /// Byte length carried by this event.
-    #[must_use]
-    pub fn byte_count(self) -> ByteCount {
-        match self {
-            Self::Initial { state } => state.byte_count(),
-            Self::Step { effect, .. } => effect.byte_count(),
-        }
-    }
-
     /// Whether the carried bytes are empty.
     #[must_use]
     pub fn is_empty(self) -> bool {
-        self.byte_count().is_zero()
-    }
-
-    /// Returns whether this event carries exactly the expected bytes.
-    #[must_use]
-    pub fn eq_bytes(self, expected: &[u8]) -> bool {
         match self {
-            Self::Initial { state } => state.eq_bytes(expected),
-            Self::Step { effect, .. } => effect.eq_bytes(expected),
+            Self::Initial { state } => state.is_empty(),
+            Self::Step { effect, .. } => effect.is_empty(),
         }
     }
 
@@ -234,7 +172,7 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
     /// `RunLimits::trace_snapshot_byte_limit`. Returns `RunError::Allocation` if
     /// snapshot allocation fails.
     pub fn to_snapshot(self, limits: RunLimits) -> Result<TraceSnapshotEvent<'program>, RunError> {
-        ensure_trace_len(self.byte_count(), limits)?;
+        ensure_trace_len(self.byte_len(), limits)?;
         match self {
             Self::Initial { state } => Ok(TraceSnapshotEvent::Initial {
                 state: RuntimeStateSnapshot::from_vec(
@@ -250,10 +188,10 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
     }
 }
 
-fn ensure_trace_len(len: ByteCount, limits: RunLimits) -> Result<(), RunError> {
-    if len.get() > limits.trace_snapshot_byte_limit().get() {
+fn ensure_trace_len(len: usize, limits: RunLimits) -> Result<(), RunError> {
+    if len > limits.trace_snapshot_byte_limit().get() {
         return Err(
-            LimitError::trace_snapshot(limits.trace_snapshot_byte_limit(), len.get()).into(),
+            LimitError::trace_snapshot(limits.trace_snapshot_byte_limit(), len).into(),
         );
     }
 

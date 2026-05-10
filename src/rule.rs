@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
-use crate::bytes::{ByteCount, Payload};
+use crate::bytes::Payload;
 use crate::source::SourceLineNumber;
 use crate::syntax::SyntaxToken;
 
@@ -72,11 +72,6 @@ pub enum RuleRepeat {
 }
 
 impl RuleRepeat {
-    /// Whether this repeat policy is `(once)`.
-    #[must_use]
-    pub const fn is_once(self) -> bool {
-        matches!(self, Self::Once)
-    }
 }
 
 /// Rule match anchor.
@@ -105,16 +100,10 @@ impl<'program> PayloadView<'program> {
         Self { payload }
     }
 
-    /// Payload length in bytes.
-    #[must_use]
-    pub fn byte_count(self) -> ByteCount {
-        ByteCount::new(self.payload.len())
-    }
-
     /// Whether the payload is empty.
     #[must_use]
     pub fn is_empty(self) -> bool {
-        self.byte_count().is_zero()
+        self.payload.is_empty()
     }
 
     /// Payload bytes as a materializing iterator.
@@ -170,22 +159,6 @@ pub enum RuleActionView<'program> {
 }
 
 impl<'program> RuleActionView<'program> {
-    /// Action payload bytes.
-    #[must_use]
-    pub const fn payload(self) -> PayloadView<'program> {
-        match self {
-            Self::Replace(payload)
-            | Self::MoveStart(payload)
-            | Self::MoveEnd(payload)
-            | Self::Return(payload) => payload,
-        }
-    }
-
-    /// Whether this action is `(return)`.
-    #[must_use]
-    pub const fn is_return(self) -> bool {
-        matches!(self, Self::Return(_))
-    }
 }
 
 /// Read-only structured view of a parsed rule.
