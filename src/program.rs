@@ -154,9 +154,9 @@ pub fn run_str(source: &str, input: &[u8], limits: RunLimits) -> Result<RunResul
 /// Resource limits for one runtime invocation.
 ///
 /// The interpreter checks these limits before allocating oversized runtime
-/// states, return outputs, or trace snapshots. Step limits alone are not
-/// enough for a rewriting system because a tiny number of steps can still
-/// expand into a very large state.
+/// states or return outputs. Step limits alone are not enough for a rewriting
+/// system because a tiny number of steps can still expand into a very large
+/// state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunLimits {
     steps: StepLimit,
@@ -372,7 +372,7 @@ impl Program {
     ///
     /// Returns `TraceSnapshotRunError::Run` for ordinary runtime failures.
     /// Returns `TraceSnapshotRunError::Snapshot` when snapshot materialization
-    /// exceeds `RunLimits::trace_snapshot_byte_limit` or allocation fails.
+    /// exceeds `trace_snapshot_limit` or allocation fails.
     pub fn run_with_trace_snapshots<'program, F>(
         &'program self,
         input: RuntimeInput,

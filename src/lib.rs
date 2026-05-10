@@ -60,10 +60,10 @@
 //!
 //! # Limits
 //!
-//! [`RunLimits`] carries the step budget and byte budgets for runtime states,
-//! `(return)` outputs, and trace snapshots. Step limits are checked only when
-//! another matching rule would apply after the configured number of completed
-//! steps:
+//! [`RunLimits`] carries the step budget and byte budgets for runtime states
+//! and `(return)` outputs. Trace snapshot materialization uses an explicit
+//! [`TraceSnapshotByteLimit`]. Step limits are checked only when another
+//! matching rule would apply after the configured number of completed steps:
 //!
 //! ```
 //! use rsaeb::{LimitError, Program, RunError, RunLimits, RuntimeInput, StepLimit};

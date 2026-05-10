@@ -294,10 +294,12 @@ pub(crate) struct AsciiByte(u8);
 impl AsciiByte {
     pub(crate) fn parse(byte: u8, zero_based_column: usize) -> Result<Self, InputError> {
         if let Some(rejected) = NonAsciiInputByte::parse(byte) {
-            Err(InputError::non_ascii(
-                InputColumn::from_zero_based(zero_based_column),
-                rejected,
-            ))
+            let column = InputColumn::from_zero_based(zero_based_column).ok_or_else(|| {
+                InputError::from(AllocationError::capacity_overflow(
+                    AllocationContext::RuntimeInput,
+                ))
+            })?;
+            Err(InputError::non_ascii(column, rejected))
         } else {
             Ok(Self(byte))
         }

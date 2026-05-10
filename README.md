@@ -42,16 +42,17 @@ a CLI or host application, not in the interpreter core.
 ## `no_std + alloc` boundary
 
 The library crate is `#![no_std]` and uses `alloc` for owned buffers such as
-parsed rules, runtime input state, per-run `(once)` state, results, preserved
-step-limit states, and trace snapshots. It requires an allocator, but not
-`std`.
+parsed rules, runtime input state, per-run `(once)` state, run results, and
+trace snapshots. It requires an allocator, but not `std`.
 
 Allocation is explicit and fallible. Parser/runtime paths reserve explicitly and
 report `AllocationError` instead of relying on accidental `Vec` growth. Runtime
 expansion is also budgeted through `RunLimits`; the runtime checks size limits
-before allocating oversized states, return outputs, or trace snapshots. Owned
-public values that contain byte buffers intentionally do not implement `Clone`;
-copying bytes is an explicit materialization step, not a hidden infallible API.
+before allocating oversized states or return outputs. Trace snapshot
+materialization is budgeted separately through an explicit
+`TraceSnapshotByteLimit`. Owned public values that contain byte buffers
+intentionally do not implement `Clone`; copying bytes is an explicit
+materialization step, not a hidden infallible API.
 
 ```sh
 cargo check -p rsaeb --lib
@@ -455,8 +456,9 @@ fn main() -> Result<(), rsaeb::AebError> {
         Err(RunError::Limit(LimitError::State {
             context: StateLimitContext::Rewrite,
             limit,
-            attempted_len: RuntimeStateByteCount::new(3),
+            attempted_len,
         })) if limit == StateByteLimit::new(2)
+            && attempted_len == RuntimeStateByteCount::new(3)
     ));
 
     Ok(())
@@ -467,7 +469,10 @@ Execution may succeed exactly at the step limit. The step limit becomes an error
 only when another rule would still apply after the configured number of steps.
 
 ```rust
-use rsaeb::{LimitError, Program, RunError, RunLimits, RunOutcome, RuntimeInput, RuntimeStateByteCount, StepLimit};
+use rsaeb::{
+    LimitError, Program, RunError, RunLimits, RunOutcome, RuntimeInput,
+    RuntimeStateByteCount, StepLimit,
+};
 
 fn main() -> Result<(), rsaeb::AebError> {
     let exact_limits = RunLimits::new(StepLimit::new(1));
@@ -502,8 +507,10 @@ fn main() -> Result<(), rsaeb::AebError> {
         Err(RunError::Limit(LimitError::Step {
             max_steps,
             completed_steps,
-            state_len: RuntimeStateByteCount::new(1),
-        })) if max_steps == StepLimit::new(0) && completed_steps.get() == 0
+            state_len,
+        })) if max_steps == StepLimit::new(0)
+            && completed_steps.get() == 0
+            && state_len == RuntimeStateByteCount::new(1)
     ));
     Ok(())
 }
@@ -689,7 +696,10 @@ Filesystem failures are not part of the library error model. External I/O must
 be handled before bytes enter `Program::parse_bytes`, `Program::parse_str`,
 `run_bytes`, or `run_str`.
 
-## Public API surface
+## Public API overview
+
+The generated rustdoc is the complete API reference. The main exported surface
+is grouped as follows.
 
 Constants:
 
@@ -716,19 +726,21 @@ Program construction and execution:
 
 Runtime configuration and result:
 
-- `RuntimeInput`
-- `RuntimeInput::parse(input)`
-- `PayloadByteCount`
-- `RuntimeStateByteCount`
-- `ReturnOutputByteCount`
-- `TraceSnapshotByteCount`
+- `RuntimeInput` (`parse(input)`, `byte_count()`, `is_empty()`, `bytes()`)
+- `PayloadByteCount` (`new(value)`, `get()`, `is_zero()`)
+- `RuntimeStateByteCount` (`new(value)`, `get()`, `is_zero()`)
+- `ReturnOutputByteCount` (`new(value)`, `get()`, `is_zero()`)
+- `TraceSnapshotByteCount` (`new(value)`, `get()`, `is_zero()`)
 - `RunLimits`
-- `StepLimit`
-- `StateByteLimit`
-- `ReturnByteLimit`
-- `TraceSnapshotByteLimit`
+- `StepLimit` (`new(value)`, `get()`)
+- `StateByteLimit` (`new(value)`, `get()`)
+- `ReturnByteLimit` (`new(value)`, `get()`)
+- `TraceSnapshotByteLimit` (`new(value)`, `get()`)
 - `RunLimits::new(step_limit)`
 - `RunLimits::bounded(step_limit, state_byte_limit, return_byte_limit)`
+- `RunLimits::step_limit()`
+- `RunLimits::state_byte_limit()`
+- `RunLimits::return_byte_limit()`
 - `RunLimits::with_step_limit(step_limit)`
 - `RunLimits::with_state_byte_limit(state_byte_limit)`
 - `RunLimits::with_return_byte_limit(return_byte_limit)`
@@ -737,30 +749,40 @@ Runtime configuration and result:
 - `RunResult::into_outcome()`
 - `RunResult::steps()`
 - `RunOutcome`
-- `RuntimeStateSnapshot` (`as_bytes()`, `into_vec()`, `byte_count()`)
-- `ReturnOutput` (`as_bytes()`, `into_vec()`, `byte_count()`)
-- `StepCount`
+- `RuntimeStateSnapshot` (`as_bytes()`, `into_vec()`, `byte_count()`, `is_empty()`)
+- `ReturnOutput` (`as_bytes()`, `into_vec()`, `byte_count()`, `is_empty()`)
+- `StepCount` (`get()`)
 
 Rule data:
 
-- `RulePosition`
-- `RuleNumber`
-- `RuleCount`
+- `RulePosition` (`number()`)
+- `RuleNumber` (`get()`)
+- `RuleCount` (`new(value)`, `get()`)
 - `RuleRepeat`
 - `RuleAnchor`
-- `PayloadView<'program>` (`byte_count()`, `bytes() -> impl Iterator<Item = u8>`, `to_vec()`)
+- `PayloadView<'program>` (`byte_count()`, `is_empty()`, `bytes()`, `eq_bytes(expected)`, `to_vec()`)
 - `RuleActionView<'program>`
 - `RuleView<'program>`
+- `RuleView::position()`
+- `RuleView::line_number()`
+- `RuleView::repeat()`
+- `RuleView::anchor()`
+- `RuleView::lhs()`
+- `RuleView::action()`
 - `RuleView::canonical_source()`
 
 Tracing:
 
-- `RuntimeStateView<'run>` (`byte_count()`, `bytes() -> impl Iterator<Item = u8>`, `to_vec()`)
+- `RuntimeStateView<'run>` (`is_empty()`, `bytes()`, `byte_count()`, `to_vec()`)
 - `BorrowedTraceEvent<'program, 'run>`
 - `BorrowedTraceEffect<'program, 'run>`
 - `TraceSnapshotEvent<'program>`
 - `TraceSnapshotEffect`
+- `BorrowedTraceEvent::byte_count()`
+- `BorrowedTraceEvent::is_empty()`
 - `BorrowedTraceEvent::to_snapshot(trace_snapshot_limit)`
+- `BorrowedTraceEffect::byte_count()`
+- `BorrowedTraceEffect::is_empty()`
 - `TracedRunError<E>`
 - `TraceSnapshotError`
 - `TraceSnapshotRunError`
@@ -770,27 +792,30 @@ Errors:
 
 - `AebError`
 - `ParseError`
+- `ParseError::location()`
+- `ParseError::line()`
+- `ParseError::kind()`
 - `ParseErrorKind`
 - `ParseErrorLocation`
-- `SourceLineNumber`
-- `SourceColumn`
-- `SourcePosition`
-- `NonAsciiCodeByte`
-- `NonPrintableCodeByte`
-- `NonAsciiInputByte`
-- `ReservedSyntaxByte`
+- `SourceLineNumber` (`get()`)
+- `SourceColumn` (`get()`)
+- `SourcePosition` (`line()`, `column()`)
+- `NonAsciiCodeByte` (`get()`)
+- `NonPrintableCodeByte` (`get()`)
+- `NonAsciiInputByte` (`get()`)
+- `ReservedSyntaxByte` (`get()`)
 - `PayloadKind`
 - `LeftModifierKind`
 - `RightActionKind`
 - `RunError`
-- `InputColumn`
+- `InputColumn` (`get()`)
 - `InputError`
 - `TraceSnapshotError`
 - `TraceSnapshotRunError`
 - `FallibleTraceSnapshotRunError<E>`
-- `AllocationError`
+- `AllocationError` (`context()`, `kind()`, `requested_capacity()`)
 - `AllocationErrorKind`
 - `AllocationContext`
-- `StateSizeError`
+- `StateSizeError` (`state_len()`, `lhs_len()`, `rhs_len()`)
 - `LimitError`
 - `StateLimitContext`

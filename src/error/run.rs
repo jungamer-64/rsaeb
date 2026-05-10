@@ -87,16 +87,9 @@ pub struct InputColumn {
 }
 
 impl InputColumn {
-    #[expect(
-        clippy::expect_used,
-        reason = "slice enumeration cannot produce usize::MAX as a valid byte index"
-    )]
-    pub(crate) fn from_zero_based(zero_based: usize) -> Self {
-        Self {
-            one_based: zero_based
-                .checked_add(1)
-                .expect("input column index from slice enumeration must fit usize"),
-        }
+    pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
+        let one_based = zero_based.checked_add(1)?;
+        Some(Self { one_based })
     }
 
     /// One-based input column as a primitive value.
@@ -224,3 +217,19 @@ impl LimitError {
 }
 
 impl Error for LimitError {}
+
+#[cfg(test)]
+mod tests {
+    use super::InputColumn;
+    use crate::test_support::{TestResult, ensure_eq};
+
+    #[test]
+    fn input_column_rejects_unrepresentable_zero_based_index() -> TestResult {
+        ensure_eq(InputColumn::from_zero_based(usize::MAX), None)?;
+        ensure_eq(
+            InputColumn::from_zero_based(0).map(InputColumn::get),
+            Some(1),
+        )?;
+        Ok(())
+    }
+}

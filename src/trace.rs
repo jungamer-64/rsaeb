@@ -129,9 +129,7 @@ impl BorrowedTraceEffect<'_, '_> {
             }),
             Self::Return { output } => Ok(TraceSnapshotEffect::Return {
                 output: ReturnOutput::from_vec(
-                    output
-                        .to_vec_with_context(AllocationContext::TraceSnapshot)
-                        .map_err(TraceSnapshotError::from)?,
+                    output.to_vec_with_context(AllocationContext::TraceSnapshot)?,
                 ),
             }),
         }
@@ -214,13 +212,15 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
         self,
         limit: TraceSnapshotByteLimit,
     ) -> Result<TraceSnapshotEvent<'program>, TraceSnapshotError> {
-        ensure_trace_len(self.byte_count(), limit)?;
         match self {
-            Self::Initial { state } => Ok(TraceSnapshotEvent::Initial {
-                state: RuntimeStateSnapshot::from_vec(
-                    state.to_vec_with_context(AllocationContext::TraceSnapshot)?,
-                ),
-            }),
+            Self::Initial { state } => {
+                ensure_trace_len(TraceSnapshotByteCount::new(state.byte_count().get()), limit)?;
+                Ok(TraceSnapshotEvent::Initial {
+                    state: RuntimeStateSnapshot::from_vec(
+                        state.to_vec_with_context(AllocationContext::TraceSnapshot)?,
+                    ),
+                })
+            }
             Self::Step { step, rule, effect } => Ok(TraceSnapshotEvent::Step {
                 step,
                 rule,
