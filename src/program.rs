@@ -14,15 +14,17 @@ use crate::rule::{
 use crate::runtime::{Runtime, RuntimeInput};
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
+const DEFAULT_BYTE_BUDGET: usize = 16_777_216;
+
 /// Default rewrite step budget used by [`RunLimits::default`].
 pub const DEFAULT_MAX_STEPS: StepLimit = StepLimit::new(1_000_000);
 /// Default runtime-state byte budget used by [`RunLimits::new`] and [`RunLimits::default`].
-pub const DEFAULT_MAX_STATE_LEN: StateByteLimit = StateByteLimit::new(16 * 1024 * 1024);
+pub const DEFAULT_MAX_STATE_LEN: StateByteLimit = StateByteLimit::new(DEFAULT_BYTE_BUDGET);
 /// Default `(return)` output byte budget used by [`RunLimits::new`] and [`RunLimits::default`].
-pub const DEFAULT_MAX_RETURN_LEN: ReturnByteLimit = ReturnByteLimit::new(16 * 1024 * 1024);
+pub const DEFAULT_MAX_RETURN_LEN: ReturnByteLimit = ReturnByteLimit::new(DEFAULT_BYTE_BUDGET);
 /// Default trace snapshot byte budget for callers that want the crate default.
 pub const DEFAULT_MAX_TRACE_SNAPSHOT_LEN: TraceSnapshotByteLimit =
-    TraceSnapshotByteLimit::new(16 * 1024 * 1024);
+    TraceSnapshotByteLimit::new(DEFAULT_BYTE_BUDGET);
 
 /// Maximum number of rewrite steps allowed before the next matching rule fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -225,7 +227,6 @@ impl RunLimits {
         self.return_len = max_return_len;
         self
     }
-
 }
 
 impl Default for RunLimits {
@@ -260,14 +261,15 @@ impl RuleSet {
     }
 
     pub(crate) fn push_parsed_rule(&mut self, parsed: ParsedRule) -> Result<(), AllocationError> {
-        let position = RulePosition::from_zero_based(self.rules.len())
-            .ok_or_else(|| AllocationError::capacity_overflow(AllocationContext::ProgramParse))?;
+        let position = RulePosition::from_zero_based(self.rules.len()).ok_or_else(|| {
+            AllocationError::capacity_overflow(AllocationContext::ProgramRuleTable)
+        })?;
 
         let repeat = parsed.repeat();
         let next_once_rule_slots = match repeat {
             RuleRepeat::Always => self.once_rule_slots,
             RuleRepeat::Once => self.once_rule_slots.checked_add(1).ok_or_else(|| {
-                AllocationError::capacity_overflow(AllocationContext::ProgramParse)
+                AllocationError::capacity_overflow(AllocationContext::ProgramRuleTable)
             })?,
         };
         let execution = match repeat {
@@ -278,7 +280,7 @@ impl RuleSet {
         try_push(
             &mut self.rules,
             Rule::from_parsed(parsed, position, execution),
-            AllocationContext::ProgramParse,
+            AllocationContext::ProgramRuleTable,
         )?;
 
         self.once_rule_slots = next_once_rule_slots;
@@ -375,12 +377,13 @@ impl Program {
         &'program self,
         input: RuntimeInput,
         limits: RunLimits,
+        trace_snapshot_limit: TraceSnapshotByteLimit,
         mut trace: F,
     ) -> Result<RunResult, TraceSnapshotRunError>
     where
         F: FnMut(TraceSnapshotEvent<'program>),
     {
-        match self.try_run_with_trace_snapshots(input, limits, |event| {
+        match self.try_run_with_trace_snapshots(input, limits, trace_snapshot_limit, |event| {
             trace(event);
             Ok::<(), Infallible>(())
         }) {
@@ -408,6 +411,7 @@ impl Program {
         &'program self,
         input: RuntimeInput,
         limits: RunLimits,
+        trace_snapshot_limit: TraceSnapshotByteLimit,
         mut trace: F,
     ) -> Result<RunResult, FallibleTraceSnapshotRunError<E>>
     where
@@ -415,7 +419,7 @@ impl Program {
     {
         let result = self.try_run_with_borrowed_trace(input, limits, |event| {
             let snapshot = event
-                .to_snapshot(limits.trace_snapshot_byte_limit())
+                .to_snapshot(trace_snapshot_limit)
                 .map_err(SnapshotTraceCallbackError::Snapshot)?;
             trace(snapshot).map_err(SnapshotTraceCallbackError::Trace)
         });
@@ -615,8 +619,7 @@ mod tests {
     use crate::{
         AebError, InputError, LimitError, ReturnByteLimit, ReturnOutputByteCount, RuleActionView,
         RuleAnchor, RuleCount, RuleRepeat, RuntimeInput, RuntimeStateByteCount, StateByteLimit,
-        StateLimitContext, TraceSnapshotByteLimit, TraceSnapshotEffect, TraceSnapshotEvent,
-        run_bytes, run_str,
+        StateLimitContext, TraceSnapshotEffect, TraceSnapshotEvent, run_bytes, run_str,
     };
     use std::vec::Vec;
 
@@ -624,7 +627,7 @@ mod tests {
         program
             .rules()
             .nth(index)
-            .ok_or(TestFailure::Message("expected parsed rule"))
+            .ok_or(TestFailure::message("expected parsed rule"))
     }
 
     #[test]
@@ -686,7 +689,7 @@ mod tests {
                 ensure_eq(output.as_bytes(), b"b".as_slice())?;
                 ensure_eq(output.byte_count(), RuntimeStateByteCount::new(1))?;
             }
-            RunOutcome::Return(_) => return Err(TestFailure::Message("expected stable outcome")),
+            RunOutcome::Return(_) => return Err(TestFailure::message("expected stable outcome")),
         }
 
         match returned.into_outcome() {
@@ -694,7 +697,7 @@ mod tests {
                 ensure_eq(output.as_bytes(), b"b".as_slice())?;
                 ensure_eq(output.byte_count(), ReturnOutputByteCount::new(1))?;
             }
-            RunOutcome::Stable(_) => return Err(TestFailure::Message("expected return outcome")),
+            RunOutcome::Stable(_) => return Err(TestFailure::message("expected return outcome")),
         }
 
         Ok(())
@@ -709,11 +712,11 @@ mod tests {
         let first = rules
             .first()
             .copied()
-            .ok_or(TestFailure::Message("expected first rule"))?;
+            .ok_or(TestFailure::message("expected first rule"))?;
         let second = rules
             .get(1)
             .copied()
-            .ok_or(TestFailure::Message("expected second rule"))?;
+            .ok_or(TestFailure::message("expected second rule"))?;
 
         ensure_eq(first.position().number().get(), 1)?;
         ensure_eq(first.line_number().get(), 1)?;
@@ -819,7 +822,6 @@ mod tests {
             StepLimit::new(10),
             StateByteLimit::new(1),
             ReturnByteLimit::new(10),
-            TraceSnapshotByteLimit::new(10),
         );
         let error = expect_run_error(
             Program::parse_str("# no executable rules")?.run(RuntimeInput::parse(b"aa")?, limits),
@@ -843,7 +845,6 @@ mod tests {
             StepLimit::new(10),
             StateByteLimit::new(2),
             ReturnByteLimit::new(10),
-            TraceSnapshotByteLimit::new(10),
         );
         let error = expect_run_error(Program::parse_str("=a")?.run(runtime_input(b"aa")?, limits))?;
         let error = expect_state_limit(error)?;
@@ -864,9 +865,14 @@ mod tests {
         let program = Program::parse_str("a=b\nb=(return)ok")?;
         let mut events = Vec::new();
         let limits = RunLimits::new(StepLimit::new(10_000));
-        let result = program.run_with_trace_snapshots(runtime_input(b"a")?, limits, |event| {
-            events.push(event);
-        })?;
+        let result = program.run_with_trace_snapshots(
+            runtime_input(b"a")?,
+            limits,
+            DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
+            |event| {
+                events.push(event);
+            },
+        )?;
 
         expect_return_output(&result, b"ok")?;
         ensure_eq(events.len(), 3)?;
@@ -912,7 +918,7 @@ mod tests {
                 ensure_eq(rule.canonical_source()?, b"a=b".as_slice())?;
             }
             TraceSnapshotEvent::Initial { .. } | TraceSnapshotEvent::Step { .. } => {
-                return Err(TestFailure::Message("expected continue step"));
+                return Err(TestFailure::message("expected continue step"));
             }
         }
         Ok(())

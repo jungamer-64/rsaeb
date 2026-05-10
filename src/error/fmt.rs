@@ -11,10 +11,13 @@ use super::{
 impl fmt::Display for AllocationContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ProgramParse => f.write_str("program parse"),
+            Self::ProgramCodeLine => f.write_str("program code line"),
+            Self::ProgramPayload => f.write_str("program payload"),
+            Self::ProgramRuleTable => f.write_str("program rule table"),
             Self::CanonicalSource => f.write_str("canonical source bytes"),
             Self::RuntimeInput => f.write_str("runtime input state"),
-            Self::RuntimeExecution => f.write_str("runtime execution"),
+            Self::RuntimeOnceRuleState => f.write_str("runtime once rule state"),
+            Self::RuntimeRewriteState => f.write_str("runtime rewrite state"),
             Self::PayloadView => f.write_str("payload view"),
             Self::RuntimeStateView => f.write_str("runtime state view"),
             Self::FinalOutput => f.write_str("final output"),
@@ -287,7 +290,7 @@ mod tests {
     };
     use crate::{
         AllocationContext, AllocationError, Program, ReturnByteLimit, RunLimits, RuntimeInput,
-        StateByteLimit, StepLimit, TraceSnapshotByteLimit,
+        StateByteLimit, StepLimit,
     };
 
     #[test]
@@ -343,7 +346,6 @@ mod tests {
             StepLimit::new(10),
             StateByteLimit::new(1),
             ReturnByteLimit::new(10),
-            TraceSnapshotByteLimit::new(10),
         );
         let error = expect_run_error(
             Program::parse_str("# no executable rules")?.run(RuntimeInput::parse(b"aa")?, limits),

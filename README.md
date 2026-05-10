@@ -437,7 +437,7 @@ rewrite system because a short run can still expand a state aggressively.
 ```rust
 use rsaeb::{
     LimitError, Program, ReturnByteLimit, RunError, RunLimits, RuntimeInput,
-    RuntimeStateByteCount, StateByteLimit, StateLimitContext, StepLimit, TraceSnapshotByteLimit,
+    RuntimeStateByteCount, StateByteLimit, StateLimitContext, StepLimit,
 };
 
 fn main() -> Result<(), rsaeb::AebError> {
@@ -445,7 +445,6 @@ fn main() -> Result<(), rsaeb::AebError> {
         StepLimit::new(10_000),
         StateByteLimit::new(1024),
         ReturnByteLimit::new(1024),
-        TraceSnapshotByteLimit::new(1024),
     );
 
     let limits = limits.with_state_byte_limit(StateByteLimit::new(2));
@@ -573,38 +572,47 @@ fn main() -> Result<(), rsaeb::AebError> {
 ```
 
 Trace snapshotting materializes state/output bytes into typed owned snapshots
-under `RunLimits::trace_snapshot_byte_limit()`. Step events still borrow
-`RuleView` from the parsed `Program`, so retained trace snapshot events cannot
-outlive that program:
+under an explicit `TraceSnapshotByteLimit`. Step events still borrow `RuleView`
+from the parsed `Program`, so retained trace snapshot events cannot outlive
+that program:
 
 ```rust
-use rsaeb::{Program, RunLimits, RunOutcome, RuntimeInput, StepLimit, TraceSnapshotEffect, TraceSnapshotEvent};
+use rsaeb::{Program, RunLimits, RunOutcome, RuntimeInput, StepLimit, TraceSnapshotByteLimit, TraceSnapshotEffect, TraceSnapshotEvent};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse_str("a=b\nb=(return)ok")?;
     let mut events = Vec::new();
 
     let limits = RunLimits::new(StepLimit::new(10));
-    let result = program.run_with_trace_snapshots(RuntimeInput::parse(b"a")?, limits, |event| {
-        events.push(event);
-    })?;
+    let snapshot_limit = TraceSnapshotByteLimit::new(1024);
+    let result = program.run_with_trace_snapshots(
+        RuntimeInput::parse(b"a")?,
+        limits,
+        snapshot_limit,
+        |event| {
+            events.push(event);
+        },
+    )?;
 
     assert!(matches!(
         result.outcome(),
         RunOutcome::Return(output) if output.as_bytes() == b"ok"
     ));
-    assert!(matches!(events.first(), Some(TraceSnapshotEvent::Initial { .. })));
-    assert!(matches!(&events[0], TraceSnapshotEvent::Initial { state } if state.as_bytes() == b"a"));
-    assert!(matches!(&events[1], TraceSnapshotEvent::Step {
+    let initial = events.first().ok_or("missing initial trace event")?;
+    let first_step = events.get(1).ok_or("missing first step trace event")?;
+    let second_step = events.get(2).ok_or("missing second step trace event")?;
+
+    assert!(matches!(initial, TraceSnapshotEvent::Initial { state } if state.as_bytes() == b"a"));
+    assert!(matches!(first_step, TraceSnapshotEvent::Step {
         effect: TraceSnapshotEffect::Continue { state },
         ..
     } if state.as_bytes() == b"b"));
-    assert!(matches!(&events[2], TraceSnapshotEvent::Step {
+    assert!(matches!(second_step, TraceSnapshotEvent::Step {
         effect: TraceSnapshotEffect::Return { output },
         ..
     } if output.as_bytes() == b"ok"));
     assert!(matches!(
-        events[2],
+        second_step,
         TraceSnapshotEvent::Step {
             effect: TraceSnapshotEffect::Return { .. },
             ..
@@ -652,7 +660,7 @@ use rsaeb::{AllocationContext, RunError, TraceSnapshotError};
 fn inspect_run(error: RunError) {
     if let RunError::Allocation(error) = error {
         match error.context() {
-            AllocationContext::RuntimeExecution => {
+            AllocationContext::RuntimeRewriteState => {
                 eprintln!("failed to allocate next rewrite state");
             }
             _ => {}
@@ -703,8 +711,8 @@ Program construction and execution:
 - `Program::run(input, limits)`
 - `Program::run_with_borrowed_trace(input, limits, callback)`
 - `Program::try_run_with_borrowed_trace(input, limits, callback)`
-- `Program::run_with_trace_snapshots(input, limits, callback)`
-- `Program::try_run_with_trace_snapshots(input, limits, callback)`
+- `Program::run_with_trace_snapshots(input, run_limits, trace_snapshot_limit, callback)`
+- `Program::try_run_with_trace_snapshots(input, run_limits, trace_snapshot_limit, callback)`
 
 Runtime configuration and result:
 
@@ -720,11 +728,10 @@ Runtime configuration and result:
 - `ReturnByteLimit`
 - `TraceSnapshotByteLimit`
 - `RunLimits::new(step_limit)`
-- `RunLimits::bounded(step_limit, state_byte_limit, return_byte_limit, trace_snapshot_byte_limit)`
+- `RunLimits::bounded(step_limit, state_byte_limit, return_byte_limit)`
 - `RunLimits::with_step_limit(step_limit)`
 - `RunLimits::with_state_byte_limit(state_byte_limit)`
 - `RunLimits::with_return_byte_limit(return_byte_limit)`
-- `RunLimits::with_trace_snapshot_byte_limit(trace_snapshot_byte_limit)`
 - `RunResult`
 - `RunResult::outcome()`
 - `RunResult::into_outcome()`

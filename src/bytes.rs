@@ -394,12 +394,12 @@ impl Payload {
         }
 
         let mut bytes = Vec::new();
-        try_reserve_total_exact(&mut bytes, input.len(), AllocationContext::ProgramParse)
+        try_reserve_total_exact(&mut bytes, input.len(), AllocationContext::ProgramPayload)
             .map_err(|error| ParseError::at_line(line_number, ParseErrorKind::Allocation(error)))?;
 
         for byte in input.iter().copied() {
             let parsed = ProgramByte::parse(byte, line_number, payload_kind)?;
-            try_push(&mut bytes, parsed, AllocationContext::ProgramParse).map_err(|error| {
+            try_push(&mut bytes, parsed, AllocationContext::ProgramPayload).map_err(|error| {
                 ParseError::at_line(line_number, ParseErrorKind::Allocation(error))
             })?;
         }
@@ -500,7 +500,7 @@ mod tests {
         payload_kind: PayloadKind,
     ) -> Result<ParseError, TestFailure> {
         match Payload::parse(input, line_number, payload_kind) {
-            Ok(_) => Err(TestFailure::Message("invalid payload bytes were accepted")),
+            Ok(_) => Err(TestFailure::message("invalid payload bytes were accepted")),
             Err(error) => Ok(error),
         }
     }

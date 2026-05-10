@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use std::format;
 use std::string::{FromUtf8Error, String};
 use std::vec::Vec;
 
@@ -10,7 +11,7 @@ use crate::{
 };
 
 pub(crate) enum TestFailure {
-    Message(&'static str),
+    Message(String),
     Parse(ParseError),
     Input(InputError),
     Run(RunError),
@@ -18,6 +19,12 @@ pub(crate) enum TestFailure {
     Aeb(AebError),
     Utf8(FromUtf8Error),
     Allocation(AllocationError),
+}
+
+impl TestFailure {
+    pub(crate) fn message(message: impl Into<String>) -> Self {
+        Self::Message(message.into())
+    }
 }
 
 impl core::fmt::Debug for TestFailure {
@@ -81,11 +88,11 @@ impl From<InputError> for TestFailure {
 
 pub(crate) type TestResult = Result<(), TestFailure>;
 
-pub(crate) fn ensure(condition: bool, message: &'static str) -> TestResult {
+pub(crate) fn ensure(condition: bool, message: impl Into<String>) -> TestResult {
     if condition {
         Ok(())
     } else {
-        Err(TestFailure::Message(message))
+        Err(TestFailure::message(message))
     }
 }
 
@@ -95,12 +102,16 @@ pub(crate) fn ensure_matches(condition: bool, message: &'static str) -> TestResu
 
 pub(crate) fn ensure_eq<T, U>(actual: T, expected: U) -> TestResult
 where
-    T: PartialEq<U>,
+    T: PartialEq<U> + core::fmt::Debug,
+    U: core::fmt::Debug,
 {
-    let values_are_equal = actual == expected;
-    core::mem::drop(actual);
-    core::mem::drop(expected);
-    ensure(values_are_equal, "values differed")
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(TestFailure::message(format!(
+            "values differed\nactual:   {actual:?}\nexpected: {expected:?}",
+        )))
+    }
 }
 
 pub(crate) fn test_limits() -> RunLimits {
@@ -146,8 +157,8 @@ pub(crate) fn expect_stable_output<'result>(
 ) -> Result<&'result [u8], TestFailure> {
     match result.outcome() {
         RunOutcome::Stable(output) if output.as_bytes() == expected => Ok(output.as_bytes()),
-        RunOutcome::Stable(_) => Err(TestFailure::Message("stable output bytes differed")),
-        RunOutcome::Return(_) => Err(TestFailure::Message("expected stable outcome")),
+        RunOutcome::Stable(_) => Err(TestFailure::message("stable output bytes differed")),
+        RunOutcome::Return(_) => Err(TestFailure::message("expected stable outcome")),
     }
 }
 
@@ -157,21 +168,21 @@ pub(crate) fn expect_return_output<'result>(
 ) -> Result<&'result [u8], TestFailure> {
     match result.outcome() {
         RunOutcome::Return(output) if output.as_bytes() == expected => Ok(output.as_bytes()),
-        RunOutcome::Return(_) => Err(TestFailure::Message("return output bytes differed")),
-        RunOutcome::Stable(_) => Err(TestFailure::Message("expected return outcome")),
+        RunOutcome::Return(_) => Err(TestFailure::message("return output bytes differed")),
+        RunOutcome::Stable(_) => Err(TestFailure::message("expected return outcome")),
     }
 }
 
 pub(crate) fn expect_parse_error(source: &str) -> Result<ParseError, TestFailure> {
     match Program::parse_str(source) {
-        Ok(_) => Err(TestFailure::Message("expected parse error")),
+        Ok(_) => Err(TestFailure::message("expected parse error")),
         Err(error) => Ok(error),
     }
 }
 
 pub(crate) fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFailure> {
     match result {
-        Ok(_) => Err(TestFailure::Message("expected runtime error")),
+        Ok(_) => Err(TestFailure::message("expected runtime error")),
         Err(error) => Ok(error),
     }
 }
@@ -182,7 +193,7 @@ pub(crate) fn expect_event<'events, 'program>(
 ) -> Result<&'events TraceSnapshotEvent<'program>, TestFailure> {
     events
         .get(index)
-        .ok_or(TestFailure::Message("expected trace event"))
+        .ok_or(TestFailure::message("expected trace event"))
 }
 
 pub(crate) fn expect_error_position(error: &ParseError, line: usize, column: usize) -> TestResult {
@@ -206,19 +217,19 @@ pub(crate) fn trace_event_bytes<'event>(event: &'event TraceSnapshotEvent<'_>) -
 
 pub(crate) fn source_line_number(one_based: usize) -> Result<SourceLineNumber, TestFailure> {
     SourceLineNumber::from_one_based(one_based)
-        .ok_or(TestFailure::Message("expected non-zero source line"))
+        .ok_or(TestFailure::message("expected non-zero source line"))
 }
 
 pub(crate) fn source_column(one_based: usize) -> Result<SourceColumn, TestFailure> {
     SourceColumn::from_one_based(one_based)
-        .ok_or(TestFailure::Message("expected non-zero source column"))
+        .ok_or(TestFailure::message("expected non-zero source column"))
 }
 
 pub(crate) fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::Step { .. }) => Ok(error),
         RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_) => {
-            Err(TestFailure::Message("expected step limit error"))
+            Err(TestFailure::message("expected step limit error"))
         }
     }
 }
@@ -227,7 +238,7 @@ pub(crate) fn expect_state_limit(error: RunError) -> Result<LimitError, TestFail
     match error {
         RunError::Limit(error @ LimitError::State { .. }) => Ok(error),
         RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_) => {
-            Err(TestFailure::Message("expected state limit error"))
+            Err(TestFailure::message("expected state limit error"))
         }
     }
 }
@@ -236,7 +247,7 @@ pub(crate) fn expect_input_error<T>(
     result: Result<T, InputError>,
 ) -> Result<InputError, TestFailure> {
     match result {
-        Ok(_) => Err(TestFailure::Message("expected input error")),
+        Ok(_) => Err(TestFailure::message("expected input error")),
         Err(error) => Ok(error),
     }
 }

@@ -307,7 +307,7 @@ impl RewriteScratch {
         try_reserve_total_exact(
             &mut self.bytes,
             capacity,
-            AllocationContext::RuntimeExecution,
+            AllocationContext::RuntimeRewriteState,
         )
     }
 
@@ -316,7 +316,11 @@ impl RewriteScratch {
         source: impl IntoIterator<Item = RuntimeByte>,
     ) -> Result<(), crate::allocation::AllocationError> {
         for byte in source {
-            try_push(&mut self.bytes, byte, AllocationContext::RuntimeExecution)?;
+            try_push(
+                &mut self.bytes,
+                byte,
+                AllocationContext::RuntimeRewriteState,
+            )?;
         }
 
         Ok(())
@@ -409,14 +413,14 @@ impl OnceRuleStates {
         try_reserve_total_exact(
             &mut states,
             count.get(),
-            AllocationContext::RuntimeExecution,
+            AllocationContext::RuntimeOnceRuleState,
         )?;
 
         for _ in 0..count.get() {
             try_push(
                 &mut states,
                 OnceRuleState::Fresh,
-                AllocationContext::RuntimeExecution,
+                AllocationContext::RuntimeOnceRuleState,
             )?;
         }
 
@@ -745,7 +749,7 @@ mod tests {
     fn expect_runtime_byte(state: &State, index: usize) -> Result<u8, TestFailure> {
         state
             .materialized_byte_at(index)
-            .ok_or(TestFailure::Message("expected runtime byte"))
+            .ok_or(TestFailure::message("expected runtime byte"))
     }
 
     fn expect_payload_byte(payload: &Payload, index: usize) -> Result<u8, TestFailure> {
@@ -754,7 +758,7 @@ mod tests {
             .get(index)
             .copied()
             .map(ProgramByte::get)
-            .ok_or(TestFailure::Message("expected payload byte"))
+            .ok_or(TestFailure::message("expected payload byte"))
     }
 
     #[test]
@@ -954,7 +958,7 @@ mod tests {
                     .checked_next()
                     .and_then(StepCount::checked_next)
                     .and_then(StepCount::checked_next)
-                    .ok_or(TestFailure::Message("expected step count"))?,
+                    .ok_or(TestFailure::message("expected step count"))?,
                 state_len: RuntimeStateByteCount::new(3),
             },
         )?;
@@ -995,7 +999,7 @@ mod tests {
                     .checked_next()
                     .and_then(StepCount::checked_next)
                     .and_then(StepCount::checked_next)
-                    .ok_or(TestFailure::Message("expected step count"))?,
+                    .ok_or(TestFailure::message("expected step count"))?,
                 state_len: RuntimeStateByteCount::new(3),
             },
         )?;

@@ -292,9 +292,14 @@ mod tests {
         let program = Program::parse_str("a=b\nb=(return)ok")?;
         let mut events = Vec::new();
         let limits = RunLimits::new(StepLimit::new(10_000));
-        let result = program.run_with_trace_snapshots(runtime_input(b"a")?, limits, |event| {
-            events.push(event);
-        })?;
+        let result = program.run_with_trace_snapshots(
+            runtime_input(b"a")?,
+            limits,
+            crate::DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
+            |event| {
+                events.push(event);
+            },
+        )?;
 
         expect_return_output(&result, b"ok")?;
         ensure_eq(events.len(), 3)?;
@@ -352,7 +357,7 @@ mod tests {
                 ensure_eq(rule.canonical_source()?, b"a=b".as_slice())?;
             }
             TraceSnapshotEvent::Initial { .. } | TraceSnapshotEvent::Step { .. } => {
-                return Err(TestFailure::Message("expected continuing step event"));
+                return Err(TestFailure::message("expected continuing step event"));
             }
         }
 
@@ -375,7 +380,7 @@ mod tests {
         )?;
 
         ensure_eq(
-            materialization.ok_or(TestFailure::Message("expected trace event"))?,
+            materialization.ok_or(TestFailure::message("expected trace event"))?,
             Err(TraceSnapshotError::Limit {
                 limit: TraceSnapshotByteLimit::new(0),
                 attempted_len: TraceSnapshotByteCount::new(1),
@@ -389,6 +394,7 @@ mod tests {
         let runtime_error = program.run_with_trace_snapshots(
             runtime_input(b"a")?,
             RunLimits::new(StepLimit::new(0)),
+            TraceSnapshotByteLimit::new(10),
             |_event| {},
         );
 
@@ -406,8 +412,8 @@ mod tests {
                 StepLimit::new(10),
                 crate::StateByteLimit::new(10),
                 crate::ReturnByteLimit::new(10),
-                TraceSnapshotByteLimit::new(0),
             ),
+            TraceSnapshotByteLimit::new(0),
             |_event| {},
         );
 
@@ -422,6 +428,7 @@ mod tests {
         let sink_error = program.try_run_with_trace_snapshots(
             runtime_input(b"a")?,
             RunLimits::new(StepLimit::new(10)),
+            TraceSnapshotByteLimit::new(10),
             |_event| Err::<(), _>("trace sink full"),
         );
 
@@ -435,9 +442,12 @@ mod tests {
     fn fallible_trace_callback_can_abort_execution() -> TestResult {
         let program = Program::parse_str("a=b\nb=c")?;
         let limits = RunLimits::new(StepLimit::new(10_000));
-        let result = program.try_run_with_trace_snapshots(runtime_input(b"a")?, limits, |_event| {
-            Err::<(), _>("trace sink full")
-        });
+        let result = program.try_run_with_trace_snapshots(
+            runtime_input(b"a")?,
+            limits,
+            crate::DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
+            |_event| Err::<(), _>("trace sink full"),
+        );
 
         ensure_eq(
             result,
@@ -452,18 +462,23 @@ mod tests {
         let mut events = Vec::new();
         let limits = RunLimits::new(StepLimit::new(10));
 
-        let result = program.run_with_trace_snapshots(runtime_input(b"a")?, limits, |event| {
-            events.push(event);
-        })?;
+        let result = program.run_with_trace_snapshots(
+            runtime_input(b"a")?,
+            limits,
+            crate::DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
+            |event| {
+                events.push(event);
+            },
+        )?;
 
         let last = events
             .last()
-            .ok_or(TestFailure::Message("expected final trace event"))?;
+            .ok_or(TestFailure::message("expected final trace event"))?;
         ensure_eq(trace_event_bytes(last), result_bytes(&result))?;
         let expected_events = result
             .steps()
             .checked_next()
-            .ok_or(TestFailure::Message("expected trace event count"))?;
+            .ok_or(TestFailure::message("expected trace event count"))?;
         ensure_eq(events.len(), expected_events.get())?;
         ensure_matches(
             matches!(
