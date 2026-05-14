@@ -76,7 +76,7 @@ pub enum ExecutionStep<'program, 'run> {
 #[derive(Debug)]
 pub struct Execution<'program> {
     program: &'program Program,
-    state: State,
+    pub(super) state: State,
     scratch: RewriteScratch,
     step_budget: StepBudget,
     once_states: OnceRunStates,
@@ -276,12 +276,8 @@ impl<'program> Execution<'program> {
         Ok(())
     }
 
-    fn find_next_match(&self) -> Result<RuleSearch<'program>, RunError> {
-        find_next_match(
-            self.program.rule_slice(),
-            &self.state,
-            &self.once_states,
-        )
+    pub(super) fn find_next_match(&self) -> Result<RuleSearch<'program>, RunError> {
+        find_next_match(self.program.rule_slice(), &self.state, &self.once_states)
     }
 
     fn apply_matched_rule(

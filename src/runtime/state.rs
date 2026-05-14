@@ -10,7 +10,7 @@ use crate::trace::RuntimeStateView;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct State {
-    bytes: Vec<RuntimeByte>,
+    pub(super) bytes: Vec<RuntimeByte>,
 }
 
 impl State {

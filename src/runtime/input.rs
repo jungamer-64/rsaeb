@@ -56,7 +56,10 @@ pub(super) struct InitialStateBytes {
 }
 
 impl InitialStateBytes {
-    pub(super) fn materialize(input: RuntimeInput<'_>, limits: RunLimits) -> Result<Self, RunError> {
+    pub(super) fn materialize(
+        input: RuntimeInput<'_>,
+        limits: RunLimits,
+    ) -> Result<Self, RunError> {
         let byte_count = input.byte_count();
 
         if byte_count.get() > limits.state_byte_limit().get() {

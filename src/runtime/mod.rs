@@ -6,5 +6,8 @@ mod once;
 mod rewrite;
 mod state;
 
+#[cfg(test)]
+mod tests;
+
 pub use execution::{Execution, ExecutionStep};
 pub use input::RuntimeInput;

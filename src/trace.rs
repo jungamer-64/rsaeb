@@ -295,9 +295,9 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn trace_snapshot_events_are_emitted_without_core_stderr() -> TestResult {
-        let program = Program::parse(crate::ProgramSource::from_str("a=b\nb=(return)ok"))?;
+    fn trace_snapshot_example<'program>(
+        program: &'program Program,
+    ) -> Result<(crate::RunResult, Vec<TraceSnapshotEvent<'program>>), TestFailure> {
         let mut events = Vec::new();
         let limits = RunLimits::new(
             StepLimit::new(10_000),
@@ -313,8 +313,31 @@ mod tests {
             },
         )?;
 
+        Ok((result, events))
+    }
+
+    #[test]
+    fn trace_snapshot_events_carry_expected_bytes() -> TestResult {
+        let program = Program::parse(crate::ProgramSource::from_str("a=b\nb=(return)ok"))?;
+        let (result, events) = trace_snapshot_example(&program)?;
+
         expect_return_output(&result, b"ok")?;
         ensure_eq!(events.len(), 3)?;
+
+        let initial = expect_event(&events, 0)?;
+        let first_step = expect_event(&events, 1)?;
+        let second_step = expect_event(&events, 2)?;
+
+        ensure_eq!(trace_event_bytes(initial), b"a".as_slice())?;
+        ensure_eq!(trace_event_bytes(first_step), b"b".as_slice())?;
+        ensure_eq!(trace_event_bytes(second_step), b"ok".as_slice())?;
+        Ok(())
+    }
+
+    #[test]
+    fn trace_snapshot_events_distinguish_continuation_and_return() -> TestResult {
+        let program = Program::parse(crate::ProgramSource::from_str("a=b\nb=(return)ok"))?;
+        let (_, events) = trace_snapshot_example(&program)?;
 
         let initial = expect_event(&events, 0)?;
         let first_step = expect_event(&events, 1)?;
@@ -324,9 +347,6 @@ mod tests {
             matches!(initial, TraceSnapshotEvent::Initial { .. }),
             "expected initial trace event",
         )?;
-        ensure_eq!(trace_event_bytes(initial), b"a".as_slice())?;
-        ensure_eq!(trace_event_bytes(first_step), b"b".as_slice())?;
-        ensure_eq!(trace_event_bytes(second_step), b"ok".as_slice())?;
         ensure_matches(
             matches!(
                 first_step,
@@ -347,6 +367,14 @@ mod tests {
             ),
             "expected return step",
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn trace_snapshot_continue_step_carries_rule_view() -> TestResult {
+        let program = Program::parse(crate::ProgramSource::from_str("a=b\nb=(return)ok"))?;
+        let (_, events) = trace_snapshot_example(&program)?;
+        let first_step = expect_event(&events, 1)?;
 
         match first_step {
             TraceSnapshotEvent::Step {
@@ -372,7 +400,6 @@ mod tests {
                 return Err(TestFailure::message("expected continuing step event"));
             }
         }
-
         Ok(())
     }
 

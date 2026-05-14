@@ -1,12 +1,15 @@
 use core::convert::Infallible;
 
-use crate::error::{FallibleTraceSnapshotRunError, RunError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
+use crate::error::{
+    FallibleTraceSnapshotRunError, RunError, TraceSnapshotError, TraceSnapshotRunError,
+    TracedRunError,
+};
 use crate::runtime::RuntimeInput;
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
+use super::Program;
 use super::limits::{RunLimits, TraceSnapshotByteLimit};
 use super::result::RunResult;
-use super::Program;
 
 enum SnapshotTraceCallbackError<E> {
     Snapshot(TraceSnapshotError),

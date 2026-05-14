@@ -2,6 +2,9 @@ mod line;
 mod location;
 mod rule_line;
 
+#[cfg(test)]
+mod tests;
+
 use crate::error::ParseError;
 use crate::program::{Program, RuleSet};
 use crate::source::ProgramSource;
