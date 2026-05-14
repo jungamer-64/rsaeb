@@ -295,9 +295,9 @@ mod tests {
         Ok(())
     }
 
-    fn trace_snapshot_example<'program>(
-        program: &'program Program,
-    ) -> Result<(crate::RunResult, Vec<TraceSnapshotEvent<'program>>), TestFailure> {
+    fn trace_snapshot_example(
+        program: &Program,
+    ) -> Result<(crate::RunResult, Vec<TraceSnapshotEvent<'_>>), TestFailure> {
         let mut events = Vec::new();
         let limits = TraceSnapshotLimits::new(
             RunLimits::new(

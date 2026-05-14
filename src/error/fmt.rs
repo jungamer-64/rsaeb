@@ -351,9 +351,8 @@ mod tests {
 
     #[test]
     fn input_error_display_keeps_byte_and_original_column() -> TestResult {
-        let error = match crate::RuntimeInput::parse(&[0xff]) {
-            Ok(_) => return Err(TestFailure::message("expected input error")),
-            Err(error) => error,
+        let Err(error) = crate::RuntimeInput::parse(&[0xff]) else {
+            return Err(TestFailure::message("expected input error"));
         };
 
         ensure_eq!(
