@@ -4,8 +4,8 @@ use core::convert::Infallible;
 use crate::allocation::{AllocationContext, AllocationError, try_push};
 use crate::bytes::{ReturnOutputByteCount, RuntimeStateByteCount};
 use crate::error::{
-    AebError, FallibleTraceSnapshotRunError, ParseError, RunError, TraceSnapshotError,
-    TraceSnapshotRunError, TracedRunError,
+    FallibleTraceSnapshotRunError, ParseError, RunError, TraceSnapshotError, TraceSnapshotRunError,
+    TracedRunError,
 };
 use crate::parser::parse_program_impl;
 use crate::rule::{OnceRuleSlotCount, ParsedRule, Rule, RuleCount, RulePosition, RuleView};
@@ -578,9 +578,9 @@ mod tests {
         result_bytes, run_program, trace_event_bytes,
     };
     use crate::{
-        AebError, InputError, LimitError, ReturnByteLimit, ReturnOutputByteCount, RuleActionView,
-        RuleAnchor, RuleCount, RuleRepeat, RuntimeStateByteCount, StateByteLimit,
-        StateLimitContext, TraceSnapshotEffect, TraceSnapshotEvent, run_bytes, run_str,
+        InputError, LimitError, ReturnByteLimit, ReturnOutputByteCount, RuleActionView, RuleAnchor,
+        RuleCount, RuleRepeat, RuntimeStateByteCount, StateByteLimit, StateLimitContext,
+        TraceSnapshotEffect, TraceSnapshotEvent,
     };
     use std::vec::Vec;
 
@@ -592,57 +592,43 @@ mod tests {
     }
 
     #[test]
-    fn public_free_run_works() -> TestResult {
-        let result = run_str(
-            "a=b",
-            b"a",
-            RunLimits::new(
-                crate::DEFAULT_MAX_STEPS,
-                crate::DEFAULT_MAX_STATE_LEN,
-                crate::DEFAULT_MAX_RETURN_LEN,
-            ),
-        )?;
+    fn public_typed_run_works() -> TestResult {
+        let limits = RunLimits::new(
+            crate::DEFAULT_MAX_STEPS,
+            crate::DEFAULT_MAX_STATE_LEN,
+            crate::DEFAULT_MAX_RETURN_LEN,
+        );
+        let program = Program::parse(crate::ProgramSource::from_str("a=b"))?;
+        let result = program.run(crate::RuntimeInput::parse(b"a")?, limits)?;
         expect_stable_output(&result, b"b")?;
         ensure_eq!(result.steps().get(), 1)?;
 
-        let result = run_bytes(
-            b"a=b#\xff",
-            b"a",
-            RunLimits::new(
-                crate::DEFAULT_MAX_STEPS,
-                crate::DEFAULT_MAX_STATE_LEN,
-                crate::DEFAULT_MAX_RETURN_LEN,
-            ),
-        )?;
+        let program = Program::parse(crate::ProgramSource::from_bytes(b"a=b#\xff"))?;
+        let result = program.run(crate::RuntimeInput::parse(b"a")?, limits)?;
         expect_stable_output(&result, b"b")?;
         Ok(())
     }
 
     #[test]
-    fn public_free_run_reports_input_boundary_errors_separately() -> TestResult {
-        let result = run_bytes(
-            b"a=b",
-            &[0xff],
-            RunLimits::new(
-                crate::DEFAULT_MAX_STEPS,
-                crate::DEFAULT_MAX_STATE_LEN,
-                crate::DEFAULT_MAX_RETURN_LEN,
-            ),
-        );
+    fn runtime_input_boundary_is_validated_before_run() -> TestResult {
+        let error = match crate::RuntimeInput::parse(&[0xff]) {
+            Ok(_) => return Err(TestFailure::message("expected input error")),
+            Err(error) => error,
+        };
 
         ensure_matches(
             matches!(
-                result,
-                Err(AebError::Run(RunError::Input(InputError::NonAscii { column, .. })))
+                error,
+                InputError::NonAscii { column, .. }
                     if column.get() == 1
             ),
-            "expected one-shot run input error",
+            "expected runtime input error",
         )
     }
 
     #[test]
     fn parsed_program_is_reusable_and_once_state_is_per_run() -> TestResult {
-        let program = Program::parse_str("(once)a=b\na=c")?;
+        let program = Program::parse(crate::ProgramSource::from_str("(once)a=b\na=c"))?;
 
         let limits = RunLimits::new(
             StepLimit::new(10_000),
@@ -660,7 +646,7 @@ mod tests {
 
     #[test]
     fn always_rules_do_not_allocate_once_slots() -> TestResult {
-        let program = Program::parse_str("a=b\nb=c\n(start)c=d")?;
+        let program = Program::parse(crate::ProgramSource::from_str("a=b\nb=c\n(start)c=d"))?;
 
         ensure_eq!(program.rule_count(), RuleCount::new(3))?;
         ensure_eq!(program.once_rule_count(), RuleCount::new(0))?;
@@ -674,8 +660,16 @@ mod tests {
             crate::DEFAULT_MAX_STATE_LEN,
             crate::DEFAULT_MAX_RETURN_LEN,
         );
-        let stable = run_program(&Program::parse_str("a=b")?, b"a", limits)?;
-        let returned = run_program(&Program::parse_str("a=(return)b")?, b"a", limits)?;
+        let stable = run_program(
+            &Program::parse(crate::ProgramSource::from_str("a=b"))?,
+            b"a",
+            limits,
+        )?;
+        let returned = run_program(
+            &Program::parse(crate::ProgramSource::from_str("a=(return)b"))?,
+            b"a",
+            limits,
+        )?;
 
         match stable.into_outcome() {
             RunOutcome::Stable(output) => {
@@ -698,7 +692,9 @@ mod tests {
 
     #[test]
     fn rule_view_generates_canonical_source_without_stored_source_blob() -> TestResult {
-        let program = Program::parse_str("a = b # comment\n(start)c=(end)d")?;
+        let program = Program::parse(crate::ProgramSource::from_str(
+            "a = b # comment\n(start)c=(end)d",
+        ))?;
         let rules = program.rules().collect::<Vec<_>>();
 
         ensure_eq!(rules.len(), 2)?;
@@ -743,10 +739,12 @@ mod tests {
 
     #[test]
     fn canonical_source_reparses_to_the_same_executable_rule() -> TestResult {
-        let program = Program::parse_str("( once ) ( start ) a = ( end ) b # comment")?;
+        let program = Program::parse(crate::ProgramSource::from_str(
+            "( once ) ( start ) a = ( end ) b # comment",
+        ))?;
         let canonical = expect_rule(&program, 0)?.canonical_source()?;
 
-        let reparsed = Program::parse_bytes(canonical.as_slice())?;
+        let reparsed = Program::parse(crate::ProgramSource::from_bytes(canonical.as_slice()))?;
         let reparsed_rule = expect_rule(&reparsed, 0)?;
 
         ensure_eq!(reparsed.rule_count(), RuleCount::new(1))?;
@@ -790,14 +788,16 @@ mod tests {
                             source.extend_from_slice(action);
                             source.extend_from_slice(rhs);
 
-                            let program = Program::parse_bytes(&source)?;
+                            let program =
+                                Program::parse(crate::ProgramSource::from_bytes(&source))?;
                             let rule = expect_rule(&program, 0)?;
                             let canonical = rule.canonical_source()?;
 
                             ensure_eq!(program.rule_count(), RuleCount::new(1))?;
                             ensure_eq!(canonical.as_slice(), source.as_slice())?;
 
-                            let reparsed = Program::parse_bytes(&canonical)?;
+                            let reparsed =
+                                Program::parse(crate::ProgramSource::from_bytes(&canonical))?;
                             let reparsed_rule = expect_rule(&reparsed, 0)?;
                             ensure_eq!(reparsed_rule.canonical_source()?, source.as_slice())?;
                         }
@@ -816,8 +816,10 @@ mod tests {
             StateByteLimit::new(1),
             ReturnByteLimit::new(10),
         );
-        let error =
-            expect_run_error(Program::parse_str("# no executable rules")?.run(b"aa", limits))?;
+        let error = expect_run_error(
+            Program::parse(crate::ProgramSource::from_str("# no executable rules"))?
+                .run(crate::RuntimeInput::parse(b"aa")?, limits),
+        )?;
         let error = expect_state_limit(error)?;
 
         ensure_eq!(
@@ -838,7 +840,10 @@ mod tests {
             StateByteLimit::new(2),
             ReturnByteLimit::new(10),
         );
-        let error = expect_run_error(Program::parse_str("=a")?.run(b"aa", limits))?;
+        let error = expect_run_error(
+            Program::parse(crate::ProgramSource::from_str("=a"))?
+                .run(crate::RuntimeInput::parse(b"aa")?, limits),
+        )?;
         let error = expect_state_limit(error)?;
 
         ensure_eq!(
@@ -854,7 +859,7 @@ mod tests {
 
     #[test]
     fn trace_snapshots_are_derived_from_borrowed_trace() -> TestResult {
-        let program = Program::parse_str("a=b\nb=(return)ok")?;
+        let program = Program::parse(crate::ProgramSource::from_str("a=b\nb=(return)ok"))?;
         let mut events = Vec::new();
         let limits = RunLimits::new(
             StepLimit::new(10_000),
@@ -862,7 +867,7 @@ mod tests {
             crate::DEFAULT_MAX_RETURN_LEN,
         );
         let result = program.run_with_trace_snapshots(
-            b"a",
+            crate::RuntimeInput::parse(b"a")?,
             limits,
             DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
             |event| {

@@ -63,13 +63,15 @@ A downstream `std` application can use the library normally. A downstream
 
 ## Basic usage
 
-One-shot parse and run from UTF-8 source:
+Parse and run from UTF-8 source:
 
 ```rust
-use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, run_str, RunLimits, RunOutcome};
+use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
 
-fn main() -> Result<(), rsaeb::AebError> {
-    let result = run_str("a=b", b"a", RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN))?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let program = Program::parse(ProgramSource::from_str("a=b"))?;
+    let input = RuntimeInput::parse(b"a")?;
+    let result = program.run(input, RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN))?;
     assert!(matches!(
         result.outcome(),
         RunOutcome::Stable(output) if output.as_bytes() == b"b"
@@ -78,17 +80,15 @@ fn main() -> Result<(), rsaeb::AebError> {
 }
 ```
 
-One-shot parse and run from raw source bytes:
+Parse and run from raw source bytes:
 
 ```rust
-use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, run_bytes, RunLimits, RunOutcome, StepLimit};
+use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, StepLimit};
 
-fn main() -> Result<(), rsaeb::AebError> {
-    let result = run_bytes(
-        b"a=b#\xff is allowed in comments\n",
-        b"a",
-        RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
-    )?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let program = Program::parse(ProgramSource::from_bytes(b"a=b#\xff is allowed in comments\n"))?;
+    let input = RuntimeInput::parse(b"a")?;
+    let result = program.run(input, RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN))?;
     assert!(matches!(
         result.outcome(),
         RunOutcome::Stable(output) if output.as_bytes() == b"b"
@@ -97,17 +97,18 @@ fn main() -> Result<(), rsaeb::AebError> {
 }
 ```
 
-Reusable parsed program with raw runtime input validated under `RunLimits`:
+Reusable parsed program with typed runtime input:
 
 ```rust
-use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, RunLimits, RunOutcome, StepLimit};
+use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, StepLimit};
 
-fn main() -> Result<(), rsaeb::AebError> {
-    let program = Program::parse_str("(once)a=b\na=c")?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let program = Program::parse(ProgramSource::from_str("(once)a=b\na=c"))?;
     let limits = RunLimits::new(StepLimit::new(10_000), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
+    let input = RuntimeInput::parse(b"aa")?;
 
-    let first = program.run(b"aa", limits)?;
-    let second = program.run(b"aa", limits)?;
+    let first = program.run(input, limits)?;
+    let second = program.run(input, limits)?;
 
     assert!(matches!(
         first.outcome(),
@@ -135,13 +136,14 @@ applied rule instead of running to completion in one call:
 
 ```rust
 use rsaeb::{
-    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ExecutionStep, Program, RunLimits, StepLimit,
+    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ExecutionStep, Program, ProgramSource,
+    RunLimits, RuntimeInput, StepLimit,
 };
 
-fn main() -> Result<(), rsaeb::AebError> {
-    let program = Program::parse_str("a=b\nb=c")?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let program = Program::parse(ProgramSource::from_str("a=b\nb=c"))?;
     let mut execution = program.start_execution(
-        b"a",
+        RuntimeInput::parse(b"a")?,
         RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
     )?;
 
@@ -174,12 +176,12 @@ is exposed as a borrowed parsed payload; callers that need ownership can
 materialize it explicitly from the payload view:
 
 ```rust
-use rsaeb::{DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, ExecutionStep, Program, RunError, RunLimits, StepLimit};
+use rsaeb::{DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, ExecutionStep, Program, ProgramSource, RunError, RunLimits, RuntimeInput, StepLimit};
 
-fn main() -> Result<(), rsaeb::AebError> {
-    let program = Program::parse_str("a=(return)ok")?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let program = Program::parse(ProgramSource::from_str("a=(return)ok"))?;
     let mut execution = program.start_execution(
-        b"a",
+        RuntimeInput::parse(b"a")?,
         RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
     )?;
 
@@ -199,11 +201,11 @@ The parser is byte-oriented. Comments are removed before executable-code
 validation, so comments can contain arbitrary non-ASCII bytes:
 
 ```rust
-use rsaeb::{Program, RuleCount};
+use rsaeb::{Program, ProgramSource};
 
 fn main() -> Result<(), rsaeb::ParseError> {
-    let program = Program::parse_bytes(b"a=b#\xff\xfe\n")?;
-    assert_eq!(program.rule_count(), RuleCount::new(1));
+    let program = Program::parse(ProgramSource::from_bytes(b"a=b#\xff\xfe\n"))?;
+    assert_eq!(program.rule_count().get(), 1);
     Ok(())
 }
 ```
@@ -212,11 +214,12 @@ ASCII whitespace in program code is ignored, but spaces in runtime input are
 data:
 
 ```rust
-use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, RunLimits, RunOutcome, StepLimit};
+use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, StepLimit};
 
-fn main() -> Result<(), rsaeb::AebError> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let result = Program::parse_str("ab=bb")?.run(b"a bc", limits)?;
+    let result = Program::parse(ProgramSource::from_str("ab=bb"))?
+        .run(RuntimeInput::parse(b"a bc")?, limits)?;
     assert!(matches!(
         result.outcome(),
         RunOutcome::Stable(output) if output.as_bytes() == b"a bc"
@@ -506,11 +509,11 @@ rewrite system because a short run can still expand a state aggressively.
 
 ```rust
 use rsaeb::{
-    LimitError, Program, ReturnByteLimit, RunError, RunLimits,
-    RuntimeStateByteCount, StateByteLimit, StateLimitContext, StepLimit,
+    LimitError, Program, ProgramSource, ReturnByteLimit, RunError, RunLimits, RuntimeInput,
+    StateByteLimit, StateLimitContext, StepLimit,
 };
 
-fn main() -> Result<(), rsaeb::AebError> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let limits = RunLimits::new(
         StepLimit::new(10_000),
         StateByteLimit::new(1024),
@@ -518,8 +521,8 @@ fn main() -> Result<(), rsaeb::AebError> {
     );
 
     let limits = limits.with_state_byte_limit(StateByteLimit::new(2));
-    let input = b"";
-    let error = Program::parse_str("=a")?.run(input, limits);
+    let input = RuntimeInput::parse(b"")?;
+    let error = Program::parse(ProgramSource::from_str("=a"))?.run(input, limits);
     assert!(matches!(
         error,
         Err(RunError::Limit(LimitError::State {
@@ -527,7 +530,7 @@ fn main() -> Result<(), rsaeb::AebError> {
             limit,
             attempted_len,
         })) if limit == StateByteLimit::new(2)
-            && attempted_len == RuntimeStateByteCount::new(3)
+            && attempted_len.get() == 3
     ));
 
     Ok(())
@@ -539,14 +542,14 @@ only when another rule would still apply after the configured number of steps.
 
 ```rust
 use rsaeb::{
-    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, LimitError, Program, RunError, RunLimits,
-    RunOutcome, RuntimeStateByteCount, StepLimit,
+    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, LimitError, Program, ProgramSource, RunError,
+    RunLimits, RunOutcome, RuntimeInput, StepLimit,
 };
 
-fn main() -> Result<(), rsaeb::AebError> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let exact_limits = RunLimits::new(StepLimit::new(1), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let exact = Program::parse_str("a=b")?.run(
-        b"a",
+    let exact = Program::parse(ProgramSource::from_str("a=b"))?.run(
+        RuntimeInput::parse(b"a")?,
         exact_limits,
     )?;
     assert!(matches!(
@@ -556,8 +559,8 @@ fn main() -> Result<(), rsaeb::AebError> {
     assert_eq!(exact.steps().get(), 1);
 
     let no_match_limits = RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let no_match = Program::parse_str("a=b")?.run(
-        b"x",
+    let no_match = Program::parse(ProgramSource::from_str("a=b"))?.run(
+        RuntimeInput::parse(b"x")?,
         no_match_limits,
     )?;
     assert!(matches!(
@@ -567,8 +570,8 @@ fn main() -> Result<(), rsaeb::AebError> {
     assert_eq!(no_match.steps().get(), 0);
 
     let would_apply_limits = RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let would_apply = Program::parse_str("a=b")?.run(
-        b"a",
+    let would_apply = Program::parse(ProgramSource::from_str("a=b"))?.run(
+        RuntimeInput::parse(b"a")?,
         would_apply_limits,
     );
     assert!(matches!(
@@ -579,7 +582,7 @@ fn main() -> Result<(), rsaeb::AebError> {
             state_len,
         })) if max_steps == StepLimit::new(0)
             && completed_steps.get() == 0
-            && state_len == RuntimeStateByteCount::new(1)
+            && state_len.get() == 1
     ));
     Ok(())
 }
@@ -593,10 +596,10 @@ blob: canonical source is generated from the structured rule when requested.
 This removes the second source of truth.
 
 ```rust
-use rsaeb::{Program, RuleActionView, RuleAnchor, RuleRepeat};
+use rsaeb::{Program, ProgramSource, RuleActionView, RuleAnchor, RuleRepeat};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let program = Program::parse_str("( once ) ( start ) a = ( end ) b # comment")?;
+    let program = Program::parse(ProgramSource::from_str("( once ) ( start ) a = ( end ) b # comment"))?;
     let rule = program.rules().next().ok_or("missing parsed rule")?;
 
     assert_eq!(rule.position().number().get(), 1);
@@ -621,14 +624,14 @@ Borrowed tracing is the allocation-free primitive. Events borrow the runtime
 state or return payload only for the callback invocation:
 
 ```rust
-use rsaeb::{DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, BorrowedTraceEvent, Program, RunLimits, RunOutcome, StepLimit};
+use rsaeb::{DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, BorrowedTraceEvent, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, StepLimit};
 
-fn main() -> Result<(), rsaeb::AebError> {
-    let program = Program::parse_str("a=b\nb=(return)ok")?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
     let mut lengths = Vec::new();
 
     let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let result = program.run_with_borrowed_trace(b"a", limits, |event| {
+    let result = program.run_with_borrowed_trace(RuntimeInput::parse(b"a")?, limits, |event| {
         lengths.push(event.byte_count().get());
         if let BorrowedTraceEvent::Step { rule, .. } = event {
             let _line = rule.line_number();
@@ -650,16 +653,16 @@ from the parsed `Program`, so retained trace snapshot events cannot outlive
 that program:
 
 ```rust
-use rsaeb::{DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, Program, RunLimits, RunOutcome, StepLimit, TraceSnapshotByteLimit, TraceSnapshotEffect, TraceSnapshotEvent};
+use rsaeb::{DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, StepLimit, TraceSnapshotByteLimit, TraceSnapshotEffect, TraceSnapshotEvent};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let program = Program::parse_str("a=b\nb=(return)ok")?;
+    let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
     let mut events = Vec::new();
 
     let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
     let snapshot_limit = TraceSnapshotByteLimit::new(1024);
     let result = program.run_with_trace_snapshots(
-        b"a",
+        RuntimeInput::parse(b"a")?,
         limits,
         snapshot_limit,
         |event| {
@@ -707,18 +710,18 @@ failures, and callback failures cannot collapse into one variant.
 The library error model is intentionally split:
 
 ```rust
-use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, InputError, Program, RunError, RunLimits, StepLimit};
+use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, InputError, Program, ProgramSource, RuntimeInput, RunLimits, StepLimit};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    match Program::parse_str("a=b=c") {
+    match Program::parse(ProgramSource::from_str("a=b=c")) {
         Err(parse_error) => assert_eq!(parse_error.line().get(), 1),
         Ok(_) => return Err("expected parse error".into()),
     }
 
-    let input_error = Program::parse_str("a=b")?.run("aあ".as_bytes(), limits);
+    let input_error = RuntimeInput::parse("aあ".as_bytes());
 
-    if let Err(RunError::Input(InputError::NonAscii { column, .. })) = input_error {
+    if let Err(InputError::NonAscii { column, .. }) = input_error {
         assert_eq!(column.get(), 2);
     }
 
@@ -765,8 +768,8 @@ byte limits are reported through `TraceSnapshotError`, not `RunError::Limit`,
 because snapshot materialization is outside runtime execution. Use borrowed
 tracing when the last state bytes are needed for diagnostics.
 Filesystem failures are not part of the library error model. External I/O must
-be handled before bytes enter `Program::parse_bytes`, `Program::parse_str`,
-`run_bytes`, or `run_str`.
+be handled before bytes enter `ProgramSource::from_bytes`,
+`ProgramSource::from_str`, or `RuntimeInput::parse`.
 
 ## Public API overview
 

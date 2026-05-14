@@ -305,7 +305,7 @@ mod tests {
     use alloc::string::ToString;
 
     use crate::test_support::{
-        TestResult, ensure_eq, expect_input_error, expect_parse_error, expect_run_error,
+        TestFailure, TestResult, ensure_eq, expect_parse_error, expect_run_error,
         expect_state_limit, expect_step_limit,
     };
     use crate::{
@@ -351,9 +351,10 @@ mod tests {
 
     #[test]
     fn input_error_display_keeps_byte_and_original_column() -> TestResult {
-        let error = expect_input_error(expect_run_error(
-            Program::parse_str("a=b")?.run(&[0xff], crate::test_support::test_limits()),
-        )?)?;
+        let error = match crate::RuntimeInput::parse(&[0xff]) {
+            Ok(_) => return Err(TestFailure::message("expected input error")),
+            Err(error) => error,
+        };
 
         ensure_eq!(
             error.to_string(),
@@ -369,8 +370,10 @@ mod tests {
             StateByteLimit::new(1),
             ReturnByteLimit::new(10),
         );
-        let error =
-            expect_run_error(Program::parse_str("# no executable rules")?.run(b"aa", limits))?;
+        let error = expect_run_error(
+            Program::parse(crate::ProgramSource::from_str("# no executable rules"))?
+                .run(crate::RuntimeInput::parse(b"aa")?, limits),
+        )?;
         let error = expect_state_limit(error)?;
 
         ensure_eq!(
@@ -382,13 +385,13 @@ mod tests {
 
     #[test]
     fn step_limit_display_reports_limit_and_preserved_state_len() -> TestResult {
-        let program = Program::parse_str("a=b")?;
+        let program = Program::parse(crate::ProgramSource::from_str("a=b"))?;
         let limits = RunLimits::new(
             StepLimit::new(0),
             crate::DEFAULT_MAX_STATE_LEN,
             crate::DEFAULT_MAX_RETURN_LEN,
         );
-        let error = expect_run_error(program.run(b"a", limits))?;
+        let error = expect_run_error(program.run(crate::RuntimeInput::parse(b"a")?, limits))?;
         let error = expect_step_limit(error)?;
 
         ensure_eq!(

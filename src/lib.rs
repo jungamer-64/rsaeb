@@ -1,9 +1,9 @@
 //! Byte-oriented interpreter for A=B ordered rewrite programs.
 //!
 //! `rsaeb` is a `no_std + alloc` library crate. It parses compact A=B source
-//! into an immutable [`Program`] and runs that program against raw input bytes
-//! validated inside the configured [`RunLimits`]. Files, stdout, stderr, arguments,
-//! and lossy display formatting are outside the interpreter core.
+//! into an immutable [`Program`] and runs that program against typed
+//! [`RuntimeInput`] validated before execution. Files, stdout, stderr,
+//! arguments, and lossy display formatting are outside the interpreter core.
 //!
 //! # Domain boundary
 //!
@@ -17,13 +17,15 @@
 //!
 //! # Basic execution
 //!
-//! Use [`run_str`] or [`run_bytes`] for a one-shot parse and run:
+//! Parse [`ProgramSource`] and [`RuntimeInput`] explicitly before running:
 //!
 //! ```
-//! use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, RunLimits, RunOutcome, run_str};
+//! use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
 //!
-//! # fn main() -> Result<(), rsaeb::AebError> {
-//! let result = run_str("a=b", b"a", RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN))?;
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let program = Program::parse(ProgramSource::from_str("a=b"))?;
+//! let input = RuntimeInput::parse(b"a")?;
+//! let result = program.run(input, RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN))?;
 //!
 //! assert!(matches!(
 //!     result.outcome(),
@@ -39,14 +41,15 @@
 //! slot indexes from rule order while scanning:
 //!
 //! ```
-//! use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, RunLimits, RunOutcome, StepLimit};
+//! use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, StepLimit};
 //!
-//! # fn main() -> Result<(), rsaeb::AebError> {
-//! let program = Program::parse_str("(once)a=b\na=c")?;
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let program = Program::parse(ProgramSource::from_str("(once)a=b\na=c"))?;
 //! let limits = RunLimits::new(StepLimit::new(10_000), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
+//! let input = RuntimeInput::parse(b"aa")?;
 //!
-//! let first = program.run(b"aa", limits)?;
-//! let second = program.run(b"aa", limits)?;
+//! let first = program.run(input, limits)?;
+//! let second = program.run(input, limits)?;
 //!
 //! assert!(matches!(
 //!     first.outcome(),
@@ -67,13 +70,14 @@
 //!
 //! ```
 //! use rsaeb::{
-//!     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ExecutionStep, Program, RunLimits, StepLimit,
+//!     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ExecutionStep, Program, ProgramSource,
+//!     RunLimits, RuntimeInput, StepLimit,
 //! };
 //!
-//! # fn main() -> Result<(), rsaeb::AebError> {
-//! let program = Program::parse_str("a=b\nb=c")?;
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let program = Program::parse(ProgramSource::from_str("a=b\nb=c"))?;
 //! let mut execution = program.start_execution(
-//!     b"a",
+//!     RuntimeInput::parse(b"a")?,
 //!     RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
 //! )?;
 //!
@@ -109,11 +113,11 @@
 //! matching rule would apply after the configured number of completed steps:
 //!
 //! ```
-//! use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, LimitError, Program, RunError, RunLimits, StepLimit};
+//! use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, LimitError, Program, ProgramSource, RunError, RunLimits, RuntimeInput, StepLimit};
 //!
-//! # fn main() -> Result<(), rsaeb::AebError> {
-//! let result = Program::parse_str("a=b")?.run(
-//!     b"a",
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let result = Program::parse(ProgramSource::from_str("a=b"))?.run(
+//!     RuntimeInput::parse(b"a")?,
 //!     RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
 //! );
 //!
@@ -132,10 +136,10 @@
 //! strings:
 //!
 //! ```
-//! use rsaeb::{Program, RuleActionView, RuleAnchor, RuleRepeat};
+//! use rsaeb::{Program, ProgramSource, RuleActionView, RuleAnchor, RuleRepeat};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse_str("( once ) ( start ) a = ( end ) b # comment")?;
+//! let program = Program::parse(ProgramSource::from_str("( once ) ( start ) a = ( end ) b # comment"))?;
 //! let rule = program.rules().next().ok_or("missing parsed rule")?;
 //!
 //! assert_eq!(rule.repeat(), RuleRepeat::Once);
@@ -154,14 +158,14 @@
 //! top when a caller needs owned event bytes:
 //!
 //! ```
-//! use rsaeb::{BorrowedTraceEvent, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, RunLimits, StepLimit};
+//! use rsaeb::{BorrowedTraceEvent, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RuntimeInput, StepLimit};
 //!
-//! # fn main() -> Result<(), rsaeb::AebError> {
-//! let program = Program::parse_str("a=b\nb=(return)ok")?;
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
 //! let mut byte_counts = Vec::new();
 //!
 //! program.run_with_borrowed_trace(
-//!     b"a",
+//!     RuntimeInput::parse(b"a")?,
 //!     RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
 //!     |event| {
 //!         byte_counts.push(event.byte_count().get());
@@ -183,7 +187,8 @@
 //! error types such as [`ParseError`], [`InputError`], [`RunError`],
 //! [`RuntimeInvariantError`], [`TraceSnapshotError`], [`TraceSnapshotRunError`],
 //! [`FallibleTraceSnapshotRunError`], and [`TracedRunError`]. [`AebError`] is
-//! the convenience umbrella used by one-shot helpers.
+//! available as a crate-level parse/run umbrella for callers that want one
+//! top-level error type.
 
 #![no_std]
 #![forbid(unsafe_code)]

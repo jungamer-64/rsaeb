@@ -127,13 +127,13 @@ pub(crate) fn test_limits() -> RunLimits {
 }
 
 pub(crate) fn run_source(source: &str, input: &str) -> Result<String, TestFailure> {
-    let program = Program::parse_str(source)?;
+    let program = Program::parse(crate::ProgramSource::from_str(source))?;
     let result = run_program(&program, input.as_bytes(), test_limits())?;
     Ok(String::from_utf8(into_result_bytes(result))?)
 }
 
-pub(crate) fn runtime_input(input: &[u8]) -> Result<RuntimeInput, TestFailure> {
-    RuntimeInput::parse(input, test_limits()).map_err(TestFailure::from)
+pub(crate) fn runtime_input(input: &[u8]) -> Result<RuntimeInput<'_>, TestFailure> {
+    RuntimeInput::parse(input).map_err(TestFailure::from)
 }
 
 pub(crate) fn run_program(
@@ -141,6 +141,7 @@ pub(crate) fn run_program(
     input: &[u8],
     limits: RunLimits,
 ) -> Result<RunResult, TestFailure> {
+    let input = RuntimeInput::parse(input)?;
     program.run(input, limits).map_err(TestFailure::from)
 }
 
@@ -181,7 +182,7 @@ pub(crate) fn expect_return_output<'result>(
 }
 
 pub(crate) fn expect_parse_error(source: &str) -> Result<ParseError, TestFailure> {
-    match Program::parse_str(source) {
+    match Program::parse(crate::ProgramSource::from_str(source)) {
         Ok(_) => Err(TestFailure::message("expected parse error")),
         Err(error) => Ok(error),
     }
@@ -251,15 +252,5 @@ pub(crate) fn expect_state_limit(error: RunError) -> Result<LimitError, TestFail
         | RunError::StateSize(_)
         | RunError::Limit(_)
         | RunError::Invariant(_) => Err(TestFailure::message("expected state limit error")),
-    }
-}
-
-pub(crate) fn expect_input_error(error: RunError) -> Result<InputError, TestFailure> {
-    match error {
-        RunError::Input(error) => Ok(error),
-        RunError::Allocation(_)
-        | RunError::StateSize(_)
-        | RunError::Limit(_)
-        | RunError::Invariant(_) => Err(TestFailure::message("expected input error")),
     }
 }

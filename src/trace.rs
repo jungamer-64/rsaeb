@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn borrowed_trace_events_are_emitted_without_snapshots() -> TestResult {
-        let program = Program::parse_str("a=b\nb=(return)ok")?;
+        let program = Program::parse(crate::ProgramSource::from_str("a=b\nb=(return)ok"))?;
         let mut seen = Vec::new();
         let limits = RunLimits::new(
             StepLimit::new(10_000),
@@ -268,20 +268,24 @@ mod tests {
             crate::DEFAULT_MAX_RETURN_LEN,
         );
 
-        let result = program.run_with_borrowed_trace(b"a", limits, |event| {
-            let bytes = match event {
-                BorrowedTraceEvent::Initial { state }
-                | BorrowedTraceEvent::Step {
-                    effect: BorrowedTraceEffect::Continue { state },
-                    ..
-                } => state.bytes().collect::<Vec<_>>(),
-                BorrowedTraceEvent::Step {
-                    effect: BorrowedTraceEffect::Return { output },
-                    ..
-                } => output.bytes().collect::<Vec<_>>(),
-            };
-            seen.push((event.byte_count().get(), bytes));
-        })?;
+        let result = program.run_with_borrowed_trace(
+            crate::RuntimeInput::parse(b"a")?,
+            limits,
+            |event| {
+                let bytes = match event {
+                    BorrowedTraceEvent::Initial { state }
+                    | BorrowedTraceEvent::Step {
+                        effect: BorrowedTraceEffect::Continue { state },
+                        ..
+                    } => state.bytes().collect::<Vec<_>>(),
+                    BorrowedTraceEvent::Step {
+                        effect: BorrowedTraceEffect::Return { output },
+                        ..
+                    } => output.bytes().collect::<Vec<_>>(),
+                };
+                seen.push((event.byte_count().get(), bytes));
+            },
+        )?;
 
         expect_return_output(&result, b"ok")?;
         ensure_eq!(
@@ -293,7 +297,7 @@ mod tests {
 
     #[test]
     fn trace_snapshot_events_are_emitted_without_core_stderr() -> TestResult {
-        let program = Program::parse_str("a=b\nb=(return)ok")?;
+        let program = Program::parse(crate::ProgramSource::from_str("a=b\nb=(return)ok"))?;
         let mut events = Vec::new();
         let limits = RunLimits::new(
             StepLimit::new(10_000),
@@ -301,7 +305,7 @@ mod tests {
             crate::DEFAULT_MAX_RETURN_LEN,
         );
         let result = program.run_with_trace_snapshots(
-            b"a",
+            crate::RuntimeInput::parse(b"a")?,
             limits,
             crate::DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
             |event| {
@@ -374,11 +378,11 @@ mod tests {
 
     #[test]
     fn borrowed_trace_to_snapshot_uses_only_snapshot_limit() -> TestResult {
-        let program = Program::parse_str("a=b")?;
+        let program = Program::parse(crate::ProgramSource::from_str("a=b"))?;
         let mut materialization = None;
 
         program.run_with_borrowed_trace(
-            b"a",
+            crate::RuntimeInput::parse(b"a")?,
             RunLimits::new(
                 StepLimit::new(10),
                 crate::DEFAULT_MAX_STATE_LEN,
@@ -402,9 +406,9 @@ mod tests {
 
     #[test]
     fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult {
-        let program = Program::parse_str("a=b")?;
+        let program = Program::parse(crate::ProgramSource::from_str("a=b"))?;
         let runtime_error = program.run_with_trace_snapshots(
-            b"a",
+            crate::RuntimeInput::parse(b"a")?,
             RunLimits::new(
                 StepLimit::new(0),
                 crate::DEFAULT_MAX_STATE_LEN,
@@ -423,7 +427,7 @@ mod tests {
         )?;
 
         let snapshot_error = program.run_with_trace_snapshots(
-            b"a",
+            crate::RuntimeInput::parse(b"a")?,
             RunLimits::new(
                 StepLimit::new(10),
                 crate::StateByteLimit::new(10),
@@ -442,7 +446,7 @@ mod tests {
         )?;
 
         let sink_error = program.try_run_with_trace_snapshots(
-            b"a",
+            crate::RuntimeInput::parse(b"a")?,
             RunLimits::new(
                 StepLimit::new(10),
                 crate::DEFAULT_MAX_STATE_LEN,
@@ -460,14 +464,14 @@ mod tests {
 
     #[test]
     fn fallible_trace_callback_can_abort_execution() -> TestResult {
-        let program = Program::parse_str("a=b\nb=c")?;
+        let program = Program::parse(crate::ProgramSource::from_str("a=b\nb=c"))?;
         let limits = RunLimits::new(
             StepLimit::new(10_000),
             crate::DEFAULT_MAX_STATE_LEN,
             crate::DEFAULT_MAX_RETURN_LEN,
         );
         let result = program.try_run_with_trace_snapshots(
-            b"a",
+            crate::RuntimeInput::parse(b"a")?,
             limits,
             crate::DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
             |_event| Err::<(), _>("trace sink full"),
@@ -482,7 +486,7 @@ mod tests {
 
     #[test]
     fn traced_final_event_matches_run_result() -> TestResult {
-        let program = Program::parse_str("a=b\nb=(return)c")?;
+        let program = Program::parse(crate::ProgramSource::from_str("a=b\nb=(return)c"))?;
         let mut events = Vec::new();
         let limits = RunLimits::new(
             StepLimit::new(10),
@@ -491,7 +495,7 @@ mod tests {
         );
 
         let result = program.run_with_trace_snapshots(
-            b"a",
+            crate::RuntimeInput::parse(b"a")?,
             limits,
             crate::DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
             |event| {

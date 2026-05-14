@@ -248,6 +248,14 @@ impl ProgramByte {
         raw.is_ascii_graphic() && ReservedSyntaxByte::parse(raw).is_none()
     }
 
+    pub(crate) const fn from_valid_raw(raw: u8) -> Option<Self> {
+        if Self::is_valid_raw(raw) {
+            Some(Self(raw))
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn parse(
         byte: CompactByte,
         line_number: SourceLineNumber,
@@ -312,44 +320,61 @@ impl AsciiByte {
     pub(crate) const fn get(self) -> u8 {
         self.0
     }
-
-    pub(crate) const fn from_program(byte: ProgramByte) -> Self {
-        Self(byte.get())
-    }
 }
 
-/// A byte inside the mutable runtime state.
-///
-/// Runtime state stores exactly one validated ASCII byte. Whether a byte can be
-/// matched by executable payloads is derived from the byte value itself instead
-/// of being stored as a second truth source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RuntimeByte(AsciiByte);
+pub(crate) struct OpaqueRuntimeByte(AsciiByte);
 
-impl RuntimeByte {
-    pub(crate) fn parse_input(byte: u8, zero_based_column: usize) -> Result<Self, InputError> {
-        Ok(Self(AsciiByte::parse(byte, zero_based_column)?))
-    }
-
-    pub(crate) const fn from_program(byte: ProgramByte) -> Self {
-        Self(AsciiByte::from_program(byte))
+impl OpaqueRuntimeByte {
+    const fn new(byte: AsciiByte) -> Self {
+        Self(byte)
     }
 
     pub(crate) const fn materialize(self) -> u8 {
         self.0.get()
     }
+}
 
-    pub(crate) const fn matches_program_byte(self, expected: ProgramByte) -> bool {
-        self.is_editable() && self.0.get() == expected.get()
+/// A byte inside the mutable runtime state.
+///
+/// Program-constructible bytes and runtime-only bytes are separate variants, so
+/// matching executable payloads cannot accidentally treat whitespace, control
+/// bytes, or reserved syntax as program payload data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeByte {
+    ProgramConstructible(ProgramByte),
+    Opaque(OpaqueRuntimeByte),
+}
+
+impl RuntimeByte {
+    pub(crate) fn parse_input(byte: u8, zero_based_column: usize) -> Result<Self, InputError> {
+        Ok(Self::from_ascii(AsciiByte::parse(byte, zero_based_column)?))
     }
 
-    pub(crate) const fn is_editable(self) -> bool {
-        ProgramByte::is_valid_raw(self.0.get())
+    pub(crate) const fn from_program(byte: ProgramByte) -> Self {
+        Self::ProgramConstructible(byte)
     }
 
-    #[cfg(test)]
-    pub(crate) const fn is_opaque(self) -> bool {
-        !self.is_editable()
+    fn from_ascii(byte: AsciiByte) -> Self {
+        if let Some(program_byte) = ProgramByte::from_valid_raw(byte.get()) {
+            Self::ProgramConstructible(program_byte)
+        } else {
+            Self::Opaque(OpaqueRuntimeByte::new(byte))
+        }
+    }
+
+    pub(crate) const fn materialize(self) -> u8 {
+        match self {
+            Self::ProgramConstructible(byte) => byte.get(),
+            Self::Opaque(byte) => byte.materialize(),
+        }
+    }
+
+    pub(crate) const fn program_byte(self) -> Option<ProgramByte> {
+        match self {
+            Self::ProgramConstructible(byte) => Some(byte),
+            Self::Opaque(_) => None,
+        }
     }
 }
 
@@ -570,13 +595,19 @@ mod tests {
     #[test]
     fn runtime_input_classifies_program_constructible_and_opaque_ascii_separately() -> TestResult {
         let parsed = RuntimeByte::parse_input(b'a', 0).map_err(TestFailure::from)?;
-        ensure(parsed.is_editable(), "expected editable input byte")?;
+        ensure_matches(
+            matches!(parsed, RuntimeByte::ProgramConstructible(byte) if byte.get() == b'a'),
+            "expected program-constructible input byte",
+        )?;
         ensure_eq!(parsed.materialize(), b'a')?;
 
         for byte in [0x00, b' ', b'=', b'#', b'(', b')'] {
             let parsed = RuntimeByte::parse_input(byte, 0).map_err(TestFailure::from)?;
             ensure_eq!(parsed.materialize(), byte)?;
-            ensure(parsed.is_opaque(), "expected opaque input byte")?;
+            ensure_matches(
+                matches!(parsed, RuntimeByte::Opaque(_)),
+                "expected opaque input byte",
+            )?;
         }
 
         Ok(())

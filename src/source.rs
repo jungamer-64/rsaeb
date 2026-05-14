@@ -1,3 +1,41 @@
+/// Borrowed A=B program source at the parser boundary.
+///
+/// Program source remains a byte format because comments may contain arbitrary
+/// non-UTF-8 bytes. Constructing this value labels a byte slice as source
+/// input; syntax validation still happens in [`Program::parse`](crate::Program::parse).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramSource<'source> {
+    bytes: &'source [u8],
+}
+
+impl<'source> ProgramSource<'source> {
+    /// Labels raw source bytes as parser input.
+    #[must_use]
+    pub const fn from_bytes(bytes: &'source [u8]) -> Self {
+        Self { bytes }
+    }
+
+    /// Labels a UTF-8 source string as parser input.
+    #[must_use]
+    pub const fn from_str(source: &'source str) -> Self {
+        Self {
+            bytes: source.as_bytes(),
+        }
+    }
+
+    /// Borrow the source bytes.
+    #[must_use]
+    pub const fn as_bytes(self) -> &'source [u8] {
+        self.bytes
+    }
+
+    /// Whether the source contains no bytes.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
 /// One-based source line number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceLineNumber {

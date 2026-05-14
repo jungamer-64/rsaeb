@@ -134,13 +134,6 @@ impl RuleSchedule {
         }
     }
 
-    const fn once_slot(self) -> Option<OnceRuleSlot> {
-        match self {
-            Self::Always => None,
-            Self::Once(slot) => Some(slot),
-        }
-    }
-
     fn from_repeat(
         repeat: RuleRepeat,
         once_slot_count: OnceRuleSlotCount,
@@ -340,28 +333,50 @@ impl Action {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ParsedRule {
-    line_number: SourceLineNumber,
+pub(crate) struct RuleHead {
     repeat: RuleRepeat,
     anchor: RuleAnchor,
     lhs: Payload,
-    action: Action,
 }
 
-impl ParsedRule {
-    pub(crate) fn new(
-        line_number: SourceLineNumber,
-        repeat: RuleRepeat,
-        anchor: RuleAnchor,
-        lhs: Payload,
-        action: Action,
-    ) -> Self {
+impl RuleHead {
+    pub(crate) fn new(repeat: RuleRepeat, anchor: RuleAnchor, lhs: Payload) -> Self {
         Self {
-            line_number,
             repeat,
             anchor,
             lhs,
-            action,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct RuleBody {
+    action: Action,
+}
+
+impl RuleBody {
+    pub(crate) const fn new(action: Action) -> Self {
+        Self { action }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ParsedRule {
+    line_number: SourceLineNumber,
+    head: RuleHead,
+    body: RuleBody,
+}
+
+impl ParsedRule {
+    pub(crate) const fn from_parts(
+        line_number: SourceLineNumber,
+        head: RuleHead,
+        body: RuleBody,
+    ) -> Self {
+        Self {
+            line_number,
+            head,
+            body,
         }
     }
 }
@@ -383,16 +398,16 @@ impl Rule {
         once_slot_count: OnceRuleSlotCount,
     ) -> Result<(Self, OnceRuleSlotCount), AllocationError> {
         let (schedule, next_once_slot_count) =
-            RuleSchedule::from_repeat(parsed.repeat, once_slot_count)?;
+            RuleSchedule::from_repeat(parsed.head.repeat, once_slot_count)?;
 
         Ok((
             Self {
                 position,
                 line_number: parsed.line_number,
                 schedule,
-                anchor: parsed.anchor,
-                lhs: parsed.lhs,
-                action: parsed.action,
+                anchor: parsed.head.anchor,
+                lhs: parsed.head.lhs,
+                action: parsed.body.action,
             },
             next_once_slot_count,
         ))
@@ -410,8 +425,8 @@ impl Rule {
         self.schedule.repeat()
     }
 
-    pub(crate) const fn once_slot(&self) -> Option<OnceRuleSlot> {
-        self.schedule.once_slot()
+    pub(crate) const fn schedule(&self) -> RuleSchedule {
+        self.schedule
     }
 
     pub(crate) const fn anchor(&self) -> RuleAnchor {

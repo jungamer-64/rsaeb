@@ -4,8 +4,8 @@ use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserv
 use crate::bytes::{CompactByte, NonAsciiCodeByte, NonPrintableCodeByte, Payload};
 use crate::error::{LeftModifierKind, ParseError, ParseErrorKind, PayloadKind, RightActionKind};
 use crate::program::{Program, RuleSet};
-use crate::rule::{Action, ParsedRule, RuleAnchor, RuleRepeat};
-use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
+use crate::rule::{Action, ParsedRule, RuleAnchor, RuleBody, RuleHead, RuleRepeat};
+use crate::source::{ProgramSource, SourceColumn, SourceLineNumber, SourcePosition};
 use crate::syntax::SyntaxToken;
 
 fn parse_allocation_error(line_number: SourceLineNumber, error: AllocationError) -> ParseError {
@@ -212,16 +212,10 @@ struct RuleSyntaxLine {
 
 impl RuleSyntaxLine {
     fn parse(&self) -> Result<ParsedRule, ParseError> {
-        let lhs = self.left().parse()?;
-        let action = self.right().parse()?;
+        let head = self.left().parse()?;
+        let body = self.right().parse()?;
 
-        Ok(ParsedRule::new(
-            self.line_number,
-            lhs.repeat,
-            lhs.anchor,
-            lhs.payload,
-            action,
-        ))
+        Ok(ParsedRule::from_parts(self.line_number, head, body))
     }
 
     fn left(&self) -> LeftSyntax<'_> {
@@ -239,12 +233,6 @@ impl RuleSyntaxLine {
     }
 }
 
-struct ParsedLhs {
-    repeat: RuleRepeat,
-    anchor: RuleAnchor,
-    payload: Payload,
-}
-
 #[derive(Clone, Copy)]
 struct LeftSyntax<'code> {
     line_number: SourceLineNumber,
@@ -252,7 +240,7 @@ struct LeftSyntax<'code> {
 }
 
 impl<'code> LeftSyntax<'code> {
-    fn parse(self) -> Result<ParsedLhs, ParseError> {
+    fn parse(self) -> Result<RuleHead, ParseError> {
         self.into_after_repeat().parse()
     }
 
@@ -281,7 +269,7 @@ struct LeftAfterRepeat<'code> {
 }
 
 impl<'code> LeftAfterRepeat<'code> {
-    fn parse(self) -> Result<ParsedLhs, ParseError> {
+    fn parse(self) -> Result<RuleHead, ParseError> {
         self.into_payload_syntax()?.parse()
     }
 
@@ -329,13 +317,9 @@ struct LeftPayloadSyntax<'code> {
 }
 
 impl LeftPayloadSyntax<'_> {
-    fn parse(self) -> Result<ParsedLhs, ParseError> {
+    fn parse(self) -> Result<RuleHead, ParseError> {
         let payload = Payload::parse(self.bytes, self.line_number, PayloadKind::LeftSideData)?;
-        Ok(ParsedLhs {
-            repeat: self.repeat,
-            anchor: self.anchor,
-            payload,
-        })
+        Ok(RuleHead::new(self.repeat, self.anchor, payload))
     }
 }
 
@@ -346,7 +330,7 @@ struct RightSyntax<'code> {
 }
 
 impl<'code> RightSyntax<'code> {
-    fn parse(self) -> Result<Action, ParseError> {
+    fn parse(self) -> Result<RuleBody, ParseError> {
         self.into_payload_syntax().parse()
     }
 
@@ -397,13 +381,15 @@ impl RightActionSyntax {
         }
     }
 
-    fn into_action(self, payload: Payload) -> Action {
-        match self {
+    fn into_body(self, payload: Payload) -> RuleBody {
+        let action = match self {
             Self::Replace => Action::Replace(payload),
             Self::MoveStart => Action::MoveStart(payload),
             Self::MoveEnd => Action::MoveEnd(payload),
             Self::Return => Action::Return(payload),
-        }
+        };
+
+        RuleBody::new(action)
     }
 }
 
@@ -415,20 +401,20 @@ struct RightPayloadSyntax<'code> {
 }
 
 impl RightPayloadSyntax<'_> {
-    fn parse(self) -> Result<Action, ParseError> {
+    fn parse(self) -> Result<RuleBody, ParseError> {
         if self.action != RightActionSyntax::Replace {
             reject_nested_rhs_action(self.bytes, self.line_number)?;
         }
 
         let payload = Payload::parse(self.bytes, self.line_number, self.action.payload_kind())?;
-        Ok(self.action.into_action(payload))
+        Ok(self.action.into_body(payload))
     }
 }
 
-pub(crate) fn parse_program_impl(source: &[u8]) -> Result<Program, ParseError> {
+pub(crate) fn parse_program_impl(source: ProgramSource<'_>) -> Result<Program, ParseError> {
     let mut rule_set = RuleSet::new();
 
-    for (zero_based_line, raw_line) in source.split(|&byte| byte == b'\n').enumerate() {
+    for (zero_based_line, raw_line) in source.as_bytes().split(|&byte| byte == b'\n').enumerate() {
         let line_number = source_line_number(zero_based_line)?;
         let compact_code = RawSourceLine::new(line_number, raw_line)
             .into_code_line()?
@@ -562,7 +548,7 @@ mod tests {
 
     #[test]
     fn empty_compact_lines_do_not_become_rules() -> TestResult {
-        let program = Program::parse_str(" \t\r\n# comment\n")?;
+        let program = Program::parse(crate::ProgramSource::from_str(" \t\r\n# comment\n"))?;
         ensure_eq!(program.rule_count(), RuleCount::new(0))?;
         Ok(())
     }
@@ -571,7 +557,7 @@ mod tests {
     fn comments_may_contain_non_utf8_bytes_because_the_core_parser_is_byte_oriented() -> TestResult
     {
         let source = b"a=b#\xff\xfe\n";
-        let program = Program::parse_bytes(source)?;
+        let program = Program::parse(crate::ProgramSource::from_bytes(source))?;
         let result = run_program(
             &program,
             b"a",
@@ -587,13 +573,16 @@ mod tests {
 
     #[test]
     fn code_body_rejects_non_ascii_outside_comments() -> TestResult {
-        ensure(Program::parse_str("a=あ").is_err(), "expected parse error")?;
         ensure(
-            Program::parse_str("あ=b# comment").is_err(),
+            Program::parse(crate::ProgramSource::from_str("a=あ")).is_err(),
             "expected parse error",
         )?;
         ensure(
-            Program::parse_str("a=b#あ").is_ok(),
+            Program::parse(crate::ProgramSource::from_str("あ=b# comment")).is_err(),
+            "expected parse error",
+        )?;
+        ensure(
+            Program::parse(crate::ProgramSource::from_str("a=b#あ")).is_ok(),
             "expected comment text to parse",
         )?;
 
@@ -618,7 +607,7 @@ mod tests {
         )?;
 
         ensure(
-            Program::parse_str("a=b#\0").is_ok(),
+            Program::parse(crate::ProgramSource::from_str("a=b#\0")).is_ok(),
             "expected comment control byte to parse",
         )?;
         Ok(())
@@ -641,7 +630,7 @@ mod tests {
         )?;
 
         ensure(
-            Program::parse_str("a=b#=c").is_ok(),
+            Program::parse(crate::ProgramSource::from_str("a=b#=c")).is_ok(),
             "expected equals in comment to parse",
         )?;
         Ok(())
@@ -673,15 +662,18 @@ mod tests {
             "a=(once)b",
             "a(once)=b",
         ] {
-            ensure(Program::parse_str(source).is_err(), "source should fail")?;
+            ensure(
+                Program::parse(crate::ProgramSource::from_str(source)).is_err(),
+                "source should fail",
+            )?;
         }
 
         ensure(
-            Program::parse_str("(once)(start)a=(end)b").is_ok(),
+            Program::parse(crate::ProgramSource::from_str("(once)(start)a=(end)b")).is_ok(),
             "expected valid parenthesized modifiers",
         )?;
         ensure(
-            Program::parse_str("a=(return)").is_ok(),
+            Program::parse(crate::ProgramSource::from_str("a=(return)")).is_ok(),
             "expected empty return payload",
         )?;
         Ok(())
@@ -690,11 +682,11 @@ mod tests {
     #[test]
     fn comment_before_non_ascii_code_hides_it() -> TestResult {
         ensure(
-            Program::parse_bytes(b"#\xff\xfe\n").is_ok(),
+            Program::parse(crate::ProgramSource::from_bytes(b"#\xff\xfe\n")).is_ok(),
             "expected non-ASCII comment to parse",
         )?;
         ensure(
-            Program::parse_bytes(b"a=b#\xff\xfe\n").is_ok(),
+            Program::parse(crate::ProgramSource::from_bytes(b"a=b#\xff\xfe\n")).is_ok(),
             "expected non-ASCII trailing comment to parse",
         )?;
         Ok(())
@@ -788,8 +780,10 @@ mod tests {
 
     #[test]
     fn compacted_source_and_spaced_source_are_equivalent() -> TestResult {
-        let compact = Program::parse_str("(once)(start)a=(end)b")?;
-        let spaced = Program::parse_str("( once ) ( start ) a = ( end ) b # comment")?;
+        let compact = Program::parse(crate::ProgramSource::from_str("(once)(start)a=(end)b"))?;
+        let spaced = Program::parse(crate::ProgramSource::from_str(
+            "( once ) ( start ) a = ( end ) b # comment",
+        ))?;
 
         let compact_result = run_program(
             &compact,
