@@ -11,6 +11,10 @@ mod traced;
 
 use core::error::Error;
 
+pub use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind};
+pub use crate::bytes::{
+    NonAsciiCodeByte, NonAsciiInputByte, NonPrintableCodeByte, ReservedSyntaxByte,
+};
 pub use parse::{
     LeftModifierKind, ParseError, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind,
 };

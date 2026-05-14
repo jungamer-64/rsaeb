@@ -1,11 +1,13 @@
+use crate::error::{
+    LeftModifierKind, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind,
+};
+use crate::inspect::RuleCount;
+use crate::limits::StepLimit;
 use crate::test_support::{
     TestResult, ensure, ensure_eq, ensure_matches, expect_error_position, expect_parse_error,
     result_bytes, run_program, run_source, source_line_number,
 };
-use crate::{
-    LeftModifierKind, ParseErrorKind, ParseErrorLocation, PayloadKind, Program, RuleCount,
-    RunLimits, StepLimit,
-};
+use crate::{Program, RunLimits};
 
 #[test]
 fn code_spaces_are_ignored_in_rules() -> TestResult {
@@ -225,7 +227,7 @@ fn right_side_action_payload_cannot_start_with_another_action() -> TestResult {
         matches!(
             error.kind(),
             ParseErrorKind::UnsupportedRightActionSyntax {
-                action: crate::RightActionKind::Return,
+                action: RightActionKind::Return,
             }
         ),
         "expected return action syntax error",

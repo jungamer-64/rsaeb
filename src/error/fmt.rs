@@ -304,14 +304,13 @@ fn printable_ascii(byte: u8) -> char {
 mod tests {
     use alloc::string::ToString;
 
+    use crate::error::{AllocationContext, AllocationError};
+    use crate::limits::{ReturnByteLimit, StateByteLimit, StepLimit};
     use crate::test_support::{
         TestFailure, TestResult, ensure_eq, expect_parse_error, expect_run_error,
         expect_state_limit, expect_step_limit,
     };
-    use crate::{
-        AllocationContext, AllocationError, Program, ReturnByteLimit, RunLimits, StateByteLimit,
-        StepLimit,
-    };
+    use crate::{Program, RunLimits};
 
     #[test]
     fn allocation_display_names_the_failed_context_and_capacity() -> TestResult {

@@ -1,3 +1,8 @@
+//! Source input and source-position value types.
+//!
+//! Program source is kept separate from runtime input, and parser diagnostics
+//! report typed line and column positions from this module.
+
 /// Borrowed A=B program source at the parser boundary.
 ///
 /// Program source remains a byte format because comments may contain arbitrary

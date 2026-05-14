@@ -1,14 +1,15 @@
 use super::*;
+use crate::error::{InputError, LimitError, StateLimitContext};
+use crate::inspect::{RuleActionView, RuleAnchor, RuleCount, RuleRepeat};
+use crate::limits::{
+    ReturnByteLimit, ReturnOutputByteCount, RuntimeStateByteCount, StateByteLimit,
+};
 use crate::test_support::{
     TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_event, expect_return_output,
     expect_run_error, expect_stable_output, expect_state_limit, result_bytes, run_program,
     trace_event_bytes,
 };
-use crate::{
-    InputError, LimitError, ReturnByteLimit, ReturnOutputByteCount, RuleActionView, RuleAnchor,
-    RuleCount, RuleRepeat, RuntimeStateByteCount, StateByteLimit, StateLimitContext,
-    TraceSnapshotEffect, TraceSnapshotEvent,
-};
+use crate::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
 use std::vec::Vec;
 
 fn expect_rule(program: &Program, index: usize) -> Result<RuleView<'_>, TestFailure> {

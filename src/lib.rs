@@ -20,7 +20,10 @@
 //! Parse [`ProgramSource`] and [`RuntimeInput`] explicitly before running:
 //!
 //! ```
-//! use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
+//! use rsaeb::{
+//!     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, Program, ProgramSource,
+//!     RunLimits, RunOutcome, RuntimeInput,
+//! };
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_str("a=b"))?;
@@ -41,7 +44,11 @@
 //! slot indexes from rule order while scanning:
 //!
 //! ```
-//! use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, StepLimit};
+//! use rsaeb::limits::StepLimit;
+//! use rsaeb::{
+//!     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits,
+//!     RunOutcome, RuntimeInput,
+//! };
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_str("(once)a=b\na=c"))?;
@@ -71,8 +78,9 @@
 //! ```
 //! use rsaeb::{
 //!     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ExecutionStep, Program, ProgramSource,
-//!     RunLimits, RuntimeInput, StepLimit,
+//!     RunLimits, RuntimeInput,
 //! };
+//! use rsaeb::limits::StepLimit;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_str("a=b\nb=c"))?;
@@ -109,11 +117,16 @@
 //!
 //! [`RunLimits`] carries the step budget and byte budgets for runtime states
 //! and `(return)` outputs. Trace snapshot materialization uses an explicit
-//! [`TraceSnapshotByteLimit`]. Step limits are checked only when another
+//! [`limits::TraceSnapshotByteLimit`]. Step limits are checked only when another
 //! matching rule would apply after the configured number of completed steps:
 //!
 //! ```
-//! use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, LimitError, Program, ProgramSource, RunError, RunLimits, RuntimeInput, StepLimit};
+//! use rsaeb::error::{LimitError, RunError};
+//! use rsaeb::limits::StepLimit;
+//! use rsaeb::{
+//!     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits,
+//!     RuntimeInput,
+//! };
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let result = Program::parse(ProgramSource::from_str("a=b"))?.run(
@@ -136,7 +149,8 @@
 //! strings:
 //!
 //! ```
-//! use rsaeb::{Program, ProgramSource, RuleActionView, RuleAnchor, RuleRepeat};
+//! use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
+//! use rsaeb::{Program, ProgramSource};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_str("( once ) ( start ) a = ( end ) b # comment"))?;
@@ -158,7 +172,12 @@
 //! top when a caller needs owned event bytes:
 //!
 //! ```
-//! use rsaeb::{BorrowedTraceEvent, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RuntimeInput, StepLimit};
+//! use rsaeb::limits::StepLimit;
+//! use rsaeb::trace::BorrowedTraceEvent;
+//! use rsaeb::{
+//!     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits,
+//!     RuntimeInput,
+//! };
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
@@ -184,11 +203,12 @@
 //!
 //! Source parsing, runtime input validation, runtime execution, trace snapshot
 //! materialization, and user trace-sink failures are reported with structured
-//! error types such as [`ParseError`], [`InputError`], [`RunError`],
-//! [`RuntimeInvariantError`], [`TraceSnapshotError`], [`TraceSnapshotRunError`],
-//! [`FallibleTraceSnapshotRunError`], and [`TracedRunError`]. [`AebError`] is
-//! available as a crate-level parse/run umbrella for callers that want one
-//! top-level error type.
+//! error types such as [`error::ParseError`], [`error::InputError`],
+//! [`error::RunError`], [`error::RuntimeInvariantError`],
+//! [`error::TraceSnapshotError`], [`error::TraceSnapshotRunError`],
+//! [`error::FallibleTraceSnapshotRunError`], and [`error::TracedRunError`].
+//! [`error::AebError`] is available as a parse/run umbrella for callers that
+//! want one top-level error type.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -219,39 +239,20 @@ mod test_support;
 
 mod allocation;
 mod bytes;
-mod error;
+pub mod error;
+pub mod inspect;
+pub mod limits;
 mod parser;
 mod program;
 mod rule;
 mod runtime;
-mod source;
+pub mod source;
 mod syntax;
-mod trace;
+pub mod trace;
 
-pub use allocation::{AllocationContext, AllocationError, AllocationErrorKind};
-pub use bytes::{
-    NonAsciiCodeByte, NonAsciiInputByte, NonPrintableCodeByte, PayloadByteCount,
-    ReservedSyntaxByte, ReturnOutputByteCount, RuntimeStateByteCount, TraceSnapshotByteCount,
-};
-pub use error::{
-    AebError, FallibleTraceSnapshotRunError, InputColumn, InputError, LeftModifierKind, LimitError,
-    ParseError, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind, RunError,
-    RuntimeInvariantError, StateLimitContext, StateSizeError, TraceSnapshotError,
-    TraceSnapshotRunError, TracedRunError,
-};
 pub use program::{
-    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
-    DEFAULT_MAX_TRACE_SNAPSHOT_LEN, Program, ReturnByteLimit, ReturnOutput, RunLimits, RunOutcome,
-    RunResult, RuntimeStateSnapshot, StateByteLimit, StepCount, StepLimit, TraceSnapshotByteLimit,
-    TraceSnapshotLimits,
-};
-pub use rule::{
-    PayloadView, RuleActionView, RuleAnchor, RuleCount, RuleNumber, RulePosition, RuleRepeat,
-    RuleView,
+    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, Program, ReturnOutput,
+    RunLimits, RunOutcome, RunResult, RuntimeStateSnapshot,
 };
 pub use runtime::{Execution, ExecutionStep, RuntimeInput};
-pub use source::{ProgramSource, SourceColumn, SourceLineNumber, SourcePosition};
-pub use trace::{
-    BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView, TraceSnapshotEffect,
-    TraceSnapshotEvent,
-};
+pub use source::ProgramSource;

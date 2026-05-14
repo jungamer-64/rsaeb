@@ -502,11 +502,11 @@ impl CompactByte {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{ParseError, ParseErrorKind, PayloadKind};
     use crate::test_support::{
         TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_error_position,
         source_column, source_line_number,
     };
-    use crate::{ParseError, ParseErrorKind, PayloadKind};
 
     fn parse_payload_error(
         input: &[CompactByte],

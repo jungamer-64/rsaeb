@@ -1,3 +1,8 @@
+//! Borrowed and snapshot trace event types.
+//!
+//! Borrowed tracing observes runtime state without allocating per event.
+//! Snapshot tracing materializes bounded owned events at the trace boundary.
+
 use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
@@ -246,16 +251,22 @@ fn ensure_trace_len(
 
 #[cfg(test)]
 mod tests {
+    use crate::error::{
+        FallibleTraceSnapshotRunError, RunError, TraceSnapshotError, TraceSnapshotRunError,
+    };
+    use crate::inspect::RuleActionView;
+    use crate::limits::{
+        DEFAULT_MAX_TRACE_SNAPSHOT_LEN, RuntimeStateByteCount, StepLimit, TraceSnapshotByteCount,
+        TraceSnapshotByteLimit, TraceSnapshotLimits,
+    };
     use crate::test_support::{
         TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_event,
         expect_return_output, result_bytes, trace_event_bytes,
     };
-    use crate::{
-        BorrowedTraceEffect, BorrowedTraceEvent, FallibleTraceSnapshotRunError, Program,
-        RuleActionView, RunError, RunLimits, RuntimeStateByteCount, StepLimit,
-        TraceSnapshotByteCount, TraceSnapshotByteLimit, TraceSnapshotEffect, TraceSnapshotError,
-        TraceSnapshotEvent, TraceSnapshotLimits, TraceSnapshotRunError,
+    use crate::trace::{
+        BorrowedTraceEffect, BorrowedTraceEvent, TraceSnapshotEffect, TraceSnapshotEvent,
     };
+    use crate::{Program, RunLimits};
     use std::vec::Vec;
 
     #[test]
@@ -305,7 +316,7 @@ mod tests {
                 crate::DEFAULT_MAX_STATE_LEN,
                 crate::DEFAULT_MAX_RETURN_LEN,
             ),
-            crate::DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
+            DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
         );
         let result = program.run_with_trace_snapshots(
             crate::RuntimeInput::parse(b"a")?,
@@ -462,8 +473,8 @@ mod tests {
             TraceSnapshotLimits::new(
                 RunLimits::new(
                     StepLimit::new(10),
-                    crate::StateByteLimit::new(10),
-                    crate::ReturnByteLimit::new(10),
+                    crate::limits::StateByteLimit::new(10),
+                    crate::limits::ReturnByteLimit::new(10),
                 ),
                 TraceSnapshotByteLimit::new(0),
             ),
@@ -506,7 +517,7 @@ mod tests {
                 crate::DEFAULT_MAX_STATE_LEN,
                 crate::DEFAULT_MAX_RETURN_LEN,
             ),
-            crate::DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
+            DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
         );
         let result = program.try_run_with_trace_snapshots(
             crate::RuntimeInput::parse(b"a")?,
@@ -531,7 +542,7 @@ mod tests {
                 crate::DEFAULT_MAX_STATE_LEN,
                 crate::DEFAULT_MAX_RETURN_LEN,
             ),
-            crate::DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
+            DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
         );
 
         let result = program.run_with_trace_snapshots(

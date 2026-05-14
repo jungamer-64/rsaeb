@@ -83,7 +83,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Parse and run from raw source bytes:
 
 ```rust
-use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, StepLimit};
+use rsaeb::limits::StepLimit;
+use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_bytes(b"a=b#\xff is allowed in comments\n"))?;
@@ -100,7 +101,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Reusable parsed program with typed runtime input:
 
 ```rust
-use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, StepLimit};
+use rsaeb::limits::StepLimit;
+use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_str("(once)a=b\na=c"))?;
@@ -137,8 +139,9 @@ applied rule instead of running to completion in one call:
 ```rust
 use rsaeb::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ExecutionStep, Program, ProgramSource,
-    RunLimits, RuntimeInput, StepLimit,
+    RunLimits, RuntimeInput,
 };
+use rsaeb::limits::StepLimit;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_str("a=b\nb=c"))?;
@@ -176,7 +179,9 @@ is exposed as a borrowed parsed payload; callers that need ownership can
 materialize it explicitly from the payload view:
 
 ```rust
-use rsaeb::{DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, ExecutionStep, Program, ProgramSource, RunError, RunLimits, RuntimeInput, StepLimit};
+use rsaeb::error::RunError;
+use rsaeb::limits::StepLimit;
+use rsaeb::{DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, ExecutionStep, Program, ProgramSource, RunLimits, RuntimeInput};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_str("a=(return)ok"))?;
@@ -203,7 +208,7 @@ validation, so comments can contain arbitrary non-ASCII bytes:
 ```rust
 use rsaeb::{Program, ProgramSource};
 
-fn main() -> Result<(), rsaeb::ParseError> {
+fn main() -> Result<(), rsaeb::error::ParseError> {
     let program = Program::parse(ProgramSource::from_bytes(b"a=b#\xff\xfe\n"))?;
     assert_eq!(program.rule_count().get(), 1);
     Ok(())
@@ -214,7 +219,8 @@ ASCII whitespace in program code is ignored, but spaces in runtime input are
 data:
 
 ```rust
-use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, StepLimit};
+use rsaeb::limits::StepLimit;
+use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
@@ -520,9 +526,10 @@ rewrite system because a short run can still expand a state aggressively.
 
 ```rust
 use rsaeb::{
-    LimitError, Program, ProgramSource, ReturnByteLimit, RunError, RunLimits, RuntimeInput,
-    StateByteLimit, StateLimitContext, StepLimit,
+    Program, ProgramSource, RunLimits, RuntimeInput,
 };
+use rsaeb::error::{LimitError, RunError, StateLimitContext};
+use rsaeb::limits::{ReturnByteLimit, StateByteLimit, StepLimit};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let limits = RunLimits::new(
@@ -553,9 +560,11 @@ only when another rule would still apply after the configured number of steps.
 
 ```rust
 use rsaeb::{
-    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, LimitError, Program, ProgramSource, RunError,
-    RunLimits, RunOutcome, RuntimeInput, StepLimit,
+    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource,
+    RunLimits, RunOutcome, RuntimeInput,
 };
+use rsaeb::error::{LimitError, RunError};
+use rsaeb::limits::StepLimit;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let exact_limits = RunLimits::new(StepLimit::new(1), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
@@ -607,7 +616,8 @@ blob: canonical source is generated from the structured rule when requested.
 This removes the second source of truth.
 
 ```rust
-use rsaeb::{Program, ProgramSource, RuleActionView, RuleAnchor, RuleRepeat};
+use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
+use rsaeb::{Program, ProgramSource};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_str("( once ) ( start ) a = ( end ) b # comment"))?;
@@ -635,7 +645,9 @@ Borrowed tracing is the allocation-free primitive. Events borrow the runtime
 state or return payload only for the callback invocation:
 
 ```rust
-use rsaeb::{DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, BorrowedTraceEvent, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, StepLimit};
+use rsaeb::limits::StepLimit;
+use rsaeb::trace::BorrowedTraceEvent;
+use rsaeb::{DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
@@ -665,7 +677,9 @@ events still borrow `RuleView` from the parsed `Program`, so retained trace
 snapshot events cannot outlive that program:
 
 ```rust
-use rsaeb::{DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, StepLimit, TraceSnapshotByteLimit, TraceSnapshotEffect, TraceSnapshotEvent, TraceSnapshotLimits};
+use rsaeb::limits::{StepLimit, TraceSnapshotByteLimit, TraceSnapshotLimits};
+use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
+use rsaeb::{DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
@@ -723,7 +737,9 @@ failures, and callback failures cannot collapse into one variant.
 The library error model is intentionally split:
 
 ```rust
-use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, InputError, Program, ProgramSource, RuntimeInput, RunLimits, StepLimit};
+use rsaeb::error::InputError;
+use rsaeb::limits::StepLimit;
+use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RuntimeInput, RunLimits};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
@@ -745,7 +761,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Allocation failures are structured:
 
 ```rust
-use rsaeb::{AllocationContext, RunError, TraceSnapshotError};
+use rsaeb::error::{AllocationContext, RunError, TraceSnapshotError};
 
 fn inspect_run(error: RunError) {
     if let RunError::Allocation(error) = error {
@@ -786,133 +802,32 @@ be handled before bytes enter `ProgramSource::from_bytes`,
 
 ## Public API overview
 
-The generated rustdoc is the complete API reference. The main exported surface
-is grouped as follows.
-
-Constants:
-
-- `DEFAULT_MAX_STEPS`
-- `DEFAULT_MAX_STATE_LEN`
-- `DEFAULT_MAX_RETURN_LEN`
-- `DEFAULT_MAX_TRACE_SNAPSHOT_LEN`
-
-Program construction and execution:
+The generated rustdoc is the complete API reference. The crate root is kept to
+the primary execution path:
 
 - `ProgramSource`
 - `RuntimeInput`
 - `Program`
-- `Program::parse(source)`
-- `Program::rule_count()`
-- `Program::once_rule_count()`
-- `Program::rules()`
-- `Program::start_execution(input, limits)`
-- `Program::run(input, limits)`
-- `Program::run_with_borrowed_trace(input, limits, callback)`
-- `Program::try_run_with_borrowed_trace(input, limits, callback)`
-- `Program::run_with_trace_snapshots(input, trace_snapshot_limits, callback)`
-- `Program::try_run_with_trace_snapshots(input, trace_snapshot_limits, callback)`
-
-Runtime configuration and result:
-
-- Runtime input must be parsed into `RuntimeInput` before execution APIs accept it.
-- `PayloadByteCount` (`get()`, `is_zero()`)
-- `RuntimeStateByteCount` (`get()`, `is_zero()`)
-- `ReturnOutputByteCount` (`get()`, `is_zero()`)
-- `TraceSnapshotByteCount` (`get()`, `is_zero()`)
-- `RunLimits`
-- `StepLimit` (`new(value)`, `get()`)
-- `StateByteLimit` (`new(value)`, `get()`)
-- `ReturnByteLimit` (`new(value)`, `get()`)
-- `TraceSnapshotByteLimit` (`new(value)`, `get()`)
-- `TraceSnapshotLimits` (`new(run_limits, snapshot_byte_limit)`, `run_limits()`, `snapshot_byte_limit()`)
-- `RunLimits::new(step_limit, state_byte_limit, return_byte_limit)`
-- `RunLimits::step_limit()`
-- `RunLimits::state_byte_limit()`
-- `RunLimits::return_byte_limit()`
-- `RunLimits::with_step_limit(step_limit)`
-- `RunLimits::with_state_byte_limit(state_byte_limit)`
-- `RunLimits::with_return_byte_limit(return_byte_limit)`
 - `Execution`
-- `Execution::step()`
-- `Execution::finish()`
-- `Execution::completed_steps()`
-- `ExecutionStep<'program, 'run>`
-- `ExecutionStep::Applied { step, rule, state }`
-- `ExecutionStep::Stable { steps, state }`
-- `ExecutionStep::Return { step, rule, output }`
+- `ExecutionStep`
+- `RunLimits`
 - `RunResult`
-- `RunResult::outcome()`
-- `RunResult::into_outcome()`
-- `RunResult::steps()`
 - `RunOutcome`
-- `RuntimeStateSnapshot` (`as_bytes()`, `into_vec()`, `byte_count()`, `is_empty()`)
-- `ReturnOutput` (`as_bytes()`, `into_vec()`, `byte_count()`, `is_empty()`)
-- `StepCount` (`get()`)
+- `RuntimeStateSnapshot`
+- `ReturnOutput`
+- `DEFAULT_MAX_STEPS`
+- `DEFAULT_MAX_STATE_LEN`
+- `DEFAULT_MAX_RETURN_LEN`
 
-Rule data:
+Secondary domains live under explicit namespaces:
 
-- `RulePosition` (`number()`)
-- `RuleNumber` (`get()`)
-- `RuleCount` (`get()`)
-- `RuleRepeat`
-- `RuleAnchor`
-- `PayloadView<'program>` (`byte_count()`, `is_empty()`, `bytes()`, `eq_bytes(expected)`, `to_vec()`)
-- `RuleActionView<'program>`
-- `RuleView<'program>`
-- `RuleView::position()`
-- `RuleView::line_number()`
-- `RuleView::repeat()`
-- `RuleView::anchor()`
-- `RuleView::lhs()`
-- `RuleView::action()`
-- `RuleView::canonical_source()`
-
-Tracing:
-
-- `RuntimeStateView<'run>` (`is_empty()`, `bytes()`, `byte_count()`, `to_vec()`)
-- `BorrowedTraceEvent<'program, 'run>`
-- `BorrowedTraceEffect<'program, 'run>`
-- `TraceSnapshotEvent<'program>`
-- `TraceSnapshotEffect`
-- `BorrowedTraceEvent::byte_count()`
-- `BorrowedTraceEvent::is_empty()`
-- `BorrowedTraceEvent::to_snapshot(trace_snapshot_limit)`
-- `BorrowedTraceEffect::byte_count()`
-- `BorrowedTraceEffect::is_empty()`
-- `TracedRunError<E>`
-- `TraceSnapshotError`
-- `TraceSnapshotRunError`
-- `FallibleTraceSnapshotRunError<E>`
-
-Errors:
-
-- `AebError`
-- `ParseError`
-- `ParseError::location()`
-- `ParseError::line()`
-- `ParseError::kind()`
-- `ParseErrorKind`
-- `ParseErrorLocation`
-- `SourceLineNumber` (`get()`)
-- `SourceColumn` (`get()`)
-- `SourcePosition` (`line()`, `column()`)
-- `NonAsciiCodeByte` (`get()`)
-- `NonPrintableCodeByte` (`get()`)
-- `NonAsciiInputByte` (`get()`)
-- `ReservedSyntaxByte` (`get()`)
-- `PayloadKind`
-- `LeftModifierKind`
-- `RightActionKind`
-- `RunError`
-- `RuntimeInvariantError`
-- `InputColumn` (`get()`)
-- `InputError`
-- `TraceSnapshotError`
-- `TraceSnapshotRunError`
-- `FallibleTraceSnapshotRunError<E>`
-- `AllocationError` (`context()`, `kind()`, `requested_capacity()`)
-- `AllocationErrorKind`
-- `AllocationContext`
-- `StateSizeError` (`state_len()`, `lhs_len()`, `rhs_len()`)
-- `LimitError`
-- `StateLimitContext`
+- `rsaeb::limits`: `StepLimit`, `StateByteLimit`, `ReturnByteLimit`,
+  `TraceSnapshotByteLimit`, `TraceSnapshotLimits`, byte-count value types,
+  `StepCount`, and `DEFAULT_MAX_TRACE_SNAPSHOT_LEN`
+- `rsaeb::inspect`: `RuleView`, `RuleActionView`, `PayloadView`, rule
+  position/count types, `RuleRepeat`, and `RuleAnchor`
+- `rsaeb::trace`: borrowed trace events/effects, snapshot trace events/effects,
+  and `RuntimeStateView`
+- `rsaeb::error`: parse, input, runtime, allocation, limit, and trace error
+  types, including rejected-byte diagnostic value types
+- `rsaeb::source`: source-position value types used by parser diagnostics

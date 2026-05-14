@@ -3,17 +3,18 @@ use super::matcher::RuleSearch;
 use super::state::State;
 use super::*;
 use crate::bytes::{CompactByte, Payload, ProgramByte, RuntimeByte};
+use crate::error::{InputError, LimitError, PayloadKind, RunError, StateLimitContext};
+use crate::limits::{
+    ReturnByteLimit, ReturnOutputByteCount, RuntimeStateByteCount, StateByteLimit, StepCount,
+    StepLimit,
+};
 use crate::test_support::{
     TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_return_output,
     expect_run_error, expect_step_limit, into_result_bytes, result_bytes, run_program, run_source,
     runtime_input, source_column, source_line_number, test_limits,
 };
-use crate::{
-    BorrowedTraceEffect, BorrowedTraceEvent, InputError, LimitError, PayloadKind, Program,
-    ReturnByteLimit, ReturnOutput, ReturnOutputByteCount, RunError, RunLimits, RunOutcome,
-    RunResult, RuntimeStateByteCount, RuntimeStateSnapshot, RuntimeStateView, StateByteLimit,
-    StateLimitContext, StepCount, StepLimit,
-};
+use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
+use crate::{Program, ReturnOutput, RunLimits, RunOutcome, RunResult, RuntimeStateSnapshot};
 use std::string::String;
 use std::vec::Vec;
 

@@ -3,12 +3,15 @@
 use std::string::{FromUtf8Error, String};
 use std::vec::Vec;
 
-use crate::runtime::RuntimeInput;
-use crate::{
-    AebError, AllocationError, InputError, LimitError, ParseError, ParseErrorLocation, Program,
-    RunError, RunLimits, RunOutcome, RunResult, SourceColumn, SourceLineNumber, SourcePosition,
-    StepLimit, TraceSnapshotEffect, TraceSnapshotEvent, TraceSnapshotRunError,
+use crate::error::{
+    AebError, AllocationError, InputError, LimitError, ParseError, ParseErrorLocation, RunError,
+    TraceSnapshotRunError,
 };
+use crate::limits::StepLimit;
+use crate::runtime::RuntimeInput;
+use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
+use crate::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
+use crate::{Program, RunLimits, RunOutcome, RunResult};
 
 pub(crate) enum TestFailure {
     Message(String),
