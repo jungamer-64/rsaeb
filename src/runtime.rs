@@ -6,8 +6,7 @@ use crate::bytes::{
     Payload, PayloadByteCount, ReturnOutputByteCount, RuntimeByte, RuntimeStateByteCount,
 };
 use crate::error::{
-    InputError, LimitError, RunError, RuntimeInvariantError, StateLimitContext, StateSizeError,
-    TracedRunError,
+    LimitError, RunError, RuntimeInvariantError, StateLimitContext, StateSizeError, TracedRunError,
 };
 use crate::program::{
     Program, ReturnOutput, RunLimits, RunResult, RuntimeStateSnapshot, StepCount, StepLimit,
@@ -21,20 +20,25 @@ type NoTrace<'program> = for<'run> fn(BorrowedTraceEvent<'program, 'run>) -> Res
 
 /// Runtime input after ASCII validation and runtime-byte classification.
 #[derive(Debug, PartialEq, Eq)]
-pub struct RuntimeInput {
+pub(crate) struct RuntimeInput {
     bytes: Vec<RuntimeByte>,
 }
 
 impl RuntimeInput {
-    /// Validates raw runtime input bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns `InputError::NonAscii` when `input` contains a non-ASCII byte.
-    /// Returns `InputError::Allocation` when storing validated input fails.
-    pub fn parse(input: &[u8]) -> Result<Self, InputError> {
-        // Validate the whole boundary before allocation so input errors keep
-        // precedence over allocation failures.
+    pub(crate) fn parse(input: &[u8], limits: RunLimits) -> Result<Self, RunError> {
+        let byte_count = RuntimeStateByteCount::new(input.len());
+
+        if byte_count.get() > limits.state_byte_limit().get() {
+            return Err(LimitError::state(
+                StateLimitContext::Input,
+                limits.state_byte_limit(),
+                byte_count,
+            )
+            .into());
+        }
+
+        // Validate the whole boundary before allocation so malformed input does
+        // not leave a partially materialized runtime state behind.
         for (zero_based_column, byte) in input.iter().copied().enumerate() {
             RuntimeByte::parse_input(byte, zero_based_column)?;
         }
@@ -52,23 +56,6 @@ impl RuntimeInput {
 
         Ok(Self { bytes })
     }
-
-    /// Runtime input length.
-    #[must_use]
-    pub fn byte_count(&self) -> RuntimeStateByteCount {
-        RuntimeStateByteCount::new(self.bytes.len())
-    }
-
-    /// Whether this input contains no bytes.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
-    }
-
-    /// Runtime input bytes as a materializing iterator.
-    pub fn bytes(&self) -> impl Iterator<Item = u8> + '_ {
-        self.bytes.iter().copied().map(RuntimeByte::materialize)
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -77,19 +64,8 @@ struct State {
 }
 
 impl State {
-    fn from_input(input: RuntimeInput, limits: RunLimits) -> Result<Self, RunError> {
-        let byte_count = input.byte_count();
-
-        if byte_count.get() > limits.state_byte_limit().get() {
-            return Err(LimitError::state(
-                StateLimitContext::Input,
-                limits.state_byte_limit(),
-                byte_count,
-            )
-            .into());
-        }
-
-        Ok(Self { bytes: input.bytes })
+    fn from_input(input: RuntimeInput) -> Self {
+        Self { bytes: input.bytes }
     }
 
     fn len(&self) -> usize {
@@ -595,10 +571,11 @@ pub struct Execution<'program> {
 impl<'program> Execution<'program> {
     pub(crate) fn new(
         program: &'program Program,
-        input: RuntimeInput,
+        input: &[u8],
         limits: RunLimits,
     ) -> Result<Self, RunError> {
-        let state = State::from_input(input, limits)?;
+        let input = RuntimeInput::parse(input, limits)?;
+        let state = State::from_input(input);
         let once_states = OnceRunStates::new(program.once_slot_count())?;
         let scratch = RewriteScratch::new();
 
@@ -925,11 +902,11 @@ mod tests {
     use crate::test_support::{
         TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_input_error,
         expect_return_output, expect_run_error, expect_step_limit, into_result_bytes, result_bytes,
-        run_program, run_source, runtime_input, source_column, source_line_number,
+        run_program, run_source, runtime_input, source_column, source_line_number, test_limits,
     };
     use crate::{
-        BorrowedTraceEffect, BorrowedTraceEvent, LimitError, PayloadKind, Program, ReturnByteLimit,
-        ReturnOutput, ReturnOutputByteCount, RunLimits, RunOutcome, RunResult,
+        BorrowedTraceEffect, BorrowedTraceEvent, InputError, LimitError, PayloadKind, Program,
+        ReturnByteLimit, ReturnOutput, ReturnOutputByteCount, RunLimits, RunOutcome, RunResult,
         RuntimeStateByteCount, RuntimeStateSnapshot, StateByteLimit, StateLimitContext,
     };
     use std::string::String;
@@ -959,7 +936,7 @@ mod tests {
         input: &[u8],
         limits: RunLimits,
     ) -> Result<RunResult, TestFailure> {
-        let mut execution = program.start_execution(runtime_input(input)?, limits)?;
+        let mut execution = program.start_execution(input, limits)?;
 
         loop {
             match execution.step()? {
@@ -1054,8 +1031,14 @@ mod tests {
     #[test]
     fn execution_step_applies_one_rule_and_waits() -> TestResult {
         let program = Program::parse_str("a=b\nb=c")?;
-        let mut execution =
-            program.start_execution(runtime_input(b"a")?, RunLimits::new(StepLimit::new(10)))?;
+        let mut execution = program.start_execution(
+            b"a",
+            RunLimits::new(
+                StepLimit::new(10),
+                crate::DEFAULT_MAX_STATE_LEN,
+                crate::DEFAULT_MAX_RETURN_LEN,
+            ),
+        )?;
 
         ensure_eq!(execution.completed_steps(), StepCount::ZERO)?;
 
@@ -1073,19 +1056,83 @@ mod tests {
     #[test]
     fn step_loop_matches_full_run_for_control_shapes() -> TestResult {
         let cases: &[(&str, &[u8], RunLimits)] = &[
-            ("a=b\nb=c", b"a", RunLimits::new(StepLimit::new(10))),
-            ("(once)a=b\na=c", b"aa", RunLimits::new(StepLimit::new(10))),
-            ("(start)a=x", b"aba", RunLimits::new(StepLimit::new(10))),
-            ("(end)a=x", b"aba", RunLimits::new(StepLimit::new(10))),
-            ("a=", b"aa", RunLimits::new(StepLimit::new(10))),
-            ("=(return)empty", b"", RunLimits::new(StepLimit::new(10))),
-            ("a=(return)ok", b"a", RunLimits::new(StepLimit::new(10))),
-            ("x=y", b"a", RunLimits::new(StepLimit::new(10))),
+            (
+                "a=b\nb=c",
+                b"a",
+                RunLimits::new(
+                    StepLimit::new(10),
+                    crate::DEFAULT_MAX_STATE_LEN,
+                    crate::DEFAULT_MAX_RETURN_LEN,
+                ),
+            ),
+            (
+                "(once)a=b\na=c",
+                b"aa",
+                RunLimits::new(
+                    StepLimit::new(10),
+                    crate::DEFAULT_MAX_STATE_LEN,
+                    crate::DEFAULT_MAX_RETURN_LEN,
+                ),
+            ),
+            (
+                "(start)a=x",
+                b"aba",
+                RunLimits::new(
+                    StepLimit::new(10),
+                    crate::DEFAULT_MAX_STATE_LEN,
+                    crate::DEFAULT_MAX_RETURN_LEN,
+                ),
+            ),
+            (
+                "(end)a=x",
+                b"aba",
+                RunLimits::new(
+                    StepLimit::new(10),
+                    crate::DEFAULT_MAX_STATE_LEN,
+                    crate::DEFAULT_MAX_RETURN_LEN,
+                ),
+            ),
+            (
+                "a=",
+                b"aa",
+                RunLimits::new(
+                    StepLimit::new(10),
+                    crate::DEFAULT_MAX_STATE_LEN,
+                    crate::DEFAULT_MAX_RETURN_LEN,
+                ),
+            ),
+            (
+                "=(return)empty",
+                b"",
+                RunLimits::new(
+                    StepLimit::new(10),
+                    crate::DEFAULT_MAX_STATE_LEN,
+                    crate::DEFAULT_MAX_RETURN_LEN,
+                ),
+            ),
+            (
+                "a=(return)ok",
+                b"a",
+                RunLimits::new(
+                    StepLimit::new(10),
+                    crate::DEFAULT_MAX_STATE_LEN,
+                    crate::DEFAULT_MAX_RETURN_LEN,
+                ),
+            ),
+            (
+                "x=y",
+                b"a",
+                RunLimits::new(
+                    StepLimit::new(10),
+                    crate::DEFAULT_MAX_STATE_LEN,
+                    crate::DEFAULT_MAX_RETURN_LEN,
+                ),
+            ),
         ];
 
         for &(source, input, limits) in cases {
             let program = Program::parse_str(source)?;
-            let full_run = program.run(runtime_input(input)?, limits)?;
+            let full_run = program.run(input, limits)?;
             let stepped_run = run_program_by_steps(&program, input, limits)?;
 
             ensure_eq!(stepped_run, full_run)?;
@@ -1097,9 +1144,13 @@ mod tests {
     #[test]
     fn execution_finish_resumes_after_manual_steps() -> TestResult {
         let program = Program::parse_str("(once)a=b\na=c\nc=(return)ok")?;
-        let limits = RunLimits::new(StepLimit::new(10));
-        let full_run = program.run(runtime_input(b"aa")?, limits)?;
-        let mut execution = program.start_execution(runtime_input(b"aa")?, limits)?;
+        let limits = RunLimits::new(
+            StepLimit::new(10),
+            crate::DEFAULT_MAX_STATE_LEN,
+            crate::DEFAULT_MAX_RETURN_LEN,
+        );
+        let full_run = program.run(b"aa", limits)?;
+        let mut execution = program.start_execution(b"aa", limits)?;
 
         expect_applied_step(execution.step()?, 1, b"(once)a=b", b"ba")?;
         let resumed = execution.finish()?;
@@ -1115,8 +1166,12 @@ mod tests {
     #[test]
     fn execution_finish_after_stable_step_returns_stable_result() -> TestResult {
         let program = Program::parse_str("x=y")?;
-        let limits = RunLimits::new(StepLimit::new(10));
-        let mut execution = program.start_execution(runtime_input(b"a")?, limits)?;
+        let limits = RunLimits::new(
+            StepLimit::new(10),
+            crate::DEFAULT_MAX_STATE_LEN,
+            crate::DEFAULT_MAX_RETURN_LEN,
+        );
+        let mut execution = program.start_execution(b"a", limits)?;
 
         expect_stable_completion(execution.step()?, 0, b"a")?;
         ensure_eq!(execution.completed_steps(), StepCount::ZERO)?;
@@ -1133,8 +1188,12 @@ mod tests {
     #[test]
     fn execution_finish_after_return_step_preserves_return_result() -> TestResult {
         let program = Program::parse_str("a=(return)ok")?;
-        let limits = RunLimits::new(StepLimit::new(10));
-        let mut execution = program.start_execution(runtime_input(b"a")?, limits)?;
+        let limits = RunLimits::new(
+            StepLimit::new(10),
+            crate::DEFAULT_MAX_STATE_LEN,
+            crate::DEFAULT_MAX_RETURN_LEN,
+        );
+        let mut execution = program.start_execution(b"a", limits)?;
 
         expect_return_completion(execution.step()?, 1, b"a=(return)ok", b"ok")?;
         ensure_eq!(execution.completed_steps().get(), 1)?;
@@ -1148,9 +1207,13 @@ mod tests {
     #[test]
     fn execution_step_uses_the_same_once_state_as_full_run() -> TestResult {
         let program = Program::parse_str("(once)a=b\na=c")?;
-        let limits = RunLimits::new(StepLimit::new(10));
-        let full_run = program.run(runtime_input(b"aa")?, limits)?;
-        let mut execution = program.start_execution(runtime_input(b"aa")?, limits)?;
+        let limits = RunLimits::new(
+            StepLimit::new(10),
+            crate::DEFAULT_MAX_STATE_LEN,
+            crate::DEFAULT_MAX_RETURN_LEN,
+        );
+        let full_run = program.run(b"aa", limits)?;
+        let mut execution = program.start_execution(b"aa", limits)?;
 
         expect_applied_step(execution.step()?, 1, b"(once)a=b", b"ba")?;
         expect_applied_step(execution.step()?, 2, b"a=c", b"bc")?;
@@ -1165,8 +1228,14 @@ mod tests {
     #[test]
     fn execution_step_return_completes_without_continuation() -> TestResult {
         let program = Program::parse_str("a=(return)ok\na=b")?;
-        let mut execution =
-            program.start_execution(runtime_input(b"a")?, RunLimits::new(StepLimit::new(10)))?;
+        let mut execution = program.start_execution(
+            b"a",
+            RunLimits::new(
+                StepLimit::new(10),
+                crate::DEFAULT_MAX_STATE_LEN,
+                crate::DEFAULT_MAX_RETURN_LEN,
+            ),
+        )?;
 
         expect_return_completion(execution.step()?, 1, b"a=(return)ok", b"ok")?;
         expect_return_completion(execution.step()?, 1, b"a=(return)ok", b"ok")?;
@@ -1176,12 +1245,24 @@ mod tests {
     #[test]
     fn execution_step_preserves_step_limit_boundary() -> TestResult {
         let program = Program::parse_str("a=b")?;
-        let mut no_match =
-            program.start_execution(runtime_input(b"x")?, RunLimits::new(StepLimit::new(0)))?;
+        let mut no_match = program.start_execution(
+            b"x",
+            RunLimits::new(
+                StepLimit::new(0),
+                crate::DEFAULT_MAX_STATE_LEN,
+                crate::DEFAULT_MAX_RETURN_LEN,
+            ),
+        )?;
         expect_stable_completion(no_match.step()?, 0, b"x")?;
 
-        let mut would_match =
-            program.start_execution(runtime_input(b"a")?, RunLimits::new(StepLimit::new(0)))?;
+        let mut would_match = program.start_execution(
+            b"a",
+            RunLimits::new(
+                StepLimit::new(0),
+                crate::DEFAULT_MAX_STATE_LEN,
+                crate::DEFAULT_MAX_RETURN_LEN,
+            ),
+        )?;
         let error = expect_run_error(would_match.step())?;
         let error = expect_step_limit(error)?;
 
@@ -1214,14 +1295,13 @@ mod tests {
     #[test]
     fn step_limit_preempts_rewrite_and_return_size_checks() -> TestResult {
         let rewrite_program = Program::parse_str("=a")?;
-        let rewrite_limits = RunLimits::bounded(
+        let rewrite_limits = RunLimits::new(
             StepLimit::new(0),
             StateByteLimit::new(0),
             ReturnByteLimit::new(0),
         );
-        let rewrite_error = expect_step_limit(expect_run_error(
-            rewrite_program.run(runtime_input(b"")?, rewrite_limits),
-        )?)?;
+        let rewrite_error =
+            expect_step_limit(expect_run_error(rewrite_program.run(b"", rewrite_limits))?)?;
         ensure_eq!(
             rewrite_error,
             LimitError::Step {
@@ -1232,14 +1312,13 @@ mod tests {
         )?;
 
         let return_program = Program::parse_str("=(return)a")?;
-        let return_limits = RunLimits::bounded(
+        let return_limits = RunLimits::new(
             StepLimit::new(0),
             StateByteLimit::new(0),
             ReturnByteLimit::new(0),
         );
-        let return_error = expect_step_limit(expect_run_error(
-            return_program.run(runtime_input(b"")?, return_limits),
-        )?)?;
+        let return_error =
+            expect_step_limit(expect_run_error(return_program.run(b"", return_limits))?)?;
         ensure_eq!(
             return_error,
             LimitError::Step {
@@ -1253,14 +1332,13 @@ mod tests {
 
     #[test]
     fn execution_step_preserves_byte_limit_boundaries() -> TestResult {
-        let state_limits = RunLimits::bounded(
+        let state_limits = RunLimits::new(
             StepLimit::new(1),
             StateByteLimit::new(2),
             ReturnByteLimit::new(10),
         );
         let state_program = Program::parse_str("=a")?;
-        let mut state_limited =
-            state_program.start_execution(runtime_input(b"aa")?, state_limits)?;
+        let mut state_limited = state_program.start_execution(b"aa", state_limits)?;
         let state_error = expect_run_error(state_limited.step())?;
         ensure_eq!(
             state_error,
@@ -1286,14 +1364,13 @@ mod tests {
             }),
         )?;
 
-        let return_limits = RunLimits::bounded(
+        let return_limits = RunLimits::new(
             StepLimit::new(1),
             StateByteLimit::new(10),
             ReturnByteLimit::new(1),
         );
         let return_program = Program::parse_str("a=(return)ok")?;
-        let mut return_limited =
-            return_program.start_execution(runtime_input(b"a")?, return_limits)?;
+        let mut return_limited = return_program.start_execution(b"a", return_limits)?;
         let return_error = expect_run_error(return_limited.step())?;
         ensure_eq!(
             return_error,
@@ -1341,7 +1418,11 @@ mod tests {
         let result = run_program(
             &Program::parse_str(source)?,
             b"ab",
-            RunLimits::new(StepLimit::new(2)),
+            RunLimits::new(
+                StepLimit::new(2),
+                crate::DEFAULT_MAX_STATE_LEN,
+                crate::DEFAULT_MAX_RETURN_LEN,
+            ),
         )?;
 
         expect_return_output(&result, b"ok")?;
@@ -1351,7 +1432,11 @@ mod tests {
 
     #[test]
     fn empty_lhs_start_and_end_anchors_pick_different_edges() -> TestResult {
-        let limits = RunLimits::new(StepLimit::new(2));
+        let limits = RunLimits::new(
+            StepLimit::new(2),
+            crate::DEFAULT_MAX_STATE_LEN,
+            crate::DEFAULT_MAX_RETURN_LEN,
+        );
         let start_result = run_program(
             &Program::parse_str("(once)(start)=x\nxab=(return)start")?,
             b"ab",
@@ -1380,8 +1465,12 @@ mod tests {
         let program = Program::parse_str("(once)a=b")?;
         let runtime = Execution::new(
             &program,
-            runtime_input(b"a")?,
-            RunLimits::new(StepLimit::new(1)),
+            b"a",
+            RunLimits::new(
+                StepLimit::new(1),
+                crate::DEFAULT_MAX_STATE_LEN,
+                crate::DEFAULT_MAX_RETURN_LEN,
+            ),
         )?;
 
         ensure(
@@ -1408,7 +1497,11 @@ mod tests {
         let result = run_program(
             &Program::parse_str("a=(return)x")?,
             b"a=()#c",
-            RunLimits::new(StepLimit::new(1)),
+            RunLimits::new(
+                StepLimit::new(1),
+                crate::DEFAULT_MAX_STATE_LEN,
+                crate::DEFAULT_MAX_RETURN_LEN,
+            ),
         )?;
         expect_return_output(&result, b"x")?;
         Ok(())
@@ -1433,7 +1526,9 @@ mod tests {
 
     #[test]
     fn runtime_input_error_is_structured() -> TestResult {
-        let error = expect_input_error(RuntimeInput::parse("aあ".as_bytes()))?;
+        let error = expect_input_error(expect_run_error(
+            Program::parse_str("a=b")?.run("aあ".as_bytes(), test_limits()),
+        )?)?;
 
         ensure_matches(
             matches!(
@@ -1458,7 +1553,15 @@ mod tests {
             "expected invalid payload",
         )?;
 
-        let result = run_program(&program, b"a=#()", RunLimits::new(StepLimit::new(10_000)))?;
+        let result = run_program(
+            &program,
+            b"a=#()",
+            RunLimits::new(
+                StepLimit::new(10_000),
+                crate::DEFAULT_MAX_STATE_LEN,
+                crate::DEFAULT_MAX_RETURN_LEN,
+            ),
+        )?;
         ensure_eq!(String::from_utf8(into_result_bytes(result))?, "b=#()")?;
         Ok(())
     }
@@ -1468,7 +1571,11 @@ mod tests {
         let exact = run_program(
             &Program::parse_str("a=b")?,
             b"a",
-            RunLimits::new(StepLimit::new(1)),
+            RunLimits::new(
+                StepLimit::new(1),
+                crate::DEFAULT_MAX_STATE_LEN,
+                crate::DEFAULT_MAX_RETURN_LEN,
+            ),
         )?;
         ensure_eq!(result_bytes(&exact), b"b".as_slice())?;
         ensure_eq!(exact.steps().get(), 1)?;
@@ -1476,13 +1583,21 @@ mod tests {
         let no_match = run_program(
             &Program::parse_str("a=b")?,
             b"x",
-            RunLimits::new(StepLimit::new(0)),
+            RunLimits::new(
+                StepLimit::new(0),
+                crate::DEFAULT_MAX_STATE_LEN,
+                crate::DEFAULT_MAX_RETURN_LEN,
+            ),
         )?;
         ensure_eq!(result_bytes(&no_match), b"x".as_slice())?;
         ensure_eq!(no_match.steps().get(), 0)?;
 
-        let limits = RunLimits::new(StepLimit::new(0));
-        let error = expect_run_error(Program::parse_str("a=b")?.run(runtime_input(b"a")?, limits))?;
+        let limits = RunLimits::new(
+            StepLimit::new(0),
+            crate::DEFAULT_MAX_STATE_LEN,
+            crate::DEFAULT_MAX_RETURN_LEN,
+        );
+        let error = expect_run_error(Program::parse_str("a=b")?.run(b"a", limits))?;
         let error = expect_step_limit(error)?;
         ensure_eq!(
             error,
@@ -1497,8 +1612,12 @@ mod tests {
 
     #[test]
     fn step_limit_error_reports_state_len_without_owning_state_bytes() -> TestResult {
-        let limits = RunLimits::new(StepLimit::new(3));
-        let error = expect_run_error(Program::parse_str("=a")?.run(runtime_input(b"")?, limits))?;
+        let limits = RunLimits::new(
+            StepLimit::new(3),
+            crate::DEFAULT_MAX_STATE_LEN,
+            crate::DEFAULT_MAX_RETURN_LEN,
+        );
+        let error = expect_run_error(Program::parse_str("=a")?.run(b"", limits))?;
         let error = expect_step_limit(error)?;
 
         ensure_eq!(
@@ -1520,26 +1639,26 @@ mod tests {
     fn borrowed_trace_exposes_last_state_before_step_limit() -> TestResult {
         let program = Program::parse_str("=a")?;
         let mut last_state = Vec::new();
-        let limits = RunLimits::new(StepLimit::new(3));
+        let limits = RunLimits::new(
+            StepLimit::new(3),
+            crate::DEFAULT_MAX_STATE_LEN,
+            crate::DEFAULT_MAX_RETURN_LEN,
+        );
 
-        let error = expect_run_error(program.run_with_borrowed_trace(
-            runtime_input(b"")?,
-            limits,
-            |event| {
-                last_state.clear();
-                match event {
-                    BorrowedTraceEvent::Initial { state }
-                    | BorrowedTraceEvent::Step {
-                        effect: BorrowedTraceEffect::Continue { state },
-                        ..
-                    } => last_state.extend(state.bytes()),
-                    BorrowedTraceEvent::Step {
-                        effect: BorrowedTraceEffect::Return { output },
-                        ..
-                    } => last_state.extend(output.bytes()),
-                }
-            },
-        ))?;
+        let error = expect_run_error(program.run_with_borrowed_trace(b"", limits, |event| {
+            last_state.clear();
+            match event {
+                BorrowedTraceEvent::Initial { state }
+                | BorrowedTraceEvent::Step {
+                    effect: BorrowedTraceEffect::Continue { state },
+                    ..
+                } => last_state.extend(state.bytes()),
+                BorrowedTraceEvent::Step {
+                    effect: BorrowedTraceEffect::Return { output },
+                    ..
+                } => last_state.extend(output.bytes()),
+            }
+        }))?;
         let error = expect_step_limit(error)?;
 
         ensure_eq!(
@@ -1580,7 +1699,11 @@ a|-=
         let result = run_program(
             &Program::parse_str("# no executable rules")?,
             &input,
-            RunLimits::default(),
+            RunLimits::new(
+                crate::DEFAULT_MAX_STEPS,
+                crate::DEFAULT_MAX_STATE_LEN,
+                crate::DEFAULT_MAX_RETURN_LEN,
+            ),
         )?;
 
         ensure_eq!(result_bytes(&result), input.as_slice())?;
@@ -1592,7 +1715,9 @@ a|-=
     fn runtime_rejects_every_non_ascii_input_byte() -> TestResult {
         for byte in 0x80..=0xff {
             ensure(
-                RuntimeInput::parse(&[byte]).is_err(),
+                Program::parse_str("a=b")?
+                    .run(&[byte], test_limits())
+                    .is_err(),
                 "byte should be rejected",
             )?;
         }
@@ -1604,7 +1729,7 @@ a|-=
     fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
         let compact = [CompactByte::new(b'a', source_column(1)?)];
         let payload = Payload::parse(&compact, source_line_number(1)?, PayloadKind::LeftSideData)?;
-        let state = State::from_input(runtime_input(b"a=()# ")?, RunLimits::default())?;
+        let state = State::from_input(runtime_input(b"a=()# ")?);
 
         ensure_eq!(expect_payload_byte(&payload, 0)?, b'a')?;
         ensure_eq!(expect_runtime_byte(&state, 0)?, b'a')?;

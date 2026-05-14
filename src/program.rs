@@ -9,16 +9,16 @@ use crate::error::{
 };
 use crate::parser::parse_program_impl;
 use crate::rule::{OnceRuleSlotCount, ParsedRule, Rule, RuleCount, RulePosition, RuleView};
-use crate::runtime::{Execution, RuntimeInput};
+use crate::runtime::Execution;
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
 const DEFAULT_BYTE_BUDGET: usize = 16_777_216;
 
-/// Default rewrite step budget used by [`RunLimits::default`].
+/// Default rewrite step budget for callers that want the crate policy value.
 pub const DEFAULT_MAX_STEPS: StepLimit = StepLimit::new(1_000_000);
-/// Default runtime-state byte budget used by [`RunLimits::new`] and [`RunLimits::default`].
+/// Default runtime-state byte budget for callers that want the crate policy value.
 pub const DEFAULT_MAX_STATE_LEN: StateByteLimit = StateByteLimit::new(DEFAULT_BYTE_BUDGET);
-/// Default `(return)` output byte budget used by [`RunLimits::new`] and [`RunLimits::default`].
+/// Default `(return)` output byte budget for callers that want the crate policy value.
 pub const DEFAULT_MAX_RETURN_LEN: ReturnByteLimit = ReturnByteLimit::new(DEFAULT_BYTE_BUDGET);
 /// Default trace snapshot byte budget for callers that want the crate default.
 pub const DEFAULT_MAX_TRACE_SNAPSHOT_LEN: TraceSnapshotByteLimit =
@@ -130,11 +130,9 @@ impl StepCount {
 /// # Errors
 ///
 /// Returns `AebError::Parse` when `source` is not valid A=B program syntax.
-/// Returns `AebError::Input` when `input` is invalid or cannot be stored.
-/// Returns `AebError::Run` when runtime execution fails.
+/// Returns `AebError::Run` when runtime input validation or execution fails.
 pub fn run_bytes(source: &[u8], input: &[u8], limits: RunLimits) -> Result<RunResult, AebError> {
     let program = Program::parse_bytes(source)?;
-    let input = RuntimeInput::parse(input)?;
     program.run(input, limits).map_err(AebError::Run)
 }
 
@@ -143,8 +141,7 @@ pub fn run_bytes(source: &[u8], input: &[u8], limits: RunLimits) -> Result<RunRe
 /// # Errors
 ///
 /// Returns `AebError::Parse` when `source` is not valid A=B program syntax.
-/// Returns `AebError::Input` when `input` is invalid or cannot be stored.
-/// Returns `AebError::Run` when runtime execution fails.
+/// Returns `AebError::Run` when runtime input validation or execution fails.
 pub fn run_str(source: &str, input: &[u8], limits: RunLimits) -> Result<RunResult, AebError> {
     run_bytes(source.as_bytes(), input, limits)
 }
@@ -163,19 +160,9 @@ pub struct RunLimits {
 }
 
 impl RunLimits {
-    /// Creates limits with an explicit step limit and default byte budgets.
+    /// Creates limits with every runtime budget specified explicitly.
     #[must_use]
-    pub const fn new(max_steps: StepLimit) -> Self {
-        Self {
-            steps: max_steps,
-            state_len: DEFAULT_MAX_STATE_LEN,
-            return_len: DEFAULT_MAX_RETURN_LEN,
-        }
-    }
-
-    /// Creates limits with every budget specified explicitly.
-    #[must_use]
-    pub const fn bounded(
+    pub const fn new(
         max_steps: StepLimit,
         max_state_len: StateByteLimit,
         max_return_len: ReturnByteLimit,
@@ -224,12 +211,6 @@ impl RunLimits {
     pub const fn with_return_byte_limit(mut self, max_return_len: ReturnByteLimit) -> Self {
         self.return_len = max_return_len;
         self
-    }
-}
-
-impl Default for RunLimits {
-    fn default() -> Self {
-        Self::new(DEFAULT_MAX_STEPS)
     }
 }
 
@@ -352,26 +333,26 @@ impl Program {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` when the validated input exceeds this run's state
+    /// Returns `RunError` when the raw input is invalid, the input exceeds this run's state
     /// limit, when allocating per-run `(once)` state fails, or when an internal
     /// runtime invariant is violated.
     pub fn start_execution(
         &self,
-        input: RuntimeInput,
+        input: &[u8],
         limits: RunLimits,
     ) -> Result<Execution<'_>, RunError> {
         Execution::new(self, input, limits)
     }
 
-    /// Runs this program with validated runtime input.
+    /// Runs this program with raw runtime input validated inside the run limits.
     ///
     /// # Errors
     ///
-    /// Returns `RunError` when the validated input exceeds this run's state
+    /// Returns `RunError` when the raw input is invalid, the input exceeds this run's state
     /// limit, an allocation fails, state-size arithmetic overflows, a
     /// configured `RunLimits` budget would be exceeded, or an internal runtime
     /// invariant is violated.
-    pub fn run(&self, input: RuntimeInput, limits: RunLimits) -> Result<RunResult, RunError> {
+    pub fn run(&self, input: &[u8], limits: RunLimits) -> Result<RunResult, RunError> {
         Execution::new(self, input, limits)?.finish()
     }
 
@@ -388,7 +369,7 @@ impl Program {
     /// exceeds `trace_snapshot_limit` or allocation fails.
     pub fn run_with_trace_snapshots<'program, F>(
         &'program self,
-        input: RuntimeInput,
+        input: &[u8],
         limits: RunLimits,
         trace_snapshot_limit: TraceSnapshotByteLimit,
         mut trace: F,
@@ -422,7 +403,7 @@ impl Program {
     /// callback returns an error.
     pub fn try_run_with_trace_snapshots<'program, F, E>(
         &'program self,
-        input: RuntimeInput,
+        input: &[u8],
         limits: RunLimits,
         trace_snapshot_limit: TraceSnapshotByteLimit,
         mut trace: F,
@@ -460,7 +441,7 @@ impl Program {
     /// Returns `RunError` for the same runtime failures as `Program::run`.
     pub fn run_with_borrowed_trace<'program, F>(
         &'program self,
-        input: RuntimeInput,
+        input: &[u8],
         limits: RunLimits,
         mut trace: F,
     ) -> Result<RunResult, RunError>
@@ -486,7 +467,7 @@ impl Program {
     /// error.
     pub fn try_run_with_borrowed_trace<'program, F, E>(
         &'program self,
-        input: RuntimeInput,
+        input: &[u8],
         limits: RunLimits,
         trace: F,
     ) -> Result<RunResult, TracedRunError<E>>
@@ -627,11 +608,11 @@ mod tests {
     use crate::test_support::{
         TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_event,
         expect_return_output, expect_run_error, expect_stable_output, expect_state_limit,
-        result_bytes, run_program, runtime_input, trace_event_bytes,
+        result_bytes, run_program, trace_event_bytes,
     };
     use crate::{
         AebError, InputError, LimitError, ReturnByteLimit, ReturnOutputByteCount, RuleActionView,
-        RuleAnchor, RuleCount, RuleRepeat, RuntimeInput, RuntimeStateByteCount, StateByteLimit,
+        RuleAnchor, RuleCount, RuleRepeat, RuntimeStateByteCount, StateByteLimit,
         StateLimitContext, TraceSnapshotEffect, TraceSnapshotEvent, run_bytes, run_str,
     };
     use std::vec::Vec;
@@ -645,23 +626,47 @@ mod tests {
 
     #[test]
     fn public_free_run_works() -> TestResult {
-        let result = run_str("a=b", b"a", RunLimits::default())?;
+        let result = run_str(
+            "a=b",
+            b"a",
+            RunLimits::new(
+                crate::DEFAULT_MAX_STEPS,
+                crate::DEFAULT_MAX_STATE_LEN,
+                crate::DEFAULT_MAX_RETURN_LEN,
+            ),
+        )?;
         expect_stable_output(&result, b"b")?;
         ensure_eq!(result.steps().get(), 1)?;
 
-        let result = run_bytes(b"a=b#\xff", b"a", RunLimits::default())?;
+        let result = run_bytes(
+            b"a=b#\xff",
+            b"a",
+            RunLimits::new(
+                crate::DEFAULT_MAX_STEPS,
+                crate::DEFAULT_MAX_STATE_LEN,
+                crate::DEFAULT_MAX_RETURN_LEN,
+            ),
+        )?;
         expect_stable_output(&result, b"b")?;
         Ok(())
     }
 
     #[test]
     fn public_free_run_reports_input_boundary_errors_separately() -> TestResult {
-        let result = run_bytes(b"a=b", &[0xff], RunLimits::default());
+        let result = run_bytes(
+            b"a=b",
+            &[0xff],
+            RunLimits::new(
+                crate::DEFAULT_MAX_STEPS,
+                crate::DEFAULT_MAX_STATE_LEN,
+                crate::DEFAULT_MAX_RETURN_LEN,
+            ),
+        );
 
         ensure_matches(
             matches!(
                 result,
-                Err(AebError::Input(InputError::NonAscii { column, .. }))
+                Err(AebError::Run(RunError::Input(InputError::NonAscii { column, .. })))
                     if column.get() == 1
             ),
             "expected one-shot run input error",
@@ -672,7 +677,11 @@ mod tests {
     fn parsed_program_is_reusable_and_once_state_is_per_run() -> TestResult {
         let program = Program::parse_str("(once)a=b\na=c")?;
 
-        let limits = RunLimits::new(StepLimit::new(10_000));
+        let limits = RunLimits::new(
+            StepLimit::new(10_000),
+            crate::DEFAULT_MAX_STATE_LEN,
+            crate::DEFAULT_MAX_RETURN_LEN,
+        );
         let first = run_program(&program, b"aa", limits)?;
         let second = run_program(&program, b"aa", limits)?;
 
@@ -693,7 +702,11 @@ mod tests {
 
     #[test]
     fn run_outcome_separates_stable_state_from_return_output() -> TestResult {
-        let limits = RunLimits::new(StepLimit::new(1));
+        let limits = RunLimits::new(
+            StepLimit::new(1),
+            crate::DEFAULT_MAX_STATE_LEN,
+            crate::DEFAULT_MAX_RETURN_LEN,
+        );
         let stable = run_program(&Program::parse_str("a=b")?, b"a", limits)?;
         let returned = run_program(&Program::parse_str("a=(return)b")?, b"a", limits)?;
 
@@ -831,14 +844,13 @@ mod tests {
 
     #[test]
     fn state_limit_rejects_oversized_input_before_runtime_allocation() -> TestResult {
-        let limits = RunLimits::bounded(
+        let limits = RunLimits::new(
             StepLimit::new(10),
             StateByteLimit::new(1),
             ReturnByteLimit::new(10),
         );
-        let error = expect_run_error(
-            Program::parse_str("# no executable rules")?.run(RuntimeInput::parse(b"aa")?, limits),
-        )?;
+        let error =
+            expect_run_error(Program::parse_str("# no executable rules")?.run(b"aa", limits))?;
         let error = expect_state_limit(error)?;
 
         ensure_eq!(
@@ -854,12 +866,12 @@ mod tests {
 
     #[test]
     fn state_limit_rejects_oversized_rewrite_before_allocating_next_state() -> TestResult {
-        let limits = RunLimits::bounded(
+        let limits = RunLimits::new(
             StepLimit::new(10),
             StateByteLimit::new(2),
             ReturnByteLimit::new(10),
         );
-        let error = expect_run_error(Program::parse_str("=a")?.run(runtime_input(b"aa")?, limits))?;
+        let error = expect_run_error(Program::parse_str("=a")?.run(b"aa", limits))?;
         let error = expect_state_limit(error)?;
 
         ensure_eq!(
@@ -877,9 +889,13 @@ mod tests {
     fn trace_snapshots_are_derived_from_borrowed_trace() -> TestResult {
         let program = Program::parse_str("a=b\nb=(return)ok")?;
         let mut events = Vec::new();
-        let limits = RunLimits::new(StepLimit::new(10_000));
+        let limits = RunLimits::new(
+            StepLimit::new(10_000),
+            crate::DEFAULT_MAX_STATE_LEN,
+            crate::DEFAULT_MAX_RETURN_LEN,
+        );
         let result = program.run_with_trace_snapshots(
-            runtime_input(b"a")?,
+            b"a",
             limits,
             DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
             |event| {

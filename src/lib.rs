@@ -1,8 +1,8 @@
 //! Byte-oriented interpreter for A=B ordered rewrite programs.
 //!
 //! `rsaeb` is a `no_std + alloc` library crate. It parses compact A=B source
-//! into an immutable [`Program`] and runs that program against validated
-//! [`RuntimeInput`]. Files, stdout, stderr, arguments, environment variables,
+//! into an immutable [`Program`] and runs that program against raw input bytes
+//! validated inside the configured [`RunLimits`]. Files, stdout, stderr, arguments,
 //! and lossy display formatting are outside the interpreter core.
 //!
 //! # Domain boundary
@@ -20,10 +20,10 @@
 //! Use [`run_str`] or [`run_bytes`] for a one-shot parse and run:
 //!
 //! ```
-//! use rsaeb::{RunLimits, RunOutcome, run_str};
+//! use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, RunLimits, RunOutcome, run_str};
 //!
 //! # fn main() -> Result<(), rsaeb::AebError> {
-//! let result = run_str("a=b", b"a", RunLimits::default())?;
+//! let result = run_str("a=b", b"a", RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN))?;
 //!
 //! assert!(matches!(
 //!     result.outcome(),
@@ -39,14 +39,14 @@
 //! slot indexes from rule order while scanning:
 //!
 //! ```
-//! use rsaeb::{Program, RunLimits, RunOutcome, RuntimeInput, StepLimit};
+//! use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, RunLimits, RunOutcome, StepLimit};
 //!
 //! # fn main() -> Result<(), rsaeb::AebError> {
 //! let program = Program::parse_str("(once)a=b\na=c")?;
-//! let limits = RunLimits::new(StepLimit::new(10_000));
+//! let limits = RunLimits::new(StepLimit::new(10_000), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
 //!
-//! let first = program.run(RuntimeInput::parse(b"aa")?, limits)?;
-//! let second = program.run(RuntimeInput::parse(b"aa")?, limits)?;
+//! let first = program.run(b"aa", limits)?;
+//! let second = program.run(b"aa", limits)?;
 //!
 //! assert!(matches!(
 //!     first.outcome(),
@@ -67,14 +67,14 @@
 //!
 //! ```
 //! use rsaeb::{
-//!     ExecutionStep, Program, RunLimits, RuntimeInput, StepLimit,
+//!     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ExecutionStep, Program, RunLimits, StepLimit,
 //! };
 //!
 //! # fn main() -> Result<(), rsaeb::AebError> {
 //! let program = Program::parse_str("a=b\nb=c")?;
 //! let mut execution = program.start_execution(
-//!     RuntimeInput::parse(b"a")?,
-//!     RunLimits::new(StepLimit::new(10)),
+//!     b"a",
+//!     RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
 //! )?;
 //!
 //! let first = execution.step()?;
@@ -109,12 +109,12 @@
 //! matching rule would apply after the configured number of completed steps:
 //!
 //! ```
-//! use rsaeb::{LimitError, Program, RunError, RunLimits, RuntimeInput, StepLimit};
+//! use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, LimitError, Program, RunError, RunLimits, StepLimit};
 //!
 //! # fn main() -> Result<(), rsaeb::AebError> {
 //! let result = Program::parse_str("a=b")?.run(
-//!     RuntimeInput::parse(b"a")?,
-//!     RunLimits::new(StepLimit::new(0)),
+//!     b"a",
+//!     RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
 //! );
 //!
 //! assert!(matches!(
@@ -154,15 +154,15 @@
 //! top when a caller needs owned event bytes:
 //!
 //! ```
-//! use rsaeb::{BorrowedTraceEvent, Program, RunLimits, RuntimeInput, StepLimit};
+//! use rsaeb::{BorrowedTraceEvent, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, RunLimits, StepLimit};
 //!
 //! # fn main() -> Result<(), rsaeb::AebError> {
 //! let program = Program::parse_str("a=b\nb=(return)ok")?;
 //! let mut byte_counts = Vec::new();
 //!
 //! program.run_with_borrowed_trace(
-//!     RuntimeInput::parse(b"a")?,
-//!     RunLimits::new(StepLimit::new(10)),
+//!     b"a",
+//!     RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
 //!     |event| {
 //!         byte_counts.push(event.byte_count().get());
 //!         if let BorrowedTraceEvent::Step { rule, .. } = event {
@@ -244,7 +244,7 @@ pub use rule::{
     PayloadView, RuleActionView, RuleAnchor, RuleCount, RuleNumber, RulePosition, RuleRepeat,
     RuleView,
 };
-pub use runtime::{Execution, ExecutionStep, RuntimeInput};
+pub use runtime::{Execution, ExecutionStep};
 pub use source::{SourceColumn, SourceLineNumber, SourcePosition};
 pub use trace::{
     BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView, TraceSnapshotEffect,

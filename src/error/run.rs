@@ -9,6 +9,8 @@ use crate::program::{ReturnByteLimit, StateByteLimit, StepCount, StepLimit};
 /// Runtime execution error.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RunError {
+    /// Runtime input failed validation before execution state was built.
+    Input(InputError),
     /// A fallible allocation failed during runtime execution.
     Allocation(AllocationError),
     /// A rewrite length could not be represented.
@@ -22,11 +24,18 @@ pub enum RunError {
 impl Error for RunError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Input(error) => Some(error),
             Self::Allocation(error) => Some(error),
             Self::StateSize(error) => Some(error),
             Self::Limit(error) => Some(error),
             Self::Invariant(error) => Some(error),
         }
+    }
+}
+
+impl From<InputError> for RunError {
+    fn from(value: InputError) -> Self {
+        Self::Input(value)
     }
 }
 

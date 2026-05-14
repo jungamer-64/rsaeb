@@ -54,7 +54,6 @@ impl fmt::Display for AebError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Parse(error) => error.fmt(f),
-            Self::Input(error) => error.fmt(f),
             Self::Run(error) => error.fmt(f),
         }
     }
@@ -142,6 +141,7 @@ impl fmt::Display for PayloadKind {
 impl fmt::Display for RunError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Input(error) => error.fmt(f),
             Self::Allocation(error) => error.fmt(f),
             Self::StateSize(error) => error.fmt(f),
             Self::Limit(error) => error.fmt(f),
@@ -306,11 +306,11 @@ mod tests {
 
     use crate::test_support::{
         TestResult, ensure_eq, expect_input_error, expect_parse_error, expect_run_error,
-        expect_state_limit, expect_step_limit, runtime_input,
+        expect_state_limit, expect_step_limit,
     };
     use crate::{
-        AllocationContext, AllocationError, Program, ReturnByteLimit, RunLimits, RuntimeInput,
-        StateByteLimit, StepLimit,
+        AllocationContext, AllocationError, Program, ReturnByteLimit, RunLimits, StateByteLimit,
+        StepLimit,
     };
 
     #[test]
@@ -351,7 +351,9 @@ mod tests {
 
     #[test]
     fn input_error_display_keeps_byte_and_original_column() -> TestResult {
-        let error = expect_input_error(RuntimeInput::parse(&[0xff]))?;
+        let error = expect_input_error(expect_run_error(
+            Program::parse_str("a=b")?.run(&[0xff], crate::test_support::test_limits()),
+        )?)?;
 
         ensure_eq!(
             error.to_string(),
@@ -362,14 +364,13 @@ mod tests {
 
     #[test]
     fn state_limit_display_names_context_attempted_length_and_limit() -> TestResult {
-        let limits = RunLimits::bounded(
+        let limits = RunLimits::new(
             StepLimit::new(10),
             StateByteLimit::new(1),
             ReturnByteLimit::new(10),
         );
-        let error = expect_run_error(
-            Program::parse_str("# no executable rules")?.run(RuntimeInput::parse(b"aa")?, limits),
-        )?;
+        let error =
+            expect_run_error(Program::parse_str("# no executable rules")?.run(b"aa", limits))?;
         let error = expect_state_limit(error)?;
 
         ensure_eq!(
@@ -382,8 +383,12 @@ mod tests {
     #[test]
     fn step_limit_display_reports_limit_and_preserved_state_len() -> TestResult {
         let program = Program::parse_str("a=b")?;
-        let limits = RunLimits::new(StepLimit::new(0));
-        let error = expect_run_error(program.run(runtime_input(b"a")?, limits))?;
+        let limits = RunLimits::new(
+            StepLimit::new(0),
+            crate::DEFAULT_MAX_STATE_LEN,
+            crate::DEFAULT_MAX_RETURN_LEN,
+        );
+        let error = expect_run_error(program.run(b"a", limits))?;
         let error = expect_step_limit(error)?;
 
         ensure_eq!(

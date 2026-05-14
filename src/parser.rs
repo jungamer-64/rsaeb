@@ -572,7 +572,15 @@ mod tests {
     {
         let source = b"a=b#\xff\xfe\n";
         let program = Program::parse_bytes(source)?;
-        let result = run_program(&program, b"a", RunLimits::new(StepLimit::new(10_000)))?;
+        let result = run_program(
+            &program,
+            b"a",
+            RunLimits::new(
+                StepLimit::new(10_000),
+                crate::DEFAULT_MAX_STATE_LEN,
+                crate::DEFAULT_MAX_RETURN_LEN,
+            ),
+        )?;
         ensure_eq!(result_bytes(&result), b"b".as_slice())?;
         Ok(())
     }
@@ -783,8 +791,24 @@ mod tests {
         let compact = Program::parse_str("(once)(start)a=(end)b")?;
         let spaced = Program::parse_str("( once ) ( start ) a = ( end ) b # comment")?;
 
-        let compact_result = run_program(&compact, b"ac", RunLimits::new(StepLimit::new(10)))?;
-        let spaced_result = run_program(&spaced, b"ac", RunLimits::new(StepLimit::new(10)))?;
+        let compact_result = run_program(
+            &compact,
+            b"ac",
+            RunLimits::new(
+                StepLimit::new(10),
+                crate::DEFAULT_MAX_STATE_LEN,
+                crate::DEFAULT_MAX_RETURN_LEN,
+            ),
+        )?;
+        let spaced_result = run_program(
+            &spaced,
+            b"ac",
+            RunLimits::new(
+                StepLimit::new(10),
+                crate::DEFAULT_MAX_STATE_LEN,
+                crate::DEFAULT_MAX_RETURN_LEN,
+            ),
+        )?;
 
         ensure_eq!(result_bytes(&compact_result), result_bytes(&spaced_result))?;
         Ok(())
