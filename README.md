@@ -273,6 +273,17 @@ runtime input bytes
   -> RuntimeByte       # private Editable(ProgramByte) or Opaque(AsciiByte)
 ```
 
+The implementation follows the same boundaries as the data flow. Parser stages
+live under `parser/`: source location construction, raw-line cleanup, compact
+code lines, and left/right rule syntax are separate steps. Program-facing types
+live under `program/`: resource limits, run results, parsed rule storage, and
+trace convenience methods are separate from the `Program` entrypoint. Runtime
+execution lives under `runtime/`: validated input materialization, mutable
+state, rewrite scratch buffers, rule matching, `(once)` state, step budgeting,
+and the execution loop are separate modules. These module boundaries are not a
+second public API; they exist so the internal source of truth for each domain is
+singular.
+
 Program payloads are stored as `ProgramByte`, not raw `u8`. Runtime state is
 stored as `RuntimeByte`: payload-compatible input and rule output become
 editable program bytes, while whitespace, control bytes, and reserved syntax
