@@ -545,14 +545,6 @@ pub enum ExecutionStep<'program, 'run> {
     },
 }
 
-impl ExecutionStep<'_, '_> {
-    /// Whether this step result is terminal.
-    #[must_use]
-    pub const fn is_terminal(&self) -> bool {
-        matches!(self, Self::Stable { .. } | Self::Return { .. })
-    }
-}
-
 /// Stateful execution of one parsed program against one runtime input.
 ///
 /// An execution owns the mutable runtime state, rewrite scratch buffer,

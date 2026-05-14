@@ -14,7 +14,7 @@ pub struct PayloadByteCount {
 impl PayloadByteCount {
     /// Creates a payload byte count from a primitive length.
     #[must_use]
-    pub const fn new(value: usize) -> Self {
+    pub(crate) const fn new(value: usize) -> Self {
         Self { value }
     }
 
@@ -46,7 +46,7 @@ pub struct RuntimeStateByteCount {
 impl RuntimeStateByteCount {
     /// Creates a runtime-state byte count from a primitive length.
     #[must_use]
-    pub const fn new(value: usize) -> Self {
+    pub(crate) const fn new(value: usize) -> Self {
         Self { value }
     }
 
@@ -78,7 +78,7 @@ pub struct ReturnOutputByteCount {
 impl ReturnOutputByteCount {
     /// Creates a `(return)` output byte count from a primitive length.
     #[must_use]
-    pub const fn new(value: usize) -> Self {
+    pub(crate) const fn new(value: usize) -> Self {
         Self { value }
     }
 
@@ -110,7 +110,7 @@ pub struct TraceSnapshotByteCount {
 impl TraceSnapshotByteCount {
     /// Creates a trace snapshot byte count from a primitive length.
     #[must_use]
-    pub const fn new(value: usize) -> Self {
+    pub(crate) const fn new(value: usize) -> Self {
         Self { value }
     }
 

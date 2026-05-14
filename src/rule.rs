@@ -15,7 +15,7 @@ pub struct RuleCount {
 impl RuleCount {
     /// Creates a rule count from a primitive count.
     #[must_use]
-    pub const fn new(value: usize) -> Self {
+    pub(crate) const fn new(value: usize) -> Self {
         Self { value }
     }
 

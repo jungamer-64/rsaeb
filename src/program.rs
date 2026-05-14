@@ -9,7 +9,8 @@ use crate::error::{
 };
 use crate::parser::parse_program_impl;
 use crate::rule::{OnceRuleSlotCount, ParsedRule, Rule, RuleCount, RulePosition, RuleView};
-use crate::runtime::Execution;
+use crate::runtime::{Execution, RuntimeInput};
+use crate::source::ProgramSource;
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
 const DEFAULT_BYTE_BUDGET: usize = 16_777_216;
@@ -123,27 +124,6 @@ impl StepCount {
         let value = self.value.checked_add(1)?;
         Some(Self { value })
     }
-}
-
-/// Parses source bytes and runs them once with the given input bytes.
-///
-/// # Errors
-///
-/// Returns `AebError::Parse` when `source` is not valid A=B program syntax.
-/// Returns `AebError::Run` when runtime input validation or execution fails.
-pub fn run_bytes(source: &[u8], input: &[u8], limits: RunLimits) -> Result<RunResult, AebError> {
-    let program = Program::parse_bytes(source)?;
-    program.run(input, limits).map_err(AebError::Run)
-}
-
-/// Parses a UTF-8 source string and runs it once with the given input bytes.
-///
-/// # Errors
-///
-/// Returns `AebError::Parse` when `source` is not valid A=B program syntax.
-/// Returns `AebError::Run` when runtime input validation or execution fails.
-pub fn run_str(source: &str, input: &[u8], limits: RunLimits) -> Result<RunResult, AebError> {
-    run_bytes(source.as_bytes(), input, limits)
 }
 
 /// Resource limits for one runtime invocation.
@@ -275,10 +255,7 @@ impl Program {
         Self { rule_set }
     }
 
-    /// Parses program source bytes into a reusable program value.
-    ///
-    /// This is the primary constructor because A=B source is a byte format:
-    /// comments may contain non-UTF-8 bytes even though executable code may not.
+    /// Parses typed program source into a reusable program value.
     ///
     /// # Errors
     ///
@@ -286,18 +263,8 @@ impl Program {
     /// when a non-empty code line does not contain exactly one `=`, when
     /// reserved syntax appears as payload data, or when allocation fails while
     /// building the parsed program.
-    pub fn parse_bytes(source: &[u8]) -> Result<Self, ParseError> {
+    pub fn parse(source: ProgramSource<'_>) -> Result<Self, ParseError> {
         parse_program_impl(source)
-    }
-
-    /// Parses a UTF-8 source string into a reusable program value.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError` for the same syntax and allocation failures as
-    /// `Program::parse_bytes`.
-    pub fn parse_str(source: &str) -> Result<Self, ParseError> {
-        Self::parse_bytes(source.as_bytes())
     }
 
     /// Returns the number of executable rules in the parsed program.
@@ -338,7 +305,7 @@ impl Program {
     /// runtime invariant is violated.
     pub fn start_execution(
         &self,
-        input: &[u8],
+        input: RuntimeInput<'_>,
         limits: RunLimits,
     ) -> Result<Execution<'_>, RunError> {
         Execution::new(self, input, limits)
@@ -352,7 +319,7 @@ impl Program {
     /// limit, an allocation fails, state-size arithmetic overflows, a
     /// configured `RunLimits` budget would be exceeded, or an internal runtime
     /// invariant is violated.
-    pub fn run(&self, input: &[u8], limits: RunLimits) -> Result<RunResult, RunError> {
+    pub fn run(&self, input: RuntimeInput<'_>, limits: RunLimits) -> Result<RunResult, RunError> {
         Execution::new(self, input, limits)?.finish()
     }
 
@@ -369,7 +336,7 @@ impl Program {
     /// exceeds `trace_snapshot_limit` or allocation fails.
     pub fn run_with_trace_snapshots<'program, F>(
         &'program self,
-        input: &[u8],
+        input: RuntimeInput<'_>,
         limits: RunLimits,
         trace_snapshot_limit: TraceSnapshotByteLimit,
         mut trace: F,
@@ -403,7 +370,7 @@ impl Program {
     /// callback returns an error.
     pub fn try_run_with_trace_snapshots<'program, F, E>(
         &'program self,
-        input: &[u8],
+        input: RuntimeInput<'_>,
         limits: RunLimits,
         trace_snapshot_limit: TraceSnapshotByteLimit,
         mut trace: F,
@@ -441,7 +408,7 @@ impl Program {
     /// Returns `RunError` for the same runtime failures as `Program::run`.
     pub fn run_with_borrowed_trace<'program, F>(
         &'program self,
-        input: &[u8],
+        input: RuntimeInput<'_>,
         limits: RunLimits,
         mut trace: F,
     ) -> Result<RunResult, RunError>
@@ -467,7 +434,7 @@ impl Program {
     /// error.
     pub fn try_run_with_borrowed_trace<'program, F, E>(
         &'program self,
-        input: &[u8],
+        input: RuntimeInput<'_>,
         limits: RunLimits,
         trace: F,
     ) -> Result<RunResult, TracedRunError<E>>

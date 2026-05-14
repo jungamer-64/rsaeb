@@ -238,14 +238,13 @@ pub use program::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, Program, ReturnByteLimit, ReturnOutput, RunLimits, RunOutcome,
     RunResult, RuntimeStateSnapshot, StateByteLimit, StepCount, StepLimit, TraceSnapshotByteLimit,
-    run_bytes, run_str,
 };
 pub use rule::{
     PayloadView, RuleActionView, RuleAnchor, RuleCount, RuleNumber, RulePosition, RuleRepeat,
     RuleView,
 };
-pub use runtime::{Execution, ExecutionStep};
-pub use source::{SourceColumn, SourceLineNumber, SourcePosition};
+pub use runtime::{Execution, ExecutionStep, RuntimeInput};
+pub use source::{ProgramSource, SourceColumn, SourceLineNumber, SourcePosition};
 pub use trace::{
     BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView, TraceSnapshotEffect,
     TraceSnapshotEvent,

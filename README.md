@@ -782,11 +782,10 @@ Constants:
 
 Program construction and execution:
 
-- `run_bytes(source, input, limits)`
-- `run_str(source, input, limits)`
+- `ProgramSource`
+- `RuntimeInput`
 - `Program`
-- `Program::parse_bytes(source)`
-- `Program::parse_str(source)`
+- `Program::parse(source)`
 - `Program::rule_count()`
 - `Program::once_rule_count()`
 - `Program::rules()`
@@ -799,11 +798,11 @@ Program construction and execution:
 
 Runtime configuration and result:
 
-- Runtime input is accepted as raw `&[u8]` by `Program::run`, `Program::start_execution`, and trace APIs; validation and initial allocation happen inside `RunLimits`.
-- `PayloadByteCount` (`new(value)`, `get()`, `is_zero()`)
-- `RuntimeStateByteCount` (`new(value)`, `get()`, `is_zero()`)
-- `ReturnOutputByteCount` (`new(value)`, `get()`, `is_zero()`)
-- `TraceSnapshotByteCount` (`new(value)`, `get()`, `is_zero()`)
+- Runtime input must be parsed into `RuntimeInput` before execution APIs accept it.
+- `PayloadByteCount` (`get()`, `is_zero()`)
+- `RuntimeStateByteCount` (`get()`, `is_zero()`)
+- `ReturnOutputByteCount` (`get()`, `is_zero()`)
+- `TraceSnapshotByteCount` (`get()`, `is_zero()`)
 - `RunLimits`
 - `StepLimit` (`new(value)`, `get()`)
 - `StateByteLimit` (`new(value)`, `get()`)
@@ -824,7 +823,6 @@ Runtime configuration and result:
 - `ExecutionStep::Applied { step, rule, state }`
 - `ExecutionStep::Stable { steps, state }`
 - `ExecutionStep::Return { step, rule, output }`
-- `ExecutionStep::is_terminal()`
 - `RunResult`
 - `RunResult::outcome()`
 - `RunResult::into_outcome()`
@@ -838,7 +836,7 @@ Rule data:
 
 - `RulePosition` (`number()`)
 - `RuleNumber` (`get()`)
-- `RuleCount` (`new(value)`, `get()`)
+- `RuleCount` (`get()`)
 - `RuleRepeat`
 - `RuleAnchor`
 - `PayloadView<'program>` (`byte_count()`, `is_empty()`, `bytes()`, `eq_bytes(expected)`, `to_vec()`)
