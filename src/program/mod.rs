@@ -17,7 +17,7 @@ pub(crate) use rule_set::RuleSet;
 pub use limits::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, ReturnByteLimit, RunLimits, StateByteLimit, StepCount,
-    StepLimit, TraceSnapshotByteLimit,
+    StepLimit, TraceSnapshotByteLimit, TraceSnapshotLimits,
 };
 pub use result::{ReturnOutput, RunOutcome, RunResult, RuntimeStateSnapshot};
 

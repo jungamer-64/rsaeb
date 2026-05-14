@@ -4,7 +4,7 @@ use super::budget::StepBudget;
 use super::input::{InitialStateBytes, RuntimeInput};
 use super::matcher::{MatchedRule, RuleSearch, find_next_match};
 use super::once::OnceRunStates;
-use super::rewrite::RewriteScratch;
+use super::rewrite::{RewritePlacement, RewriteRequest, RewriteScratch};
 use super::state::{MatchedStateSpan, State};
 use crate::allocation::AllocationContext;
 use crate::bytes::ReturnOutputByteCount;
@@ -333,18 +333,27 @@ impl<'program> Execution<'program> {
     ) -> Result<StepApplication<'program>, RunError> {
         match action {
             Action::Replace(rhs) => {
-                self.state
-                    .replace_at_into(state_match, rhs, &mut self.scratch, self.limits)?;
+                self.state.rewrite_into(
+                    RewriteRequest::new(state_match, rhs, RewritePlacement::Replace),
+                    &mut self.scratch,
+                    self.limits,
+                )?;
                 Ok(StepApplication::Continue)
             }
             Action::MoveStart(rhs) => {
-                self.state
-                    .move_start_at_into(state_match, rhs, &mut self.scratch, self.limits)?;
+                self.state.rewrite_into(
+                    RewriteRequest::new(state_match, rhs, RewritePlacement::MoveStart),
+                    &mut self.scratch,
+                    self.limits,
+                )?;
                 Ok(StepApplication::Continue)
             }
             Action::MoveEnd(rhs) => {
-                self.state
-                    .move_end_at_into(state_match, rhs, &mut self.scratch, self.limits)?;
+                self.state.rewrite_into(
+                    RewriteRequest::new(state_match, rhs, RewritePlacement::MoveEnd),
+                    &mut self.scratch,
+                    self.limits,
+                )?;
                 Ok(StepApplication::Continue)
             }
             Action::Return(output) => {

@@ -254,28 +254,35 @@ fn starts_with_token(input: &[CompactByte], token: SyntaxToken) -> bool {
     strip_token(input, token).is_some()
 }
 
+fn first_matching_token_kind<T: Copy>(
+    input: &[CompactByte],
+    mappings: &[(SyntaxToken, T)],
+) -> Option<T> {
+    mappings
+        .iter()
+        .find_map(|&(token, kind)| starts_with_token(input, token).then_some(kind))
+}
+
 fn left_modifier_kind(input: &[CompactByte]) -> Option<LeftModifierKind> {
-    if starts_with_token(input, SyntaxToken::Once) {
-        Some(LeftModifierKind::Once)
-    } else if starts_with_token(input, SyntaxToken::Start) {
-        Some(LeftModifierKind::Start)
-    } else if starts_with_token(input, SyntaxToken::End) {
-        Some(LeftModifierKind::End)
-    } else {
-        None
-    }
+    first_matching_token_kind(
+        input,
+        &[
+            (SyntaxToken::Once, LeftModifierKind::Once),
+            (SyntaxToken::Start, LeftModifierKind::Start),
+            (SyntaxToken::End, LeftModifierKind::End),
+        ],
+    )
 }
 
 fn right_action_kind(input: &[CompactByte]) -> Option<RightActionKind> {
-    if starts_with_token(input, SyntaxToken::Start) {
-        Some(RightActionKind::Start)
-    } else if starts_with_token(input, SyntaxToken::End) {
-        Some(RightActionKind::End)
-    } else if starts_with_token(input, SyntaxToken::Return) {
-        Some(RightActionKind::Return)
-    } else {
-        None
-    }
+    first_matching_token_kind(
+        input,
+        &[
+            (SyntaxToken::Start, RightActionKind::Start),
+            (SyntaxToken::End, RightActionKind::End),
+            (SyntaxToken::Return, RightActionKind::Return),
+        ],
+    )
 }
 
 fn reject_nested_rhs_action(

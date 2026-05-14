@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use super::input::InitialStateBytes;
-use super::rewrite::RewriteScratch;
+use super::rewrite::{RewritePlacement, RewriteRequest, RewriteScratch};
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::{Payload, PayloadByteCount, RuntimeByte, RuntimeStateByteCount};
 use crate::error::{LimitError, RunError, StateLimitContext, StateSizeError};
@@ -88,56 +88,40 @@ impl State {
             .then_some(state_match)
     }
 
-    pub(super) fn replace_at_into(
+    pub(super) fn rewrite_into(
         &self,
-        state_match: MatchedStateSpan,
-        rhs: &Payload,
+        request: RewriteRequest<'_>,
         output: &mut RewriteScratch,
         limits: RunLimits,
     ) -> Result<(), RunError> {
-        self.prepare_replacement_buffer(state_match, rhs, output, limits)?;
-        self.push_prefix(output, state_match)?;
-        output.push_payload(rhs)?;
-        self.push_suffix(output, state_match)?;
-        Ok(())
-    }
-
-    pub(super) fn move_start_at_into(
-        &self,
-        state_match: MatchedStateSpan,
-        rhs: &Payload,
-        output: &mut RewriteScratch,
-        limits: RunLimits,
-    ) -> Result<(), RunError> {
-        self.prepare_replacement_buffer(state_match, rhs, output, limits)?;
-        output.push_payload(rhs)?;
-        self.push_prefix(output, state_match)?;
-        self.push_suffix(output, state_match)?;
-        Ok(())
-    }
-
-    pub(super) fn move_end_at_into(
-        &self,
-        state_match: MatchedStateSpan,
-        rhs: &Payload,
-        output: &mut RewriteScratch,
-        limits: RunLimits,
-    ) -> Result<(), RunError> {
-        self.prepare_replacement_buffer(state_match, rhs, output, limits)?;
-        self.push_prefix(output, state_match)?;
-        self.push_suffix(output, state_match)?;
-        output.push_payload(rhs)?;
+        self.prepare_replacement_buffer(request, output, limits)?;
+        match request.placement() {
+            RewritePlacement::Replace => {
+                self.push_prefix(output, request.state_match())?;
+                output.push_payload(request.rhs())?;
+                self.push_suffix(output, request.state_match())?;
+            }
+            RewritePlacement::MoveStart => {
+                output.push_payload(request.rhs())?;
+                self.push_prefix(output, request.state_match())?;
+                self.push_suffix(output, request.state_match())?;
+            }
+            RewritePlacement::MoveEnd => {
+                self.push_prefix(output, request.state_match())?;
+                self.push_suffix(output, request.state_match())?;
+                output.push_payload(request.rhs())?;
+            }
+        }
         Ok(())
     }
 
     fn replaced_byte_count(
         &self,
-        state_match: MatchedStateSpan,
-        rhs: &Payload,
+        request: RewriteRequest<'_>,
     ) -> Result<RuntimeStateByteCount, StateSizeError> {
         let state_len = self.byte_count();
-        let lhs_len = state_match.matched_len();
-        let rhs_len = rhs.byte_count();
+        let lhs_len = request.state_match().matched_len();
+        let rhs_len = request.rhs().byte_count();
 
         state_len
             .get()
@@ -149,12 +133,11 @@ impl State {
 
     fn prepare_replacement_buffer(
         &self,
-        state_match: MatchedStateSpan,
-        rhs: &Payload,
+        request: RewriteRequest<'_>,
         output: &mut RewriteScratch,
         limits: RunLimits,
     ) -> Result<(), RunError> {
-        let capacity = self.replaced_byte_count(state_match, rhs)?;
+        let capacity = self.replaced_byte_count(request)?;
 
         if capacity.get() > limits.state_byte_limit().get() {
             return Err(LimitError::state(

@@ -8,7 +8,7 @@ use crate::runtime::RuntimeInput;
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
 use super::Program;
-use super::limits::{RunLimits, TraceSnapshotByteLimit};
+use super::limits::{RunLimits, TraceSnapshotLimits};
 use super::result::RunResult;
 
 enum SnapshotTraceCallbackError<E> {
@@ -31,14 +31,13 @@ impl Program {
     pub fn run_with_trace_snapshots<'program, F>(
         &'program self,
         input: RuntimeInput<'_>,
-        limits: RunLimits,
-        trace_snapshot_limit: TraceSnapshotByteLimit,
+        limits: TraceSnapshotLimits,
         mut trace: F,
     ) -> Result<RunResult, TraceSnapshotRunError>
     where
         F: FnMut(TraceSnapshotEvent<'program>),
     {
-        match self.try_run_with_trace_snapshots(input, limits, trace_snapshot_limit, |event| {
+        match self.try_run_with_trace_snapshots(input, limits, |event| {
             trace(event);
             Ok::<(), Infallible>(())
         }) {
@@ -65,16 +64,15 @@ impl Program {
     pub fn try_run_with_trace_snapshots<'program, F, E>(
         &'program self,
         input: RuntimeInput<'_>,
-        limits: RunLimits,
-        trace_snapshot_limit: TraceSnapshotByteLimit,
+        limits: TraceSnapshotLimits,
         mut trace: F,
     ) -> Result<RunResult, FallibleTraceSnapshotRunError<E>>
     where
         F: FnMut(TraceSnapshotEvent<'program>) -> Result<(), E>,
     {
-        let result = self.try_run_with_borrowed_trace(input, limits, |event| {
+        let result = self.try_run_with_borrowed_trace(input, limits.run_limits(), |event| {
             let snapshot = event
-                .to_snapshot(trace_snapshot_limit)
+                .to_snapshot(limits.snapshot_byte_limit())
                 .map_err(SnapshotTraceCallbackError::Snapshot)?;
             trace(snapshot).map_err(SnapshotTraceCallbackError::Trace)
         });

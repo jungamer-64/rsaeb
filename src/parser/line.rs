@@ -60,8 +60,17 @@ pub(super) struct CodeLine<'source> {
 
 impl CodeLine<'_> {
     pub(super) fn into_compact_line(self) -> Result<CompactCodeLine, ParseError> {
-        let mut compact_len = 0usize;
+        let compact_len = self.compact_len()?;
+        let bytes = self.compact_bytes(compact_len)?;
 
+        Ok(CompactCodeLine {
+            line_number: self.line_number,
+            bytes,
+        })
+    }
+
+    fn compact_len(&self) -> Result<usize, ParseError> {
+        let mut compact_len = 0usize;
         for (zero_based_column, byte) in self.bytes.iter().copied().enumerate() {
             if byte.is_ascii_whitespace() {
                 continue;
@@ -85,6 +94,10 @@ impl CodeLine<'_> {
             })?;
         }
 
+        Ok(compact_len)
+    }
+
+    fn compact_bytes(&self, compact_len: usize) -> Result<Vec<CompactByte>, ParseError> {
         let mut bytes = Vec::new();
         try_reserve_total_exact(&mut bytes, compact_len, AllocationContext::ProgramCodeLine)
             .map_err(|error| parse_allocation_error(self.line_number, error))?;
@@ -102,10 +115,7 @@ impl CodeLine<'_> {
             .map_err(|error| parse_allocation_error(self.line_number, error))?;
         }
 
-        Ok(CompactCodeLine {
-            line_number: self.line_number,
-            bytes,
-        })
+        Ok(bytes)
     }
 }
 

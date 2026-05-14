@@ -659,23 +659,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 Trace snapshotting materializes state/output bytes into typed owned snapshots
-under an explicit `TraceSnapshotByteLimit`. Step events still borrow `RuleView`
-from the parsed `Program`, so retained trace snapshot events cannot outlive
-that program:
+under explicit `TraceSnapshotLimits`: runtime limits still govern interpreter
+execution, while `TraceSnapshotByteLimit` governs one materialized event. Step
+events still borrow `RuleView` from the parsed `Program`, so retained trace
+snapshot events cannot outlive that program:
 
 ```rust
-use rsaeb::{DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, StepLimit, TraceSnapshotByteLimit, TraceSnapshotEffect, TraceSnapshotEvent};
+use rsaeb::{DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, StepLimit, TraceSnapshotByteLimit, TraceSnapshotEffect, TraceSnapshotEvent, TraceSnapshotLimits};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
     let mut events = Vec::new();
 
-    let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let snapshot_limit = TraceSnapshotByteLimit::new(1024);
+    let limits = TraceSnapshotLimits::new(
+        RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
+        TraceSnapshotByteLimit::new(1024),
+    );
     let result = program.run_with_trace_snapshots(
         RuntimeInput::parse(b"a")?,
         limits,
-        snapshot_limit,
         |event| {
             events.push(event);
         },
@@ -807,8 +809,8 @@ Program construction and execution:
 - `Program::run(input, limits)`
 - `Program::run_with_borrowed_trace(input, limits, callback)`
 - `Program::try_run_with_borrowed_trace(input, limits, callback)`
-- `Program::run_with_trace_snapshots(input, run_limits, trace_snapshot_limit, callback)`
-- `Program::try_run_with_trace_snapshots(input, run_limits, trace_snapshot_limit, callback)`
+- `Program::run_with_trace_snapshots(input, trace_snapshot_limits, callback)`
+- `Program::try_run_with_trace_snapshots(input, trace_snapshot_limits, callback)`
 
 Runtime configuration and result:
 
@@ -822,6 +824,7 @@ Runtime configuration and result:
 - `StateByteLimit` (`new(value)`, `get()`)
 - `ReturnByteLimit` (`new(value)`, `get()`)
 - `TraceSnapshotByteLimit` (`new(value)`, `get()`)
+- `TraceSnapshotLimits` (`new(run_limits, snapshot_byte_limit)`, `run_limits()`, `snapshot_byte_limit()`)
 - `RunLimits::new(step_limit, state_byte_limit, return_byte_limit)`
 - `RunLimits::step_limit()`
 - `RunLimits::state_byte_limit()`

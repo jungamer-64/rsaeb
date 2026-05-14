@@ -259,19 +259,29 @@ fn canonical_source_roundtrips_all_supported_rule_shapes() -> TestResult {
     Ok(())
 }
 
+fn expect_state_limit_from_run(
+    source: &str,
+    input: &[u8],
+    limits: RunLimits,
+) -> Result<LimitError, TestFailure> {
+    let error = expect_run_error(
+        Program::parse(crate::ProgramSource::from_str(source))?
+            .run(crate::RuntimeInput::parse(input)?, limits),
+    )?;
+    expect_state_limit(error)
+}
+
 #[test]
 fn state_limit_rejects_oversized_input_before_runtime_allocation() -> TestResult {
-    let limits = RunLimits::new(
-        StepLimit::new(10),
-        StateByteLimit::new(1),
-        ReturnByteLimit::new(10),
-    );
-    let error = expect_run_error(
-        Program::parse(crate::ProgramSource::from_str("# no executable rules"))?
-            .run(crate::RuntimeInput::parse(b"aa")?, limits),
+    let error = expect_state_limit_from_run(
+        "# no executable rules",
+        b"aa",
+        RunLimits::new(
+            StepLimit::new(10),
+            StateByteLimit::new(1),
+            ReturnByteLimit::new(10),
+        ),
     )?;
-    let error = expect_state_limit(error)?;
-
     ensure_eq!(
         error,
         LimitError::State {
@@ -285,17 +295,15 @@ fn state_limit_rejects_oversized_input_before_runtime_allocation() -> TestResult
 
 #[test]
 fn state_limit_rejects_oversized_rewrite_before_allocating_next_state() -> TestResult {
-    let limits = RunLimits::new(
-        StepLimit::new(10),
-        StateByteLimit::new(2),
-        ReturnByteLimit::new(10),
-    );
-    let error = expect_run_error(
-        Program::parse(crate::ProgramSource::from_str("=a"))?
-            .run(crate::RuntimeInput::parse(b"aa")?, limits),
+    let error = expect_state_limit_from_run(
+        "=a",
+        b"aa",
+        RunLimits::new(
+            StepLimit::new(10),
+            StateByteLimit::new(2),
+            ReturnByteLimit::new(10),
+        ),
     )?;
-    let error = expect_state_limit(error)?;
-
     ensure_eq!(
         error,
         LimitError::State {
@@ -311,19 +319,18 @@ fn state_limit_rejects_oversized_rewrite_before_allocating_next_state() -> TestR
 fn trace_snapshots_are_derived_from_borrowed_trace() -> TestResult {
     let program = Program::parse(crate::ProgramSource::from_str("a=b\nb=(return)ok"))?;
     let mut events = Vec::new();
-    let limits = RunLimits::new(
-        StepLimit::new(10_000),
-        crate::DEFAULT_MAX_STATE_LEN,
-        crate::DEFAULT_MAX_RETURN_LEN,
-    );
-    let result = program.run_with_trace_snapshots(
-        crate::RuntimeInput::parse(b"a")?,
-        limits,
+    let limits = TraceSnapshotLimits::new(
+        RunLimits::new(
+            StepLimit::new(10_000),
+            crate::DEFAULT_MAX_STATE_LEN,
+            crate::DEFAULT_MAX_RETURN_LEN,
+        ),
         DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
-        |event| {
+    );
+    let result =
+        program.run_with_trace_snapshots(crate::RuntimeInput::parse(b"a")?, limits, |event| {
             events.push(event);
-        },
-    )?;
+        })?;
 
     expect_return_output(&result, b"ok")?;
     ensure_eq!(events.len(), 3)?;

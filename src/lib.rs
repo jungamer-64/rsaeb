@@ -243,6 +243,7 @@ pub use program::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, Program, ReturnByteLimit, ReturnOutput, RunLimits, RunOutcome,
     RunResult, RuntimeStateSnapshot, StateByteLimit, StepCount, StepLimit, TraceSnapshotByteLimit,
+    TraceSnapshotLimits,
 };
 pub use rule::{
     PayloadView, RuleActionView, RuleAnchor, RuleCount, RuleNumber, RulePosition, RuleRepeat,

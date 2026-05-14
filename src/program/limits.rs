@@ -178,3 +178,38 @@ impl RunLimits {
         self
     }
 }
+
+/// Resource limits for one trace-snapshot runtime invocation.
+///
+/// Runtime execution limits and trace snapshot materialization limits are
+/// separate domains, but snapshot tracing needs both. Keeping them in one value
+/// prevents trace APIs from growing parallel primitive-like budget arguments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TraceSnapshotLimits {
+    run: RunLimits,
+    snapshot: TraceSnapshotByteLimit,
+}
+
+impl TraceSnapshotLimits {
+    /// Creates trace-snapshot limits from runtime limits and a snapshot byte
+    /// budget.
+    #[must_use]
+    pub const fn new(run_limits: RunLimits, snapshot_byte_limit: TraceSnapshotByteLimit) -> Self {
+        Self {
+            run: run_limits,
+            snapshot: snapshot_byte_limit,
+        }
+    }
+
+    /// Runtime limits used by the underlying interpreter execution.
+    #[must_use]
+    pub const fn run_limits(self) -> RunLimits {
+        self.run
+    }
+
+    /// Maximum bytes materialized for one trace snapshot event.
+    #[must_use]
+    pub const fn snapshot_byte_limit(self) -> TraceSnapshotByteLimit {
+        self.snapshot
+    }
+}
