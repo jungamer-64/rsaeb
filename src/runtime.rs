@@ -6,12 +6,15 @@ use crate::bytes::{
     Payload, PayloadByteCount, ReturnOutputByteCount, RuntimeByte, RuntimeStateByteCount,
 };
 use crate::error::{
-    InputError, LimitError, RunError, StateLimitContext, StateSizeError, TracedRunError,
+    InputError, LimitError, RunError, RuntimeInvariantError, StateLimitContext, StateSizeError,
+    TracedRunError,
 };
 use crate::program::{
     Program, ReturnOutput, RunLimits, RunResult, RuntimeStateSnapshot, StepCount, StepLimit,
 };
-use crate::rule::{Action, PayloadView, Rule, RuleAnchor, RuleExecution, RuleView};
+use crate::rule::{
+    Action, OnceRuleSlot, OnceRuleSlotCount, PayloadView, Rule, RuleAnchor, RuleView,
+};
 use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
 
 type NoTrace<'program> = for<'run> fn(BorrowedTraceEvent<'program, 'run>) -> Result<(), Infallible>;
@@ -398,10 +401,10 @@ struct AppliedRule<'program> {
     effect: AppliedRuleEffect<'program>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 struct MatchedRule<'program> {
     rule: &'program Rule,
-    execution: RuleExecution,
+    once_slot: Option<OnceRuleSlot>,
     state_match: MatchedStateSpan,
 }
 
@@ -411,21 +414,28 @@ enum OnceRuleState {
     Consumed,
 }
 
+impl OnceRuleState {
+    const fn is_consumed(self) -> bool {
+        matches!(self, Self::Consumed)
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
-struct OnceRuleStates {
+struct OnceRunStates {
     states: Vec<OnceRuleState>,
 }
 
-impl OnceRuleStates {
-    fn new(count: crate::rule::RuleCount) -> Result<Self, crate::allocation::AllocationError> {
+impl OnceRunStates {
+    fn new(once_slot_count: OnceRuleSlotCount) -> Result<Self, crate::allocation::AllocationError> {
         let mut states = Vec::new();
+        let state_count = once_slot_count.get();
         try_reserve_total_exact(
             &mut states,
-            count.get(),
+            state_count,
             AllocationContext::RuntimeOnceRuleState,
         )?;
 
-        for _ in 0..count.get() {
+        for _ in 0..state_count {
             try_push(
                 &mut states,
                 OnceRuleState::Fresh,
@@ -436,32 +446,29 @@ impl OnceRuleStates {
         Ok(Self { states })
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "once rule slots are assigned only by RuleSet and must have matching runtime state"
-    )]
-    fn is_available(&self, execution: RuleExecution) -> bool {
-        match execution {
-            RuleExecution::Always => true,
-            RuleExecution::Once(slot) => matches!(
-                self.states
-                    .get(slot.get())
-                    .expect("once rule slot must be allocated by RuleSet"),
-                OnceRuleState::Fresh
-            ),
-        }
+    fn is_consumed(&self, slot: OnceRuleSlot) -> Result<bool, RuntimeInvariantError> {
+        let once_state_count = self.states.len();
+        let state = self.states.get(slot.get()).copied().ok_or_else(|| {
+            RuntimeInvariantError::missing_once_rule_state(slot.get(), once_state_count)
+        })?;
+
+        Ok(state.is_consumed())
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "once rule slots are assigned only by RuleSet and must have matching runtime state"
-    )]
-    fn consume(&mut self, execution: RuleExecution) {
-        if let RuleExecution::Once(slot) = execution {
-            *self
-                .states
-                .get_mut(slot.get())
-                .expect("once rule slot must be allocated by RuleSet") = OnceRuleState::Consumed;
+    fn consume(&mut self, slot: OnceRuleSlot) -> Result<(), RuntimeInvariantError> {
+        let once_state_count = self.states.len();
+        let state = self.states.get_mut(slot.get()).ok_or_else(|| {
+            RuntimeInvariantError::missing_once_rule_state(slot.get(), once_state_count)
+        })?;
+
+        match state {
+            OnceRuleState::Fresh => {
+                *state = OnceRuleState::Consumed;
+                Ok(())
+            }
+            OnceRuleState::Consumed => {
+                Err(RuntimeInvariantError::consumed_once_rule_slot(slot.get()))
+            }
         }
     }
 }
@@ -470,6 +477,11 @@ impl OnceRuleStates {
 struct StepBudget {
     max_steps: StepLimit,
     completed_steps: StepCount,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StepPermit {
+    next_step: StepCount,
 }
 
 impl StepBudget {
@@ -496,10 +508,10 @@ impl StepBudget {
         Ok(())
     }
 
-    fn complete_step(&mut self, state_len: RuntimeStateByteCount) -> Result<StepCount, LimitError> {
+    fn reserve_next_step(self, state_len: RuntimeStateByteCount) -> Result<StepPermit, LimitError> {
         self.ensure_next_step_allowed(state_len)?;
 
-        let Some(next_steps) = self.completed_steps.checked_next() else {
+        let Some(next_step) = self.completed_steps.checked_next() else {
             return Err(LimitError::step(
                 self.max_steps,
                 self.completed_steps,
@@ -507,8 +519,12 @@ impl StepBudget {
             ));
         };
 
-        self.completed_steps = next_steps;
-        Ok(next_steps)
+        Ok(StepPermit { next_step })
+    }
+
+    fn commit(&mut self, permit: StepPermit) -> StepCount {
+        self.completed_steps = permit.next_step;
+        permit.next_step
     }
 }
 
@@ -523,42 +539,18 @@ enum ExecutionTerminal<'program> {
     },
 }
 
-/// Borrowed effect of one applied execution step.
-///
-/// A public step only reports continuation effects here. A matching `(return)`
-/// rule completes the execution and is reported through [`ExecutionCompletion`].
+/// Result of asking an [`Execution`] to advance by one rule application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExecutionEffect<'run> {
-    state: RuntimeStateView<'run>,
-}
-
-impl<'run> ExecutionEffect<'run> {
-    const fn continue_with(state: RuntimeStateView<'run>) -> Self {
-        Self { state }
-    }
-
-    /// Runtime state after the applied rewrite step.
-    #[must_use]
-    pub const fn state(self) -> RuntimeStateView<'run> {
-        self.state
-    }
-
-    /// Runtime state length after the applied rewrite step.
-    #[must_use]
-    pub const fn byte_count(self) -> RuntimeStateByteCount {
-        self.state.byte_count()
-    }
-
-    /// Whether the runtime state after the step contains no bytes.
-    #[must_use]
-    pub const fn is_empty(self) -> bool {
-        self.state.is_empty()
-    }
-}
-
-/// Completed execution state returned by [`Execution::step`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExecutionCompletion<'program, 'run> {
+pub enum ExecutionStep<'program, 'run> {
+    /// One ordinary rewrite rule was applied and execution can be stepped again.
+    Applied {
+        /// One-based applied step count.
+        step: StepCount,
+        /// Structured view of the applied rule.
+        rule: RuleView<'program>,
+        /// Borrowed runtime state after the applied rewrite step.
+        state: RuntimeStateView<'run>,
+    },
     /// No rule matched the final runtime state.
     Stable {
         /// Number of rewrite steps applied before reaching the stable state.
@@ -577,33 +569,25 @@ pub enum ExecutionCompletion<'program, 'run> {
     },
 }
 
-/// Result of asking an [`Execution`] to advance by one rule application.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExecutionStep<'program, 'run> {
-    /// One ordinary rewrite rule was applied and execution can be stepped again.
-    Applied {
-        /// One-based applied step count.
-        step: StepCount,
-        /// Structured view of the applied rule.
-        rule: RuleView<'program>,
-        /// Borrowed post-step continuation state.
-        effect: ExecutionEffect<'run>,
-    },
-    /// The execution has completed.
-    Complete(ExecutionCompletion<'program, 'run>),
+impl ExecutionStep<'_, '_> {
+    /// Whether this step result is terminal.
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        matches!(self, Self::Stable { .. } | Self::Return { .. })
+    }
 }
 
 /// Stateful execution of one parsed program against one runtime input.
 ///
 /// An execution owns the mutable runtime state, rewrite scratch buffer,
 /// completed-step budget, and per-run `(once)` state for one invocation.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Execution<'program> {
     program: &'program Program,
     state: State,
     scratch: RewriteScratch,
     step_budget: StepBudget,
-    once_states: OnceRuleStates,
+    once_states: OnceRunStates,
     limits: RunLimits,
     terminal: ExecutionTerminal<'program>,
 }
@@ -615,7 +599,7 @@ impl<'program> Execution<'program> {
         limits: RunLimits,
     ) -> Result<Self, RunError> {
         let state = State::from_input(input, limits)?;
-        let once_states = OnceRuleStates::new(program.once_rule_count())?;
+        let once_states = OnceRunStates::new(program.once_slot_count())?;
         let scratch = RewriteScratch::new();
 
         Ok(Self {
@@ -629,40 +613,69 @@ impl<'program> Execution<'program> {
         })
     }
 
+    /// Number of rewrite steps that have already completed in this execution.
+    #[must_use]
+    pub const fn completed_steps(&self) -> StepCount {
+        self.step_budget.completed_steps()
+    }
+
+    /// Runs this execution from its current state to completion.
+    ///
+    /// This consumes the execution and preserves already-applied steps, `(once)`
+    /// state, and byte budgets. It is the non-tracing counterpart to repeated
+    /// calls to [`Execution::step`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` when applying a later matching rule would exceed the
+    /// configured limits, allocation fails, state-size arithmetic overflows, or
+    /// an internal runtime invariant is violated.
+    pub fn finish(self) -> Result<RunResult, RunError> {
+        match self.run_impl::<NoTrace<'program>, Infallible>(None) {
+            Ok(result) => Ok(result),
+            Err(TracedRunError::Run(error)) => Err(error),
+            Err(TracedRunError::Trace(error)) => match error {},
+        }
+    }
+
     /// Advances this execution by at most one matching rule.
     ///
     /// Returns [`ExecutionStep::Applied`] after one ordinary rewrite step.
-    /// Returns [`ExecutionStep::Complete`] when no rule matches or when the
-    /// next matching rule executes `(return)`.
+    /// Returns [`ExecutionStep::Stable`] when no rule matches.
+    /// Returns [`ExecutionStep::Return`] when the next matching rule executes
+    /// `(return)`.
     ///
     /// # Errors
     ///
     /// Returns `RunError` when applying the next matching rule would exceed the
-    /// configured limits, allocation fails, or state-size arithmetic overflows.
+    /// configured limits, allocation fails, state-size arithmetic overflows, or
+    /// an internal runtime invariant is violated. On error, no rewrite step is
+    /// completed: the runtime state, `(once)`
+    /// state, and completed-step count remain unchanged.
     pub fn step(&mut self) -> Result<ExecutionStep<'program, '_>, RunError> {
         match self.terminal {
             ExecutionTerminal::Running => {}
             ExecutionTerminal::Stable => {
-                return Ok(ExecutionStep::Complete(ExecutionCompletion::Stable {
+                return Ok(ExecutionStep::Stable {
                     steps: self.step_budget.completed_steps(),
                     state: self.state.view(),
-                }));
+                });
             }
             ExecutionTerminal::Return { step, rule, output } => {
-                return Ok(ExecutionStep::Complete(ExecutionCompletion::Return {
+                return Ok(ExecutionStep::Return {
                     step,
                     rule: rule.view(),
                     output,
-                }));
+                });
             }
         }
 
-        let Some(matched) = self.find_next_match() else {
+        let Some(matched) = self.find_next_match()? else {
             self.terminal = ExecutionTerminal::Stable;
-            return Ok(ExecutionStep::Complete(ExecutionCompletion::Stable {
+            return Ok(ExecutionStep::Stable {
                 steps: self.step_budget.completed_steps(),
                 state: self.state.view(),
-            }));
+            });
         };
 
         let applied = self.apply_matched_rule(matched)?;
@@ -670,23 +683,13 @@ impl<'program> Execution<'program> {
             AppliedRuleEffect::Continue => Ok(ExecutionStep::Applied {
                 step: applied.step,
                 rule: applied.rule.view(),
-                effect: ExecutionEffect::continue_with(self.state.view()),
+                state: self.state.view(),
             }),
-            AppliedRuleEffect::Return(output) => {
-                Ok(ExecutionStep::Complete(ExecutionCompletion::Return {
-                    step: applied.step,
-                    rule: applied.rule.view(),
-                    output,
-                }))
-            }
-        }
-    }
-
-    pub(crate) fn run(self) -> Result<RunResult, RunError> {
-        match self.run_impl::<NoTrace<'program>, Infallible>(None) {
-            Ok(result) => Ok(result),
-            Err(TracedRunError::Run(error)) => Err(error),
-            Err(TracedRunError::Trace(error)) => match error {},
+            AppliedRuleEffect::Return(output) => Ok(ExecutionStep::Return {
+                step: applied.step,
+                rule: applied.rule.view(),
+                output,
+            }),
         }
     }
 
@@ -723,7 +726,7 @@ impl<'program> Execution<'program> {
                 }
             }
 
-            let Some(matched) = self.find_next_match() else {
+            let Some(matched) = self.find_next_match().map_err(TracedRunError::Run)? else {
                 return Ok(RunResult::stable(
                     self.state.into_snapshot()?,
                     self.step_budget.completed_steps(),
@@ -774,11 +777,13 @@ impl<'program> Execution<'program> {
         Ok(())
     }
 
-    fn find_next_match(&self) -> Option<MatchedRule<'program>> {
+    fn find_next_match(&self) -> Result<Option<MatchedRule<'program>>, RunError> {
         for rule in self.program.rule_slice() {
-            let execution = rule.execution();
+            let once_slot = rule.once_slot();
 
-            if !self.once_states.is_available(execution) {
+            if let Some(slot) = once_slot
+                && self.once_states.is_consumed(slot)?
+            {
                 continue;
             }
 
@@ -786,30 +791,32 @@ impl<'program> Execution<'program> {
                 continue;
             };
 
-            return Some(MatchedRule {
+            return Ok(Some(MatchedRule {
                 rule,
-                execution,
+                once_slot,
                 state_match,
-            });
+            }));
         }
 
-        None
+        Ok(None)
     }
 
     fn apply_matched_rule(
         &mut self,
         matched: MatchedRule<'program>,
     ) -> Result<AppliedRule<'program>, RunError> {
-        let effect = self.apply_action_to_scratch(matched.state_match, matched.rule.action())?;
-
-        let step = self
+        let permit = self
             .step_budget
-            .complete_step(self.state.byte_count())
+            .reserve_next_step(self.state.byte_count())
             .map_err(RunError::from)?;
+
+        let effect = self.apply_action_to_scratch(matched.state_match, matched.rule.action())?;
+        self.consume_once_rule(matched.once_slot)?;
+
+        let step = self.step_budget.commit(permit);
 
         match effect {
             RewriteEffect::Continue => {
-                self.once_states.consume(matched.execution);
                 self.state.swap_with_scratch(&mut self.scratch);
                 Ok(AppliedRule {
                     step,
@@ -818,7 +825,6 @@ impl<'program> Execution<'program> {
                 })
             }
             RewriteEffect::Return(output) => {
-                self.once_states.consume(matched.execution);
                 self.terminal = ExecutionTerminal::Return {
                     step,
                     rule: matched.rule,
@@ -830,6 +836,13 @@ impl<'program> Execution<'program> {
                     effect: AppliedRuleEffect::Return(output),
                 })
             }
+        }
+    }
+
+    fn consume_once_rule(&mut self, once_slot: Option<OnceRuleSlot>) -> Result<(), RunError> {
+        match once_slot {
+            None => Ok(()),
+            Some(slot) => self.once_states.consume(slot).map_err(RunError::from),
         }
     }
 
@@ -916,7 +929,8 @@ mod tests {
     };
     use crate::{
         BorrowedTraceEffect, BorrowedTraceEvent, LimitError, PayloadKind, Program, ReturnByteLimit,
-        ReturnOutputByteCount, RunLimits, RuntimeStateByteCount, StateByteLimit, StateLimitContext,
+        ReturnOutput, ReturnOutputByteCount, RunLimits, RunOutcome, RunResult,
+        RuntimeStateByteCount, RuntimeStateSnapshot, StateByteLimit, StateLimitContext,
     };
     use std::string::String;
     use std::vec::Vec;
@@ -940,6 +954,32 @@ mod tests {
         view.bytes().collect()
     }
 
+    fn run_program_by_steps(
+        program: &Program,
+        input: &[u8],
+        limits: RunLimits,
+    ) -> Result<RunResult, TestFailure> {
+        let mut execution = program.start_execution(runtime_input(input)?, limits)?;
+
+        loop {
+            match execution.step()? {
+                ExecutionStep::Applied { .. } => {}
+                ExecutionStep::Stable { steps, state } => {
+                    return Ok(RunResult::stable(
+                        RuntimeStateSnapshot::from_vec(state.to_vec()?),
+                        steps,
+                    ));
+                }
+                ExecutionStep::Return { step, output, .. } => {
+                    return Ok(RunResult::from_return(
+                        ReturnOutput::from_vec(output.to_vec()?),
+                        step,
+                    ));
+                }
+            }
+        }
+    }
+
     fn expect_applied_step(
         step: ExecutionStep<'_, '_>,
         expected_step: usize,
@@ -947,21 +987,21 @@ mod tests {
         expected_state: &[u8],
     ) -> TestResult {
         match step {
-            ExecutionStep::Applied { step, rule, effect } => {
-                ensure_eq(step.get(), expected_step)?;
-                ensure_eq(rule.canonical_source()?.as_slice(), expected_rule)?;
-                ensure_eq(
-                    runtime_view_bytes(effect.state()).as_slice(),
-                    expected_state,
+            ExecutionStep::Applied { step, rule, state } => {
+                ensure_eq!(step.get(), expected_step)?;
+                ensure_eq!(rule.canonical_source()?.as_slice(), expected_rule)?;
+                let actual_state = runtime_view_bytes(state);
+                ensure_eq!(actual_state.as_slice(), expected_state)?;
+                ensure_eq!(
+                    state.byte_count(),
+                    RuntimeStateByteCount::new(expected_state.len())
                 )?;
-                ensure_eq(
-                    effect.byte_count(),
-                    RuntimeStateByteCount::new(expected_state.len()),
-                )?;
-                ensure_eq(effect.is_empty(), expected_state.is_empty())?;
+                ensure_eq!(state.is_empty(), expected_state.is_empty())?;
                 Ok(())
             }
-            ExecutionStep::Complete(_) => Err(TestFailure::message("expected applied step")),
+            ExecutionStep::Stable { .. } | ExecutionStep::Return { .. } => {
+                Err(TestFailure::message("expected applied step"))
+            }
         }
     }
 
@@ -971,12 +1011,12 @@ mod tests {
         expected_state: &[u8],
     ) -> TestResult {
         match step {
-            ExecutionStep::Complete(ExecutionCompletion::Stable { steps, state }) => {
-                ensure_eq(steps.get(), expected_steps)?;
-                ensure_eq(runtime_view_bytes(state).as_slice(), expected_state)?;
+            ExecutionStep::Stable { steps, state } => {
+                ensure_eq!(steps.get(), expected_steps)?;
+                ensure_eq!(runtime_view_bytes(state).as_slice(), expected_state)?;
                 Ok(())
             }
-            ExecutionStep::Applied { .. } | ExecutionStep::Complete(_) => {
+            ExecutionStep::Applied { .. } | ExecutionStep::Return { .. } => {
                 Err(TestFailure::message("expected stable completion"))
             }
         }
@@ -989,16 +1029,16 @@ mod tests {
         expected_output: &[u8],
     ) -> TestResult {
         match step {
-            ExecutionStep::Complete(ExecutionCompletion::Return { step, rule, output }) => {
-                ensure_eq(step.get(), expected_step)?;
-                ensure_eq(rule.canonical_source()?.as_slice(), expected_rule)?;
+            ExecutionStep::Return { step, rule, output } => {
+                ensure_eq!(step.get(), expected_step)?;
+                ensure_eq!(rule.canonical_source()?.as_slice(), expected_rule)?;
                 ensure(
                     output.eq_bytes(expected_output),
                     "expected return completion output",
                 )?;
                 Ok(())
             }
-            ExecutionStep::Applied { .. } | ExecutionStep::Complete(_) => {
+            ExecutionStep::Applied { .. } | ExecutionStep::Stable { .. } => {
                 Err(TestFailure::message("expected return completion"))
             }
         }
@@ -1007,7 +1047,7 @@ mod tests {
     #[test]
     fn normal_replacement_is_ordered_and_leftmost() -> TestResult {
         let source = "aa=x\na=y";
-        ensure_eq(run_source(source, "aaaa")?, "xx")?;
+        ensure_eq!(run_source(source, "aaaa")?, "xx")?;
         Ok(())
     }
 
@@ -1017,10 +1057,91 @@ mod tests {
         let mut execution =
             program.start_execution(runtime_input(b"a")?, RunLimits::new(StepLimit::new(10)))?;
 
+        ensure_eq!(execution.completed_steps(), StepCount::ZERO)?;
+
         expect_applied_step(execution.step()?, 1, b"a=b", b"b")?;
+        ensure_eq!(execution.completed_steps().get(), 1)?;
+
         expect_applied_step(execution.step()?, 2, b"b=c", b"c")?;
+        ensure_eq!(execution.completed_steps().get(), 2)?;
+
         expect_stable_completion(execution.step()?, 2, b"c")?;
         expect_stable_completion(execution.step()?, 2, b"c")?;
+        Ok(())
+    }
+
+    #[test]
+    fn step_loop_matches_full_run_for_control_shapes() -> TestResult {
+        let cases: &[(&str, &[u8], RunLimits)] = &[
+            ("a=b\nb=c", b"a", RunLimits::new(StepLimit::new(10))),
+            ("(once)a=b\na=c", b"aa", RunLimits::new(StepLimit::new(10))),
+            ("(start)a=x", b"aba", RunLimits::new(StepLimit::new(10))),
+            ("(end)a=x", b"aba", RunLimits::new(StepLimit::new(10))),
+            ("a=", b"aa", RunLimits::new(StepLimit::new(10))),
+            ("=(return)empty", b"", RunLimits::new(StepLimit::new(10))),
+            ("a=(return)ok", b"a", RunLimits::new(StepLimit::new(10))),
+            ("x=y", b"a", RunLimits::new(StepLimit::new(10))),
+        ];
+
+        for &(source, input, limits) in cases {
+            let program = Program::parse_str(source)?;
+            let full_run = program.run(runtime_input(input)?, limits)?;
+            let stepped_run = run_program_by_steps(&program, input, limits)?;
+
+            ensure_eq!(stepped_run, full_run)?;
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn execution_finish_resumes_after_manual_steps() -> TestResult {
+        let program = Program::parse_str("(once)a=b\na=c\nc=(return)ok")?;
+        let limits = RunLimits::new(StepLimit::new(10));
+        let full_run = program.run(runtime_input(b"aa")?, limits)?;
+        let mut execution = program.start_execution(runtime_input(b"aa")?, limits)?;
+
+        expect_applied_step(execution.step()?, 1, b"(once)a=b", b"ba")?;
+        let resumed = execution.finish()?;
+
+        ensure_matches(
+            matches!(resumed.outcome(), RunOutcome::Return(output) if output.as_bytes() == b"ok"),
+            "expected resumed execution to return ok",
+        )?;
+        ensure_eq!(resumed, full_run)?;
+        Ok(())
+    }
+
+    #[test]
+    fn execution_finish_after_stable_step_returns_stable_result() -> TestResult {
+        let program = Program::parse_str("x=y")?;
+        let limits = RunLimits::new(StepLimit::new(10));
+        let mut execution = program.start_execution(runtime_input(b"a")?, limits)?;
+
+        expect_stable_completion(execution.step()?, 0, b"a")?;
+        ensure_eq!(execution.completed_steps(), StepCount::ZERO)?;
+
+        let finished = execution.finish()?;
+        ensure_eq!(finished.steps(), StepCount::ZERO)?;
+        ensure_matches(
+            matches!(finished.outcome(), RunOutcome::Stable(state) if state.as_bytes() == b"a"),
+            "expected stable finish output",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn execution_finish_after_return_step_preserves_return_result() -> TestResult {
+        let program = Program::parse_str("a=(return)ok")?;
+        let limits = RunLimits::new(StepLimit::new(10));
+        let mut execution = program.start_execution(runtime_input(b"a")?, limits)?;
+
+        expect_return_completion(execution.step()?, 1, b"a=(return)ok", b"ok")?;
+        ensure_eq!(execution.completed_steps().get(), 1)?;
+
+        let finished = execution.finish()?;
+        expect_return_output(&finished, b"ok")?;
+        ensure_eq!(finished.steps().get(), 1)?;
         Ok(())
     }
 
@@ -1064,12 +1185,67 @@ mod tests {
         let error = expect_run_error(would_match.step())?;
         let error = expect_step_limit(error)?;
 
-        ensure_eq(
+        ensure_eq!(
             error,
             LimitError::Step {
                 max_steps: StepLimit::new(0),
                 completed_steps: StepCount::ZERO,
                 state_len: RuntimeStateByteCount::new(1),
+            },
+        )?;
+        ensure_eq!(would_match.completed_steps(), StepCount::ZERO)?;
+        ensure_eq!(
+            runtime_view_bytes(would_match.state.view()).as_slice(),
+            b"a"
+        )?;
+
+        let repeated_error = expect_step_limit(expect_run_error(would_match.step())?)?;
+        ensure_eq!(
+            repeated_error,
+            LimitError::Step {
+                max_steps: StepLimit::new(0),
+                completed_steps: StepCount::ZERO,
+                state_len: RuntimeStateByteCount::new(1),
+            },
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn step_limit_preempts_rewrite_and_return_size_checks() -> TestResult {
+        let rewrite_program = Program::parse_str("=a")?;
+        let rewrite_limits = RunLimits::bounded(
+            StepLimit::new(0),
+            StateByteLimit::new(0),
+            ReturnByteLimit::new(0),
+        );
+        let rewrite_error = expect_step_limit(expect_run_error(
+            rewrite_program.run(runtime_input(b"")?, rewrite_limits),
+        )?)?;
+        ensure_eq!(
+            rewrite_error,
+            LimitError::Step {
+                max_steps: StepLimit::new(0),
+                completed_steps: StepCount::ZERO,
+                state_len: RuntimeStateByteCount::new(0),
+            },
+        )?;
+
+        let return_program = Program::parse_str("=(return)a")?;
+        let return_limits = RunLimits::bounded(
+            StepLimit::new(0),
+            StateByteLimit::new(0),
+            ReturnByteLimit::new(0),
+        );
+        let return_error = expect_step_limit(expect_run_error(
+            return_program.run(runtime_input(b"")?, return_limits),
+        )?)?;
+        ensure_eq!(
+            return_error,
+            LimitError::Step {
+                max_steps: StepLimit::new(0),
+                completed_steps: StepCount::ZERO,
+                state_len: RuntimeStateByteCount::new(0),
             },
         )?;
         Ok(())
@@ -1086,8 +1262,23 @@ mod tests {
         let mut state_limited =
             state_program.start_execution(runtime_input(b"aa")?, state_limits)?;
         let state_error = expect_run_error(state_limited.step())?;
-        ensure_eq(
+        ensure_eq!(
             state_error,
+            RunError::Limit(LimitError::State {
+                context: StateLimitContext::Rewrite,
+                limit: StateByteLimit::new(2),
+                attempted_len: RuntimeStateByteCount::new(3),
+            }),
+        )?;
+        ensure_eq!(state_limited.completed_steps(), StepCount::ZERO)?;
+        ensure_eq!(
+            runtime_view_bytes(state_limited.state.view()).as_slice(),
+            b"aa"
+        )?;
+
+        let repeated_state_error = expect_run_error(state_limited.step())?;
+        ensure_eq!(
+            repeated_state_error,
             RunError::Limit(LimitError::State {
                 context: StateLimitContext::Rewrite,
                 limit: StateByteLimit::new(2),
@@ -1104,8 +1295,22 @@ mod tests {
         let mut return_limited =
             return_program.start_execution(runtime_input(b"a")?, return_limits)?;
         let return_error = expect_run_error(return_limited.step())?;
-        ensure_eq(
+        ensure_eq!(
             return_error,
+            RunError::Limit(LimitError::Return {
+                limit: ReturnByteLimit::new(1),
+                attempted_len: ReturnOutputByteCount::new(2),
+            }),
+        )?;
+        ensure_eq!(return_limited.completed_steps(), StepCount::ZERO)?;
+        ensure_eq!(
+            runtime_view_bytes(return_limited.state.view()).as_slice(),
+            b"a"
+        )?;
+
+        let repeated_return_error = expect_run_error(return_limited.step())?;
+        ensure_eq!(
+            repeated_return_error,
             RunError::Limit(LimitError::Return {
                 limit: ReturnByteLimit::new(1),
                 attempted_len: ReturnOutputByteCount::new(2),
@@ -1116,17 +1321,17 @@ mod tests {
 
     #[test]
     fn anchors_match_only_at_their_edges() -> TestResult {
-        ensure_eq(run_source("(start)a=x", "aba")?, "xba")?;
-        ensure_eq(run_source("(start)a=x", "ba")?, "ba")?;
-        ensure_eq(run_source("(end)a=x", "aba")?, "abx")?;
-        ensure_eq(run_source("(end)a=x", "ab")?, "ab")?;
+        ensure_eq!(run_source("(start)a=x", "aba")?, "xba")?;
+        ensure_eq!(run_source("(start)a=x", "ba")?, "ba")?;
+        ensure_eq!(run_source("(end)a=x", "aba")?, "abx")?;
+        ensure_eq!(run_source("(end)a=x", "ab")?, "ab")?;
         Ok(())
     }
 
     #[test]
     fn move_actions_work() -> TestResult {
-        ensure_eq(run_source("a=(start)x", "ba")?, "xb")?;
-        ensure_eq(run_source("a=(end)x", "ba")?, "bx")?;
+        ensure_eq!(run_source("a=(start)x", "ba")?, "xb")?;
+        ensure_eq!(run_source("a=(end)x", "ba")?, "bx")?;
         Ok(())
     }
 
@@ -1140,7 +1345,7 @@ mod tests {
         )?;
 
         expect_return_output(&result, b"ok")?;
-        ensure_eq(result.steps().get(), 2)?;
+        ensure_eq!(result.steps().get(), 2)?;
         Ok(())
     }
 
@@ -1158,15 +1363,15 @@ mod tests {
             limits,
         )?;
 
-        ensure_eq(result_bytes(&start_result), b"start".as_slice())?;
-        ensure_eq(result_bytes(&end_result), b"end".as_slice())?;
+        ensure_eq!(result_bytes(&start_result), b"start".as_slice())?;
+        ensure_eq!(result_bytes(&end_result), b"end".as_slice())?;
         Ok(())
     }
 
     #[test]
     fn once_rule_is_used_at_most_once() -> TestResult {
         let source = "(once)a=b\na=c";
-        ensure_eq(run_source(source, "aa")?, "bc")?;
+        ensure_eq!(run_source(source, "aa")?, "bc")?;
         Ok(())
     }
 
@@ -1180,11 +1385,11 @@ mod tests {
         )?;
 
         ensure(
-            runtime.find_next_match().is_some(),
+            runtime.find_next_match()?.is_some(),
             "expected first lookup to find the once rule",
         )?;
         ensure(
-            runtime.find_next_match().is_some(),
+            runtime.find_next_match()?.is_some(),
             "lookup must not consume a once rule before the step commits",
         )?;
         Ok(())
@@ -1193,13 +1398,13 @@ mod tests {
     #[test]
     fn return_discards_current_state() -> TestResult {
         let source = "aa=(return)ok\na=x";
-        ensure_eq(run_source(source, "aabb")?, "ok")?;
+        ensure_eq!(run_source(source, "aabb")?, "ok")?;
         Ok(())
     }
 
     #[test]
     fn runtime_only_bytes_are_preserved_until_return_discards_them() -> TestResult {
-        ensure_eq(run_source("a=b", "a=()#c")?, "b=()#c")?;
+        ensure_eq!(run_source("a=b", "a=()#c")?, "b=()#c")?;
         let result = run_program(
             &Program::parse_str("a=(return)x")?,
             b"a=()#c",
@@ -1211,18 +1416,18 @@ mod tests {
 
     #[test]
     fn input_spaces_are_preserved_and_do_not_bridge_matches() -> TestResult {
-        ensure_eq(run_source("a= b", "a bc")?, "b bc")?;
-        ensure_eq(run_source("a b=bb", "a bc")?, "a bc")?;
-        ensure_eq(run_source("ab=bb", "a bc")?, "a bc")?;
+        ensure_eq!(run_source("a= b", "a bc")?, "b bc")?;
+        ensure_eq!(run_source("a b=bb", "a bc")?, "a bc")?;
+        ensure_eq!(run_source("ab=bb", "a bc")?, "a bc")?;
         Ok(())
     }
 
     #[test]
     fn opaque_reserved_input_bytes_do_not_bridge_program_payload_matches() -> TestResult {
-        ensure_eq(run_source("ab=x", "a=b")?, "a=b")?;
-        ensure_eq(run_source("ab=x", "a#b")?, "a#b")?;
-        ensure_eq(run_source("ab=x", "a(b")?, "a(b")?;
-        ensure_eq(run_source("ab=x", "a)b")?, "a)b")?;
+        ensure_eq!(run_source("ab=x", "a=b")?, "a=b")?;
+        ensure_eq!(run_source("ab=x", "a#b")?, "a#b")?;
+        ensure_eq!(run_source("ab=x", "a(b")?, "a(b")?;
+        ensure_eq!(run_source("ab=x", "a)b")?, "a)b")?;
         Ok(())
     }
 
@@ -1254,7 +1459,7 @@ mod tests {
         )?;
 
         let result = run_program(&program, b"a=#()", RunLimits::new(StepLimit::new(10_000)))?;
-        ensure_eq(String::from_utf8(into_result_bytes(result))?, "b=#()")?;
+        ensure_eq!(String::from_utf8(into_result_bytes(result))?, "b=#()")?;
         Ok(())
     }
 
@@ -1265,21 +1470,21 @@ mod tests {
             b"a",
             RunLimits::new(StepLimit::new(1)),
         )?;
-        ensure_eq(result_bytes(&exact), b"b".as_slice())?;
-        ensure_eq(exact.steps().get(), 1)?;
+        ensure_eq!(result_bytes(&exact), b"b".as_slice())?;
+        ensure_eq!(exact.steps().get(), 1)?;
 
         let no_match = run_program(
             &Program::parse_str("a=b")?,
             b"x",
             RunLimits::new(StepLimit::new(0)),
         )?;
-        ensure_eq(result_bytes(&no_match), b"x".as_slice())?;
-        ensure_eq(no_match.steps().get(), 0)?;
+        ensure_eq!(result_bytes(&no_match), b"x".as_slice())?;
+        ensure_eq!(no_match.steps().get(), 0)?;
 
         let limits = RunLimits::new(StepLimit::new(0));
         let error = expect_run_error(Program::parse_str("a=b")?.run(runtime_input(b"a")?, limits))?;
         let error = expect_step_limit(error)?;
-        ensure_eq(
+        ensure_eq!(
             error,
             LimitError::Step {
                 max_steps: StepLimit::new(0),
@@ -1296,7 +1501,7 @@ mod tests {
         let error = expect_run_error(Program::parse_str("=a")?.run(runtime_input(b"")?, limits))?;
         let error = expect_step_limit(error)?;
 
-        ensure_eq(
+        ensure_eq!(
             error,
             LimitError::Step {
                 max_steps: StepLimit::new(3),
@@ -1337,7 +1542,7 @@ mod tests {
         ))?;
         let error = expect_step_limit(error)?;
 
-        ensure_eq(
+        ensure_eq!(
             error,
             LimitError::Step {
                 max_steps: StepLimit::new(3),
@@ -1349,7 +1554,7 @@ mod tests {
                 state_len: RuntimeStateByteCount::new(3),
             },
         )?;
-        ensure_eq(last_state.as_slice(), b"aaa".as_slice())?;
+        ensure_eq!(last_state.as_slice(), b"aaa".as_slice())?;
         Ok(())
     }
 
@@ -1364,8 +1569,8 @@ a|-=
 (start)a=(end)|-
 =(return)true";
 
-        ensure_eq(run_source(source, "aba")?, "true")?;
-        ensure_eq(run_source(source, "ab")?, "false")?;
+        ensure_eq!(run_source(source, "aba")?, "true")?;
+        ensure_eq!(run_source(source, "ab")?, "false")?;
         Ok(())
     }
 
@@ -1378,8 +1583,8 @@ a|-=
             RunLimits::default(),
         )?;
 
-        ensure_eq(result_bytes(&result), input.as_slice())?;
-        ensure_eq(result.steps().get(), 0)?;
+        ensure_eq!(result_bytes(&result), input.as_slice())?;
+        ensure_eq!(result.steps().get(), 0)?;
         Ok(())
     }
 
@@ -1401,15 +1606,15 @@ a|-=
         let payload = Payload::parse(&compact, source_line_number(1)?, PayloadKind::LeftSideData)?;
         let state = State::from_input(runtime_input(b"a=()# ")?, RunLimits::default())?;
 
-        ensure_eq(expect_payload_byte(&payload, 0)?, b'a')?;
-        ensure_eq(expect_runtime_byte(&state, 0)?, b'a')?;
-        ensure_eq(expect_runtime_byte(&state, 1)?, b'=')?;
-        ensure_eq(expect_runtime_byte(&state, 2)?, b'(')?;
-        ensure_eq(expect_runtime_byte(&state, 5)?, b' ')?;
-        ensure_eq(state.byte_at_is_editable(0), Some(true))?;
-        ensure_eq(state.byte_at_is_opaque(1), Some(true))?;
-        ensure_eq(state.byte_at_is_opaque(2), Some(true))?;
-        ensure_eq(state.byte_at_is_opaque(5), Some(true))?;
+        ensure_eq!(expect_payload_byte(&payload, 0)?, b'a')?;
+        ensure_eq!(expect_runtime_byte(&state, 0)?, b'a')?;
+        ensure_eq!(expect_runtime_byte(&state, 1)?, b'=')?;
+        ensure_eq!(expect_runtime_byte(&state, 2)?, b'(')?;
+        ensure_eq!(expect_runtime_byte(&state, 5)?, b' ')?;
+        ensure_eq!(state.byte_at_is_editable(0), Some(true))?;
+        ensure_eq!(state.byte_at_is_opaque(1), Some(true))?;
+        ensure_eq!(state.byte_at_is_opaque(2), Some(true))?;
+        ensure_eq!(state.byte_at_is_opaque(5), Some(true))?;
         Ok(())
     }
 }

@@ -534,36 +534,36 @@ mod tests {
 
     #[test]
     fn code_spaces_are_ignored_in_rules() -> TestResult {
-        ensure_eq(run_source("a b=bb", "abc")?, "bbc")?;
-        ensure_eq(run_source("a = b", "a")?, "b")?;
-        ensure_eq(run_source("( once ) a = ( end ) b", "ca")?, "cb")?;
+        ensure_eq!(run_source("a b=bb", "abc")?, "bbc")?;
+        ensure_eq!(run_source("a = b", "a")?, "b")?;
+        ensure_eq!(run_source("( once ) a = ( end ) b", "ca")?, "cb")?;
         Ok(())
     }
 
     #[test]
     fn crlf_source_is_accepted_as_code_whitespace() -> TestResult {
-        ensure_eq(run_source("a=b\r\nb=c\r\n", "a")?, "c")?;
+        ensure_eq!(run_source("a=b\r\nb=c\r\n", "a")?, "c")?;
         Ok(())
     }
 
     #[test]
     fn tab_whitespace_is_ignored_in_code() -> TestResult {
-        ensure_eq(run_source("a\tb = c\tc", "ab")?, "cc")?;
+        ensure_eq!(run_source("a\tb = c\tc", "ab")?, "cc")?;
         Ok(())
     }
 
     #[test]
     fn hash_starts_a_comment() -> TestResult {
-        ensure_eq(run_source("a=b#c", "a")?, "b")?;
-        ensure_eq(run_source("#a=b", "a")?, "a")?;
-        ensure_eq(run_source("a=b#コメント内の非ASCIIは許可", "a")?, "b")?;
+        ensure_eq!(run_source("a=b#c", "a")?, "b")?;
+        ensure_eq!(run_source("#a=b", "a")?, "a")?;
+        ensure_eq!(run_source("a=b#コメント内の非ASCIIは許可", "a")?, "b")?;
         Ok(())
     }
 
     #[test]
     fn empty_compact_lines_do_not_become_rules() -> TestResult {
         let program = Program::parse_str(" \t\r\n# comment\n")?;
-        ensure_eq(program.rule_count(), RuleCount::new(0))?;
+        ensure_eq!(program.rule_count(), RuleCount::new(0))?;
         Ok(())
     }
 
@@ -573,7 +573,7 @@ mod tests {
         let source = b"a=b#\xff\xfe\n";
         let program = Program::parse_bytes(source)?;
         let result = run_program(&program, b"a", RunLimits::new(StepLimit::new(10_000)))?;
-        ensure_eq(result_bytes(&result), b"b".as_slice())?;
+        ensure_eq!(result_bytes(&result), b"b".as_slice())?;
         Ok(())
     }
 
@@ -590,7 +590,7 @@ mod tests {
         )?;
 
         let error = expect_parse_error("a=あ")?;
-        ensure_eq(error.line().get(), 1)?;
+        ensure_eq!(error.line().get(), 1)?;
         expect_error_position(&error, 1, 3)?;
         ensure_matches(
             matches!(error.kind(), ParseErrorKind::NonAsciiInCode { .. }),
@@ -602,7 +602,7 @@ mod tests {
     #[test]
     fn code_body_rejects_non_printable_ascii_outside_comments() -> TestResult {
         let error = expect_parse_error("a=\0")?;
-        ensure_eq(error.line().get(), 1)?;
+        ensure_eq!(error.line().get(), 1)?;
         expect_error_position(&error, 1, 3)?;
         ensure_matches(
             matches!(error.kind(), ParseErrorKind::NonPrintableAsciiInCode { .. }),
@@ -643,7 +643,7 @@ mod tests {
     fn missing_equals_error_uses_line_location() -> TestResult {
         let error = expect_parse_error("abc")?;
 
-        ensure_eq(
+        ensure_eq!(
             error.location(),
             ParseErrorLocation::Line(source_line_number(1)?),
         )?;
@@ -694,9 +694,9 @@ mod tests {
 
     #[test]
     fn rhs_action_with_empty_payload_is_allowed() -> TestResult {
-        ensure_eq(run_source("a=(start)", "ba")?, "b")?;
-        ensure_eq(run_source("a=(end)", "ba")?, "b")?;
-        ensure_eq(run_source("a=(return)", "a")?, "")?;
+        ensure_eq!(run_source("a=(start)", "ba")?, "b")?;
+        ensure_eq!(run_source("a=(end)", "ba")?, "b")?;
+        ensure_eq!(run_source("a=(return)", "a")?, "")?;
         Ok(())
     }
 
@@ -704,7 +704,7 @@ mod tests {
     fn multiline_errors_report_line_and_original_column() -> TestResult {
         let error = expect_parse_error("a=b\nx = y = z")?;
 
-        ensure_eq(error.line().get(), 2)?;
+        ensure_eq!(error.line().get(), 2)?;
         expect_error_position(&error, 2, 7)?;
         ensure_matches(
             matches!(error.kind(), ParseErrorKind::MultipleEquals),
@@ -786,7 +786,7 @@ mod tests {
         let compact_result = run_program(&compact, b"ac", RunLimits::new(StepLimit::new(10)))?;
         let spaced_result = run_program(&spaced, b"ac", RunLimits::new(StepLimit::new(10)))?;
 
-        ensure_eq(result_bytes(&compact_result), result_bytes(&spaced_result))?;
+        ensure_eq!(result_bytes(&compact_result), result_bytes(&spaced_result))?;
         Ok(())
     }
 }

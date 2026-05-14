@@ -14,7 +14,10 @@ use core::error::Error;
 pub use parse::{
     LeftModifierKind, ParseError, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind,
 };
-pub use run::{InputColumn, InputError, LimitError, RunError, StateLimitContext, StateSizeError};
+pub use run::{
+    InputColumn, InputError, LimitError, RunError, RuntimeInvariantError, StateLimitContext,
+    StateSizeError,
+};
 pub use traced::{
     FallibleTraceSnapshotRunError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
 };

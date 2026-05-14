@@ -8,9 +8,7 @@ use crate::error::{
     TraceSnapshotRunError, TracedRunError,
 };
 use crate::parser::parse_program_impl;
-use crate::rule::{
-    OnceRuleSlot, ParsedRule, Rule, RuleCount, RuleExecution, RulePosition, RuleRepeat, RuleView,
-};
+use crate::rule::{OnceRuleSlotCount, ParsedRule, Rule, RuleCount, RulePosition, RuleView};
 use crate::runtime::{Execution, RuntimeInput};
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
@@ -252,7 +250,7 @@ pub struct Program {
 #[derive(Debug, PartialEq, Eq, Default)]
 pub(crate) struct RuleSet {
     rules: Vec<Rule>,
-    once_rule_slots: usize,
+    once_slot_count: OnceRuleSlotCount,
 }
 
 impl RuleSet {
@@ -265,25 +263,12 @@ impl RuleSet {
             AllocationError::capacity_overflow(AllocationContext::ProgramRuleTable)
         })?;
 
-        let repeat = parsed.repeat();
-        let next_once_rule_slots = match repeat {
-            RuleRepeat::Always => self.once_rule_slots,
-            RuleRepeat::Once => self.once_rule_slots.checked_add(1).ok_or_else(|| {
-                AllocationError::capacity_overflow(AllocationContext::ProgramRuleTable)
-            })?,
-        };
-        let execution = match repeat {
-            RuleRepeat::Always => RuleExecution::Always,
-            RuleRepeat::Once => RuleExecution::Once(OnceRuleSlot::new(self.once_rule_slots)),
-        };
+        let (rule, next_once_slot_count) =
+            Rule::from_parsed(parsed, position, self.once_slot_count)?;
 
-        try_push(
-            &mut self.rules,
-            Rule::from_parsed(parsed, position, execution),
-            AllocationContext::ProgramRuleTable,
-        )?;
+        try_push(&mut self.rules, rule, AllocationContext::ProgramRuleTable)?;
 
-        self.once_rule_slots = next_once_rule_slots;
+        self.once_slot_count = next_once_slot_count;
         Ok(())
     }
 
@@ -292,7 +277,11 @@ impl RuleSet {
     }
 
     pub(crate) fn once_rule_count(&self) -> RuleCount {
-        RuleCount::new(self.once_rule_slots)
+        self.once_slot_count.as_rule_count()
+    }
+
+    pub(crate) const fn once_slot_count(&self) -> OnceRuleSlotCount {
+        self.once_slot_count
     }
 
     pub(crate) fn as_slice(&self) -> &[Rule] {
@@ -336,7 +325,7 @@ impl Program {
         self.rule_set.rule_count()
     }
 
-    /// Returns the number of `(once)` rules that need runtime state.
+    /// Returns the number of parsed `(once)` rules.
     #[must_use]
     pub fn once_rule_count(&self) -> RuleCount {
         self.rule_set.once_rule_count()
@@ -351,6 +340,10 @@ impl Program {
         self.rule_set.as_slice()
     }
 
+    pub(crate) const fn once_slot_count(&self) -> OnceRuleSlotCount {
+        self.rule_set.once_slot_count()
+    }
+
     /// Starts a stateful execution session for this program.
     ///
     /// The returned [`Execution`] can be advanced one matching rule at a time.
@@ -360,7 +353,8 @@ impl Program {
     /// # Errors
     ///
     /// Returns `RunError` when the validated input exceeds this run's state
-    /// limit or when allocating per-run `(once)` state fails.
+    /// limit, when allocating per-run `(once)` state fails, or when an internal
+    /// runtime invariant is violated.
     pub fn start_execution(
         &self,
         input: RuntimeInput,
@@ -374,10 +368,11 @@ impl Program {
     /// # Errors
     ///
     /// Returns `RunError` when the validated input exceeds this run's state
-    /// limit, an allocation fails, state-size arithmetic overflows, or a
-    /// configured `RunLimits` budget would be exceeded.
+    /// limit, an allocation fails, state-size arithmetic overflows, a
+    /// configured `RunLimits` budget would be exceeded, or an internal runtime
+    /// invariant is violated.
     pub fn run(&self, input: RuntimeInput, limits: RunLimits) -> Result<RunResult, RunError> {
-        Execution::new(self, input, limits)?.run()
+        Execution::new(self, input, limits)?.finish()
     }
 
     /// Runs this program and emits trace-snapshot, infallible events.
@@ -652,7 +647,7 @@ mod tests {
     fn public_free_run_works() -> TestResult {
         let result = run_str("a=b", b"a", RunLimits::default())?;
         expect_stable_output(&result, b"b")?;
-        ensure_eq(result.steps().get(), 1)?;
+        ensure_eq!(result.steps().get(), 1)?;
 
         let result = run_bytes(b"a=b#\xff", b"a", RunLimits::default())?;
         expect_stable_output(&result, b"b")?;
@@ -681,9 +676,9 @@ mod tests {
         let first = run_program(&program, b"aa", limits)?;
         let second = run_program(&program, b"aa", limits)?;
 
-        ensure_eq(result_bytes(&first), b"bc".as_slice())?;
-        ensure_eq(result_bytes(&second), b"bc".as_slice())?;
-        ensure_eq(program.once_rule_count(), RuleCount::new(1))?;
+        ensure_eq!(result_bytes(&first), b"bc".as_slice())?;
+        ensure_eq!(result_bytes(&second), b"bc".as_slice())?;
+        ensure_eq!(program.once_rule_count(), RuleCount::new(1))?;
         Ok(())
     }
 
@@ -691,8 +686,8 @@ mod tests {
     fn always_rules_do_not_allocate_once_slots() -> TestResult {
         let program = Program::parse_str("a=b\nb=c\n(start)c=d")?;
 
-        ensure_eq(program.rule_count(), RuleCount::new(3))?;
-        ensure_eq(program.once_rule_count(), RuleCount::new(0))?;
+        ensure_eq!(program.rule_count(), RuleCount::new(3))?;
+        ensure_eq!(program.once_rule_count(), RuleCount::new(0))?;
         Ok(())
     }
 
@@ -704,16 +699,16 @@ mod tests {
 
         match stable.into_outcome() {
             RunOutcome::Stable(output) => {
-                ensure_eq(output.as_bytes(), b"b".as_slice())?;
-                ensure_eq(output.byte_count(), RuntimeStateByteCount::new(1))?;
+                ensure_eq!(output.as_bytes(), b"b".as_slice())?;
+                ensure_eq!(output.byte_count(), RuntimeStateByteCount::new(1))?;
             }
             RunOutcome::Return(_) => return Err(TestFailure::message("expected stable outcome")),
         }
 
         match returned.into_outcome() {
             RunOutcome::Return(output) => {
-                ensure_eq(output.as_bytes(), b"b".as_slice())?;
-                ensure_eq(output.byte_count(), ReturnOutputByteCount::new(1))?;
+                ensure_eq!(output.as_bytes(), b"b".as_slice())?;
+                ensure_eq!(output.byte_count(), ReturnOutputByteCount::new(1))?;
             }
             RunOutcome::Stable(_) => return Err(TestFailure::message("expected return outcome")),
         }
@@ -726,7 +721,7 @@ mod tests {
         let program = Program::parse_str("a = b # comment\n(start)c=(end)d")?;
         let rules = program.rules().collect::<Vec<_>>();
 
-        ensure_eq(rules.len(), 2)?;
+        ensure_eq!(rules.len(), 2)?;
         let first = rules
             .first()
             .copied()
@@ -736,10 +731,10 @@ mod tests {
             .copied()
             .ok_or(TestFailure::message("expected second rule"))?;
 
-        ensure_eq(first.position().number().get(), 1)?;
-        ensure_eq(first.line_number().get(), 1)?;
-        ensure_eq(first.repeat(), RuleRepeat::Always)?;
-        ensure_eq(first.anchor(), RuleAnchor::Anywhere)?;
+        ensure_eq!(first.position().number().get(), 1)?;
+        ensure_eq!(first.line_number().get(), 1)?;
+        ensure_eq!(first.repeat(), RuleRepeat::Always)?;
+        ensure_eq!(first.anchor(), RuleAnchor::Anywhere)?;
         ensure(first.lhs().eq_bytes(b"a"), "expected first lhs")?;
         ensure_matches(
             matches!(
@@ -748,12 +743,12 @@ mod tests {
             ),
             "expected replace action",
         )?;
-        ensure_eq(first.canonical_source()?, b"a=b".as_slice())?;
+        ensure_eq!(first.canonical_source()?, b"a=b".as_slice())?;
 
-        ensure_eq(second.position().number().get(), 2)?;
-        ensure_eq(second.line_number().get(), 2)?;
-        ensure_eq(second.repeat(), RuleRepeat::Always)?;
-        ensure_eq(second.anchor(), RuleAnchor::Start)?;
+        ensure_eq!(second.position().number().get(), 2)?;
+        ensure_eq!(second.line_number().get(), 2)?;
+        ensure_eq!(second.repeat(), RuleRepeat::Always)?;
+        ensure_eq!(second.anchor(), RuleAnchor::Start)?;
         ensure(second.lhs().eq_bytes(b"c"), "expected second lhs")?;
         ensure_matches(
             matches!(
@@ -762,7 +757,7 @@ mod tests {
             ),
             "expected move-end action",
         )?;
-        ensure_eq(second.canonical_source()?, b"(start)c=(end)d".as_slice())?;
+        ensure_eq!(second.canonical_source()?, b"(start)c=(end)d".as_slice())?;
         Ok(())
     }
 
@@ -774,12 +769,12 @@ mod tests {
         let reparsed = Program::parse_bytes(canonical.as_slice())?;
         let reparsed_rule = expect_rule(&reparsed, 0)?;
 
-        ensure_eq(reparsed.rule_count(), RuleCount::new(1))?;
-        ensure_eq(reparsed.once_rule_count(), RuleCount::new(1))?;
-        ensure_eq(reparsed_rule.repeat(), RuleRepeat::Once)?;
-        ensure_eq(reparsed_rule.anchor(), RuleAnchor::Start)?;
+        ensure_eq!(reparsed.rule_count(), RuleCount::new(1))?;
+        ensure_eq!(reparsed.once_rule_count(), RuleCount::new(1))?;
+        ensure_eq!(reparsed_rule.repeat(), RuleRepeat::Once)?;
+        ensure_eq!(reparsed_rule.anchor(), RuleAnchor::Start)?;
         ensure(reparsed_rule.lhs().eq_bytes(b"a"), "expected lhs")?;
-        ensure_eq(
+        ensure_eq!(
             reparsed_rule.canonical_source()?,
             b"(once)(start)a=(end)b".as_slice(),
         )?;
@@ -819,12 +814,12 @@ mod tests {
                             let rule = expect_rule(&program, 0)?;
                             let canonical = rule.canonical_source()?;
 
-                            ensure_eq(program.rule_count(), RuleCount::new(1))?;
-                            ensure_eq(canonical.as_slice(), source.as_slice())?;
+                            ensure_eq!(program.rule_count(), RuleCount::new(1))?;
+                            ensure_eq!(canonical.as_slice(), source.as_slice())?;
 
                             let reparsed = Program::parse_bytes(&canonical)?;
                             let reparsed_rule = expect_rule(&reparsed, 0)?;
-                            ensure_eq(reparsed_rule.canonical_source()?, source.as_slice())?;
+                            ensure_eq!(reparsed_rule.canonical_source()?, source.as_slice())?;
                         }
                     }
                 }
@@ -846,7 +841,7 @@ mod tests {
         )?;
         let error = expect_state_limit(error)?;
 
-        ensure_eq(
+        ensure_eq!(
             error,
             LimitError::State {
                 context: StateLimitContext::Input,
@@ -867,7 +862,7 @@ mod tests {
         let error = expect_run_error(Program::parse_str("=a")?.run(runtime_input(b"aa")?, limits))?;
         let error = expect_state_limit(error)?;
 
-        ensure_eq(
+        ensure_eq!(
             error,
             LimitError::State {
                 context: StateLimitContext::Rewrite,
@@ -893,7 +888,7 @@ mod tests {
         )?;
 
         expect_return_output(&result, b"ok")?;
-        ensure_eq(events.len(), 3)?;
+        ensure_eq!(events.len(), 3)?;
         ensure_matches(
             matches!(events.first(), Some(TraceSnapshotEvent::Initial { .. })),
             "expected initial trace event",
@@ -902,9 +897,9 @@ mod tests {
         let first_step = expect_event(&events, 1)?;
         let second_step = expect_event(&events, 2)?;
 
-        ensure_eq(trace_event_bytes(initial), b"a".as_slice())?;
-        ensure_eq(trace_event_bytes(first_step), b"b".as_slice())?;
-        ensure_eq(trace_event_bytes(second_step), b"ok".as_slice())?;
+        ensure_eq!(trace_event_bytes(initial), b"a".as_slice())?;
+        ensure_eq!(trace_event_bytes(first_step), b"b".as_slice())?;
+        ensure_eq!(trace_event_bytes(second_step), b"ok".as_slice())?;
         ensure_matches(
             matches!(
                 first_step,
@@ -932,8 +927,8 @@ mod tests {
                 effect: TraceSnapshotEffect::Continue { state },
                 ..
             } => {
-                ensure_eq(state.as_bytes(), b"b".as_slice())?;
-                ensure_eq(rule.canonical_source()?, b"a=b".as_slice())?;
+                ensure_eq!(state.as_bytes(), b"b".as_slice())?;
+                ensure_eq!(rule.canonical_source()?, b"a=b".as_slice())?;
             }
             TraceSnapshotEvent::Initial { .. } | TraceSnapshotEvent::Step { .. } => {
                 return Err(TestFailure::message("expected continue step"));

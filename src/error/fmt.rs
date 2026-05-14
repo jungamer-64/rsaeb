@@ -5,7 +5,8 @@ use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind}
 use super::{
     AebError, FallibleTraceSnapshotRunError, InputColumn, InputError, LeftModifierKind, LimitError,
     ParseError, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind, RunError,
-    StateLimitContext, StateSizeError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
+    RuntimeInvariantError, StateLimitContext, StateSizeError, TraceSnapshotError,
+    TraceSnapshotRunError, TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -144,6 +145,25 @@ impl fmt::Display for RunError {
             Self::Allocation(error) => error.fmt(f),
             Self::StateSize(error) => error.fmt(f),
             Self::Limit(error) => error.fmt(f),
+            Self::Invariant(error) => error.fmt(f),
+        }
+    }
+}
+
+impl fmt::Display for RuntimeInvariantError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingOnceRuleState {
+                once_slot,
+                once_state_count,
+            } => write!(
+                f,
+                "runtime invariant violation: once rule slot {once_slot} has no runtime state; allocated once state count: {once_state_count}",
+            ),
+            Self::ConsumedOnceRuleSlot { once_slot } => write!(
+                f,
+                "runtime invariant violation: matched once rule slot {once_slot} was already consumed",
+            ),
         }
     }
 }
@@ -297,21 +317,21 @@ mod tests {
     fn allocation_display_names_the_failed_context_and_capacity() -> TestResult {
         let error = AllocationError::reserve_failed(AllocationContext::TraceSnapshot, 123);
 
-        ensure_eq(
+        ensure_eq!(
             error.to_string(),
             "allocation failure while building trace snapshot; requested capacity: 123",
         )?;
 
         let error = AllocationError::reserve_failed(AllocationContext::RuntimeStateView, 456);
 
-        ensure_eq(
+        ensure_eq!(
             error.to_string(),
             "allocation failure while building runtime state view; requested capacity: 456",
         )?;
 
         let error = AllocationError::capacity_overflow(AllocationContext::CanonicalSource);
 
-        ensure_eq(
+        ensure_eq!(
             error.to_string(),
             "allocation capacity overflow while building canonical source bytes",
         )?;
@@ -322,7 +342,7 @@ mod tests {
     fn parse_error_display_includes_line_column_and_structured_reason() -> TestResult {
         let error = expect_parse_error("a=b=c")?;
 
-        ensure_eq(
+        ensure_eq!(
             error.to_string(),
             "parse error at line 1, column 4: multiple '=' characters are not allowed",
         )?;
@@ -333,7 +353,7 @@ mod tests {
     fn input_error_display_keeps_byte_and_original_column() -> TestResult {
         let error = expect_input_error(RuntimeInput::parse(&[0xff]))?;
 
-        ensure_eq(
+        ensure_eq!(
             error.to_string(),
             "input error: non-ASCII byte 0xff at column 1",
         )?;
@@ -352,7 +372,7 @@ mod tests {
         )?;
         let error = expect_state_limit(error)?;
 
-        ensure_eq(
+        ensure_eq!(
             error.to_string(),
             "state limit exceeded by runtime input; attempted length: 2, limit: 1",
         )?;
@@ -366,7 +386,7 @@ mod tests {
         let error = expect_run_error(program.run(runtime_input(b"a")?, limits))?;
         let error = expect_step_limit(error)?;
 
-        ensure_eq(
+        ensure_eq!(
             error.to_string(),
             "step limit exceeded after 0 steps; max steps: 0, state length: 1 bytes",
         )?;

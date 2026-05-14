@@ -18,7 +18,7 @@ pub enum AllocationContext {
     CanonicalSource,
     /// Storing validated runtime input.
     RuntimeInput,
-    /// Storing per-run `(once)` slot state.
+    /// Storing `(once)` execution state.
     RuntimeOnceRuleState,
     /// Building the next runtime state after a rewrite.
     RuntimeRewriteState,
@@ -141,19 +141,19 @@ mod tests {
     #[test]
     fn allocation_contexts_are_publicly_inspectable() -> TestResult {
         let error = AllocationError::reserve_failed(AllocationContext::TraceSnapshot, 123);
-        ensure_eq(error.context(), AllocationContext::TraceSnapshot)?;
-        ensure_eq(
+        ensure_eq!(error.context(), AllocationContext::TraceSnapshot)?;
+        ensure_eq!(
             error.kind(),
             AllocationErrorKind::ReserveFailed {
                 requested_capacity: 123,
             },
         )?;
-        ensure_eq(error.requested_capacity(), Some(123))?;
+        ensure_eq!(error.requested_capacity(), Some(123))?;
 
         let error = AllocationError::capacity_overflow(AllocationContext::CanonicalSource);
-        ensure_eq(error.context(), AllocationContext::CanonicalSource)?;
-        ensure_eq(error.kind(), AllocationErrorKind::CapacityOverflow)?;
-        ensure_eq(error.requested_capacity(), None)?;
+        ensure_eq!(error.context(), AllocationContext::CanonicalSource)?;
+        ensure_eq!(error.kind(), AllocationErrorKind::CapacityOverflow)?;
+        ensure_eq!(error.requested_capacity(), None)?;
         Ok(())
     }
 }

@@ -280,7 +280,7 @@ mod tests {
         })?;
 
         expect_return_output(&result, b"ok")?;
-        ensure_eq(
+        ensure_eq!(
             seen.as_slice(),
             &[(1, b"a".to_vec()), (1, b"b".to_vec()), (2, b"ok".to_vec())],
         )?;
@@ -302,7 +302,7 @@ mod tests {
         )?;
 
         expect_return_output(&result, b"ok")?;
-        ensure_eq(events.len(), 3)?;
+        ensure_eq!(events.len(), 3)?;
 
         let initial = expect_event(&events, 0)?;
         let first_step = expect_event(&events, 1)?;
@@ -312,9 +312,9 @@ mod tests {
             matches!(initial, TraceSnapshotEvent::Initial { .. }),
             "expected initial trace event",
         )?;
-        ensure_eq(trace_event_bytes(initial), b"a".as_slice())?;
-        ensure_eq(trace_event_bytes(first_step), b"b".as_slice())?;
-        ensure_eq(trace_event_bytes(second_step), b"ok".as_slice())?;
+        ensure_eq!(trace_event_bytes(initial), b"a".as_slice())?;
+        ensure_eq!(trace_event_bytes(first_step), b"b".as_slice())?;
+        ensure_eq!(trace_event_bytes(second_step), b"ok".as_slice())?;
         ensure_matches(
             matches!(
                 first_step,
@@ -342,10 +342,10 @@ mod tests {
                 effect: TraceSnapshotEffect::Continue { state },
                 ..
             } => {
-                ensure_eq(state.as_bytes(), b"b".as_slice())?;
-                ensure_eq(state.byte_count(), RuntimeStateByteCount::new(1))?;
-                ensure_eq(rule.position().number().get(), 1)?;
-                ensure_eq(rule.line_number().get(), 1)?;
+                ensure_eq!(state.as_bytes(), b"b".as_slice())?;
+                ensure_eq!(state.byte_count(), RuntimeStateByteCount::new(1))?;
+                ensure_eq!(rule.position().number().get(), 1)?;
+                ensure_eq!(rule.line_number().get(), 1)?;
                 ensure(rule.lhs().eq_bytes(b"a"), "expected lhs")?;
                 ensure_matches(
                     matches!(
@@ -354,7 +354,7 @@ mod tests {
                     ),
                     "expected replace action",
                 )?;
-                ensure_eq(rule.canonical_source()?, b"a=b".as_slice())?;
+                ensure_eq!(rule.canonical_source()?, b"a=b".as_slice())?;
             }
             TraceSnapshotEvent::Initial { .. } | TraceSnapshotEvent::Step { .. } => {
                 return Err(TestFailure::message("expected continuing step event"));
@@ -379,7 +379,7 @@ mod tests {
             },
         )?;
 
-        ensure_eq(
+        ensure_eq!(
             materialization.ok_or(TestFailure::message("expected trace event"))?,
             Err(TraceSnapshotError::Limit {
                 limit: TraceSnapshotByteLimit::new(0),
@@ -417,7 +417,7 @@ mod tests {
             |_event| {},
         );
 
-        ensure_eq(
+        ensure_eq!(
             snapshot_error,
             Err(TraceSnapshotRunError::Snapshot(TraceSnapshotError::Limit {
                 limit: TraceSnapshotByteLimit::new(0),
@@ -432,7 +432,7 @@ mod tests {
             |_event| Err::<(), _>("trace sink full"),
         );
 
-        ensure_eq(
+        ensure_eq!(
             sink_error,
             Err(FallibleTraceSnapshotRunError::Trace("trace sink full")),
         )
@@ -449,7 +449,7 @@ mod tests {
             |_event| Err::<(), _>("trace sink full"),
         );
 
-        ensure_eq(
+        ensure_eq!(
             result,
             Err(FallibleTraceSnapshotRunError::Trace("trace sink full")),
         )?;
@@ -474,12 +474,12 @@ mod tests {
         let last = events
             .last()
             .ok_or(TestFailure::message("expected final trace event"))?;
-        ensure_eq(trace_event_bytes(last), result_bytes(&result))?;
+        ensure_eq!(trace_event_bytes(last), result_bytes(&result))?;
         let expected_events = result
             .steps()
             .checked_next()
             .ok_or(TestFailure::message("expected trace event count"))?;
-        ensure_eq(events.len(), expected_events.get())?;
+        ensure_eq!(events.len(), expected_events.get())?;
         ensure_matches(
             matches!(
                 last,

@@ -244,6 +244,10 @@ impl ReservedSyntaxByte {
 pub(crate) struct ProgramByte(u8);
 
 impl ProgramByte {
+    pub(crate) const fn is_valid_raw(raw: u8) -> bool {
+        raw.is_ascii_graphic() && ReservedSyntaxByte::parse(raw).is_none()
+    }
+
     pub(crate) fn parse(
         byte: CompactByte,
         line_number: SourceLineNumber,
@@ -308,61 +312,44 @@ impl AsciiByte {
     pub(crate) const fn get(self) -> u8 {
         self.0
     }
+
+    pub(crate) const fn from_program(byte: ProgramByte) -> Self {
+        Self(byte.get())
+    }
 }
 
 /// A byte inside the mutable runtime state.
 ///
-/// `Editable` bytes came from user input as ordinary payload-compatible bytes or
-/// from rule payloads. `Opaque` bytes came from runtime input only. Rules cannot
-/// directly match opaque bytes, so program syntax bytes like `=` and `#` can
-/// survive in state without becoming part of the program byte domain.
+/// Runtime state stores exactly one validated ASCII byte. Whether a byte can be
+/// matched by executable payloads is derived from the byte value itself instead
+/// of being stored as a second truth source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RuntimeByte(RuntimeByteRepr);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeByteRepr {
-    Editable(ProgramByte),
-    Opaque(AsciiByte),
-}
+pub(crate) struct RuntimeByte(AsciiByte);
 
 impl RuntimeByte {
     pub(crate) fn parse_input(byte: u8, zero_based_column: usize) -> Result<Self, InputError> {
-        let byte = AsciiByte::parse(byte, zero_based_column)?;
-        let raw = byte.get();
-
-        if raw.is_ascii_graphic() && ReservedSyntaxByte::parse(raw).is_none() {
-            Ok(Self(RuntimeByteRepr::Editable(ProgramByte(raw))))
-        } else {
-            Ok(Self(RuntimeByteRepr::Opaque(byte)))
-        }
+        Ok(Self(AsciiByte::parse(byte, zero_based_column)?))
     }
 
     pub(crate) const fn from_program(byte: ProgramByte) -> Self {
-        Self(RuntimeByteRepr::Editable(byte))
+        Self(AsciiByte::from_program(byte))
     }
 
     pub(crate) const fn materialize(self) -> u8 {
-        match self.0 {
-            RuntimeByteRepr::Editable(byte) => byte.get(),
-            RuntimeByteRepr::Opaque(byte) => byte.get(),
-        }
+        self.0.get()
     }
 
     pub(crate) const fn matches_program_byte(self, expected: ProgramByte) -> bool {
-        match self.0 {
-            RuntimeByteRepr::Editable(byte) => byte.get() == expected.get(),
-            RuntimeByteRepr::Opaque(_) => false,
-        }
+        self.is_editable() && self.0.get() == expected.get()
     }
 
-    #[cfg(test)]
     pub(crate) const fn is_editable(self) -> bool {
-        matches!(self.0, RuntimeByteRepr::Editable(_))
+        ProgramByte::is_valid_raw(self.0.get())
     }
 
     #[cfg(test)]
     pub(crate) const fn is_opaque(self) -> bool {
-        matches!(self.0, RuntimeByteRepr::Opaque(_))
+        !self.is_editable()
     }
 }
 
@@ -576,7 +563,7 @@ mod tests {
             .map_err(TestFailure::from)?;
 
         ensure(payload.eq_bytes(b"ab"), "expected payload bytes")?;
-        ensure_eq(payload.first_byte().map(ProgramByte::get), Some(b'a'))?;
+        ensure_eq!(payload.first_byte().map(ProgramByte::get), Some(b'a'))?;
         Ok(())
     }
 
@@ -584,11 +571,11 @@ mod tests {
     fn runtime_input_classifies_program_constructible_and_opaque_ascii_separately() -> TestResult {
         let parsed = RuntimeByte::parse_input(b'a', 0).map_err(TestFailure::from)?;
         ensure(parsed.is_editable(), "expected editable input byte")?;
-        ensure_eq(parsed.materialize(), b'a')?;
+        ensure_eq!(parsed.materialize(), b'a')?;
 
         for byte in [0x00, b' ', b'=', b'#', b'(', b')'] {
             let parsed = RuntimeByte::parse_input(byte, 0).map_err(TestFailure::from)?;
-            ensure_eq(parsed.materialize(), byte)?;
+            ensure_eq!(parsed.materialize(), byte)?;
             ensure(parsed.is_opaque(), "expected opaque input byte")?;
         }
 

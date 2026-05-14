@@ -34,7 +34,9 @@
 //! ```
 //!
 //! Parse [`Program`] once when the same rules should be reused. Per-run
-//! `(once)` state is owned by each runtime invocation, not by the program:
+//! `(once)` state is owned by each runtime invocation, not by the program.
+//! Parsed `(once)` rules carry private slots, so runtime code does not rebuild
+//! slot indexes from rule order while scanning:
 //!
 //! ```
 //! use rsaeb::{Program, RunLimits, RunOutcome, RuntimeInput, StepLimit};
@@ -65,7 +67,7 @@
 //!
 //! ```
 //! use rsaeb::{
-//!     ExecutionCompletion, ExecutionStep, Program, RunLimits, RuntimeInput, StepLimit,
+//!     ExecutionStep, Program, RunLimits, RuntimeInput, StepLimit,
 //! };
 //!
 //! # fn main() -> Result<(), rsaeb::AebError> {
@@ -78,21 +80,21 @@
 //! let first = execution.step()?;
 //! assert!(matches!(
 //!     first,
-//!     ExecutionStep::Applied { effect, .. }
-//!         if effect.state().bytes().eq(b"b".iter().copied())
+//!     ExecutionStep::Applied { state, .. }
+//!         if state.bytes().eq(b"b".iter().copied())
 //! ));
 //!
 //! let second = execution.step()?;
 //! assert!(matches!(
 //!     second,
-//!     ExecutionStep::Applied { effect, .. }
-//!         if effect.state().bytes().eq(b"c".iter().copied())
+//!     ExecutionStep::Applied { state, .. }
+//!         if state.bytes().eq(b"c".iter().copied())
 //! ));
 //!
 //! let completed = execution.step()?;
 //! assert!(matches!(
 //!     completed,
-//!     ExecutionStep::Complete(ExecutionCompletion::Stable { steps, state })
+//!     ExecutionStep::Stable { steps, state }
 //!         if steps.get() == 2 && state.bytes().eq(b"c".iter().copied())
 //! ));
 //! # Ok(())
@@ -134,7 +136,7 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse_str("( once ) ( start ) a = ( end ) b # comment")?;
-//! let rule = program.rules().next().expect("one parsed rule");
+//! let rule = program.rules().next().ok_or("missing parsed rule")?;
 //!
 //! assert_eq!(rule.repeat(), RuleRepeat::Once);
 //! assert_eq!(rule.anchor(), RuleAnchor::Start);
@@ -179,7 +181,7 @@
 //! Source parsing, runtime input validation, runtime execution, trace snapshot
 //! materialization, and user trace-sink failures are reported with structured
 //! error types such as [`ParseError`], [`InputError`], [`RunError`],
-//! [`TraceSnapshotError`], [`TraceSnapshotRunError`],
+//! [`RuntimeInvariantError`], [`TraceSnapshotError`], [`TraceSnapshotRunError`],
 //! [`FallibleTraceSnapshotRunError`], and [`TracedRunError`]. [`AebError`] is
 //! the convenience umbrella used by one-shot helpers.
 
@@ -229,7 +231,8 @@ pub use bytes::{
 pub use error::{
     AebError, FallibleTraceSnapshotRunError, InputColumn, InputError, LeftModifierKind, LimitError,
     ParseError, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind, RunError,
-    StateLimitContext, StateSizeError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
+    RuntimeInvariantError, StateLimitContext, StateSizeError, TraceSnapshotError,
+    TraceSnapshotRunError, TracedRunError,
 };
 pub use program::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
@@ -241,7 +244,7 @@ pub use rule::{
     PayloadView, RuleActionView, RuleAnchor, RuleCount, RuleNumber, RulePosition, RuleRepeat,
     RuleView,
 };
-pub use runtime::{Execution, ExecutionCompletion, ExecutionEffect, ExecutionStep, RuntimeInput};
+pub use runtime::{Execution, ExecutionStep, RuntimeInput};
 pub use source::{SourceColumn, SourceLineNumber, SourcePosition};
 pub use trace::{
     BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView, TraceSnapshotEffect,

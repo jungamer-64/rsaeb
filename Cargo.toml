@@ -14,6 +14,7 @@ include = [
     "/README.md",
     "/LICENSE-MIT",
     "/LICENSE-APACHE",
+    "/clippy.toml",
 ]
 
 [package.metadata.docs.rs]

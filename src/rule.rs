@@ -64,21 +64,6 @@ impl RulePosition {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct OnceRuleSlot {
-    zero_based: usize,
-}
-
-impl OnceRuleSlot {
-    pub(crate) const fn new(zero_based: usize) -> Self {
-        Self { zero_based }
-    }
-
-    pub(crate) const fn get(self) -> usize {
-        self.zero_based
-    }
-}
-
 /// Rule repeat policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleRepeat {
@@ -88,10 +73,86 @@ pub enum RuleRepeat {
     Once,
 }
 
+/// Program-local slot assigned to one parsed `(once)` rule.
+///
+/// The constructor is intentionally private to this module. Runtime code can
+/// receive a slot only from a parsed [`Rule`], so it cannot synthesize a stale
+/// or out-of-range `(once)` index while scanning rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct OnceRuleSlot {
+    zero_based: usize,
+}
+
+impl OnceRuleSlot {
+    const fn new(zero_based: usize) -> Self {
+        Self { zero_based }
+    }
+
+    pub(crate) const fn get(self) -> usize {
+        self.zero_based
+    }
+}
+
+/// Number of `(once)` slots assigned while building a rule set.
+///
+/// Keeping this as a dedicated type prevents the parsed program from carrying a
+/// raw `usize` counter that can drift away from the slots embedded in rules.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct OnceRuleSlotCount {
+    value: usize,
+}
+
+impl OnceRuleSlotCount {
+    pub(crate) const fn get(self) -> usize {
+        self.value
+    }
+
+    pub(crate) const fn as_rule_count(self) -> RuleCount {
+        RuleCount::new(self.value)
+    }
+
+    fn allocate_next(self) -> Result<(OnceRuleSlot, Self), AllocationError> {
+        let next = self.value.checked_add(1).ok_or_else(|| {
+            AllocationError::capacity_overflow(AllocationContext::ProgramRuleTable)
+        })?;
+
+        Ok((OnceRuleSlot::new(self.value), Self { value: next }))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuleExecution {
+pub(crate) enum RuleSchedule {
     Always,
     Once(OnceRuleSlot),
+}
+
+impl RuleSchedule {
+    const fn repeat(self) -> RuleRepeat {
+        match self {
+            Self::Always => RuleRepeat::Always,
+            Self::Once(_) => RuleRepeat::Once,
+        }
+    }
+
+    const fn once_slot(self) -> Option<OnceRuleSlot> {
+        match self {
+            Self::Always => None,
+            Self::Once(slot) => Some(slot),
+        }
+    }
+
+    fn from_repeat(
+        repeat: RuleRepeat,
+        once_slot_count: OnceRuleSlotCount,
+    ) -> Result<(Self, OnceRuleSlotCount), AllocationError> {
+        match repeat {
+            RuleRepeat::Always => Ok((Self::Always, once_slot_count)),
+            RuleRepeat::Once => {
+                let (slot, next_count) = once_slot_count.allocate_next()?;
+                Ok((Self::Once(slot), next_count))
+            }
+        }
+    }
 }
 
 /// Rule match anchor.
@@ -303,18 +364,13 @@ impl ParsedRule {
             action,
         }
     }
-
-    pub(crate) const fn repeat(&self) -> RuleRepeat {
-        self.repeat
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Rule {
     position: RulePosition,
     line_number: SourceLineNumber,
-    repeat: RuleRepeat,
-    execution: RuleExecution,
+    schedule: RuleSchedule,
     anchor: RuleAnchor,
     lhs: Payload,
     action: Action,
@@ -324,17 +380,22 @@ impl Rule {
     pub(crate) fn from_parsed(
         parsed: ParsedRule,
         position: RulePosition,
-        execution: RuleExecution,
-    ) -> Self {
-        Self {
-            position,
-            line_number: parsed.line_number,
-            repeat: parsed.repeat,
-            execution,
-            anchor: parsed.anchor,
-            lhs: parsed.lhs,
-            action: parsed.action,
-        }
+        once_slot_count: OnceRuleSlotCount,
+    ) -> Result<(Self, OnceRuleSlotCount), AllocationError> {
+        let (schedule, next_once_slot_count) =
+            RuleSchedule::from_repeat(parsed.repeat, once_slot_count)?;
+
+        Ok((
+            Self {
+                position,
+                line_number: parsed.line_number,
+                schedule,
+                anchor: parsed.anchor,
+                lhs: parsed.lhs,
+                action: parsed.action,
+            },
+            next_once_slot_count,
+        ))
     }
 
     pub(crate) const fn position(&self) -> RulePosition {
@@ -346,11 +407,11 @@ impl Rule {
     }
 
     pub(crate) const fn repeat(&self) -> RuleRepeat {
-        self.repeat
+        self.schedule.repeat()
     }
 
-    pub(crate) const fn execution(&self) -> RuleExecution {
-        self.execution
+    pub(crate) const fn once_slot(&self) -> Option<OnceRuleSlot> {
+        self.schedule.once_slot()
     }
 
     pub(crate) const fn anchor(&self) -> RuleAnchor {
@@ -373,7 +434,7 @@ impl Rule {
         let (action_token, payload) = self.action.canonical_parts();
         let mut len = self.lhs.len();
 
-        if matches!(self.repeat, RuleRepeat::Once) {
+        if matches!(self.schedule, RuleSchedule::Once(_)) {
             len = len.checked_add(SyntaxToken::Once.len()).ok_or_else(|| {
                 AllocationError::capacity_overflow(AllocationContext::CanonicalSource)
             })?;
@@ -405,7 +466,7 @@ impl Rule {
             AllocationContext::CanonicalSource,
         )?;
 
-        if matches!(self.repeat, RuleRepeat::Once) {
+        if matches!(self.schedule, RuleSchedule::Once(_)) {
             push_token(&mut output, SyntaxToken::Once)?;
         }
 

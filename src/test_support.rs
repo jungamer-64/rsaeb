@@ -1,6 +1,5 @@
 #![cfg(test)]
 
-use std::format;
 use std::string::{FromUtf8Error, String};
 use std::vec::Vec;
 
@@ -100,22 +99,23 @@ pub(crate) fn ensure_matches(condition: bool, message: &'static str) -> TestResu
     ensure(condition, message)
 }
 
-pub(crate) fn ensure_eq<T, U>(actual: T, expected: U) -> TestResult
-where
-    T: PartialEq<U> + core::fmt::Debug,
-    U: core::fmt::Debug,
-{
-    let result = if actual == expected {
-        Ok(())
-    } else {
-        Err(TestFailure::message(format!(
-            "values differed\nactual:   {actual:?}\nexpected: {expected:?}",
-        )))
-    };
-
-    core::mem::drop(actual);
-    result
+macro_rules! ensure_eq {
+    ($actual:expr, $expected:expr $(,)?) => {{
+        match (&$actual, &$expected) {
+            (actual, expected) => {
+                if *actual == *expected {
+                    Ok(())
+                } else {
+                    Err($crate::test_support::TestFailure::message(::std::format!(
+                        "values differed\nactual:   {actual:?}\nexpected: {expected:?}",
+                    )))
+                }
+            }
+        }
+    }};
 }
+
+pub(crate) use ensure_eq;
 
 pub(crate) fn test_limits() -> RunLimits {
     RunLimits::new(StepLimit::new(10_000))
@@ -202,7 +202,7 @@ pub(crate) fn expect_event<'events, 'program>(
 pub(crate) fn expect_error_position(error: &ParseError, line: usize, column: usize) -> TestResult {
     let line = source_line_number(line)?;
     let column = source_column(column)?;
-    ensure_eq(
+    ensure_eq!(
         error.location(),
         ParseErrorLocation::Position(SourcePosition::new(line, column)),
     )
@@ -231,18 +231,20 @@ pub(crate) fn source_column(one_based: usize) -> Result<SourceColumn, TestFailur
 pub(crate) fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::Step { .. }) => Ok(error),
-        RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_) => {
-            Err(TestFailure::message("expected step limit error"))
-        }
+        RunError::Allocation(_)
+        | RunError::StateSize(_)
+        | RunError::Limit(_)
+        | RunError::Invariant(_) => Err(TestFailure::message("expected step limit error")),
     }
 }
 
 pub(crate) fn expect_state_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::State { .. }) => Ok(error),
-        RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_) => {
-            Err(TestFailure::message("expected state limit error"))
-        }
+        RunError::Allocation(_)
+        | RunError::StateSize(_)
+        | RunError::Limit(_)
+        | RunError::Invariant(_) => Err(TestFailure::message("expected state limit error")),
     }
 }
 

@@ -122,9 +122,11 @@ fn main() -> Result<(), rsaeb::AebError> {
 ```
 
 `(once)` consumption is runtime-local. Reusing `Program` is safe because parsed
-programs are immutable; each run owns its own compact `(once)` state table. Only
-`(once)` rules get state entries, so ordinary rules do not inflate runtime state
-just by existing.
+programs are immutable. Each `(once)` rule receives a private slot while the
+`RuleSet` is built, and each run allocates runtime state from that same slot
+count. Runtime scanning no longer synthesizes `(once)` indexes from rule order,
+so a stale or out-of-range `(once)` state cannot be silently treated as an
+unmatched rule.
 
 ## Stepwise execution
 
@@ -133,8 +135,7 @@ applied rule instead of running to completion in one call:
 
 ```rust
 use rsaeb::{
-    ExecutionCompletion, ExecutionStep, Program, RunLimits, RuntimeInput,
-    StepLimit,
+    ExecutionStep, Program, RunLimits, RuntimeInput, StepLimit,
 };
 
 fn main() -> Result<(), rsaeb::AebError> {
@@ -147,21 +148,21 @@ fn main() -> Result<(), rsaeb::AebError> {
     let first = execution.step()?;
     assert!(matches!(
         first,
-        ExecutionStep::Applied { effect, .. }
-            if effect.state().bytes().eq(b"b".iter().copied())
+        ExecutionStep::Applied { state, .. }
+            if state.bytes().eq(b"b".iter().copied())
     ));
 
     let second = execution.step()?;
     assert!(matches!(
         second,
-        ExecutionStep::Applied { effect, .. }
-            if effect.state().bytes().eq(b"c".iter().copied())
+        ExecutionStep::Applied { state, .. }
+            if state.bytes().eq(b"c".iter().copied())
     ));
 
     let completed = execution.step()?;
     assert!(matches!(
         completed,
-        ExecutionStep::Complete(ExecutionCompletion::Stable { steps, state })
+        ExecutionStep::Stable { steps, state }
             if steps.get() == 2 && state.bytes().eq(b"c".iter().copied())
     ));
     Ok(())
@@ -170,7 +171,27 @@ fn main() -> Result<(), rsaeb::AebError> {
 
 `(return)` is a completion state, not an ordinary continuation step. Its output
 is exposed as a borrowed parsed payload; callers that need ownership can
-materialize it explicitly from the payload view.
+materialize it explicitly from the payload view:
+
+```rust
+use rsaeb::{ExecutionStep, Program, RunError, RunLimits, RuntimeInput, StepLimit};
+
+fn main() -> Result<(), rsaeb::AebError> {
+    let program = Program::parse_str("a=(return)ok")?;
+    let mut execution = program.start_execution(
+        RuntimeInput::parse(b"a")?,
+        RunLimits::new(StepLimit::new(10)),
+    )?;
+
+    let owned_output = match execution.step()? {
+        ExecutionStep::Return { output, .. } => output.to_vec().map_err(RunError::from)?,
+        _ => Vec::new(),
+    };
+
+    assert_eq!(owned_output, b"ok");
+    Ok(())
+}
+```
 
 ## Parser behavior
 
@@ -261,7 +282,10 @@ type: stable states use `RuntimeStateSnapshot`, while `(return)` payloads use
 `ReturnOutput`. During execution, the active state and the rewrite scratch
 buffer are distinct typed buffers; the runtime swaps them only after a
 successful continuation step, so a partially built rewrite cannot become the
-committed state.
+committed state. `(once)` rules carry private slots assigned during parsing;
+matching only observes whether a slot is still fresh, and only a committed
+application can consume that slot. There is no public constructor for `(once)`
+slots, so callers cannot forge indexes into the per-run table.
 
 Examples:
 
@@ -572,9 +596,9 @@ This removes the second source of truth.
 ```rust
 use rsaeb::{Program, RuleActionView, RuleAnchor, RuleRepeat};
 
-fn main() -> Result<(), rsaeb::AebError> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse_str("( once ) ( start ) a = ( end ) b # comment")?;
-    let rule = program.rules().next().expect("one parsed rule");
+    let rule = program.rules().next().ok_or("missing parsed rule")?;
 
     assert_eq!(rule.position().number().get(), 1);
     assert_eq!(rule.line_number().get(), 1);
@@ -585,10 +609,7 @@ fn main() -> Result<(), rsaeb::AebError> {
         rule.action(),
         RuleActionView::MoveEnd(payload) if payload.eq_bytes(b"b")
     ));
-    assert_eq!(
-        rule.canonical_source().expect("canonical source"),
-        b"(once)(start)a=(end)b"
-    );
+    assert_eq!(rule.canonical_source()?, b"(once)(start)a=(end)b");
     Ok(())
 }
 ```
@@ -689,10 +710,10 @@ The library error model is intentionally split:
 ```rust
 use rsaeb::{InputError, Program, RuntimeInput};
 
-fn main() -> Result<(), rsaeb::AebError> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     match Program::parse_str("a=b=c") {
         Err(parse_error) => assert_eq!(parse_error.line().get(), 1),
-        Ok(_) => panic!("expected parse error"),
+        Ok(_) => return Err("expected parse error".into()),
     }
 
     let input_error = RuntimeInput::parse("aあ".as_bytes());
@@ -732,12 +753,17 @@ fn inspect_snapshot(error: TraceSnapshotError) {
 
 State length arithmetic overflow is separate from allocation failure and is
 reported as `RunError::StateSize`. Configured byte budgets and step budgets are
-reported as `RunError::Limit(LimitError::...)`. Step-limit errors report the
-last state length, not the state bytes, so reporting the step limit cannot turn
-into an allocation failure. Trace snapshot byte limits are reported through
-`TraceSnapshotError`, not `RunError::Limit`, because snapshot materialization is
-outside runtime execution. Use borrowed tracing when the last state bytes are
-needed for diagnostics.
+reported as `RunError::Limit(LimitError::...)`. Internal runtime invariant
+violations are reported as `RunError::Invariant(RuntimeInvariantError)` instead
+of being collapsed into "no match". These errors describe library-internal
+state corruption, such as a parsed `(once)` slot missing from the per-run state
+table or a matched `(once)` slot being consumed twice; ordinary user input
+should produce parse, input, size, allocation, or limit errors instead.
+Step-limit errors report the last state length, not the state bytes, so
+reporting the step limit cannot turn into an allocation failure. Trace snapshot
+byte limits are reported through `TraceSnapshotError`, not `RunError::Limit`,
+because snapshot materialization is outside runtime execution. Use borrowed
+tracing when the last state bytes are needed for diagnostics.
 Filesystem failures are not part of the library error model. External I/O must
 be handled before bytes enter `Program::parse_bytes`, `Program::parse_str`,
 `run_bytes`, or `run_str`.
@@ -793,9 +819,13 @@ Runtime configuration and result:
 - `RunLimits::with_return_byte_limit(return_byte_limit)`
 - `Execution`
 - `Execution::step()`
+- `Execution::finish()`
+- `Execution::completed_steps()`
 - `ExecutionStep<'program, 'run>`
-- `ExecutionCompletion<'program, 'run>`
-- `ExecutionEffect<'run>` (`state()`, `byte_count()`, `is_empty()`)
+- `ExecutionStep::Applied { step, rule, state }`
+- `ExecutionStep::Stable { steps, state }`
+- `ExecutionStep::Return { step, rule, output }`
+- `ExecutionStep::is_terminal()`
 - `RunResult`
 - `RunResult::outcome()`
 - `RunResult::into_outcome()`
@@ -860,6 +890,7 @@ Errors:
 - `LeftModifierKind`
 - `RightActionKind`
 - `RunError`
+- `RuntimeInvariantError`
 - `InputColumn` (`get()`)
 - `InputError`
 - `TraceSnapshotError`

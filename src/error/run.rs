@@ -15,6 +15,8 @@ pub enum RunError {
     StateSize(StateSizeError),
     /// A configured runtime budget would be exceeded.
     Limit(LimitError),
+    /// An internal runtime invariant was violated.
+    Invariant(RuntimeInvariantError),
 }
 
 impl Error for RunError {
@@ -23,6 +25,7 @@ impl Error for RunError {
             Self::Allocation(error) => Some(error),
             Self::StateSize(error) => Some(error),
             Self::Limit(error) => Some(error),
+            Self::Invariant(error) => Some(error),
         }
     }
 }
@@ -44,6 +47,44 @@ impl From<LimitError> for RunError {
         Self::Limit(value)
     }
 }
+
+impl From<RuntimeInvariantError> for RunError {
+    fn from(value: RuntimeInvariantError) -> Self {
+        Self::Invariant(value)
+    }
+}
+
+/// Internal runtime invariant violation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeInvariantError {
+    /// A parsed `(once)` rule referred to a runtime slot that does not exist.
+    MissingOnceRuleState {
+        /// Zero-based `(once)` slot embedded in the parsed rule.
+        once_slot: usize,
+        /// Number of runtime `(once)` states allocated for this execution.
+        once_state_count: usize,
+    },
+    /// A matched `(once)` rule was applied after its slot had already been consumed.
+    ConsumedOnceRuleSlot {
+        /// Zero-based `(once)` slot that was already consumed.
+        once_slot: usize,
+    },
+}
+
+impl RuntimeInvariantError {
+    pub(crate) const fn missing_once_rule_state(once_slot: usize, once_state_count: usize) -> Self {
+        Self::MissingOnceRuleState {
+            once_slot,
+            once_state_count,
+        }
+    }
+
+    pub(crate) const fn consumed_once_rule_slot(once_slot: usize) -> Self {
+        Self::ConsumedOnceRuleSlot { once_slot }
+    }
+}
+
+impl Error for RuntimeInvariantError {}
 
 /// Runtime input boundary error.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,8 +266,8 @@ mod tests {
 
     #[test]
     fn input_column_rejects_unrepresentable_zero_based_index() -> TestResult {
-        ensure_eq(InputColumn::from_zero_based(usize::MAX), None)?;
-        ensure_eq(
+        ensure_eq!(InputColumn::from_zero_based(usize::MAX), None)?;
+        ensure_eq!(
             InputColumn::from_zero_based(0).map(InputColumn::get),
             Some(1),
         )?;
