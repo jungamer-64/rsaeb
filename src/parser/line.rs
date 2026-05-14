@@ -142,44 +142,29 @@ pub(super) struct NonEmptyCompactCodeLine {
 
 impl NonEmptyCompactCodeLine {
     pub(super) fn into_rule_syntax(self) -> Result<RuleSyntaxLine, ParseError> {
-        let mut left = Vec::new();
-        let mut right = Vec::new();
-        let mut side = RuleSyntaxSide::Left;
-
-        for byte in self.bytes {
+        let mut equals_index = None;
+        for (index, byte) in self.bytes.iter().copied().enumerate() {
             if byte.as_u8() == b'=' {
-                if side == RuleSyntaxSide::Right {
+                if equals_index.replace(index).is_some() {
                     return Err(ParseError::at_position(
                         SourcePosition::new(self.line_number, byte.source_column()),
                         ParseErrorKind::MultipleEquals,
                     ));
                 }
-
-                side = RuleSyntaxSide::Right;
-                continue;
             }
-
-            let target = match side {
-                RuleSyntaxSide::Left => &mut left,
-                RuleSyntaxSide::Right => &mut right,
-            };
-            try_push(target, byte, AllocationContext::ProgramCodeLine)
-                .map_err(|error| parse_allocation_error(self.line_number, error))?;
         }
 
-        if side == RuleSyntaxSide::Left {
+        let Some(equals_index) = equals_index else {
             return Err(ParseError::at_line(
                 self.line_number,
                 ParseErrorKind::MissingEquals,
             ));
-        }
+        };
 
-        Ok(RuleSyntaxLine::new(self.line_number, left, right))
+        Ok(RuleSyntaxLine::new(
+            self.line_number,
+            self.bytes,
+            equals_index,
+        ))
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuleSyntaxSide {
-    Left,
-    Right,
 }

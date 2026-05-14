@@ -39,14 +39,14 @@ impl RuleSyntaxLine {
     fn left(&self) -> LeftSyntax<'_> {
         LeftSyntax {
             line_number: self.line_number,
-            bytes: &self.left,
+            bytes: &self.bytes[..self.equals_index],
         }
     }
 
     fn right(&self) -> RightSyntax<'_> {
         RightSyntax {
             line_number: self.line_number,
-            bytes: &self.right,
+            bytes: &self.bytes[self.equals_index + 1..],
         }
     }
 }
