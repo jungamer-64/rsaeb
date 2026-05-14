@@ -144,13 +144,11 @@ impl NonEmptyCompactCodeLine {
     pub(super) fn into_rule_syntax(self) -> Result<RuleSyntaxLine, ParseError> {
         let mut equals_index = None;
         for (index, byte) in self.bytes.iter().copied().enumerate() {
-            if byte.as_u8() == b'=' {
-                if equals_index.replace(index).is_some() {
-                    return Err(ParseError::at_position(
-                        SourcePosition::new(self.line_number, byte.source_column()),
-                        ParseErrorKind::MultipleEquals,
-                    ));
-                }
+            if byte.as_u8() == b'=' && equals_index.replace(index).is_some() {
+                return Err(ParseError::at_position(
+                    SourcePosition::new(self.line_number, byte.source_column()),
+                    ParseErrorKind::MultipleEquals,
+                ));
             }
         }
 

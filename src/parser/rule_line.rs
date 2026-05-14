@@ -30,24 +30,43 @@ impl RuleSyntaxLine {
     }
 
     pub(super) fn parse(&self) -> Result<ParsedRule, ParseError> {
-        let head = self.left().parse()?;
-        let body = self.right().parse()?;
+        let (left, right) = self.syntax_parts()?;
+        let head = left.parse()?;
+        let body = right.parse()?;
 
         Ok(ParsedRule::from_parts(self.line_number, head, body))
     }
 
-    fn left(&self) -> LeftSyntax<'_> {
-        LeftSyntax {
-            line_number: self.line_number,
-            bytes: &self.bytes[..self.equals_index],
+    fn syntax_parts(&self) -> Result<(LeftSyntax<'_>, RightSyntax<'_>), ParseError> {
+        let Some((left, equals_and_right)) = self.bytes.split_at_checked(self.equals_index) else {
+            return Err(ParseError::at_line(
+                self.line_number,
+                ParseErrorKind::MissingEquals,
+            ));
+        };
+        let Some((equals, right)) = equals_and_right.split_first() else {
+            return Err(ParseError::at_line(
+                self.line_number,
+                ParseErrorKind::MissingEquals,
+            ));
+        };
+        if equals.as_u8() != b'=' {
+            return Err(ParseError::at_line(
+                self.line_number,
+                ParseErrorKind::MissingEquals,
+            ));
         }
-    }
 
-    fn right(&self) -> RightSyntax<'_> {
-        RightSyntax {
-            line_number: self.line_number,
-            bytes: &self.bytes[self.equals_index + 1..],
-        }
+        Ok((
+            LeftSyntax {
+                line_number: self.line_number,
+                bytes: left,
+            },
+            RightSyntax {
+                line_number: self.line_number,
+                bytes: right,
+            },
+        ))
     }
 }
 
