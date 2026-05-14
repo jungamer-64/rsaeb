@@ -74,13 +74,17 @@ impl Program {
 
     /// Starts a stateful execution session for this program.
     ///
+    /// The input must already be validated as [`RuntimeInput`]. This function
+    /// materializes it into the mutable runtime-state byte domain under
+    /// `limits`.
+    ///
     /// The returned [`Execution`] can be advanced one matching rule at a time.
     /// Use [`Program::run`] when the caller wants to run to completion in one
     /// call.
     ///
     /// # Errors
     ///
-    /// Returns `RunError` when the raw input is invalid, the input exceeds this run's state
+    /// Returns `RunError` when the validated input exceeds this run's state
     /// limit, when allocating per-run `(once)` state fails, or when an internal
     /// runtime invariant is violated.
     pub fn start_execution(
@@ -91,14 +95,14 @@ impl Program {
         Execution::new(self, input, limits)
     }
 
-    /// Runs this program with raw runtime input validated inside the run limits.
+    /// Runs this program with already-validated runtime input.
     ///
     /// # Errors
     ///
-    /// Returns `RunError` when the raw input is invalid, the input exceeds this run's state
-    /// limit, an allocation fails, state-size arithmetic overflows, a
-    /// configured `RunLimits` budget would be exceeded, or an internal runtime
-    /// invariant is violated.
+    /// Returns `RunError` when the input exceeds this run's state limit,
+    /// allocation fails, state-size arithmetic overflows, a configured
+    /// `RunLimits` budget would be exceeded, or an internal runtime invariant
+    /// is violated.
     pub fn run(&self, input: RuntimeInput<'_>, limits: RunLimits) -> Result<RunResult, RunError> {
         Execution::new(self, input, limits)?.finish()
     }

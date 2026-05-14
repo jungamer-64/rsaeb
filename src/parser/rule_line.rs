@@ -12,20 +12,20 @@ use super::location::parse_allocation_error;
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct RuleSyntaxLine {
     line_number: SourceLineNumber,
-    left: Vec<CompactByte>,
-    right: Vec<CompactByte>,
+    bytes: Vec<CompactByte>,
+    equals_index: usize,
 }
 
 impl RuleSyntaxLine {
     pub(super) fn new(
         line_number: SourceLineNumber,
-        left: Vec<CompactByte>,
-        right: Vec<CompactByte>,
+        bytes: Vec<CompactByte>,
+        equals_index: usize,
     ) -> Self {
         Self {
             line_number,
-            left,
-            right,
+            bytes,
+            equals_index,
         }
     }
 
