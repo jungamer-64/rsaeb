@@ -1,17 +1,13 @@
 #![cfg(test)]
 
 use std::string::{FromUtf8Error, String};
-use std::vec::Vec;
 
 use crate::error::{
-    AebError, AllocationError, InputError, LimitError, ParseError, ParseErrorLocation, RunError,
+    AebError, AllocationError, InputError, ParseError, ParseErrorLocation, RunError,
     TraceSnapshotRunError,
 };
-use crate::limits::StepLimit;
-use crate::runtime::RuntimeInput;
 use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
-use crate::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
-use crate::{Program, RunLimits, RunOutcome, RunResult};
+use crate::Program;
 
 pub(crate) enum TestFailure {
     Message(String),
@@ -121,69 +117,6 @@ macro_rules! ensure_eq {
 
 pub(crate) use ensure_eq;
 
-pub(crate) fn test_limits() -> RunLimits {
-    RunLimits::new(
-        StepLimit::new(10_000),
-        crate::DEFAULT_MAX_STATE_LEN,
-        crate::DEFAULT_MAX_RETURN_LEN,
-    )
-}
-
-pub(crate) fn run_source(source: &str, input: &str) -> Result<String, TestFailure> {
-    let program = Program::parse(crate::ProgramSource::from_str(source))?;
-    let result = run_program(&program, input.as_bytes(), test_limits())?;
-    Ok(String::from_utf8(into_result_bytes(result))?)
-}
-
-pub(crate) fn runtime_input(input: &[u8]) -> Result<RuntimeInput<'_>, TestFailure> {
-    RuntimeInput::validate(input).map_err(TestFailure::from)
-}
-
-pub(crate) fn run_program(
-    program: &Program,
-    input: &[u8],
-    limits: RunLimits,
-) -> Result<RunResult, TestFailure> {
-    let input = RuntimeInput::validate(input)?;
-    program.run(input, limits).map_err(TestFailure::from)
-}
-
-pub(crate) fn result_bytes(result: &RunResult) -> &[u8] {
-    match result.outcome() {
-        RunOutcome::Stable(output) => output.as_bytes(),
-        RunOutcome::Return(output) => output.as_bytes(),
-    }
-}
-
-pub(crate) fn into_result_bytes(result: RunResult) -> Vec<u8> {
-    match result.into_outcome() {
-        RunOutcome::Stable(output) => output.into_vec(),
-        RunOutcome::Return(output) => output.into_vec(),
-    }
-}
-
-pub(crate) fn expect_stable_output<'result>(
-    result: &'result RunResult,
-    expected: &[u8],
-) -> Result<&'result [u8], TestFailure> {
-    match result.outcome() {
-        RunOutcome::Stable(output) if output.as_bytes() == expected => Ok(output.as_bytes()),
-        RunOutcome::Stable(_) => Err(TestFailure::message("stable output bytes differed")),
-        RunOutcome::Return(_) => Err(TestFailure::message("expected stable outcome")),
-    }
-}
-
-pub(crate) fn expect_return_output<'result>(
-    result: &'result RunResult,
-    expected: &[u8],
-) -> Result<&'result [u8], TestFailure> {
-    match result.outcome() {
-        RunOutcome::Return(output) if output.as_bytes() == expected => Ok(output.as_bytes()),
-        RunOutcome::Return(_) => Err(TestFailure::message("return output bytes differed")),
-        RunOutcome::Stable(_) => Err(TestFailure::message("expected return outcome")),
-    }
-}
-
 pub(crate) fn expect_parse_error(source: &str) -> Result<ParseError, TestFailure> {
     match Program::parse(crate::ProgramSource::from_str(source)) {
         Ok(_) => Err(TestFailure::message("expected parse error")),
@@ -198,15 +131,6 @@ pub(crate) fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunErro
     }
 }
 
-pub(crate) fn expect_event<'events, 'program>(
-    events: &'events [TraceSnapshotEvent<'program>],
-    index: usize,
-) -> Result<&'events TraceSnapshotEvent<'program>, TestFailure> {
-    events
-        .get(index)
-        .ok_or(TestFailure::message("expected trace event"))
-}
-
 pub(crate) fn expect_error_position(error: &ParseError, line: usize, column: usize) -> TestResult {
     let line = source_line_number(line)?;
     let column = source_column(column)?;
@@ -214,16 +138,6 @@ pub(crate) fn expect_error_position(error: &ParseError, line: usize, column: usi
         error.location(),
         ParseErrorLocation::Position(SourcePosition::new(line, column)),
     )
-}
-
-pub(crate) fn trace_event_bytes<'event>(event: &'event TraceSnapshotEvent<'_>) -> &'event [u8] {
-    match event {
-        TraceSnapshotEvent::Initial { state } => state.as_bytes(),
-        TraceSnapshotEvent::Step { effect, .. } => match effect {
-            TraceSnapshotEffect::Continue { state } => state.as_bytes(),
-            TraceSnapshotEffect::Return { output } => output.as_bytes(),
-        },
-    }
 }
 
 pub(crate) fn source_line_number(one_based: usize) -> Result<SourceLineNumber, TestFailure> {
@@ -234,24 +148,4 @@ pub(crate) fn source_line_number(one_based: usize) -> Result<SourceLineNumber, T
 pub(crate) fn source_column(one_based: usize) -> Result<SourceColumn, TestFailure> {
     SourceColumn::from_one_based(one_based)
         .ok_or(TestFailure::message("expected non-zero source column"))
-}
-
-pub(crate) fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
-    match error {
-        RunError::Limit(error @ LimitError::Step { .. }) => Ok(error),
-        RunError::Allocation(_)
-        | RunError::StateSize(_)
-        | RunError::Limit(_)
-        | RunError::Invariant(_) => Err(TestFailure::message("expected step limit error")),
-    }
-}
-
-pub(crate) fn expect_state_limit(error: RunError) -> Result<LimitError, TestFailure> {
-    match error {
-        RunError::Limit(error @ LimitError::State { .. }) => Ok(error),
-        RunError::Allocation(_)
-        | RunError::StateSize(_)
-        | RunError::Limit(_)
-        | RunError::Invariant(_) => Err(TestFailure::message("expected state limit error")),
-    }
 }
