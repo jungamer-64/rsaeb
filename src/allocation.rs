@@ -137,6 +137,7 @@ pub(crate) fn try_push<T>(
 mod tests {
     use super::*;
     use crate::test_support::{TestResult, ensure_eq};
+    use alloc::string::ToString;
 
     #[test]
     fn allocation_contexts_are_publicly_inspectable() -> TestResult {
@@ -155,5 +156,29 @@ mod tests {
         ensure_eq!(error.kind(), AllocationErrorKind::CapacityOverflow)?;
         ensure_eq!(error.requested_capacity(), None)?;
         Ok(())
+    }
+
+    #[test]
+    fn allocation_display_names_the_failed_context_and_capacity() -> TestResult {
+        let error = AllocationError::reserve_failed(AllocationContext::TraceSnapshot, 123);
+
+        ensure_eq!(
+            error.to_string(),
+            "allocation failure while building trace snapshot; requested capacity: 123",
+        )?;
+
+        let error = AllocationError::reserve_failed(AllocationContext::RuntimeStateView, 456);
+
+        ensure_eq!(
+            error.to_string(),
+            "allocation failure while building runtime state view; requested capacity: 456",
+        )?;
+
+        let error = AllocationError::capacity_overflow(AllocationContext::CanonicalSource);
+
+        ensure_eq!(
+            error.to_string(),
+            "allocation capacity overflow while building canonical source bytes",
+        )
     }
 }

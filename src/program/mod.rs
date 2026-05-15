@@ -3,9 +3,6 @@ mod result;
 mod rule_set;
 mod tracing;
 
-#[cfg(test)]
-mod tests;
-
 use crate::error::{ParseError, RunError};
 use crate::parser::parse_program_impl;
 use crate::rule::{OnceRuleSlotCount, Rule, RuleCount, RuleView};

@@ -1,93 +1,72 @@
 use crate::error::{
     LeftModifierKind, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind,
 };
-use crate::inspect::RuleCount;
-use crate::limits::StepLimit;
+use crate::inspect::{RuleActionView, RuleAnchor, RuleCount, RuleRepeat};
 use crate::test_support::{
-    TestResult, ensure, ensure_eq, ensure_matches, expect_error_position, expect_parse_error,
-    result_bytes, run_program, run_source, source_line_number,
+    TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_error_position,
+    expect_parse_error, source_line_number,
 };
-use crate::{Program, RunLimits};
+use crate::{Program, ProgramSource};
 
-#[test]
-fn code_spaces_are_ignored_in_rules() -> TestResult {
-    ensure_eq!(run_source("a b=bb", "abc")?, "bbc")?;
-    ensure_eq!(run_source("a = b", "a")?, "b")?;
-    ensure_eq!(run_source("( once ) a = ( end ) b", "ca")?, "cb")?;
-    Ok(())
+fn expect_rule(
+    program: &Program,
+    index: usize,
+) -> Result<crate::inspect::RuleView<'_>, TestFailure> {
+    program
+        .rules()
+        .nth(index)
+        .ok_or(TestFailure::message("expected parsed rule"))
 }
 
 #[test]
-fn crlf_source_is_accepted_as_code_whitespace() -> TestResult {
-    ensure_eq!(run_source("a=b\r\nb=c\r\n", "a")?, "c")?;
-    Ok(())
-}
+fn compacting_source_whitespace_and_comments_preserves_rule_domain() -> TestResult {
+    let program = Program::parse(ProgramSource::from_str(
+        "a b=bb\n\
+         a = b # trailing comment\n\
+         ( once ) ( start ) x = ( end ) y",
+    ))?;
 
-#[test]
-fn tab_whitespace_is_ignored_in_code() -> TestResult {
-    ensure_eq!(run_source("a\tb = c\tc", "ab")?, "cc")?;
-    Ok(())
-}
-
-#[test]
-fn hash_starts_a_comment() -> TestResult {
-    ensure_eq!(run_source("a=b#c", "a")?, "b")?;
-    ensure_eq!(run_source("#a=b", "a")?, "a")?;
-    ensure_eq!(run_source("a=b#コメント内の非ASCIIは許可", "a")?, "b")?;
-    Ok(())
-}
-
-#[test]
-fn empty_compact_lines_do_not_become_rules() -> TestResult {
-    let program = Program::parse(crate::ProgramSource::from_str(" \t\r\n# comment\n"))?;
-    ensure_eq!(program.rule_count(), RuleCount::new(0))?;
-    Ok(())
-}
-
-#[test]
-fn comments_may_contain_non_utf8_bytes_because_the_core_parser_is_byte_oriented() -> TestResult {
-    let source = b"a=b#\xff\xfe\n";
-    let program = Program::parse(crate::ProgramSource::from_bytes(source))?;
-    let result = run_program(
-        &program,
-        b"a",
-        RunLimits::new(
-            StepLimit::new(10_000),
-            crate::DEFAULT_MAX_STATE_LEN,
-            crate::DEFAULT_MAX_RETURN_LEN,
-        ),
+    ensure_eq!(program.rule_count(), RuleCount::new(3))?;
+    ensure_eq!(
+        expect_rule(&program, 0)?.canonical_source()?,
+        b"ab=bb".as_slice(),
     )?;
-    ensure_eq!(result_bytes(&result), b"b".as_slice())?;
+    ensure_eq!(
+        expect_rule(&program, 1)?.canonical_source()?,
+        b"a=b".as_slice(),
+    )?;
+    ensure_eq!(
+        expect_rule(&program, 2)?.canonical_source()?,
+        b"(once)(start)x=(end)y".as_slice(),
+    )?;
     Ok(())
 }
 
 #[test]
-fn code_body_rejects_non_ascii_outside_comments() -> TestResult {
-    ensure(
-        Program::parse(crate::ProgramSource::from_str("a=あ")).is_err(),
-        "expected parse error",
-    )?;
-    ensure(
-        Program::parse(crate::ProgramSource::from_str("あ=b# comment")).is_err(),
-        "expected parse error",
-    )?;
-    ensure(
-        Program::parse(crate::ProgramSource::from_str("a=b#あ")).is_ok(),
-        "expected comment text to parse",
-    )?;
+fn empty_code_lines_and_comments_do_not_become_rules() -> TestResult {
+    let program = Program::parse(ProgramSource::from_str(" \t\r\n# comment\n"))?;
+    ensure_eq!(program.rule_count(), RuleCount::new(0))
+}
 
-    let error = expect_parse_error("a=あ")?;
+#[test]
+fn comments_may_contain_non_utf8_bytes_because_source_is_byte_oriented() -> TestResult {
+    let program = Program::parse(ProgramSource::from_bytes(b"a=b#\xff\xfe\n"))?;
+    let rule = expect_rule(&program, 0)?;
+
+    ensure_eq!(program.rule_count(), RuleCount::new(1))?;
+    ensure_eq!(rule.canonical_source()?, b"a=b".as_slice())
+}
+
+#[test]
+fn code_body_rejects_non_ascii_and_non_printable_bytes_outside_comments() -> TestResult {
+    let error = expect_parse_error("a=\u{80}")?;
     ensure_eq!(error.line().get(), 1)?;
     expect_error_position(&error, 1, 3)?;
     ensure_matches(
         matches!(error.kind(), ParseErrorKind::NonAsciiInCode { .. }),
         "expected non-ASCII parse error",
     )?;
-    Ok(())
-}
 
-#[test]
-fn code_body_rejects_non_printable_ascii_outside_comments() -> TestResult {
     let error = expect_parse_error("a=\0")?;
     ensure_eq!(error.line().get(), 1)?;
     expect_error_position(&error, 1, 3)?;
@@ -97,14 +76,13 @@ fn code_body_rejects_non_printable_ascii_outside_comments() -> TestResult {
     )?;
 
     ensure(
-        Program::parse(crate::ProgramSource::from_str("a=b#\0")).is_ok(),
-        "expected comment control byte to parse",
-    )?;
-    Ok(())
+        Program::parse(ProgramSource::from_bytes(b"a=b#\xff")).is_ok(),
+        "expected comment bytes to parse",
+    )
 }
 
 #[test]
-fn second_equals_is_a_parse_error_unless_it_is_in_a_comment() -> TestResult {
+fn equals_and_missing_equals_errors_keep_original_source_locations() -> TestResult {
     let error = expect_parse_error("a=b=c")?;
     expect_error_position(&error, 1, 4)?;
     ensure_matches(
@@ -119,17 +97,7 @@ fn second_equals_is_a_parse_error_unless_it_is_in_a_comment() -> TestResult {
         "expected multiple equals parse error",
     )?;
 
-    ensure(
-        Program::parse(crate::ProgramSource::from_str("a=b#=c")).is_ok(),
-        "expected equals in comment to parse",
-    )?;
-    Ok(())
-}
-
-#[test]
-fn missing_equals_error_uses_line_location() -> TestResult {
     let error = expect_parse_error("abc")?;
-
     ensure_eq!(
         error.location(),
         ParseErrorLocation::Line(source_line_number(1)?),
@@ -137,12 +105,11 @@ fn missing_equals_error_uses_line_location() -> TestResult {
     ensure_matches(
         matches!(error.kind(), ParseErrorKind::MissingEquals),
         "expected missing equals parse error",
-    )?;
-    Ok(())
+    )
 }
 
 #[test]
-fn unsupported_parentheses_are_parse_errors() -> TestResult {
+fn reserved_parentheses_are_rejected_outside_supported_modifier_slots() -> TestResult {
     for source in [
         "a=b(",
         "a=b)",
@@ -153,54 +120,19 @@ fn unsupported_parentheses_are_parse_errors() -> TestResult {
         "a(once)=b",
     ] {
         ensure(
-            Program::parse(crate::ProgramSource::from_str(source)).is_err(),
+            Program::parse(ProgramSource::from_str(source)).is_err(),
             "source should fail",
         )?;
     }
 
     ensure(
-        Program::parse(crate::ProgramSource::from_str("(once)(start)a=(end)b")).is_ok(),
+        Program::parse(ProgramSource::from_str("(once)(start)a=(end)b")).is_ok(),
         "expected valid parenthesized modifiers",
     )?;
     ensure(
-        Program::parse(crate::ProgramSource::from_str("a=(return)")).is_ok(),
+        Program::parse(ProgramSource::from_str("a=(return)")).is_ok(),
         "expected empty return payload",
-    )?;
-    Ok(())
-}
-
-#[test]
-fn comment_before_non_ascii_code_hides_it() -> TestResult {
-    ensure(
-        Program::parse(crate::ProgramSource::from_bytes(b"#\xff\xfe\n")).is_ok(),
-        "expected non-ASCII comment to parse",
-    )?;
-    ensure(
-        Program::parse(crate::ProgramSource::from_bytes(b"a=b#\xff\xfe\n")).is_ok(),
-        "expected non-ASCII trailing comment to parse",
-    )?;
-    Ok(())
-}
-
-#[test]
-fn rhs_action_with_empty_payload_is_allowed() -> TestResult {
-    ensure_eq!(run_source("a=(start)", "ba")?, "b")?;
-    ensure_eq!(run_source("a=(end)", "ba")?, "b")?;
-    ensure_eq!(run_source("a=(return)", "a")?, "")?;
-    Ok(())
-}
-
-#[test]
-fn multiline_errors_report_line_and_original_column() -> TestResult {
-    let error = expect_parse_error("a=b\nx = y = z")?;
-
-    ensure_eq!(error.line().get(), 2)?;
-    expect_error_position(&error, 2, 7)?;
-    ensure_matches(
-        matches!(error.kind(), ParseErrorKind::MultipleEquals),
-        "expected multiple equals parse error",
-    )?;
-    Ok(())
+    )
 }
 
 #[test]
@@ -231,12 +163,11 @@ fn right_side_action_payload_cannot_start_with_another_action() -> TestResult {
             }
         ),
         "expected return action syntax error",
-    )?;
-    Ok(())
+    )
 }
 
 #[test]
-fn reserved_payload_syntax_errors_keep_original_source_column() -> TestResult {
+fn payload_and_left_modifier_errors_are_structured() -> TestResult {
     let error = expect_parse_error("a = b (")?;
     expect_error_position(&error, 1, 7)?;
     ensure_matches(
@@ -249,11 +180,7 @@ fn reserved_payload_syntax_errors_keep_original_source_column() -> TestResult {
         ),
         "expected reserved syntax payload error",
     )?;
-    Ok(())
-}
 
-#[test]
-fn invalid_left_modifier_order_is_structured() -> TestResult {
     let error = expect_parse_error("(start)(once)a=b")?;
     expect_error_position(&error, 1, 8)?;
     ensure_matches(
@@ -264,36 +191,32 @@ fn invalid_left_modifier_order_is_structured() -> TestResult {
             }
         ),
         "expected left modifier order error",
-    )?;
-    Ok(())
+    )
 }
 
 #[test]
-fn compacted_source_and_spaced_source_are_equivalent() -> TestResult {
-    let compact = Program::parse(crate::ProgramSource::from_str("(once)(start)a=(end)b"))?;
-    let spaced = Program::parse(crate::ProgramSource::from_str(
+fn spaced_source_and_compact_source_parse_to_the_same_rule_view() -> TestResult {
+    let compact = Program::parse(ProgramSource::from_str("(once)(start)a=(end)b"))?;
+    let spaced = Program::parse(ProgramSource::from_str(
         "( once ) ( start ) a = ( end ) b # comment",
     ))?;
+    let compact_rule = expect_rule(&compact, 0)?;
+    let spaced_rule = expect_rule(&spaced, 0)?;
 
-    let compact_result = run_program(
-        &compact,
-        b"ac",
-        RunLimits::new(
-            StepLimit::new(10),
-            crate::DEFAULT_MAX_STATE_LEN,
-            crate::DEFAULT_MAX_RETURN_LEN,
+    ensure_eq!(compact.rule_count(), RuleCount::new(1))?;
+    ensure_eq!(spaced.rule_count(), RuleCount::new(1))?;
+    ensure_eq!(spaced_rule.repeat(), RuleRepeat::Once)?;
+    ensure_eq!(spaced_rule.anchor(), RuleAnchor::Start)?;
+    ensure(spaced_rule.lhs().eq_bytes(b"a"), "expected lhs")?;
+    ensure_matches(
+        matches!(
+            spaced_rule.action(),
+            RuleActionView::MoveEnd(payload) if payload.eq_bytes(b"b")
         ),
+        "expected move-end action",
     )?;
-    let spaced_result = run_program(
-        &spaced,
-        b"ac",
-        RunLimits::new(
-            StepLimit::new(10),
-            crate::DEFAULT_MAX_STATE_LEN,
-            crate::DEFAULT_MAX_RETURN_LEN,
-        ),
-    )?;
-
-    ensure_eq!(result_bytes(&compact_result), result_bytes(&spaced_result))?;
-    Ok(())
+    ensure_eq!(
+        compact_rule.canonical_source()?,
+        spaced_rule.canonical_source()?
+    )
 }

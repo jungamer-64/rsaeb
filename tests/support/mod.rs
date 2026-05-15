@@ -1,27 +1,24 @@
-#![cfg(test)]
-
 use std::string::{FromUtf8Error, String};
 
-use crate::Program;
-use crate::error::{
-    AebError, AllocationError, InputError, ParseError, ParseErrorLocation, RunError,
+use rsaeb::error::{
+    AebError, AllocationError, FallibleTraceSnapshotRunError, InputError, ParseError, RunError,
     TraceSnapshotRunError,
 };
-use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
 
-pub(crate) enum TestFailure {
+pub enum TestFailure {
     Message(String),
     Parse(ParseError),
     Input(InputError),
     Run(RunError),
     TraceSnapshot(TraceSnapshotRunError),
+    FallibleTraceSnapshot(FallibleTraceSnapshotRunError<&'static str>),
     Aeb(AebError),
     Utf8(FromUtf8Error),
     Allocation(AllocationError),
 }
 
 impl TestFailure {
-    pub(crate) fn message(message: impl Into<String>) -> Self {
+    pub fn message(message: impl Into<String>) -> Self {
         Self::Message(message.into())
     }
 }
@@ -36,6 +33,10 @@ impl core::fmt::Debug for TestFailure {
             Self::TraceSnapshot(error) => {
                 formatter.debug_tuple("TraceSnapshot").field(error).finish()
             }
+            Self::FallibleTraceSnapshot(error) => formatter
+                .debug_tuple("FallibleTraceSnapshot")
+                .field(error)
+                .finish(),
             Self::Aeb(error) => formatter.debug_tuple("Aeb").field(error).finish(),
             Self::Utf8(error) => formatter.debug_tuple("Utf8").field(error).finish(),
             Self::Allocation(error) => formatter.debug_tuple("Allocation").field(error).finish(),
@@ -49,6 +50,12 @@ impl From<ParseError> for TestFailure {
     }
 }
 
+impl From<InputError> for TestFailure {
+    fn from(value: InputError) -> Self {
+        Self::Input(value)
+    }
+}
+
 impl From<RunError> for TestFailure {
     fn from(value: RunError) -> Self {
         Self::Run(value)
@@ -58,6 +65,12 @@ impl From<RunError> for TestFailure {
 impl From<TraceSnapshotRunError> for TestFailure {
     fn from(value: TraceSnapshotRunError) -> Self {
         Self::TraceSnapshot(value)
+    }
+}
+
+impl From<FallibleTraceSnapshotRunError<&'static str>> for TestFailure {
+    fn from(value: FallibleTraceSnapshotRunError<&'static str>) -> Self {
+        Self::FallibleTraceSnapshot(value)
     }
 }
 
@@ -79,15 +92,9 @@ impl From<AllocationError> for TestFailure {
     }
 }
 
-impl From<InputError> for TestFailure {
-    fn from(value: InputError) -> Self {
-        Self::Input(value)
-    }
-}
+pub type TestResult = Result<(), TestFailure>;
 
-pub(crate) type TestResult = Result<(), TestFailure>;
-
-pub(crate) fn ensure(condition: bool, message: impl Into<String>) -> TestResult {
+pub fn ensure(condition: bool, message: impl Into<String>) -> TestResult {
     if condition {
         Ok(())
     } else {
@@ -95,7 +102,7 @@ pub(crate) fn ensure(condition: bool, message: impl Into<String>) -> TestResult 
     }
 }
 
-pub(crate) fn ensure_matches(condition: bool, message: &'static str) -> TestResult {
+pub fn ensure_matches(condition: bool, message: &'static str) -> TestResult {
     ensure(condition, message)
 }
 
@@ -106,7 +113,7 @@ macro_rules! ensure_eq {
                 if *actual == *expected {
                     Ok(())
                 } else {
-                    Err($crate::test_support::TestFailure::message(::std::format!(
+                    Err($crate::support::TestFailure::message(::std::format!(
                         "values differed\nactual:   {actual:?}\nexpected: {expected:?}",
                     )))
                 }
@@ -116,36 +123,3 @@ macro_rules! ensure_eq {
 }
 
 pub(crate) use ensure_eq;
-
-pub(crate) fn expect_parse_error(source: &str) -> Result<ParseError, TestFailure> {
-    match Program::parse(crate::ProgramSource::from_str(source)) {
-        Ok(_) => Err(TestFailure::message("expected parse error")),
-        Err(error) => Ok(error),
-    }
-}
-
-pub(crate) fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFailure> {
-    match result {
-        Ok(_) => Err(TestFailure::message("expected runtime error")),
-        Err(error) => Ok(error),
-    }
-}
-
-pub(crate) fn expect_error_position(error: &ParseError, line: usize, column: usize) -> TestResult {
-    let line = source_line_number(line)?;
-    let column = source_column(column)?;
-    ensure_eq!(
-        error.location(),
-        ParseErrorLocation::Position(SourcePosition::new(line, column)),
-    )
-}
-
-pub(crate) fn source_line_number(one_based: usize) -> Result<SourceLineNumber, TestFailure> {
-    SourceLineNumber::from_one_based(one_based)
-        .ok_or(TestFailure::message("expected non-zero source line"))
-}
-
-pub(crate) fn source_column(one_based: usize) -> Result<SourceColumn, TestFailure> {
-    SourceColumn::from_one_based(one_based)
-        .ok_or(TestFailure::message("expected non-zero source column"))
-}
