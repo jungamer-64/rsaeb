@@ -2,11 +2,12 @@ mod support;
 
 use rsaeb::error::{
     AebError, InputError, LimitError, ParseErrorKind, ParseErrorLocation, PayloadKind, RunError,
-    StateLimitContext,
+    RuntimeInputBytesError, StateLimitContext,
 };
 use rsaeb::limits::{ReturnByteLimit, StateByteLimit, StepLimit};
 use rsaeb::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RuntimeInput,
+    RuntimeInputBytes,
 };
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches};
 
@@ -105,6 +106,18 @@ fn input_error_and_top_level_aeb_error_are_structured() -> TestResult {
     ensure_matches(
         matches!(error, AebError::Input(_)),
         "expected top-level input error",
+    )?;
+
+    let Err(error) = RuntimeInputBytes::from_slice(&[0xff]) else {
+        return Err(TestFailure::message("expected owned input error"));
+    };
+    ensure_matches(
+        matches!(
+            error,
+            RuntimeInputBytesError::Input(InputError::NonAscii { column, .. })
+                if column.get() == 1
+        ),
+        "expected owned runtime input validation error",
     )
 }
 
@@ -120,6 +133,14 @@ fn display_errors_name_their_domain_contexts() -> TestResult {
 
     let Err(input_error) = RuntimeInput::validate(&[0xff]) else {
         return Err(TestFailure::message("expected input error"));
+    };
+    ensure_eq!(
+        input_error.to_string(),
+        "input error: non-ASCII byte 0xff at column 1",
+    )?;
+
+    let Err(input_error) = RuntimeInputBytes::from_slice(&[0xff]) else {
+        return Err(TestFailure::message("expected owned input error"));
     };
     ensure_eq!(
         input_error.to_string(),

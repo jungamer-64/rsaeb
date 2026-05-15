@@ -2,8 +2,10 @@
 //!
 //! `rsaeb` is a `no_std + alloc` library crate. It parses compact A=B source
 //! into an immutable [`Program`] and runs that program against typed
-//! [`RuntimeInput`] validated before execution. Files, stdout, stderr,
-//! arguments, and lossy display formatting are outside the interpreter core.
+//! [`RuntimeInput`] validated before execution. Hosts that need an owned
+//! validated input can store [`RuntimeInputBytes`] and borrow it as
+//! [`RuntimeInput`]. Files, stdout, stderr, arguments, and lossy display
+//! formatting are outside the interpreter core.
 //!
 //! # Domain boundary
 //!
@@ -113,6 +115,34 @@
 //! # }
 //! ```
 //!
+//! Use [`Program::into_execution`] when a host needs one owned execution object
+//! that stores both the parsed program and the mutable runtime state:
+//!
+//! ```
+//! use rsaeb::{
+//!     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ExecutionStep, Program, ProgramSource,
+//!     RunLimits, RuntimeInputBytes,
+//! };
+//! use rsaeb::limits::StepLimit;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let input = RuntimeInputBytes::from_slice(b"a")?;
+//! let mut execution = Program::parse(ProgramSource::from_str("a=b"))?.into_execution(
+//!     input.as_input(),
+//!     RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
+//! )?;
+//! drop(input);
+//!
+//! assert!(execution.state().bytes().eq(b"a".iter().copied()));
+//! assert!(matches!(
+//!     execution.step()?,
+//!     ExecutionStep::Applied { state, .. }
+//!         if state.bytes().eq(b"b".iter().copied())
+//! ));
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Limits
 //!
 //! [`RunLimits`] carries the step budget and byte budgets for runtime states
@@ -201,10 +231,11 @@
 //!
 //! # Error model
 //!
-//! Source parsing, runtime input validation, runtime execution, trace snapshot
-//! materialization, and user trace-sink failures are reported with structured
-//! error types such as [`error::ParseError`], [`error::InputError`],
-//! [`error::RunError`], [`error::RuntimeInvariantError`],
+//! Source parsing, runtime input validation, owned runtime input construction,
+//! runtime execution, trace snapshot materialization, and user trace-sink
+//! failures are reported with structured error types such as
+//! [`error::ParseError`], [`error::InputError`],
+//! [`error::RuntimeInputBytesError`], [`error::RunError`], [`error::RuntimeInvariantError`],
 //! [`error::TraceSnapshotError`], [`error::TraceSnapshotRunError`],
 //! [`error::FallibleTraceSnapshotRunError`], and [`error::TracedRunError`].
 //! [`error::AebError`] is available as a parse/input/run umbrella for callers
@@ -254,5 +285,5 @@ pub use program::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, Program, ReturnOutput,
     RunLimits, RunOutcome, RunResult, RuntimeStateSnapshot,
 };
-pub use runtime::{Execution, ExecutionStep, RuntimeInput};
+pub use runtime::{Execution, ExecutionStep, OwnedExecution, RuntimeInput, RuntimeInputBytes};
 pub use source::ProgramSource;

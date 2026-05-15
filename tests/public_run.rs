@@ -5,7 +5,7 @@ use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
 use rsaeb::limits::{ReturnByteLimit, StateByteLimit, StepLimit};
 use rsaeb::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, ExecutionStep, Program,
-    ProgramSource, RunLimits, RunOutcome, RunResult, RuntimeInput,
+    ProgramSource, RunLimits, RunOutcome, RunResult, RuntimeInput, RuntimeInputBytes,
 };
 use support::{TestFailure, TestResult, ensure, ensure_eq, ensure_matches};
 
@@ -33,6 +33,43 @@ fn expect_return_bytes<'result>(
 
 fn runtime_view_bytes(state: rsaeb::trace::RuntimeStateView<'_>) -> Vec<u8> {
     state.bytes().collect()
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum StepSignature {
+    Applied {
+        step: usize,
+        rule: Vec<u8>,
+        state: Vec<u8>,
+    },
+    Stable {
+        steps: usize,
+        state: Vec<u8>,
+    },
+    Return {
+        step: usize,
+        rule: Vec<u8>,
+        output: Vec<u8>,
+    },
+}
+
+fn step_signature(step: ExecutionStep<'_, '_>) -> Result<StepSignature, TestFailure> {
+    match step {
+        ExecutionStep::Applied { step, rule, state } => Ok(StepSignature::Applied {
+            step: step.get(),
+            rule: rule.canonical_source()?,
+            state: runtime_view_bytes(state),
+        }),
+        ExecutionStep::Stable { steps, state } => Ok(StepSignature::Stable {
+            steps: steps.get(),
+            state: runtime_view_bytes(state),
+        }),
+        ExecutionStep::Return { step, rule, output } => Ok(StepSignature::Return {
+            step: step.get(),
+            rule: rule.canonical_source()?,
+            output: output.to_vec()?,
+        }),
+    }
 }
 
 fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFailure> {
@@ -283,6 +320,124 @@ fn stepwise_execution_matches_full_run_and_waits_after_each_rule() -> TestResult
         }
     }
     Ok(())
+}
+
+#[test]
+fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
+    let limits = RunLimits::new(
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let program = Program::parse(ProgramSource::from_str("a=b"))?;
+    let mut execution = program.start_execution(RuntimeInput::validate(b"a")?, limits)?;
+
+    ensure_eq!(
+        runtime_view_bytes(execution.state()).as_slice(),
+        b"a".as_slice(),
+    )?;
+
+    match execution.step()? {
+        ExecutionStep::Applied { state, .. } => {
+            ensure_eq!(runtime_view_bytes(state).as_slice(), b"b".as_slice())?;
+        }
+        ExecutionStep::Stable { .. } | ExecutionStep::Return { .. } => {
+            return Err(TestFailure::message("expected applied step"));
+        }
+    }
+
+    ensure_eq!(
+        runtime_view_bytes(execution.state()).as_slice(),
+        b"b".as_slice(),
+    )
+}
+
+#[test]
+fn owned_runtime_input_bytes_reborrow_without_revalidation() -> TestResult {
+    let input = RuntimeInputBytes::from_slice(b"a=()# ")?;
+
+    ensure_eq!(input.as_bytes(), b"a=()# ".as_slice())?;
+    ensure_eq!(input.byte_count().get(), 6)?;
+    ensure(!input.is_empty(), "expected non-empty owned input")?;
+
+    let program = Program::parse(ProgramSource::from_str("a=b"))?;
+    let result = program.run(
+        input.as_input(),
+        RunLimits::new(
+            DEFAULT_MAX_STEPS,
+            DEFAULT_MAX_STATE_LEN,
+            DEFAULT_MAX_RETURN_LEN,
+        ),
+    )?;
+    expect_stable_bytes(&result, b"b=()# ")?;
+    Ok(())
+}
+
+#[test]
+fn owned_execution_matches_borrowed_stepwise_execution_and_owns_input() -> TestResult {
+    let limits = RunLimits::new(
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let source = ProgramSource::from_str("(once)a=b\na=c");
+    let borrowed_program = Program::parse(source)?;
+    let owned_program = Program::parse(source)?;
+    let mut borrowed = borrowed_program.start_execution(RuntimeInput::validate(b"aa")?, limits)?;
+
+    let input = RuntimeInputBytes::from_slice(b"aa")?;
+    let mut owned = owned_program.into_execution(input.as_input(), limits)?;
+    drop(input);
+
+    ensure_eq!(owned.completed_steps().get(), 0)?;
+    ensure_eq!(
+        runtime_view_bytes(owned.state()).as_slice(),
+        b"aa".as_slice()
+    )?;
+
+    ensure_eq!(
+        step_signature(owned.step()?)?,
+        step_signature(borrowed.step()?)?,
+    )?;
+    ensure_eq!(
+        step_signature(owned.step()?)?,
+        step_signature(borrowed.step()?)?,
+    )?;
+    ensure_eq!(
+        step_signature(owned.step()?)?,
+        step_signature(borrowed.step()?)?,
+    )?;
+    ensure_eq!(
+        step_signature(owned.step()?)?,
+        StepSignature::Stable {
+            steps: 2,
+            state: b"bc".to_vec(),
+        },
+    )?;
+    Ok(())
+}
+
+#[test]
+fn owned_execution_preserves_return_terminal_state() -> TestResult {
+    let limits = RunLimits::new(
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let program = Program::parse(ProgramSource::from_str("a=(return)ok"))?;
+    let mut execution = program.into_execution(RuntimeInput::validate(b"a")?, limits)?;
+
+    let first = step_signature(execution.step()?)?;
+    ensure_eq!(
+        first,
+        StepSignature::Return {
+            step: 1,
+            rule: b"a=(return)ok".to_vec(),
+            output: b"ok".to_vec(),
+        },
+    )?;
+
+    ensure_eq!(step_signature(execution.step()?)?, first)
 }
 
 #[test]

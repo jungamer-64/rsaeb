@@ -40,6 +40,10 @@ impl RuleSet {
         self.once_slot_count
     }
 
+    pub(crate) fn rule_at_position(&self, position: RulePosition) -> Option<&Rule> {
+        self.rules.get(position.zero_based())
+    }
+
     pub(crate) fn as_slice(&self) -> &[Rule] {
         &self.rules
     }

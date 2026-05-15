@@ -19,8 +19,8 @@ pub use parse::{
     LeftModifierKind, ParseError, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind,
 };
 pub use run::{
-    InputColumn, InputError, LimitError, RunError, RuntimeInvariantError, StateLimitContext,
-    StateSizeError,
+    InputColumn, InputError, LimitError, RunError, RuntimeInputBytesError, RuntimeInvariantError,
+    StateLimitContext, StateSizeError,
 };
 pub use traced::{
     FallibleTraceSnapshotRunError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,

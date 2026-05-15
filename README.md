@@ -174,6 +174,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+Use `Program::into_execution` when a host needs one owned execution object that
+stores both the parsed program and the mutable runtime state. The input is
+materialized during construction, so the owned execution does not borrow the
+input buffer:
+
+```rust
+use rsaeb::limits::StepLimit;
+use rsaeb::{
+    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ExecutionStep, Program, ProgramSource,
+    RunLimits, RuntimeInputBytes,
+};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let input = RuntimeInputBytes::from_slice(b"a")?;
+    let mut execution = Program::parse(ProgramSource::from_str("a=b"))?.into_execution(
+        input.as_input(),
+        RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
+    )?;
+    drop(input);
+
+    assert!(execution.state().bytes().eq(b"a".iter().copied()));
+    assert!(matches!(
+        execution.step()?,
+        ExecutionStep::Applied { state, .. }
+            if state.bytes().eq(b"b".iter().copied())
+    ));
+    Ok(())
+}
+```
+
 `(return)` is a completion state, not an ordinary continuation step. Its output
 is exposed as a borrowed parsed payload; callers that need ownership can
 materialize it explicitly from the payload view:
@@ -800,6 +830,8 @@ tracing when the last state bytes are needed for diagnostics.
 Filesystem failures are not part of the library error model. External I/O must
 be handled before bytes enter `ProgramSource::from_bytes`,
 `ProgramSource::from_str`, or `RuntimeInput::validate`.
+Use `RuntimeInputBytes::from_slice` when a host needs to validate runtime input
+once and store an owned copy that can later be borrowed as `RuntimeInput`.
 
 ## Public API overview
 
@@ -809,8 +841,11 @@ the primary execution path:
 - `ProgramSource`
 - `RuntimeInput`
 - `RuntimeInput::validate(bytes)`
+- `RuntimeInputBytes`
+- `RuntimeInputBytes::from_slice(bytes)`
 - `Program`
 - `Execution`
+- `OwnedExecution`
 - `ExecutionStep`
 - `RunLimits`
 - `RunResult`

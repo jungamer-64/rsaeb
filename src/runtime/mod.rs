@@ -12,5 +12,6 @@ mod terminal;
 #[cfg(test)]
 mod tests;
 
-pub use execution::{Execution, ExecutionStep};
-pub use input::RuntimeInput;
+pub(crate) use execution::ExecutionCore;
+pub use execution::{Execution, ExecutionStep, OwnedExecution};
+pub use input::{RuntimeInput, RuntimeInputBytes};

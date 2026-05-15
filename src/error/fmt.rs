@@ -5,8 +5,8 @@ use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind}
 use super::{
     AebError, FallibleTraceSnapshotRunError, InputColumn, InputError, LeftModifierKind, LimitError,
     ParseError, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind, RunError,
-    RuntimeInvariantError, StateLimitContext, StateSizeError, TraceSnapshotError,
-    TraceSnapshotRunError, TracedRunError,
+    RuntimeInputBytesError, RuntimeInvariantError, StateLimitContext, StateSizeError,
+    TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -150,6 +150,15 @@ impl fmt::Display for RunError {
     }
 }
 
+impl fmt::Display for RuntimeInputBytesError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Input(error) => error.fmt(f),
+            Self::Allocation(error) => error.fmt(f),
+        }
+    }
+}
+
 impl fmt::Display for RuntimeInvariantError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -168,6 +177,20 @@ impl fmt::Display for RuntimeInvariantError {
                 f,
                 "runtime invariant violation: validated runtime input byte became non-ASCII: 0x{:02x}",
                 byte.get(),
+            ),
+            Self::MissingTerminalRule {
+                rule_position,
+                rule_count,
+            } => write!(
+                f,
+                "runtime invariant violation: terminal rule {} does not exist; parsed rule count: {}",
+                rule_position.number().get(),
+                rule_count.get(),
+            ),
+            Self::TerminalRuleNotReturn { rule_position } => write!(
+                f,
+                "runtime invariant violation: terminal rule {} is not a return rule",
+                rule_position.number().get(),
             ),
         }
     }

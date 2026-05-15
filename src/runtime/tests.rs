@@ -129,7 +129,7 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
     )?;
     ensure_eq!(would_match.completed_steps(), StepCount::ZERO)?;
     ensure_eq!(
-        runtime_view_bytes(would_match.state.view()).as_slice(),
+        runtime_view_bytes(would_match.state()).as_slice(),
         b"a".as_slice(),
     )?;
 
@@ -158,7 +158,7 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     )?;
     ensure_eq!(state_limited.completed_steps(), StepCount::ZERO)?;
     ensure_eq!(
-        runtime_view_bytes(state_limited.state.view()).as_slice(),
+        runtime_view_bytes(state_limited.state()).as_slice(),
         b"aa".as_slice(),
     )?;
     ensure_eq!(expect_run_error(state_limited.step())?, state_error)?;
@@ -181,7 +181,7 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     )?;
     ensure_eq!(return_limited.completed_steps(), StepCount::ZERO)?;
     ensure_eq!(
-        runtime_view_bytes(return_limited.state.view()).as_slice(),
+        runtime_view_bytes(return_limited.state()).as_slice(),
         b"a".as_slice(),
     )?;
     ensure_eq!(expect_run_error(return_limited.step())?, return_error)

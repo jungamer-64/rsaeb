@@ -2,7 +2,7 @@ use std::string::{FromUtf8Error, String};
 
 use rsaeb::error::{
     AebError, AllocationError, FallibleTraceSnapshotRunError, InputError, ParseError, RunError,
-    TraceSnapshotRunError,
+    RuntimeInputBytesError, TraceSnapshotRunError,
 };
 
 pub enum TestFailure {
@@ -15,6 +15,7 @@ pub enum TestFailure {
     Aeb(AebError),
     Utf8(FromUtf8Error),
     Allocation(AllocationError),
+    RuntimeInputBytes(RuntimeInputBytesError),
 }
 
 impl TestFailure {
@@ -40,6 +41,10 @@ impl core::fmt::Debug for TestFailure {
             Self::Aeb(error) => formatter.debug_tuple("Aeb").field(error).finish(),
             Self::Utf8(error) => formatter.debug_tuple("Utf8").field(error).finish(),
             Self::Allocation(error) => formatter.debug_tuple("Allocation").field(error).finish(),
+            Self::RuntimeInputBytes(error) => formatter
+                .debug_tuple("RuntimeInputBytes")
+                .field(error)
+                .finish(),
         }
     }
 }
@@ -89,6 +94,12 @@ impl From<FromUtf8Error> for TestFailure {
 impl From<AllocationError> for TestFailure {
     fn from(value: AllocationError) -> Self {
         Self::Allocation(value)
+    }
+}
+
+impl From<RuntimeInputBytesError> for TestFailure {
+    fn from(value: RuntimeInputBytesError) -> Self {
+        Self::RuntimeInputBytes(value)
     }
 }
 

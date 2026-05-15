@@ -3,10 +3,12 @@ mod result;
 mod rule_set;
 mod tracing;
 
-use crate::error::{ParseError, RunError};
+use crate::error::{ParseError, RunError, RuntimeInvariantError};
 use crate::parser::parse_program_impl;
-use crate::rule::{OnceRuleSlotCount, Rule, RuleCount, RuleView};
-use crate::runtime::{Execution, RuntimeInput};
+use crate::rule::{
+    Action, OnceRuleSlotCount, PayloadView, Rule, RuleCount, RulePosition, RuleView,
+};
+use crate::runtime::{Execution, ExecutionCore, OwnedExecution, RuntimeInput};
 use crate::source::ProgramSource;
 
 pub(crate) use rule_set::RuleSet;
@@ -65,6 +67,32 @@ impl Program {
         self.rule_set.as_slice()
     }
 
+    pub(crate) fn rule_at_position(&self, position: RulePosition) -> Result<&Rule, RunError> {
+        self.rule_set.rule_at_position(position).ok_or_else(|| {
+            RuntimeInvariantError::missing_terminal_rule(position, self.rule_count()).into()
+        })
+    }
+
+    pub(crate) fn return_rule_at(
+        &self,
+        position: RulePosition,
+    ) -> Result<(&Rule, PayloadView<'_>), RunError> {
+        let rule = self.rule_at_position(position)?;
+        match rule.action() {
+            Action::Return(output) => Ok((rule, PayloadView::new(output))),
+            Action::Replace(_) | Action::MoveStart(_) | Action::MoveEnd(_) => {
+                Err(RuntimeInvariantError::terminal_rule_not_return(position).into())
+            }
+        }
+    }
+
+    pub(crate) fn return_output_at(
+        &self,
+        position: RulePosition,
+    ) -> Result<PayloadView<'_>, RunError> {
+        self.return_rule_at(position).map(|(_, output)| output)
+    }
+
     pub(crate) const fn once_slot_count(&self) -> OnceRuleSlotCount {
         self.rule_set.once_slot_count()
     }
@@ -90,6 +118,24 @@ impl Program {
         limits: RunLimits,
     ) -> Result<Execution<'_>, RunError> {
         Execution::new(self, input, limits)
+    }
+
+    /// Consumes this program and starts an owned stateful execution session.
+    ///
+    /// The input is materialized into the execution state during construction,
+    /// so the returned [`OwnedExecution`] does not borrow the input bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` for the same startup failures as
+    /// [`Program::start_execution`].
+    pub fn into_execution(
+        self,
+        input: RuntimeInput<'_>,
+        limits: RunLimits,
+    ) -> Result<OwnedExecution, RunError> {
+        let core = ExecutionCore::new(&self, input, limits)?;
+        Ok(OwnedExecution::new(self, core))
     }
 
     /// Runs this program with already-validated runtime input.

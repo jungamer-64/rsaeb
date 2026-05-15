@@ -2,7 +2,10 @@ use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeStateByteCount};
-use crate::error::{InputError, LimitError, RunError, RuntimeInvariantError, StateLimitContext};
+use crate::error::{
+    InputError, LimitError, RunError, RuntimeInputBytesError, RuntimeInvariantError,
+    StateLimitContext,
+};
 use crate::program::RunLimits;
 
 /// Borrowed runtime input after ASCII validation.
@@ -13,6 +16,16 @@ use crate::program::RunLimits;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeInput<'input> {
     bytes: &'input [u8],
+}
+
+/// Owned runtime input after ASCII validation.
+///
+/// This is the owned counterpart to [`RuntimeInput`]. It lets a host validate
+/// input once, store the validated bytes, and later borrow them as
+/// [`RuntimeInput`] without repeating validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeInputBytes {
+    bytes: Vec<u8>,
 }
 
 impl<'input> RuntimeInput<'input> {
@@ -55,6 +68,51 @@ impl<'input> RuntimeInput<'input> {
             .iter()
             .copied()
             .map(RuntimeByte::from_validated_input)
+    }
+}
+
+impl RuntimeInputBytes {
+    /// Validates raw bytes as runtime input and stores an owned copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RuntimeInputBytesError::Input` if validation fails. Returns
+    /// `RuntimeInputBytesError::Allocation` if owned storage cannot be
+    /// allocated.
+    pub fn from_slice(input: &[u8]) -> Result<Self, RuntimeInputBytesError> {
+        let input = RuntimeInput::validate(input)?;
+        let mut bytes = Vec::new();
+        try_reserve_total_exact(
+            &mut bytes,
+            input.as_bytes().len(),
+            AllocationContext::RuntimeInput,
+        )?;
+        bytes.extend_from_slice(input.as_bytes());
+        Ok(Self { bytes })
+    }
+
+    /// Borrow this owned value as validated runtime input.
+    #[must_use]
+    pub fn as_input(&self) -> RuntimeInput<'_> {
+        RuntimeInput { bytes: &self.bytes }
+    }
+
+    /// Borrow the validated input bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Runtime input length in bytes.
+    #[must_use]
+    pub fn byte_count(&self) -> RuntimeStateByteCount {
+        RuntimeStateByteCount::new(self.bytes.len())
+    }
+
+    /// Whether this runtime input contains no bytes.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
     }
 }
 

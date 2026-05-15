@@ -4,7 +4,7 @@ use crate::error::{LimitError, RunError};
 use crate::program::{ReturnOutput, StepCount};
 use crate::rule::{Action, PayloadView, Rule};
 
-use super::execution::Execution;
+use super::execution::ExecutionCore;
 use super::matcher::MatchedRule;
 use super::rewrite::{RewritePlacement, RewriteRequest};
 use super::state::MatchedStateSpan;
@@ -23,8 +23,8 @@ pub(super) struct AppliedRule<'program> {
     pub(super) effect: StepApplication<'program>,
 }
 
-impl<'program> Execution<'program> {
-    pub(super) fn apply_matched_rule(
+impl ExecutionCore {
+    pub(super) fn apply_matched_rule<'program>(
         &mut self,
         matched: MatchedRule<'program>,
     ) -> Result<AppliedRule<'program>, RunError> {
@@ -52,8 +52,7 @@ impl<'program> Execution<'program> {
             StepApplication::Return(output) => {
                 self.terminal = ExecutionTerminal::Return {
                     step,
-                    rule: matched.rule,
-                    output,
+                    rule_position: matched.rule.position(),
                 };
                 Ok(AppliedRule {
                     step,
@@ -64,7 +63,7 @@ impl<'program> Execution<'program> {
         }
     }
 
-    pub(super) fn materialize_return_output(
+    pub(super) fn materialize_return_output<'program>(
         output: PayloadView<'program>,
     ) -> Result<ReturnOutput, RunError> {
         Ok(ReturnOutput::from_vec(
@@ -72,7 +71,7 @@ impl<'program> Execution<'program> {
         ))
     }
 
-    fn apply_action_to_scratch(
+    fn apply_action_to_scratch<'program>(
         &mut self,
         state_match: MatchedStateSpan,
         action: &'program Action,
