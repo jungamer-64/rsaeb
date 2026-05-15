@@ -14,6 +14,11 @@ use rsaeb::{
 };
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, runtime_input};
 
+/// Returns the expected trace snapshot run error.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the traced run succeeds.
 fn expect_trace_snapshot_error<T>(
     result: Result<T, TraceSnapshotRunError>,
 ) -> Result<TraceSnapshotRunError, TestFailure> {
@@ -23,6 +28,12 @@ fn expect_trace_snapshot_error<T>(
     }
 }
 
+/// Runs a standard trace snapshot example and returns its result and events.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if parsing, input validation, runtime execution, or
+/// trace snapshot materialization fails.
 fn trace_snapshot_example(
     program: &Program,
 ) -> Result<(rsaeb::RunResult, Vec<TraceSnapshotEvent<'_>>), TestFailure> {
@@ -52,6 +63,10 @@ fn snapshot_event_bytes<'event>(event: &'event TraceSnapshotEvent<'_>) -> &'even
     }
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if borrowed trace events allocate snapshots or expose
+/// incorrect byte data.
 #[test]
 fn borrowed_trace_events_are_emitted_without_snapshots() -> TestResult {
     let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
@@ -87,6 +102,10 @@ fn borrowed_trace_events_are_emitted_without_snapshots() -> TestResult {
     )
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if trace snapshot events lose materialized bytes or
+/// structured effects.
 #[test]
 fn trace_snapshot_events_carry_bytes_and_structured_effects() -> TestResult {
     let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
@@ -133,6 +152,10 @@ fn trace_snapshot_events_carry_bytes_and_structured_effects() -> TestResult {
     )
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if a continuing trace snapshot step does not carry the
+/// expected rule view.
 #[test]
 fn trace_snapshot_continue_step_carries_rule_view() -> TestResult {
     let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
@@ -157,6 +180,10 @@ fn trace_snapshot_continue_step_carries_rule_view() -> TestResult {
     }
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if borrowed-to-snapshot conversion uses runtime limits
+/// instead of only the snapshot limit.
 #[test]
 fn borrowed_trace_to_snapshot_uses_only_snapshot_limit() -> TestResult {
     let program = Program::parse(ProgramSource::from_str("a=b"))?;
@@ -188,6 +215,10 @@ fn borrowed_trace_to_snapshot_uses_only_snapshot_limit() -> TestResult {
     )
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if the snapshot API conflates runtime, snapshot, and
+/// sink failures.
 #[test]
 fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult {
     let program = Program::parse(ProgramSource::from_str("a=b"))?;
@@ -253,6 +284,10 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
     )
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if the final trace event no longer matches the run
+/// result.
 #[test]
 fn traced_final_event_matches_run_result() -> TestResult {
     let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)c"))?;

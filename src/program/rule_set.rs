@@ -13,6 +13,12 @@ impl RuleSet {
         Self::default()
     }
 
+    /// Stores one parsed rule and assigns its program-local position.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the rule position cannot be represented or
+    /// the rule table cannot grow.
     pub(crate) fn push_parsed_rule(&mut self, parsed: ParsedRule) -> Result<(), AllocationError> {
         let position = RulePosition::from_zero_based(self.rules.len()).ok_or_else(|| {
             AllocationError::capacity_overflow(AllocationContext::ProgramRuleTable)

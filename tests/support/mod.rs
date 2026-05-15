@@ -96,10 +96,22 @@ impl From<AllocationError> for TestFailure {
 
 pub type TestResult = Result<(), TestFailure>;
 
+/// Validates runtime input with the default state byte limit.
+///
+/// # Errors
+///
+/// Returns `RuntimeInputError` if the test input violates runtime input
+/// validation or allocation constraints.
 pub fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
     runtime_input_with_limit(bytes, DEFAULT_MAX_STATE_LEN)
 }
 
+/// Validates runtime input with a test-provided state byte limit.
+///
+/// # Errors
+///
+/// Returns `RuntimeInputError` if the test input violates runtime input
+/// validation, the provided limit, or allocation constraints.
 pub fn runtime_input_with_limit(
     bytes: &[u8],
     limit: StateByteLimit,
@@ -107,6 +119,11 @@ pub fn runtime_input_with_limit(
     RuntimeInput::validate(bytes, RuntimeInputLimits::new(limit))
 }
 
+/// Converts a boolean assertion into the shared test result type.
+///
+/// # Errors
+///
+/// Returns `TestFailure` with `message` when `condition` is false.
 pub fn ensure(condition: bool, message: impl Into<String>) -> TestResult {
     if condition {
         Ok(())
@@ -115,6 +132,11 @@ pub fn ensure(condition: bool, message: impl Into<String>) -> TestResult {
     }
 }
 
+/// Converts a pattern-match assertion into the shared test result type.
+///
+/// # Errors
+///
+/// Returns `TestFailure` with `message` when `condition` is false.
 pub fn ensure_matches(condition: bool, message: &'static str) -> TestResult {
     ensure(condition, message)
 }

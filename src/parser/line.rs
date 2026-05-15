@@ -18,6 +18,12 @@ impl<'source> RawSourceLine<'source> {
         Self { line_number, bytes }
     }
 
+    /// Splits comments away and validates raw executable code bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` when executable code contains non-ASCII bytes or
+    /// source-column arithmetic overflows.
     pub(super) fn into_code_line(self) -> Result<CodeLine<'source>, ParseError> {
         let code_bytes = self
             .bytes
@@ -59,6 +65,12 @@ pub(super) struct CodeLine<'source> {
 }
 
 impl CodeLine<'_> {
+    /// Removes insignificant source whitespace into compact syntax bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` when compacting sees non-printable executable code
+    /// bytes, allocation fails, or source positions cannot be represented.
     pub(super) fn into_compact_line(self) -> Result<CompactCodeLine, ParseError> {
         let compact_len = self.compact_len()?;
         let bytes = self.compact_bytes(compact_len)?;
@@ -69,6 +81,12 @@ impl CodeLine<'_> {
         })
     }
 
+    /// Counts compact executable bytes after whitespace removal.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` when a non-printable byte is found or the compact
+    /// length cannot be represented.
     fn compact_len(&self) -> Result<usize, ParseError> {
         let mut compact_len = 0usize;
         for (zero_based_column, byte) in self.bytes.iter().copied().enumerate() {
@@ -97,6 +115,12 @@ impl CodeLine<'_> {
         Ok(compact_len)
     }
 
+    /// Builds compact source bytes with original source columns attached.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if allocation fails or a source column cannot be
+    /// represented.
     fn compact_bytes(&self, compact_len: usize) -> Result<Vec<CompactByte>, ParseError> {
         let mut bytes = Vec::new();
         try_reserve_total_exact(&mut bytes, compact_len, AllocationContext::ProgramCodeLine)
@@ -141,6 +165,12 @@ pub(super) struct NonEmptyCompactCodeLine {
 }
 
 impl NonEmptyCompactCodeLine {
+    /// Converts a non-empty compact line into parsed rule syntax.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if the compact line cannot be split into a valid
+    /// rule syntax boundary.
     pub(super) fn into_rule_syntax(self) -> Result<RuleSyntaxLine, ParseError> {
         RuleSyntaxLine::new(self.line_number, self.bytes)
     }

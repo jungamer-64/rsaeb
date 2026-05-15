@@ -33,6 +33,12 @@ pub(super) enum MatchedRuleCommit<'runtime> {
 }
 
 impl<'program> RuntimeRules<'program> {
+    /// Builds per-execution rule availability from parsed rules.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the per-execution rule-state table cannot
+    /// be allocated.
     pub(super) fn new(rules: &'program [Rule]) -> Result<Self, AllocationError> {
         let mut entries = Vec::new();
         try_reserve_total_exact(

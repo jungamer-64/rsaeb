@@ -55,6 +55,12 @@ impl RewriteScratch {
         Self { bytes: Vec::new() }
     }
 
+    /// Clears scratch storage and reserves the requested rewrite capacity.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the rewrite scratch buffer cannot reserve
+    /// the requested capacity.
     pub(super) fn clear_and_reserve(&mut self, capacity: usize) -> Result<(), AllocationError> {
         self.bytes.clear();
         try_reserve_total_exact(
@@ -64,6 +70,11 @@ impl RewriteScratch {
         )
     }
 
+    /// Appends existing runtime bytes into scratch storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the rewrite scratch buffer cannot grow.
     pub(super) fn push_existing(
         &mut self,
         source: impl IntoIterator<Item = RuntimeByte>,
@@ -79,6 +90,11 @@ impl RewriteScratch {
         Ok(())
     }
 
+    /// Appends program payload bytes into scratch storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the rewrite scratch buffer cannot grow.
     pub(super) fn push_payload(&mut self, payload: &Payload) -> Result<(), AllocationError> {
         self.push_existing(payload.runtime_bytes())
     }

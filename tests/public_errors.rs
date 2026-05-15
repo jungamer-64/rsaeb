@@ -11,6 +11,11 @@ use rsaeb::{
 };
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, runtime_input};
 
+/// Returns the expected runtime error.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the result succeeds.
 fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFailure> {
     match result {
         Ok(_) => Err(TestFailure::message("expected runtime error")),
@@ -18,6 +23,11 @@ fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFail
     }
 }
 
+/// Returns the expected step limit error.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if `error` is not a step limit error.
 fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::Step { .. }) => Ok(error),
@@ -27,6 +37,11 @@ fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
     }
 }
 
+/// Returns the expected state limit error.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if `error` is not a state limit error.
 fn expect_state_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::State { .. }) => Ok(error),
@@ -36,6 +51,10 @@ fn expect_state_limit(error: RunError) -> Result<LimitError, TestFailure> {
     }
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if parse errors lose structured location or kind
+/// information.
 #[test]
 fn parse_error_location_and_kind_are_structured() -> TestResult {
     let Err(error) = Program::parse(ProgramSource::from_str("a=b=c")) else {
@@ -58,6 +77,10 @@ fn parse_error_location_and_kind_are_structured() -> TestResult {
     )
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if payload or modifier errors lose domain-specific
+/// information.
 #[test]
 fn payload_and_modifier_errors_keep_domain_information() -> TestResult {
     let Err(error) = Program::parse(ProgramSource::from_str("a = b (")) else {
@@ -86,6 +109,10 @@ fn payload_and_modifier_errors_keep_domain_information() -> TestResult {
     )
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if input errors or the top-level error wrapper lose
+/// structured variants.
 #[test]
 fn input_error_and_top_level_aeb_error_are_structured() -> TestResult {
     let Err(error) = runtime_input(&[0xff]) else {
@@ -127,6 +154,10 @@ fn input_error_and_top_level_aeb_error_are_structured() -> TestResult {
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if runtime input debug output exposes internal byte
+/// domain names or bytes drift.
 #[test]
 fn runtime_input_debug_materializes_public_bytes() -> TestResult {
     let input = RuntimeInput::validate(b"a=\n", RuntimeInputLimits::new(DEFAULT_MAX_STATE_LEN))?;
@@ -141,6 +172,10 @@ fn runtime_input_debug_materializes_public_bytes() -> TestResult {
     )
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if display output no longer names the expected domain
+/// contexts.
 #[test]
 fn display_errors_name_their_domain_contexts() -> TestResult {
     let Err(parse_error) = Program::parse(ProgramSource::from_str("a=b=c")) else {
@@ -162,6 +197,10 @@ fn display_errors_name_their_domain_contexts() -> TestResult {
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if step, state, or return limit errors lose their
+/// public domain details.
 #[test]
 fn limit_errors_report_step_state_and_return_domains() -> TestResult {
     let state_error = Program::parse(ProgramSource::from_str("# no executable rules"))?.run(

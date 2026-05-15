@@ -17,6 +17,12 @@ pub(super) struct RuleSyntaxLine {
 }
 
 impl RuleSyntaxLine {
+    /// Splits one compact source line around its rule separator.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if the line has no `=`, multiple `=` bytes,
+    /// allocation fails, or separator arithmetic overflows.
     pub(super) fn new(
         line_number: SourceLineNumber,
         bytes: Vec<CompactByte>,
@@ -30,6 +36,12 @@ impl RuleSyntaxLine {
         })
     }
 
+    /// Parses this compact rule syntax into typed rule data.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if either rule side contains invalid modifier,
+    /// action, or payload syntax.
     pub(super) fn parse(&self) -> Result<ParsedRule, ParseError> {
         let (left, right) = self.syntax_parts();
         let head = left.parse()?;
@@ -64,6 +76,12 @@ struct RuleSyntaxParts {
 }
 
 impl EqualsPosition {
+    /// Finds the single rule separator in a compact source line.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if the line has no `=`, more than one `=`, or the
+    /// right-side start index cannot be represented.
     fn find(line_number: SourceLineNumber, bytes: &[CompactByte]) -> Result<Self, ParseError> {
         let mut found = None;
 
@@ -96,6 +114,12 @@ impl EqualsPosition {
         found.ok_or_else(|| ParseError::at_line(line_number, ParseErrorKind::MissingEquals))
     }
 
+    /// Splits compact bytes into left and right rule syntax buffers.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if allocation fails or the calculated right-side
+    /// length cannot be represented.
     fn split(
         self,
         line_number: SourceLineNumber,
@@ -122,6 +146,12 @@ impl EqualsPosition {
 }
 
 impl RuleSyntaxParts {
+    /// Allocates left and right rule syntax buffers.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if either syntax buffer cannot reserve its
+    /// requested capacity.
     fn new(
         line_number: SourceLineNumber,
         left_capacity: usize,
@@ -142,6 +172,11 @@ impl RuleSyntaxParts {
         Ok(Self { left, right })
     }
 
+    /// Appends one compact byte to the left-side syntax buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if the left-side syntax buffer cannot grow.
     fn push_left(
         &mut self,
         line_number: SourceLineNumber,
@@ -150,6 +185,11 @@ impl RuleSyntaxParts {
         push_syntax_byte(line_number, &mut self.left, byte)
     }
 
+    /// Appends one compact byte to the right-side syntax buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if the right-side syntax buffer cannot grow.
     fn push_right(
         &mut self,
         line_number: SourceLineNumber,
@@ -159,6 +199,11 @@ impl RuleSyntaxParts {
     }
 }
 
+/// Appends one compact byte to a syntax buffer.
+///
+/// # Errors
+///
+/// Returns `ParseError` if the syntax buffer cannot grow.
 fn push_syntax_byte(
     line_number: SourceLineNumber,
     output: &mut Vec<CompactByte>,
@@ -175,6 +220,12 @@ struct LeftSyntax<'code> {
 }
 
 impl<'code> LeftSyntax<'code> {
+    /// Parses left-side syntax into a typed rule head.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if left-side modifier order or payload syntax is
+    /// invalid.
     fn parse(self) -> Result<RuleHead, ParseError> {
         self.into_after_repeat().parse()
     }
@@ -204,10 +255,22 @@ struct LeftAfterRepeat<'code> {
 }
 
 impl<'code> LeftAfterRepeat<'code> {
+    /// Parses left-side syntax after optional repeat classification.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if the remaining left-side syntax cannot become a
+    /// valid payload with its anchor.
     fn parse(self) -> Result<RuleHead, ParseError> {
         self.into_payload_syntax()?.parse()
     }
 
+    /// Classifies the left-side anchor and payload slice.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` when modifiers appear after the anchor/payload
+    /// boundary or source-column lookup overflows.
     fn into_payload_syntax(self) -> Result<LeftPayloadSyntax<'code>, ParseError> {
         let (anchor, bytes) = if let Some(rest) = strip_token(self.bytes, SyntaxToken::Start) {
             (RuleAnchor::Start, rest)
@@ -252,6 +315,12 @@ struct LeftPayloadSyntax<'code> {
 }
 
 impl LeftPayloadSyntax<'_> {
+    /// Parses left-side payload syntax into a typed rule head.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if the left-side payload contains invalid
+    /// executable payload bytes or allocation fails.
     fn parse(self) -> Result<RuleHead, ParseError> {
         let payload = Payload::parse(self.bytes, self.line_number, PayloadKind::LeftSideData)?;
         Ok(RuleHead::new(self.repeat, self.anchor, payload))
@@ -265,6 +334,11 @@ struct RightSyntax<'code> {
 }
 
 impl<'code> RightSyntax<'code> {
+    /// Parses right-side syntax into a typed rule body.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if right-side action or payload syntax is invalid.
     fn parse(self) -> Result<RuleBody, ParseError> {
         self.into_payload_syntax().parse()
     }
@@ -336,6 +410,12 @@ struct RightPayloadSyntax<'code> {
 }
 
 impl RightPayloadSyntax<'_> {
+    /// Parses classified right-side payload syntax into a typed rule body.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if action syntax is nested, payload bytes are
+    /// invalid, or allocation fails.
     fn parse(self) -> Result<RuleBody, ParseError> {
         if self.action != RightActionSyntax::Replace {
             reject_nested_rhs_action(self.bytes, self.line_number)?;
@@ -402,6 +482,12 @@ fn right_action_kind(input: &[CompactByte]) -> Option<RightActionKind> {
     )
 }
 
+/// Rejects action tokens that appear inside a right-side action payload.
+///
+/// # Errors
+///
+/// Returns `ParseError` if the payload starts with another right-side action
+/// token or its source column cannot be represented.
 fn reject_nested_rhs_action(
     input: &[CompactByte],
     line_number: SourceLineNumber,

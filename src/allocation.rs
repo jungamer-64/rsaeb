@@ -100,6 +100,12 @@ impl AllocationError {
 
 impl Error for AllocationError {}
 
+/// Ensures `vec` can hold exactly `total_capacity` items.
+///
+/// # Errors
+///
+/// Returns `AllocationError` if the requested capacity cannot be represented
+/// or if the allocator rejects the reservation.
 pub(crate) fn try_reserve_total_exact<T>(
     vec: &mut Vec<T>,
     total_capacity: usize,
@@ -117,6 +123,12 @@ pub(crate) fn try_reserve_total_exact<T>(
         .map_err(|_| AllocationError::reserve_failed(context, total_capacity))
 }
 
+/// Pushes one value after reserving through the explicit allocation boundary.
+///
+/// # Errors
+///
+/// Returns `AllocationError` if the next capacity cannot be represented or if
+/// the allocator rejects the reservation.
 pub(crate) fn try_push<T>(
     vec: &mut Vec<T>,
     value: T,
@@ -143,6 +155,10 @@ mod tests {
     use crate::test_support::{TestResult, ensure_eq};
     use alloc::string::ToString;
 
+    /// # Errors
+    ///
+    /// Returns `TestFailure` if an allocation error field does not match the
+    /// expected public value.
     #[test]
     fn allocation_contexts_are_publicly_inspectable() -> TestResult {
         let error = AllocationError::reserve_failed(AllocationContext::TraceSnapshot, 123);
@@ -171,6 +187,10 @@ mod tests {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns `TestFailure` if an allocation error display string drifts from
+    /// the expected domain wording.
     #[test]
     fn allocation_display_names_the_failed_context_and_capacity() -> TestResult {
         let error = AllocationError::reserve_failed(AllocationContext::TraceSnapshot, 123);

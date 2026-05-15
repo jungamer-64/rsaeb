@@ -71,6 +71,12 @@ pub struct ExecutionStepError<'program> {
 }
 
 impl<'program> ExecutionCore<'program> {
+    /// Builds the mutable runtime core for one execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if input materialization fails, input exceeds runtime
+    /// state limits, or per-execution rule state allocation fails.
     pub(crate) fn new(
         program: &'program Program,
         input: &RuntimeInput,
@@ -96,12 +102,23 @@ impl<'program> ExecutionCore<'program> {
         self.state.view()
     }
 
+    /// Materializes a stable terminal result.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if final state materialization cannot allocate.
     pub(super) fn into_stable_result(self, steps: StepCount) -> Result<RunResult, RunError> {
         Ok(RunResult::stable(self.state.into_snapshot()?, steps))
     }
 }
 
 impl<'program> RunningExecution<'program> {
+    /// Starts a new running execution for a parsed program and validated input.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if runtime input materialization fails, state limits
+    /// reject the input, or per-execution rule state allocation fails.
     pub(crate) fn new(
         program: &'program Program,
         input: &RuntimeInput,
@@ -128,6 +145,12 @@ impl<'program> RunningExecution<'program> {
     ///
     /// Consuming `self` makes terminal states explicit. Call
     /// [`AppliedExecution::into_running`] to continue after an applied rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ExecutionStepError` if the matching rule cannot commit because
+    /// runtime limits or allocation fail. The error preserves the uncommitted
+    /// execution.
     #[expect(
         clippy::result_large_err,
         reason = "ExecutionStepError preserves the uncommitted execution by value without allocating on the error path"

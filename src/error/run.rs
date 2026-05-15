@@ -243,6 +243,10 @@ mod tests {
     use super::InputColumn;
     use crate::test_support::{TestResult, ensure_eq};
 
+    /// # Errors
+    ///
+    /// Returns `TestFailure` if input-column conversion accepts an
+    /// unrepresentable index or rejects zero.
     #[test]
     fn input_column_rejects_unrepresentable_zero_based_index() -> TestResult {
         ensure_eq!(InputColumn::from_zero_based(usize::MAX), None)?;

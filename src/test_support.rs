@@ -89,10 +89,22 @@ impl From<RuntimeInputError> for TestFailure {
 
 pub(crate) type TestResult = Result<(), TestFailure>;
 
+/// Validates runtime input with the default state byte limit.
+///
+/// # Errors
+///
+/// Returns `RuntimeInputError` if the test input violates runtime input
+/// validation or allocation constraints.
 pub(crate) fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
     runtime_input_with_limit(bytes, DEFAULT_MAX_STATE_LEN)
 }
 
+/// Validates runtime input with a test-provided state byte limit.
+///
+/// # Errors
+///
+/// Returns `RuntimeInputError` if the test input violates runtime input
+/// validation, the provided limit, or allocation constraints.
 pub(crate) fn runtime_input_with_limit(
     bytes: &[u8],
     limit: StateByteLimit,
@@ -100,6 +112,11 @@ pub(crate) fn runtime_input_with_limit(
     RuntimeInput::validate(bytes, RuntimeInputLimits::new(limit))
 }
 
+/// Converts a boolean assertion into the shared test result type.
+///
+/// # Errors
+///
+/// Returns `TestFailure` with `message` when `condition` is false.
 pub(crate) fn ensure(condition: bool, message: impl Into<String>) -> TestResult {
     if condition {
         Ok(())
@@ -108,6 +125,11 @@ pub(crate) fn ensure(condition: bool, message: impl Into<String>) -> TestResult 
     }
 }
 
+/// Converts a pattern-match assertion into the shared test result type.
+///
+/// # Errors
+///
+/// Returns `TestFailure` with `message` when `condition` is false.
 pub(crate) fn ensure_matches(condition: bool, message: &'static str) -> TestResult {
     ensure(condition, message)
 }
@@ -130,6 +152,11 @@ macro_rules! ensure_eq {
 
 pub(crate) use ensure_eq;
 
+/// Parses source and returns the expected parse error.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if parsing succeeds.
 pub(crate) fn expect_parse_error(source: &str) -> Result<ParseError, TestFailure> {
     match Program::parse(crate::ProgramSource::from_str(source)) {
         Ok(_) => Err(TestFailure::message("expected parse error")),
@@ -137,6 +164,12 @@ pub(crate) fn expect_parse_error(source: &str) -> Result<ParseError, TestFailure
     }
 }
 
+/// Asserts that a parse error has the expected source position.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the expected position cannot be represented or the
+/// parse error location differs.
 pub(crate) fn expect_error_position(error: &ParseError, line: usize, column: usize) -> TestResult {
     let line = source_line_number(line)?;
     let column = source_column(column)?;
@@ -146,11 +179,21 @@ pub(crate) fn expect_error_position(error: &ParseError, line: usize, column: usi
     )
 }
 
+/// Converts a test literal into a source line number.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if `one_based` is zero.
 pub(crate) fn source_line_number(one_based: usize) -> Result<SourceLineNumber, TestFailure> {
     SourceLineNumber::from_one_based(one_based)
         .ok_or(TestFailure::message("expected non-zero source line"))
 }
 
+/// Converts a test literal into a source column.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if `one_based` is zero.
 pub(crate) fn source_column(one_based: usize) -> Result<SourceColumn, TestFailure> {
     SourceColumn::from_one_based(one_based)
         .ok_or(TestFailure::message("expected non-zero source column"))

@@ -24,6 +24,11 @@ pub(super) struct AppliedRule<'program> {
 }
 
 impl ExecutionCore<'_> {
+    /// Materializes a return payload as public return output.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if return-output allocation fails.
     pub(super) fn materialize_return_output(
         output: PayloadView<'_>,
     ) -> Result<ReturnOutput, RunError> {
@@ -33,6 +38,12 @@ impl ExecutionCore<'_> {
     }
 }
 
+/// Applies one matched rule and commits its once-rule state on success.
+///
+/// # Errors
+///
+/// Returns `RunError` if the next step exceeds limits, the rewrite would
+/// exceed state limits, return output exceeds limits, or allocation fails.
 pub(super) fn apply_matched_rule<'program>(
     state: &mut State,
     scratch: &mut RewriteScratch,
@@ -69,6 +80,12 @@ pub(super) fn apply_matched_rule<'program>(
     }
 }
 
+/// Applies a rule action into scratch storage without committing the state.
+///
+/// # Errors
+///
+/// Returns `RunError` if rewrite state or return output exceeds limits, or if
+/// scratch/output allocation fails.
 fn apply_action_to_scratch<'program>(
     state: &State,
     scratch: &mut RewriteScratch,

@@ -12,6 +12,12 @@ use crate::source::ProgramSource;
 use line::RawSourceLine;
 use location::{parse_allocation_error, source_line_number};
 
+/// Parses source bytes into a typed program.
+///
+/// # Errors
+///
+/// Returns `ParseError` if source location conversion, line compaction, rule
+/// parsing, or parsed-rule storage fails.
 pub(crate) fn parse_program_impl(source: ProgramSource<'_>) -> Result<Program, ParseError> {
     let mut rule_set = RuleSet::new();
 

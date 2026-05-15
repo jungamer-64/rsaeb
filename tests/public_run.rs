@@ -10,6 +10,11 @@ use rsaeb::{
 };
 use support::{TestFailure, TestResult, ensure, ensure_eq, ensure_matches, runtime_input};
 
+/// Returns stable output bytes when they match `expected`.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the run result is not stable or stable bytes differ.
 fn expect_stable_bytes<'result>(
     result: &'result RunResult,
     expected: &[u8],
@@ -21,6 +26,12 @@ fn expect_stable_bytes<'result>(
     }
 }
 
+/// Returns return output bytes when they match `expected`.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the run result is not returned or return bytes
+/// differ.
 fn expect_return_bytes<'result>(
     result: &'result RunResult,
     expected: &[u8],
@@ -54,6 +65,11 @@ enum StepSignature {
     },
 }
 
+/// Builds a comparable signature for an applied step.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if canonical rule source materialization fails.
 fn applied_signature(applied: &AppliedExecution<'_>) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Applied {
         step: applied.step().get(),
@@ -69,6 +85,12 @@ fn stable_signature(stable: &StableExecution<'_>) -> StepSignature {
     }
 }
 
+/// Builds a comparable signature for a returned step.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if canonical rule source or return output
+/// materialization fails.
 fn returned_signature(returned: &ReturnedExecution<'_>) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Return {
         step: returned.step().get(),
@@ -77,6 +99,11 @@ fn returned_signature(returned: &ReturnedExecution<'_>) -> Result<StepSignature,
     })
 }
 
+/// Runs stepwise execution and collects comparable transition signatures.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if a step fails or transition materialization fails.
 fn finish_step_signatures(
     mut execution: RunningExecution<'_>,
 ) -> Result<Vec<StepSignature>, TestFailure> {
@@ -99,6 +126,11 @@ fn finish_step_signatures(
     }
 }
 
+/// Returns the expected runtime error.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the result succeeds.
 fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFailure> {
     match result {
         Ok(_) => Err(TestFailure::message("expected runtime error")),
@@ -106,6 +138,11 @@ fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFail
     }
 }
 
+/// Returns the expected step limit error.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if `error` is not a step limit error.
 fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::Step { .. }) => Ok(error),
@@ -115,6 +152,11 @@ fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
     }
 }
 
+/// Returns the expected state limit error.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if `error` is not a state limit error.
 fn expect_state_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::State { .. }) => Ok(error),
@@ -124,6 +166,11 @@ fn expect_state_limit(error: RunError) -> Result<LimitError, TestFailure> {
     }
 }
 
+/// Returns the expected successful step transition.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if stepping fails.
 fn expect_step_transition<'program>(
     result: Result<ExecutionTransition<'program>, ExecutionStepError<'program>>,
 ) -> Result<ExecutionTransition<'program>, TestFailure> {
@@ -133,6 +180,10 @@ fn expect_step_transition<'program>(
     }
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if public typed boundaries cannot parse or run simple
+/// programs.
 #[test]
 fn public_typed_boundaries_parse_and_run_programs() -> TestResult {
     let limits = RunLimits::new(
@@ -154,6 +205,10 @@ fn public_typed_boundaries_parse_and_run_programs() -> TestResult {
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if public language whitespace, comments, or actions
+/// drift from the expected contract.
 #[test]
 fn language_whitespace_comments_and_actions_are_public_contract() -> TestResult {
     let limits = RunLimits::new(
@@ -196,6 +251,10 @@ fn language_whitespace_comments_and_actions_are_public_contract() -> TestResult 
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if rewrite order, anchors, once rules, or runtime-only
+/// byte preservation drift from the public contract.
 #[test]
 fn rewrite_order_anchors_once_and_runtime_only_bytes_are_public_contract() -> TestResult {
     let limits = RunLimits::new(
@@ -230,6 +289,10 @@ fn rewrite_order_anchors_once_and_runtime_only_bytes_are_public_contract() -> Te
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if parsed programs are not reusable or rule views lose
+/// structured public data.
 #[test]
 fn parsed_program_is_reusable_and_rule_views_are_structured() -> TestResult {
     let limits = RunLimits::new(
@@ -281,6 +344,10 @@ fn parsed_program_is_reusable_and_rule_views_are_structured() -> TestResult {
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if canonical source does not reparse to the same
+/// public rule view.
 #[test]
 fn canonical_source_reparses_to_the_same_public_rule_view() -> TestResult {
     let program = Program::parse(ProgramSource::from_str(
@@ -310,6 +377,10 @@ fn canonical_source_reparses_to_the_same_public_rule_view() -> TestResult {
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if stepwise execution diverges from full-run behavior
+/// or fails to pause after each applied rule.
 #[test]
 fn stepwise_execution_matches_full_run_and_waits_after_each_rule() -> TestResult {
     let limits = RunLimits::new(
@@ -374,6 +445,10 @@ fn stepwise_execution_matches_full_run_and_waits_after_each_rule() -> TestResult
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if execution state views do not expose initial and
+/// current state bytes correctly.
 #[test]
 fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
     let limits = RunLimits::new(
@@ -409,6 +484,10 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
     )
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if reusable runtime input revalidates or loses owned
+/// typed bytes.
 #[test]
 fn runtime_input_owns_typed_bytes_without_revalidation() -> TestResult {
     let input = runtime_input(b"a=()# ")?;
@@ -430,6 +509,10 @@ fn runtime_input_owns_typed_bytes_without_revalidation() -> TestResult {
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if repeated stepwise executions with the same runtime
+/// input diverge.
 #[test]
 fn reusable_runtime_input_matches_repeated_stepwise_execution() -> TestResult {
     let limits = RunLimits::new(
@@ -468,6 +551,10 @@ fn reusable_runtime_input_matches_repeated_stepwise_execution() -> TestResult {
     )
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if public limit errors no longer preserve distinct
+/// step, state, and return domains.
 #[test]
 fn public_limits_preserve_distinct_step_state_and_return_errors() -> TestResult {
     let step_limited = Program::parse(ProgramSource::from_str("a=b"))?.run(
@@ -537,6 +624,10 @@ fn public_limits_preserve_distinct_step_state_and_return_errors() -> TestResult 
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if the runtime input public boundary accepts
+/// non-ASCII bytes or rejects ASCII bytes.
 #[test]
 fn runtime_input_public_boundary_accepts_ascii_and_rejects_non_ascii() -> TestResult {
     let input: Vec<u8> = (0x00..=0x7f).collect();

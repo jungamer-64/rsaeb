@@ -6,6 +6,12 @@ use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent};
 use super::execution::{ExecutionTransition, RunningExecution};
 
 impl<'program> RunningExecution<'program> {
+    /// Runs to completion while emitting borrowed trace events.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TracedRunError::Trace` if the trace sink fails. Returns
+    /// `TracedRunError::Run` if runtime execution fails.
     pub(crate) fn run_with_borrowed_trace<F, E>(
         mut self,
         mut trace: F,
@@ -50,6 +56,11 @@ impl<'program> RunningExecution<'program> {
         }
     }
 
+    /// Emits one borrowed step trace event.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TracedRunError::Trace` if the trace sink rejects the event.
     fn emit_step_trace<F, E>(
         trace: &mut F,
         step: StepCount,

@@ -9,6 +9,11 @@ pub(super) fn parse_allocation_error(
     ParseError::at_line(line_number, ParseErrorKind::Allocation(error))
 }
 
+/// Converts a zero-based source line index into the domain line number.
+///
+/// # Errors
+///
+/// Returns `ParseError` if the one-based source line cannot be represented.
 pub(super) fn source_line_number(zero_based_line: usize) -> Result<SourceLineNumber, ParseError> {
     SourceLineNumber::from_zero_based(zero_based_line).ok_or_else(|| {
         parse_allocation_error(
@@ -18,6 +23,11 @@ pub(super) fn source_line_number(zero_based_line: usize) -> Result<SourceLineNum
     })
 }
 
+/// Converts a zero-based source column index into the domain column number.
+///
+/// # Errors
+///
+/// Returns `ParseError` if the one-based source column cannot be represented.
 pub(super) fn source_column(
     zero_based_column: usize,
     line_number: SourceLineNumber,

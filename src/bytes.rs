@@ -256,6 +256,12 @@ impl ProgramByte {
         }
     }
 
+    /// Parses a compact source byte as executable program payload data.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` when the byte is non-ASCII, non-printable, or
+    /// reserved executable syntax for the selected payload boundary.
     pub(crate) fn parse(
         byte: CompactByte,
         line_number: SourceLineNumber,
@@ -316,6 +322,12 @@ mod runtime_ascii {
     pub(crate) struct NonProgramAsciiByte(AsciiByte);
 
     impl AsciiByte {
+        /// Validates one raw runtime input byte as ASCII.
+        ///
+        /// # Errors
+        ///
+        /// Returns `RuntimeInputError` when the byte is non-ASCII or its
+        /// one-based input column cannot be represented.
         pub(crate) fn validate(
             byte: u8,
             zero_based_column: usize,
@@ -361,6 +373,12 @@ pub(crate) enum RuntimeByte {
 }
 
 impl RuntimeByte {
+    /// Validates and classifies one raw runtime input byte.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RuntimeInputError` when ASCII validation fails or the input
+    /// column cannot be represented.
     pub(crate) fn validate_input(
         byte: u8,
         zero_based_column: usize,
@@ -397,6 +415,12 @@ impl RuntimeByte {
     }
 }
 
+/// Pushes raw bytes through the explicit allocation boundary.
+///
+/// # Errors
+///
+/// Returns `AllocationError` if output capacity cannot be represented or
+/// allocated.
 pub(crate) fn push_bytes(
     output: &mut Vec<u8>,
     source: impl IntoIterator<Item = u8>,
@@ -415,6 +439,13 @@ pub(crate) struct Payload {
 }
 
 impl Payload {
+    /// Parses compact bytes into typed executable payload data.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` when a payload byte is invalid for executable
+    /// payload data, allocation fails, or payload allocation capacity
+    /// overflows.
     pub(crate) fn parse(
         input: &[CompactByte],
         line_number: SourceLineNumber,
@@ -472,6 +503,12 @@ impl Payload {
                 .all(|(actual, expected)| actual == expected)
     }
 
+    /// Appends materialized payload bytes to `output`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if output capacity cannot be represented or
+    /// allocated.
     pub(crate) fn push_bytes_to(
         &self,
         output: &mut Vec<u8>,
@@ -484,6 +521,11 @@ impl Payload {
         self.bytes.iter().copied().map(RuntimeByte::from_program)
     }
 
+    /// Materializes this payload as owned bytes for the given allocation site.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the output buffer cannot be allocated.
     pub(crate) fn to_vec_with_context(
         &self,
         context: AllocationContext,
@@ -527,6 +569,11 @@ mod tests {
         source_column, source_line_number,
     };
 
+    /// Parses payload bytes and returns the expected parse error.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TestFailure` if the invalid payload is accepted.
     fn parse_payload_error(
         input: &[CompactByte],
         line_number: SourceLineNumber,
@@ -538,6 +585,10 @@ mod tests {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns `TestFailure` if reserved syntax bytes are not rejected with
+    /// structured payload errors.
     #[test]
     fn payload_rejects_every_reserved_syntax_byte_even_if_payload_parser_is_called_directly()
     -> TestResult {
@@ -569,6 +620,10 @@ mod tests {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns `TestFailure` if payload validation accepts invalid executable
+    /// bytes or reports an unexpected error location.
     #[test]
     fn payload_validates_compact_bytes_at_the_domain_boundary() -> TestResult {
         let non_ascii = [CompactByte::new(0xff, source_column(1)?)];
@@ -597,6 +652,10 @@ mod tests {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns `TestFailure` if a parsed payload exposes bytes inconsistent
+    /// with the validated domain value.
     #[test]
     fn payload_exposes_validated_bytes_without_leaking_the_internal_domain_type() -> TestResult {
         let compact = [
@@ -611,6 +670,10 @@ mod tests {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns `TestFailure` if runtime input byte classification or
+    /// materialization drifts from the ASCII domain split.
     #[test]
     fn runtime_input_classifies_program_constructible_and_opaque_ascii_separately() -> TestResult {
         let parsed = RuntimeByte::validate_input(b'a', 0).map_err(TestFailure::from)?;
@@ -632,6 +695,10 @@ mod tests {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns `TestFailure` if runtime input validation depends on
+    /// reconstructing executable program bytes.
     #[test]
     fn runtime_input_validation_has_no_reconstruction_invariant() -> TestResult {
         let parsed = RuntimeByte::validate_input(b'a', 0).map_err(TestFailure::from)?;

@@ -8,6 +8,11 @@ use crate::test_support::{
 };
 use crate::{Program, ProgramSource};
 
+/// Returns the parsed rule at `index`.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the program has no rule at `index`.
 fn expect_rule(
     program: &Program,
     index: usize,
@@ -18,6 +23,10 @@ fn expect_rule(
         .ok_or(TestFailure::message("expected parsed rule"))
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if compacted source does not preserve the expected
+/// typed rule domain.
 #[test]
 fn compacting_source_whitespace_and_comments_preserves_rule_domain() -> TestResult {
     let program = Program::parse(ProgramSource::from_str(
@@ -42,12 +51,18 @@ fn compacting_source_whitespace_and_comments_preserves_rule_domain() -> TestResu
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if empty code lines or comments become parsed rules.
 #[test]
 fn empty_code_lines_and_comments_do_not_become_rules() -> TestResult {
     let program = Program::parse(ProgramSource::from_str(" \t\r\n# comment\n"))?;
     ensure_eq!(program.rule_count(), RuleCount::new(0))
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if comment bytes affect executable parsing.
 #[test]
 fn comments_may_contain_non_utf8_bytes_because_source_is_byte_oriented() -> TestResult {
     let program = Program::parse(ProgramSource::from_bytes(b"a=b#\xff\xfe\n"))?;
@@ -57,6 +72,10 @@ fn comments_may_contain_non_utf8_bytes_because_source_is_byte_oriented() -> Test
     ensure_eq!(rule.canonical_source()?, b"a=b".as_slice())
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if invalid executable code bytes are accepted or
+/// reported at the wrong location.
 #[test]
 fn code_body_rejects_non_ascii_and_non_printable_bytes_outside_comments() -> TestResult {
     let error = expect_parse_error("a=\u{80}")?;
@@ -81,6 +100,10 @@ fn code_body_rejects_non_ascii_and_non_printable_bytes_outside_comments() -> Tes
     )
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if equals-separator errors lose their original source
+/// locations.
 #[test]
 fn equals_and_missing_equals_errors_keep_original_source_locations() -> TestResult {
     let error = expect_parse_error("a=b=c")?;
@@ -108,6 +131,10 @@ fn equals_and_missing_equals_errors_keep_original_source_locations() -> TestResu
     )
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if reserved parentheses are accepted outside their
+/// supported modifier and action slots.
 #[test]
 fn reserved_parentheses_are_rejected_outside_supported_modifier_slots() -> TestResult {
     for source in [
@@ -135,6 +162,10 @@ fn reserved_parentheses_are_rejected_outside_supported_modifier_slots() -> TestR
     )
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if nested right-side actions are accepted or reported
+/// with the wrong structured action kind.
 #[test]
 fn right_side_action_payload_cannot_start_with_another_action() -> TestResult {
     for source in [
@@ -166,6 +197,10 @@ fn right_side_action_payload_cannot_start_with_another_action() -> TestResult {
     )
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if payload or left-modifier parse errors lose their
+/// structured kind.
 #[test]
 fn payload_and_left_modifier_errors_are_structured() -> TestResult {
     let error = expect_parse_error("a = b (")?;
@@ -194,6 +229,10 @@ fn payload_and_left_modifier_errors_are_structured() -> TestResult {
     )
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if spaced and compact source parse to different typed
+/// rule views.
 #[test]
 fn spaced_source_and_compact_source_parse_to_the_same_rule_view() -> TestResult {
     let compact = Program::parse(ProgramSource::from_str("(once)(start)a=(end)b"))?;

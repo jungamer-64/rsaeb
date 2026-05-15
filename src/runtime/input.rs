@@ -132,6 +132,12 @@ pub(super) struct InitialStateBytes {
 }
 
 impl InitialStateBytes {
+    /// Materializes validated runtime input into mutable execution state bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if the input exceeds runtime state limits or the
+    /// initial state buffer cannot be allocated.
     pub(super) fn materialize(input: &RuntimeInput, limits: RunLimits) -> Result<Self, RunError> {
         let byte_count = input.byte_count();
 

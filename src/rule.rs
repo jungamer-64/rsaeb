@@ -137,6 +137,11 @@ impl<'program> PayloadView<'program> {
         self.to_vec_with_context(AllocationContext::PayloadView)
     }
 
+    /// Materializes this payload view as owned bytes for the given allocation site.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the output buffer cannot be allocated.
     pub(crate) fn to_vec_with_context(
         self,
         context: AllocationContext,
@@ -357,6 +362,12 @@ impl Rule {
         RuleView::new(self)
     }
 
+    /// Computes the byte length of this rule's canonical source form.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if canonical source length arithmetic
+    /// overflows.
     fn canonical_source_len(&self) -> Result<usize, AllocationError> {
         let (action_token, payload) = self.action.canonical_parts();
         let mut len = self.lhs.len();
@@ -385,6 +396,12 @@ impl Rule {
         Ok(len)
     }
 
+    /// Materializes this rule's canonical source form.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if canonical source length arithmetic
+    /// overflows or the output buffer cannot be allocated.
     fn canonical_source(&self) -> Result<Vec<u8>, AllocationError> {
         let mut output = Vec::new();
         try_reserve_total_exact(
@@ -416,6 +433,11 @@ impl Rule {
     }
 }
 
+/// Appends one syntax token to canonical source output.
+///
+/// # Errors
+///
+/// Returns `AllocationError` if the output buffer cannot grow.
 fn push_token(output: &mut Vec<u8>, token: SyntaxToken) -> Result<(), AllocationError> {
     for byte in token.bytes().iter().copied() {
         try_push(output, byte, AllocationContext::CanonicalSource)?;
@@ -424,6 +446,11 @@ fn push_token(output: &mut Vec<u8>, token: SyntaxToken) -> Result<(), Allocation
     Ok(())
 }
 
+/// Appends payload bytes to canonical source output.
+///
+/// # Errors
+///
+/// Returns `AllocationError` if the output buffer cannot grow.
 fn push_payload(output: &mut Vec<u8>, payload: &Payload) -> Result<(), AllocationError> {
     payload.push_bytes_to(output, AllocationContext::CanonicalSource)
 }

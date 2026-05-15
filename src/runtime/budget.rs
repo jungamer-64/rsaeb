@@ -25,6 +25,12 @@ impl StepBudget {
         self.completed_steps
     }
 
+    /// Checks whether another rewrite step can be attempted.
+    ///
+    /// # Errors
+    ///
+    /// Returns `LimitError` if the configured step limit has already been
+    /// reached.
     fn ensure_next_step_allowed(self, state_len: RuntimeStateByteCount) -> Result<(), LimitError> {
         if self.completed_steps.get() >= self.max_steps.get() {
             return Err(LimitError::step(
@@ -37,6 +43,12 @@ impl StepBudget {
         Ok(())
     }
 
+    /// Reserves the next step number before a rule commits.
+    ///
+    /// # Errors
+    ///
+    /// Returns `LimitError` if the step limit is reached or the next step
+    /// count cannot be represented.
     pub(super) fn reserve_next_step(
         self,
         state_len: RuntimeStateByteCount,

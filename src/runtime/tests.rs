@@ -19,12 +19,22 @@ fn runtime_view_bytes(view: RuntimeStateView<'_>) -> Vec<u8> {
     view.bytes().collect()
 }
 
+/// Returns the materialized runtime byte at `index`.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the state has no byte at `index`.
 fn expect_runtime_byte(state: &State, index: usize) -> Result<u8, TestFailure> {
     state
         .materialized_byte_at(index)
         .ok_or(TestFailure::message("expected runtime byte"))
 }
 
+/// Returns the program-constructible runtime byte at `index`.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the byte is missing or is runtime-only.
 fn expect_program_constructible_byte(state: &State, index: usize) -> Result<u8, TestFailure> {
     match state.bytes.get(index).copied() {
         Some(RuntimeByte::ProgramConstructible(byte)) => Ok(byte.get()),
@@ -35,6 +45,11 @@ fn expect_program_constructible_byte(state: &State, index: usize) -> Result<u8, 
     }
 }
 
+/// Returns the opaque runtime-only byte at `index`.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the byte is missing or is program-constructible.
 fn expect_opaque_runtime_byte(state: &State, index: usize) -> Result<u8, TestFailure> {
     match state.bytes.get(index).copied() {
         Some(RuntimeByte::Opaque(byte)) => Ok(byte.materialize()),
@@ -45,6 +60,11 @@ fn expect_opaque_runtime_byte(state: &State, index: usize) -> Result<u8, TestFai
     }
 }
 
+/// Returns the program payload byte at `index`.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the payload has no byte at `index`.
 fn expect_payload_byte(payload: &Payload, index: usize) -> Result<u8, TestFailure> {
     payload
         .program_bytes()
@@ -54,6 +74,11 @@ fn expect_payload_byte(payload: &Payload, index: usize) -> Result<u8, TestFailur
         .ok_or(TestFailure::message("expected payload byte"))
 }
 
+/// Returns the expected step limit error.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if `error` is not a step limit error.
 fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::Step { .. }) => Ok(error),
@@ -63,6 +88,11 @@ fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
     }
 }
 
+/// Returns the expected step error.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if stepping succeeds.
 fn expect_step_error<'program>(
     result: Result<ExecutionTransition<'program>, ExecutionStepError<'program>>,
 ) -> Result<ExecutionStepError<'program>, TestFailure> {
@@ -72,6 +102,11 @@ fn expect_step_error<'program>(
     }
 }
 
+/// Returns the expected successful step transition.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if stepping fails.
 fn expect_step_transition<'program>(
     result: Result<ExecutionTransition<'program>, ExecutionStepError<'program>>,
 ) -> Result<ExecutionTransition<'program>, TestFailure> {
@@ -81,6 +116,10 @@ fn expect_step_transition<'program>(
     }
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if once-rule lookup mutates rule availability before a
+/// step commits.
 #[test]
 fn once_rule_lookup_does_not_consume_before_step_commit() -> TestResult {
     let program = Program::parse(ProgramSource::from_str("(once)a=b"))?;
@@ -104,6 +143,10 @@ fn once_rule_lookup_does_not_consume_before_step_commit() -> TestResult {
     )
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if a step-limit failure commits state or loses the
+/// running execution.
 #[test]
 fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
     let program = Program::parse(ProgramSource::from_str("a=b"))?;
@@ -174,6 +217,9 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
     )
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if state or return-size limit failures commit state.
 #[test]
 fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     let state_limits = RunLimits::new(
@@ -239,6 +285,10 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     )
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if runtime input errors lose structured boundary
+/// information.
 #[test]
 fn runtime_input_error_is_structured_at_the_runtime_boundary() -> TestResult {
     let Err(error) = runtime_input("a\u{80}".as_bytes()) else {
@@ -254,6 +304,10 @@ fn runtime_input_error_is_structured_at_the_runtime_boundary() -> TestResult {
     )
 }
 
+/// # Errors
+///
+/// Returns `TestFailure` if executable payload bytes and runtime-only bytes are
+/// not kept in distinct domains.
 #[test]
 fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
     let compact = [CompactByte::new(b'a', source_column(1)?)];

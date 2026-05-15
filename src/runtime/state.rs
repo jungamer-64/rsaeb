@@ -88,6 +88,12 @@ impl State {
             .then_some(state_match)
     }
 
+    /// Rewrites this state into scratch storage according to `request`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if replacement size arithmetic overflows, the
+    /// rewritten state exceeds limits, or scratch allocation fails.
     pub(super) fn rewrite_into(
         &self,
         request: RewriteRequest<'_>,
@@ -115,6 +121,12 @@ impl State {
         Ok(())
     }
 
+    /// Computes the rewritten state length for a rewrite request.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StateSizeError` if removing the match and adding the payload
+    /// cannot be represented as a runtime state byte count.
     fn replaced_byte_count(
         &self,
         request: RewriteRequest<'_>,
@@ -131,6 +143,12 @@ impl State {
             .ok_or_else(|| StateSizeError::new(state_len, lhs_len, rhs_len))
     }
 
+    /// Clears and reserves scratch storage for one rewrite.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if replacement size arithmetic overflows, the
+    /// rewritten state exceeds limits, or scratch allocation fails.
     fn prepare_replacement_buffer(
         &self,
         request: RewriteRequest<'_>,
@@ -152,6 +170,11 @@ impl State {
         Ok(())
     }
 
+    /// Copies bytes before the matched span into scratch storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if scratch storage cannot grow.
     fn push_prefix(
         &self,
         output: &mut RewriteScratch,
@@ -160,6 +183,11 @@ impl State {
         output.push_existing(self.bytes.iter().copied().take(state_match.start()))
     }
 
+    /// Copies bytes after the matched span into scratch storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if scratch storage cannot grow.
     fn push_suffix(
         &self,
         output: &mut RewriteScratch,
@@ -168,6 +196,11 @@ impl State {
         output.push_existing(self.bytes.iter().copied().skip(state_match.end()))
     }
 
+    /// Materializes runtime state bytes at the requested allocation site.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the output buffer cannot be allocated.
     fn materialize(&self, context: AllocationContext) -> Result<Vec<u8>, AllocationError> {
         let mut output = Vec::new();
         try_reserve_total_exact(&mut output, self.len(), context)?;
@@ -177,6 +210,11 @@ impl State {
         Ok(output)
     }
 
+    /// Materializes this state as a public runtime-state snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if final output allocation fails.
     pub(super) fn into_snapshot(self) -> Result<RuntimeStateSnapshot, RunError> {
         let bytes = self
             .materialize(AllocationContext::FinalOutput)

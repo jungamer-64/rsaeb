@@ -53,6 +53,11 @@ impl<'run> RuntimeStateView<'run> {
         self.to_vec_with_context(AllocationContext::RuntimeStateView)
     }
 
+    /// Materializes this runtime-state view at the given allocation site.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the output buffer cannot be allocated.
     pub(crate) fn to_vec_with_context(
         self,
         context: AllocationContext,
@@ -121,6 +126,12 @@ impl BorrowedTraceEffect<'_, '_> {
         }
     }
 
+    /// Materializes this borrowed trace effect into an owned snapshot effect.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TraceSnapshotError` if the effect exceeds `limit` or snapshot
+    /// allocation fails.
     fn to_snapshot(
         self,
         limit: TraceSnapshotByteLimit,
@@ -236,6 +247,11 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
     }
 }
 
+/// Checks whether a trace snapshot byte count is within its limit.
+///
+/// # Errors
+///
+/// Returns `TraceSnapshotError::Limit` if `len` exceeds `limit`.
 fn ensure_trace_len(
     len: TraceSnapshotByteCount,
     limit: TraceSnapshotByteLimit,
