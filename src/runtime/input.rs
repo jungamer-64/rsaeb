@@ -4,7 +4,7 @@ use core::fmt;
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeStateByteCount};
 use crate::error::{LimitError, RunError, RuntimeInputError, StateLimitContext};
-use crate::program::{RunLimits, StateByteLimit};
+use crate::program::RunLimits;
 
 /// Runtime input after ASCII validation and byte-domain classification.
 ///
@@ -33,26 +33,6 @@ impl fmt::Debug for RuntimeInputBytesDebug<'_> {
     }
 }
 
-/// Allocation and length budget for constructing owned runtime input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuntimeInputLimits {
-    byte_limit: StateByteLimit,
-}
-
-impl RuntimeInputLimits {
-    /// Creates a runtime input construction limit from a state byte limit.
-    #[must_use]
-    pub const fn new(byte_limit: StateByteLimit) -> Self {
-        Self { byte_limit }
-    }
-
-    /// Maximum accepted runtime input length before owned classification.
-    #[must_use]
-    pub const fn byte_limit(self) -> StateByteLimit {
-        self.byte_limit
-    }
-}
-
 impl RuntimeInput {
     /// Validates raw bytes as runtime input.
     ///
@@ -61,10 +41,10 @@ impl RuntimeInput {
     /// Returns `RuntimeInputError` if the input exceeds `limits`, if any input
     /// byte is non-ASCII, if its one-based column cannot be represented, or if
     /// owned storage cannot be allocated.
-    pub fn validate(input: &[u8], limits: RuntimeInputLimits) -> Result<Self, RuntimeInputError> {
+    pub fn validate(input: &[u8], limit: RuntimeInputByteLimit) -> Result<Self, RuntimeInputError> {
         let byte_count = RuntimeStateByteCount::new(input.len());
-        if byte_count.get() > limits.byte_limit().get() {
-            return Err(RuntimeInputError::limit(limits.byte_limit(), byte_count));
+        if byte_count.get() > limit.get() {
+            return Err(RuntimeInputError::limit(limit, byte_count));
         }
 
         let mut bytes = Vec::new();

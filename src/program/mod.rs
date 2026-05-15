@@ -4,7 +4,7 @@ mod rule_set;
 mod tracing;
 
 use crate::error::{ParseError, RunError};
-use crate::parser::parse_program_impl;
+use crate::parser::parse_rules_impl;
 use crate::rule::{Rule, RuleCount, RuleView};
 use crate::runtime::{RunningExecution, RuntimeInput};
 use crate::source::ProgramSource;
@@ -13,7 +13,7 @@ pub(crate) use rule_set::RuleSet;
 
 pub use limits::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
-    DEFAULT_MAX_TRACE_SNAPSHOT_LEN, ReturnByteLimit, RunLimits, StateByteLimit, StepCount,
+    DEFAULT_MAX_TRACE_SNAPSHOT_LEN, ReturnByteLimit, RunLimits, RuntimeStateByteLimit, StepCount,
     StepLimit, TraceSnapshotByteLimit, TraceSnapshotLimits,
 };
 pub use result::{ReturnOutput, RunOutcome, RunResult, RuntimeStateSnapshot};
@@ -41,7 +41,7 @@ impl Program {
     /// reserved syntax appears as payload data, or when allocation fails while
     /// building the parsed program.
     pub fn parse(source: ProgramSource<'_>) -> Result<Self, ParseError> {
-        parse_program_impl(source)
+        Self::from_rule_set(parse_rules_impl(source)?)
     }
 
     /// Returns the number of executable rules in the parsed program.

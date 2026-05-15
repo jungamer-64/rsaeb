@@ -257,6 +257,7 @@ mod test_support;
 mod allocation;
 mod bytes;
 pub mod error;
+pub mod execution;
 pub mod inspect;
 pub mod limits;
 mod parser;
@@ -268,11 +269,8 @@ mod syntax;
 pub mod trace;
 
 pub use program::{
-    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, Program, ReturnOutput,
-    RunLimits, RunOutcome, RunResult, RuntimeStateSnapshot,
+    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, Program, RunLimits,
+    RunOutcome,
 };
-pub use runtime::{
-    AppliedExecution, ExecutionStepError, ExecutionTransition, ReturnedExecution, RunningExecution,
-    RuntimeInput, RuntimeInputLimits, StableExecution,
-};
+pub use runtime::RuntimeInput;
 pub use source::ProgramSource;

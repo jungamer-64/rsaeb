@@ -6,7 +6,7 @@ mod rule_line;
 mod tests;
 
 use crate::error::ParseError;
-use crate::program::{Program, RuleSet};
+use crate::program::RuleSet;
 use crate::source::ProgramSource;
 
 use line::RawSourceLine;
@@ -18,7 +18,7 @@ use location::{parse_allocation_error, source_line_number};
 ///
 /// Returns `ParseError` if source location conversion, line compaction, rule
 /// parsing, or parsed-rule storage fails.
-pub(crate) fn parse_program_impl(source: ProgramSource<'_>) -> Result<Program, ParseError> {
+pub(crate) fn parse_rules_impl(source: ProgramSource<'_>) -> Result<RuleSet, ParseError> {
     let mut rule_set = RuleSet::new();
 
     for (zero_based_line, raw_line) in source.as_bytes().split(|&byte| byte == b'\n').enumerate() {
@@ -38,5 +38,5 @@ pub(crate) fn parse_program_impl(source: ProgramSource<'_>) -> Result<Program, P
             .map_err(|error| parse_allocation_error(line_number, error))?;
     }
 
-    Ok(Program::from_rule_set(rule_set))
+    Ok(rule_set)
 }

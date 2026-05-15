@@ -3,7 +3,8 @@ const DEFAULT_BYTE_BUDGET: usize = 16_777_216;
 /// Default rewrite step budget for callers that want the crate policy value.
 pub const DEFAULT_MAX_STEPS: StepLimit = StepLimit::new(1_000_000);
 /// Default runtime-state byte budget for callers that want the crate policy value.
-pub const DEFAULT_MAX_STATE_LEN: StateByteLimit = StateByteLimit::new(DEFAULT_BYTE_BUDGET);
+pub const DEFAULT_MAX_STATE_LEN: RuntimeStateByteLimit =
+    RuntimeStateByteLimit::new(DEFAULT_BYTE_BUDGET);
 /// Default `(return)` output byte budget for callers that want the crate policy value.
 pub const DEFAULT_MAX_RETURN_LEN: ReturnByteLimit = ReturnByteLimit::new(DEFAULT_BYTE_BUDGET);
 /// Default trace snapshot byte budget for callers that want the crate default.
@@ -32,11 +33,11 @@ impl StepLimit {
 
 /// Maximum runtime state length in bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct StateByteLimit {
+pub struct RuntimeStateByteLimit {
     value: usize,
 }
 
-impl StateByteLimit {
+impl RuntimeStateByteLimit {
     /// Creates a runtime-state byte limit from a primitive length.
     #[must_use]
     pub const fn new(value: usize) -> Self {
@@ -120,7 +121,7 @@ impl StepCount {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunLimits {
     steps: StepLimit,
-    state_len: StateByteLimit,
+    state_len: RuntimeStateByteLimit,
     return_len: ReturnByteLimit,
 }
 
@@ -129,7 +130,7 @@ impl RunLimits {
     #[must_use]
     pub const fn new(
         max_steps: StepLimit,
-        max_state_len: StateByteLimit,
+        max_state_len: RuntimeStateByteLimit,
         max_return_len: ReturnByteLimit,
     ) -> Self {
         Self {
@@ -147,7 +148,7 @@ impl RunLimits {
 
     /// Maximum runtime state length, including initial input and rewrite results.
     #[must_use]
-    pub const fn state_byte_limit(self) -> StateByteLimit {
+    pub const fn state_byte_limit(self) -> RuntimeStateByteLimit {
         self.state_len
     }
 
@@ -166,7 +167,7 @@ impl RunLimits {
 
     /// Returns limits with a different runtime-state budget.
     #[must_use]
-    pub const fn with_state_byte_limit(mut self, max_state_len: StateByteLimit) -> Self {
+    pub const fn with_state_byte_limit(mut self, max_state_len: RuntimeStateByteLimit) -> Self {
         self.state_len = max_state_len;
         self
     }
