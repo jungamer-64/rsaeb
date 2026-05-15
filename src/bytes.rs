@@ -2,7 +2,9 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
-use crate::error::{InputColumn, InputError, ParseError, ParseErrorKind, PayloadKind};
+use crate::error::{
+    InputColumn, InputError, ParseError, ParseErrorKind, PayloadKind, RuntimeInvariantError,
+};
 use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
 
 /// Byte length of executable program payload data.
@@ -297,9 +299,9 @@ impl ProgramByte {
 
 /// ASCII byte accepted by runtime input.
 ///
-/// This newtype prevents crate-internal code from constructing an opaque
-/// runtime byte with a non-ASCII value. Runtime input validation owns the only
-/// constructor that can cross from raw `u8` into this domain.
+/// This newtype centralizes the ASCII invariant for runtime-only bytes. Raw
+/// runtime input crosses into this domain only through validation or through
+/// invariant-checked reconstruction from a validated input witness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AsciiByte(u8);
 
@@ -314,8 +316,14 @@ impl AsciiByte {
         }
     }
 
-    pub(crate) const fn from_validated_input(byte: u8) -> Self {
-        Self(byte)
+    pub(crate) fn from_validated_input(byte: u8) -> Result<Self, RuntimeInvariantError> {
+        if let Some(rejected) = NonAsciiInputByte::parse(byte) {
+            Err(RuntimeInvariantError::validated_input_became_non_ascii(
+                rejected,
+            ))
+        } else {
+            Ok(Self(byte))
+        }
     }
 
     pub(crate) const fn get(self) -> u8 {
@@ -355,8 +363,8 @@ impl RuntimeByte {
         )?))
     }
 
-    pub(crate) fn from_validated_input(byte: u8) -> Self {
-        Self::from_ascii(AsciiByte::from_validated_input(byte))
+    pub(crate) fn from_validated_input(byte: u8) -> Result<Self, RuntimeInvariantError> {
+        Ok(Self::from_ascii(AsciiByte::from_validated_input(byte)?))
     }
 
     pub(crate) const fn from_program(byte: ProgramByte) -> Self {
@@ -619,5 +627,36 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn validated_runtime_input_reconstruction_rechecks_the_ascii_invariant() -> TestResult {
+        let parsed = match RuntimeByte::from_validated_input(b'a') {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                return Err(TestFailure::message(
+                    "valid ASCII byte failed validated-input reconstruction",
+                ));
+            }
+        };
+        ensure_matches(
+            matches!(parsed, RuntimeByte::ProgramConstructible(byte) if byte.get() == b'a'),
+            "expected ASCII runtime input to reconstruct normally",
+        )?;
+
+        let Err(error) = RuntimeByte::from_validated_input(0xff) else {
+            return Err(TestFailure::message(
+                "expected validated input invariant error",
+            ));
+        };
+
+        ensure_matches(
+            matches!(
+                error,
+                RuntimeInvariantError::ValidatedInputBecameNonAscii { byte }
+                    if byte.get() == 0xff
+            ),
+            "expected non-ASCII validated-input invariant error",
+        )
     }
 }

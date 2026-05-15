@@ -9,7 +9,7 @@ use super::RunError;
 /// Error returned by fallible tracing APIs.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TracedRunError<E> {
-    /// Parser/runtime execution failed.
+    /// Runtime execution failed.
     Run(RunError),
     /// The user-provided trace sink failed.
     Trace(E),

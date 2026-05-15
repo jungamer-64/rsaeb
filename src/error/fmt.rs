@@ -164,6 +164,11 @@ impl fmt::Display for RuntimeInvariantError {
                 f,
                 "runtime invariant violation: matched once rule slot {once_slot} was already consumed",
             ),
+            Self::ValidatedInputBecameNonAscii { byte } => write!(
+                f,
+                "runtime invariant violation: validated runtime input byte became non-ASCII: 0x{:02x}",
+                byte.get(),
+            ),
         }
     }
 }

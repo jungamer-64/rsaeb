@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeStateByteCount};
-use crate::error::{InputError, LimitError, RunError, StateLimitContext};
+use crate::error::{InputError, LimitError, RunError, RuntimeInvariantError, StateLimitContext};
 use crate::program::RunLimits;
 
 /// Borrowed runtime input after ASCII validation.
@@ -48,7 +48,9 @@ impl<'input> RuntimeInput<'input> {
         self.bytes.is_empty()
     }
 
-    pub(super) fn runtime_bytes(self) -> impl Iterator<Item = RuntimeByte> + 'input {
+    pub(super) fn runtime_bytes(
+        self,
+    ) -> impl Iterator<Item = Result<RuntimeByte, RuntimeInvariantError>> + 'input {
         self.bytes
             .iter()
             .copied()
@@ -86,7 +88,7 @@ impl InitialStateBytes {
         )?;
 
         for byte in input.runtime_bytes() {
-            try_push(&mut bytes, byte, AllocationContext::RuntimeInput)?;
+            try_push(&mut bytes, byte?, AllocationContext::RuntimeInput)?;
         }
 
         Ok(Self { bytes })

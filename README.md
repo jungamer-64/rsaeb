@@ -789,7 +789,8 @@ reported as `RunError::Limit(LimitError::...)`. Internal runtime invariant
 violations are reported as `RunError::Invariant(RuntimeInvariantError)` instead
 of being collapsed into "no match". These errors describe library-internal
 state corruption, such as a parsed `(once)` slot missing from the per-run state
-table or a matched `(once)` slot being consumed twice; ordinary user input
+table, a matched `(once)` slot being consumed twice, or a validated runtime
+input witness no longer satisfying the ASCII invariant; ordinary user input
 should produce parse, input, size, allocation, or limit errors instead.
 Step-limit errors report the last state length, not the state bytes, so
 reporting the step limit cannot turn into an allocation failure. Trace snapshot

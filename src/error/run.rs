@@ -69,6 +69,11 @@ pub enum RuntimeInvariantError {
         /// Zero-based `(once)` slot that was already consumed.
         once_slot: usize,
     },
+    /// A runtime input byte escaped the ASCII guarantee after validation.
+    ValidatedInputBecameNonAscii {
+        /// Non-ASCII byte found while materializing validated runtime input.
+        byte: NonAsciiInputByte,
+    },
 }
 
 impl RuntimeInvariantError {
@@ -81,6 +86,10 @@ impl RuntimeInvariantError {
 
     pub(crate) const fn consumed_once_rule_slot(once_slot: usize) -> Self {
         Self::ConsumedOnceRuleSlot { once_slot }
+    }
+
+    pub(crate) const fn validated_input_became_non_ascii(byte: NonAsciiInputByte) -> Self {
+        Self::ValidatedInputBecameNonAscii { byte }
     }
 }
 
