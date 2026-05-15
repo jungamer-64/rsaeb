@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::fmt;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeStateByteCount};
@@ -10,9 +11,26 @@ use crate::program::{RunLimits, StateByteLimit};
 /// Runtime input is a separate byte domain from program source. It may contain
 /// ASCII whitespace, control bytes, and reserved syntax bytes, but it cannot
 /// contain non-ASCII bytes.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct RuntimeInput {
     bytes: Vec<RuntimeByte>,
+}
+
+impl fmt::Debug for RuntimeInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeInput")
+            .field("bytes", &RuntimeInputBytesDebug(self))
+            .finish()
+    }
+}
+
+struct RuntimeInputBytesDebug<'input>(&'input RuntimeInput);
+
+impl fmt::Debug for RuntimeInputBytesDebug<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_list().entries(self.0.bytes()).finish()
+    }
 }
 
 /// Allocation and length budget for constructing owned runtime input.
@@ -50,13 +68,17 @@ impl RuntimeInput {
         }
 
         let mut bytes = Vec::new();
-        try_reserve_total_exact(&mut bytes, input.len(), AllocationContext::RuntimeInput)?;
+        try_reserve_total_exact(
+            &mut bytes,
+            input.len(),
+            AllocationContext::RuntimeInputValidation,
+        )?;
 
         for (zero_based_column, byte) in input.iter().copied().enumerate() {
             try_push(
                 &mut bytes,
                 RuntimeByte::validate_input(byte, zero_based_column)?,
-                AllocationContext::RuntimeInput,
+                AllocationContext::RuntimeInputValidation,
             )?;
         }
 
@@ -78,10 +100,10 @@ impl RuntimeInput {
         try_reserve_total_exact(
             &mut output,
             self.bytes.len(),
-            AllocationContext::RuntimeInput,
+            AllocationContext::RuntimeInputView,
         )?;
         for byte in self.bytes() {
-            try_push(&mut output, byte, AllocationContext::RuntimeInput)?;
+            try_push(&mut output, byte, AllocationContext::RuntimeInputView)?;
         }
         Ok(output)
     }
@@ -126,11 +148,11 @@ impl InitialStateBytes {
         try_reserve_total_exact(
             &mut bytes,
             byte_count.get(),
-            AllocationContext::RuntimeInput,
+            AllocationContext::InitialRuntimeState,
         )?;
 
         for byte in input.runtime_bytes() {
-            try_push(&mut bytes, byte, AllocationContext::RuntimeInput)?;
+            try_push(&mut bytes, byte, AllocationContext::InitialRuntimeState)?;
         }
 
         Ok(Self { bytes })

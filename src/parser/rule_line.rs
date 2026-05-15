@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use crate::allocation::{AllocationContext, AllocationError};
+use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::{CompactByte, Payload};
 use crate::error::{LeftModifierKind, ParseError, ParseErrorKind, PayloadKind, RightActionKind};
 use crate::rule::{Action, ParsedRule, RuleAnchor, RuleBody, RuleHead, RuleRepeat};
@@ -12,8 +12,8 @@ use super::location::parse_allocation_error;
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct RuleSyntaxLine {
     line_number: SourceLineNumber,
-    bytes: Vec<CompactByte>,
-    equals: EqualsPosition,
+    left: Vec<CompactByte>,
+    right: Vec<CompactByte>,
 }
 
 impl RuleSyntaxLine {
@@ -21,53 +21,45 @@ impl RuleSyntaxLine {
         line_number: SourceLineNumber,
         bytes: Vec<CompactByte>,
     ) -> Result<Self, ParseError> {
-        let equals = EqualsPosition::find(line_number, &bytes)?;
+        let parts = EqualsPosition::find(line_number, &bytes)?.split(line_number, &bytes)?;
         Ok(Self {
             line_number,
-            bytes,
-            equals,
+            left: parts.left,
+            right: parts.right,
         })
     }
 
     pub(super) fn parse(&self) -> Result<ParsedRule, ParseError> {
-        let (left, right) = self.syntax_parts()?;
+        let (left, right) = self.syntax_parts();
         let head = left.parse()?;
         let body = right.parse()?;
 
         Ok(ParsedRule::from_parts(self.line_number, head, body))
     }
 
-    fn syntax_parts(&self) -> Result<(LeftSyntax<'_>, RightSyntax<'_>), ParseError> {
-        let (left, equals_and_right) = self.bytes.split_at(self.equals.get());
-        let Some((equals, right)) = equals_and_right.split_first() else {
-            return Err(ParseError::at_line(
-                self.line_number,
-                ParseErrorKind::MissingEquals,
-            ));
-        };
-        if equals.as_u8() != b'=' {
-            return Err(ParseError::at_line(
-                self.line_number,
-                ParseErrorKind::MissingEquals,
-            ));
-        }
-
-        Ok((
+    fn syntax_parts(&self) -> (LeftSyntax<'_>, RightSyntax<'_>) {
+        (
             LeftSyntax {
                 line_number: self.line_number,
-                bytes: left,
+                bytes: &self.left,
             },
             RightSyntax {
                 line_number: self.line_number,
-                bytes: right,
+                bytes: &self.right,
             },
-        ))
+        )
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EqualsPosition {
-    index: usize,
+    equals_index: usize,
+    right_start: usize,
+}
+
+struct RuleSyntaxParts {
+    left: Vec<CompactByte>,
+    right: Vec<CompactByte>,
 }
 
 impl EqualsPosition {
@@ -79,7 +71,20 @@ impl EqualsPosition {
                 continue;
             }
 
-            if found.replace(index).is_some() {
+            let right_start = index.checked_add(1).ok_or_else(|| {
+                parse_allocation_error(
+                    line_number,
+                    AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
+                )
+            })?;
+
+            if found
+                .replace(Self {
+                    equals_index: index,
+                    right_start,
+                })
+                .is_some()
+            {
                 return Err(ParseError::at_position(
                     SourcePosition::new(line_number, byte.source_column()),
                     ParseErrorKind::MultipleEquals,
@@ -87,14 +92,51 @@ impl EqualsPosition {
             }
         }
 
-        found
-            .map(|index| Self { index })
-            .ok_or_else(|| ParseError::at_line(line_number, ParseErrorKind::MissingEquals))
+        found.ok_or_else(|| ParseError::at_line(line_number, ParseErrorKind::MissingEquals))
     }
 
-    const fn get(self) -> usize {
-        self.index
+    fn split(
+        self,
+        line_number: SourceLineNumber,
+        bytes: &[CompactByte],
+    ) -> Result<RuleSyntaxParts, ParseError> {
+        let right_len = bytes.len().checked_sub(self.right_start).ok_or_else(|| {
+            parse_allocation_error(
+                line_number,
+                AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
+            )
+        })?;
+
+        Ok(RuleSyntaxParts {
+            left: collect_syntax_side(
+                line_number,
+                self.equals_index,
+                bytes.iter().copied().take(self.equals_index),
+            )?,
+            right: collect_syntax_side(
+                line_number,
+                right_len,
+                bytes.iter().copied().skip(self.right_start),
+            )?,
+        })
     }
+}
+
+fn collect_syntax_side(
+    line_number: SourceLineNumber,
+    capacity: usize,
+    bytes: impl IntoIterator<Item = CompactByte>,
+) -> Result<Vec<CompactByte>, ParseError> {
+    let mut output = Vec::new();
+    try_reserve_total_exact(&mut output, capacity, AllocationContext::ProgramCodeLine)
+        .map_err(|error| parse_allocation_error(line_number, error))?;
+
+    for byte in bytes {
+        try_push(&mut output, byte, AllocationContext::ProgramCodeLine)
+            .map_err(|error| parse_allocation_error(line_number, error))?;
+    }
+
+    Ok(output)
 }
 
 #[derive(Clone, Copy)]

@@ -27,8 +27,9 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_str("a=b"))?;
-//! let input = RuntimeInput::validate(b"a", RuntimeInputLimits::new(DEFAULT_MAX_STATE_LEN))?;
-//! let result = program.run(&input, RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN))?;
+//! let limits = RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
+//! let input = RuntimeInput::validate(b"a", RuntimeInputLimits::new(limits.state_byte_limit()))?;
+//! let result = program.run(&input, limits)?;
 //!
 //! assert!(matches!(
 //!     result.outcome(),
@@ -87,10 +88,11 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_str("a=b\nb=c"))?;
-//! let input = RuntimeInput::validate(b"a", RuntimeInputLimits::new(DEFAULT_MAX_STATE_LEN))?;
+//! let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
+//! let input = RuntimeInput::validate(b"a", RuntimeInputLimits::new(limits.state_byte_limit()))?;
 //! let execution = program.start_execution(
 //!     &input,
-//!     RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
+//!     limits,
 //! )?;
 //!
 //! let execution = match execution.step().map_err(|step| step.into_error())? {

@@ -128,6 +128,10 @@ impl<'program> RunningExecution<'program> {
     ///
     /// Consuming `self` makes terminal states explicit. Call
     /// [`AppliedExecution::into_running`] to continue after an applied rule.
+    #[expect(
+        clippy::result_large_err,
+        reason = "ExecutionStepError preserves the uncommitted execution by value without allocating on the error path"
+    )]
     pub fn step(mut self) -> Result<ExecutionTransition<'program>, ExecutionStepError<'program>> {
         let applied = {
             let ExecutionCore {

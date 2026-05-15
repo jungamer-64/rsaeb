@@ -128,6 +128,20 @@ fn input_error_and_top_level_aeb_error_are_structured() -> TestResult {
 }
 
 #[test]
+fn runtime_input_debug_materializes_public_bytes() -> TestResult {
+    let input = RuntimeInput::validate(b"a=\n", RuntimeInputLimits::new(DEFAULT_MAX_STATE_LEN))?;
+    let debug = format!("{input:?}");
+
+    ensure_eq!(debug.as_str(), "RuntimeInput { bytes: [97, 61, 10] }")?;
+    ensure_matches(
+        !debug.contains("RuntimeByte")
+            && !debug.contains("ProgramConstructible")
+            && !debug.contains("NonProgramAsciiByte"),
+        "expected runtime input debug to hide internal byte domain",
+    )
+}
+
+#[test]
 fn display_errors_name_their_domain_contexts() -> TestResult {
     let Err(parse_error) = Program::parse(ProgramSource::from_str("a=b=c")) else {
         return Err(TestFailure::message("expected parse error"));

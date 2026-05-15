@@ -16,8 +16,12 @@ pub enum AllocationContext {
     ProgramRuleTable,
     /// Building canonical source bytes from structured rule data.
     CanonicalSource,
+    /// Classifying raw runtime input into owned typed input bytes.
+    RuntimeInputValidation,
+    /// Materializing validated runtime input as public raw bytes.
+    RuntimeInputView,
     /// Materializing validated runtime input into mutable runtime state.
-    RuntimeInput,
+    InitialRuntimeState,
     /// Storing `(once)` execution state.
     RuntimeOnceRuleState,
     /// Building the next runtime state after a rewrite.
@@ -155,6 +159,15 @@ mod tests {
         ensure_eq!(error.context(), AllocationContext::CanonicalSource)?;
         ensure_eq!(error.kind(), AllocationErrorKind::CapacityOverflow)?;
         ensure_eq!(error.requested_capacity(), None)?;
+
+        let error = AllocationError::reserve_failed(AllocationContext::RuntimeInputValidation, 4);
+        ensure_eq!(error.context(), AllocationContext::RuntimeInputValidation)?;
+
+        let error = AllocationError::reserve_failed(AllocationContext::RuntimeInputView, 4);
+        ensure_eq!(error.context(), AllocationContext::RuntimeInputView)?;
+
+        let error = AllocationError::reserve_failed(AllocationContext::InitialRuntimeState, 4);
+        ensure_eq!(error.context(), AllocationContext::InitialRuntimeState)?;
         Ok(())
     }
 
@@ -172,6 +185,27 @@ mod tests {
         ensure_eq!(
             error.to_string(),
             "allocation failure while building runtime state view; requested capacity: 456",
+        )?;
+
+        let error = AllocationError::reserve_failed(AllocationContext::RuntimeInputValidation, 789);
+
+        ensure_eq!(
+            error.to_string(),
+            "allocation failure while building runtime input validation; requested capacity: 789",
+        )?;
+
+        let error = AllocationError::reserve_failed(AllocationContext::RuntimeInputView, 789);
+
+        ensure_eq!(
+            error.to_string(),
+            "allocation failure while building runtime input view; requested capacity: 789",
+        )?;
+
+        let error = AllocationError::reserve_failed(AllocationContext::InitialRuntimeState, 789);
+
+        ensure_eq!(
+            error.to_string(),
+            "allocation failure while building initial runtime state; requested capacity: 789",
         )?;
 
         let error = AllocationError::capacity_overflow(AllocationContext::CanonicalSource);

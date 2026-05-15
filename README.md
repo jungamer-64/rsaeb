@@ -76,8 +76,9 @@ use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, Pr
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_str("a=b"))?;
-    let input = RuntimeInput::validate(b"a", RuntimeInputLimits::new(DEFAULT_MAX_STATE_LEN))?;
-    let result = program.run(&input, RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN))?;
+    let limits = RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
+    let input = RuntimeInput::validate(b"a", RuntimeInputLimits::new(limits.state_byte_limit()))?;
+    let result = program.run(&input, limits)?;
     assert!(matches!(
         result.outcome(),
         RunOutcome::Stable(output) if output.as_bytes() == b"b"
@@ -94,8 +95,9 @@ use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSourc
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_bytes(b"a=b#\xff is allowed in comments\n"))?;
-    let input = RuntimeInput::validate(b"a", RuntimeInputLimits::new(DEFAULT_MAX_STATE_LEN))?;
-    let result = program.run(&input, RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN))?;
+    let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
+    let input = RuntimeInput::validate(b"a", RuntimeInputLimits::new(limits.state_byte_limit()))?;
+    let result = program.run(&input, limits)?;
     assert!(matches!(
         result.outcome(),
         RunOutcome::Stable(output) if output.as_bytes() == b"b"
@@ -113,7 +115,7 @@ use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSourc
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_str("(once)a=b\na=c"))?;
     let limits = RunLimits::new(StepLimit::new(10_000), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let input = RuntimeInput::validate(b"aa", RuntimeInputLimits::new(DEFAULT_MAX_STATE_LEN))?;
+    let input = RuntimeInput::validate(b"aa", RuntimeInputLimits::new(limits.state_byte_limit()))?;
 
     let first = program.run(&input, limits)?;
     let second = program.run(&input, limits)?;
@@ -148,10 +150,11 @@ use rsaeb::limits::StepLimit;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_str("a=b\nb=c"))?;
-    let input = RuntimeInput::validate(b"a", RuntimeInputLimits::new(DEFAULT_MAX_STATE_LEN))?;
+    let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
+    let input = RuntimeInput::validate(b"a", RuntimeInputLimits::new(limits.state_byte_limit()))?;
     let execution = program.start_execution(
         &input,
-        RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
+        limits,
     )?;
 
     let execution = match execution.step().map_err(|step| step.into_error())? {
@@ -197,10 +200,11 @@ use rsaeb::{DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, ExecutionTransition, 
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_str("a=(return)ok"))?;
-    let input = RuntimeInput::validate(b"a", RuntimeInputLimits::new(DEFAULT_MAX_STATE_LEN))?;
+    let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
+    let input = RuntimeInput::validate(b"a", RuntimeInputLimits::new(limits.state_byte_limit()))?;
     let execution = program.start_execution(
         &input,
-        RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
+        limits,
     )?;
 
     let owned_output = match execution.step().map_err(|step| step.into_error())? {
@@ -237,8 +241,9 @@ use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSourc
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
+    let input = RuntimeInput::validate(b"a bc", RuntimeInputLimits::new(limits.state_byte_limit()))?;
     let result = Program::parse(ProgramSource::from_str("ab=bb"))?
-        .run(&RuntimeInput::validate(b"a bc", RuntimeInputLimits::new(DEFAULT_MAX_STATE_LEN))?, limits)?;
+        .run(&input, limits)?;
     assert!(matches!(
         result.outcome(),
         RunOutcome::Stable(output) if output.as_bytes() == b"a bc"
@@ -581,8 +586,12 @@ use rsaeb::limits::StepLimit;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let exact_limits = RunLimits::new(StepLimit::new(1), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
+    let exact_input = RuntimeInput::validate(
+        b"a",
+        RuntimeInputLimits::new(exact_limits.state_byte_limit()),
+    )?;
     let exact = Program::parse(ProgramSource::from_str("a=b"))?.run(
-        &RuntimeInput::validate(b"a", RuntimeInputLimits::new(DEFAULT_MAX_STATE_LEN))?,
+        &exact_input,
         exact_limits,
     )?;
     assert!(matches!(
@@ -592,8 +601,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(exact.steps().get(), 1);
 
     let no_match_limits = RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
+    let no_match_input = RuntimeInput::validate(
+        b"x",
+        RuntimeInputLimits::new(no_match_limits.state_byte_limit()),
+    )?;
     let no_match = Program::parse(ProgramSource::from_str("a=b"))?.run(
-        &RuntimeInput::validate(b"x", RuntimeInputLimits::new(DEFAULT_MAX_STATE_LEN))?,
+        &no_match_input,
         no_match_limits,
     )?;
     assert!(matches!(
@@ -603,8 +616,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(no_match.steps().get(), 0);
 
     let would_apply_limits = RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
+    let would_apply_input = RuntimeInput::validate(
+        b"a",
+        RuntimeInputLimits::new(would_apply_limits.state_byte_limit()),
+    )?;
     let would_apply = Program::parse(ProgramSource::from_str("a=b"))?.run(
-        &RuntimeInput::validate(b"a", RuntimeInputLimits::new(DEFAULT_MAX_STATE_LEN))?,
+        &would_apply_input,
         would_apply_limits,
     );
     assert!(matches!(
@@ -667,7 +684,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut lengths = Vec::new();
 
     let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let result = program.run_with_borrowed_trace(&RuntimeInput::validate(b"a", RuntimeInputLimits::new(DEFAULT_MAX_STATE_LEN))?, limits, |event| {
+    let input = RuntimeInput::validate(b"a", RuntimeInputLimits::new(limits.state_byte_limit()))?;
+    let result = program.run_with_borrowed_trace(&input, limits, |event| {
         lengths.push(event.byte_count().get());
         if let BorrowedTraceEvent::Step { rule, .. } = event {
             let _line = rule.line_number();
@@ -702,8 +720,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
         TraceSnapshotByteLimit::new(1024),
     );
+    let input = RuntimeInput::validate(
+        b"a",
+        RuntimeInputLimits::new(limits.run_limits().state_byte_limit()),
+    )?;
     let result = program.run_with_trace_snapshots(
-        &RuntimeInput::validate(b"a", RuntimeInputLimits::new(DEFAULT_MAX_STATE_LEN))?,
+        &input,
         limits,
         |event| {
             events.push(event);
