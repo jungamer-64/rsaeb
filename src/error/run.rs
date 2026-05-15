@@ -57,6 +57,13 @@ pub enum RuntimeInputError {
     },
     /// A one-based input column could not be represented.
     ColumnOverflow,
+    /// Runtime input exceeded its construction byte budget.
+    Limit {
+        /// Configured maximum runtime input length.
+        limit: StateByteLimit,
+        /// Runtime input length that would have been classified.
+        attempted_len: RuntimeStateByteCount,
+    },
     /// Storing validated runtime input failed.
     Allocation(AllocationError),
 }
@@ -69,13 +76,20 @@ impl RuntimeInputError {
     pub(crate) const fn column_overflow() -> Self {
         Self::ColumnOverflow
     }
+
+    pub(crate) const fn limit(limit: StateByteLimit, attempted_len: RuntimeStateByteCount) -> Self {
+        Self::Limit {
+            limit,
+            attempted_len,
+        }
+    }
 }
 
 impl Error for RuntimeInputError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Allocation(error) => Some(error),
-            Self::NonAscii { .. } | Self::ColumnOverflow => None,
+            Self::NonAscii { .. } | Self::ColumnOverflow | Self::Limit { .. } => None,
         }
     }
 }

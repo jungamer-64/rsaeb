@@ -207,6 +207,15 @@ impl fmt::Display for RuntimeInputError {
                 byte.get(),
             ),
             Self::ColumnOverflow => write!(f, "input error: column number overflow"),
+            Self::Limit {
+                limit,
+                attempted_len,
+            } => write!(
+                f,
+                "input error: runtime input length {} exceeds the configured input limit {}",
+                attempted_len.get(),
+                limit.get()
+            ),
             Self::Allocation(error) => error.fmt(f),
         }
     }

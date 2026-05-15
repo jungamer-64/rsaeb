@@ -266,6 +266,6 @@ pub use program::{
 };
 pub use runtime::{
     AppliedExecution, ExecutionStepError, ExecutionTransition, ReturnedExecution, RunningExecution,
-    RuntimeInput, StableExecution,
+    RuntimeInput, RuntimeInputLimits, StableExecution,
 };
 pub use source::ProgramSource;

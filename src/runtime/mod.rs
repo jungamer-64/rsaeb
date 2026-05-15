@@ -15,4 +15,4 @@ pub use execution::{
     AppliedExecution, ExecutionStepError, ExecutionTransition, ReturnedExecution, RunningExecution,
     StableExecution,
 };
-pub use input::RuntimeInput;
+pub use input::{RuntimeInput, RuntimeInputLimits};
