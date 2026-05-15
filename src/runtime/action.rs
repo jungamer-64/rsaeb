@@ -35,15 +35,15 @@ impl ExecutionCore<'_> {
 
 pub(super) fn apply_matched_rule<'program>(
     state: &mut State,
+    scratch: &mut RewriteScratch,
     step_budget: &mut StepBudget,
     limits: RunLimits,
     matched: MatchedRule<'program, '_>,
 ) -> Result<AppliedRule<'program>, RunError> {
     let permit = step_budget.reserve_next_step(state.byte_count())?;
-    let mut scratch = RewriteScratch::new();
     let effect = apply_action_to_scratch(
         state,
-        &mut scratch,
+        scratch,
         limits,
         matched.state_match,
         matched.rule.action(),
@@ -54,7 +54,7 @@ pub(super) fn apply_matched_rule<'program>(
 
     match effect {
         StepApplication::Continue => {
-            state.swap_with_scratch(&mut scratch);
+            state.swap_with_scratch(scratch);
             Ok(AppliedRule {
                 step,
                 rule: matched.rule,

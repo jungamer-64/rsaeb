@@ -3,6 +3,7 @@ use super::budget::StepBudget;
 use super::input::{InitialStateBytes, RuntimeInput};
 use super::matcher::{RuleSearch, find_next_match};
 use super::once::RuntimeRules;
+use super::rewrite::RewriteScratch;
 use super::state::State;
 use crate::error::RunError;
 use crate::program::{Program, RunLimits, RunResult, StepCount};
@@ -22,6 +23,7 @@ pub struct RunningExecution<'program> {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ExecutionCore<'program> {
     pub(super) state: State,
+    pub(super) scratch: RewriteScratch,
     pub(super) step_budget: StepBudget,
     pub(super) runtime_rules: RuntimeRules<'program>,
     pub(super) limits: RunLimits,
@@ -79,6 +81,7 @@ impl<'program> ExecutionCore<'program> {
         let runtime_rules = RuntimeRules::new(program.rule_slice())?;
         Ok(Self {
             state,
+            scratch: RewriteScratch::new(),
             step_budget: StepBudget::new(limits.step_limit()),
             runtime_rules,
             limits,
@@ -129,6 +132,7 @@ impl<'program> RunningExecution<'program> {
         let applied = {
             let ExecutionCore {
                 state,
+                scratch,
                 step_budget,
                 runtime_rules,
                 limits,
@@ -145,7 +149,7 @@ impl<'program> RunningExecution<'program> {
                 }
             };
 
-            apply_matched_rule(state, step_budget, *limits, matched)
+            apply_matched_rule(state, scratch, step_budget, *limits, matched)
         };
 
         let applied = match applied {
