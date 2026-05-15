@@ -31,7 +31,9 @@ pub use traced::{
 pub enum AebError {
     /// Source program parse error.
     Parse(ParseError),
-    /// Runtime execution error, including runtime input validation failures.
+    /// Runtime input validation error.
+    Input(InputError),
+    /// Runtime execution error.
     Run(RunError),
 }
 
@@ -39,6 +41,7 @@ impl Error for AebError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Parse(error) => Some(error),
+            Self::Input(error) => Some(error),
             Self::Run(error) => Some(error),
         }
     }
@@ -47,6 +50,12 @@ impl Error for AebError {
 impl From<ParseError> for AebError {
     fn from(value: ParseError) -> Self {
         Self::Parse(value)
+    }
+}
+
+impl From<InputError> for AebError {
+    fn from(value: InputError) -> Self {
+        Self::Input(value)
     }
 }
 

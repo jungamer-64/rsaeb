@@ -1,16 +1,14 @@
 use core::error::Error;
 
-use crate::allocation::AllocationError;
 use crate::bytes::{
     NonAsciiInputByte, PayloadByteCount, ReturnOutputByteCount, RuntimeStateByteCount,
 };
+use crate::error::AllocationError;
 use crate::program::{ReturnByteLimit, StateByteLimit, StepCount, StepLimit};
 
 /// Runtime execution error.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RunError {
-    /// Runtime input failed validation before execution state was built.
-    Input(InputError),
     /// A fallible allocation failed during runtime execution.
     Allocation(AllocationError),
     /// A rewrite length could not be represented.
@@ -24,18 +22,11 @@ pub enum RunError {
 impl Error for RunError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Input(error) => Some(error),
             Self::Allocation(error) => Some(error),
             Self::StateSize(error) => Some(error),
             Self::Limit(error) => Some(error),
             Self::Invariant(error) => Some(error),
         }
-    }
-}
-
-impl From<InputError> for RunError {
-    fn from(value: InputError) -> Self {
-        Self::Input(value)
     }
 }
 
@@ -105,19 +96,17 @@ pub enum InputError {
         /// Rejected byte.
         byte: NonAsciiInputByte,
     },
-    /// Storing validated runtime input failed.
-    Allocation(AllocationError),
+    /// A one-based input column could not be represented.
+    ColumnOverflow,
 }
 
 impl InputError {
     pub(crate) const fn non_ascii(column: InputColumn, byte: NonAsciiInputByte) -> Self {
         Self::NonAscii { column, byte }
     }
-}
 
-impl From<AllocationError> for InputError {
-    fn from(value: AllocationError) -> Self {
-        Self::Allocation(value)
+    pub(crate) const fn column_overflow() -> Self {
+        Self::ColumnOverflow
     }
 }
 
@@ -125,7 +114,7 @@ impl Error for InputError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::NonAscii { .. } => None,
-            Self::Allocation(error) => Some(error),
+            Self::ColumnOverflow => None,
         }
     }
 }
