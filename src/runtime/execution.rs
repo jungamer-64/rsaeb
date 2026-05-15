@@ -48,12 +48,17 @@ pub enum ExecutionStep<'program, 'run> {
 #[derive(Debug)]
 pub struct Execution<'program> {
     program: &'program Program,
+    pub(super) core: ExecutionCore,
+}
+
+#[derive(Debug)]
+pub(super) struct ExecutionCore {
     pub(super) state: State,
     pub(super) scratch: RewriteScratch,
     pub(super) step_budget: StepBudget,
     pub(super) once_states: OnceRunStates,
     pub(super) limits: RunLimits,
-    pub(super) terminal: ExecutionTerminal<'program>,
+    pub(super) terminal: ExecutionTerminal,
 }
 
 impl<'program> Execution<'program> {
@@ -69,12 +74,14 @@ impl<'program> Execution<'program> {
 
         Ok(Self {
             program,
-            state,
-            scratch,
-            step_budget: StepBudget::new(limits.step_limit()),
-            once_states,
-            limits,
-            terminal: ExecutionTerminal::Running,
+            core: ExecutionCore {
+                state,
+                scratch,
+                step_budget: StepBudget::new(limits.step_limit()),
+                once_states,
+                limits,
+                terminal: ExecutionTerminal::Running,
+            },
         })
     }
 
