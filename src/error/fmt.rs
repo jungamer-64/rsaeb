@@ -5,8 +5,7 @@ use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind}
 use super::{
     AebError, FallibleTraceSnapshotRunError, InputColumn, InputError, LeftModifierKind, LimitError,
     ParseError, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind, RunError,
-    RuntimeInputBytesError, RuntimeInvariantError, StateLimitContext, StateSizeError,
-    TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
+    StateLimitContext, StateSizeError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -145,53 +144,6 @@ impl fmt::Display for RunError {
             Self::Allocation(error) => error.fmt(f),
             Self::StateSize(error) => error.fmt(f),
             Self::Limit(error) => error.fmt(f),
-            Self::Invariant(error) => error.fmt(f),
-        }
-    }
-}
-
-impl fmt::Display for RuntimeInputBytesError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Input(error) => error.fmt(f),
-            Self::Allocation(error) => error.fmt(f),
-        }
-    }
-}
-
-impl fmt::Display for RuntimeInvariantError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingOnceRuleState {
-                once_slot,
-                once_state_count,
-            } => write!(
-                f,
-                "runtime invariant violation: once rule slot {once_slot} has no runtime state; allocated once state count: {once_state_count}",
-            ),
-            Self::ConsumedOnceRuleSlot { once_slot } => write!(
-                f,
-                "runtime invariant violation: matched once rule slot {once_slot} was already consumed",
-            ),
-            Self::ValidatedInputBecameNonAscii { byte } => write!(
-                f,
-                "runtime invariant violation: validated runtime input byte became non-ASCII: 0x{:02x}",
-                byte.get(),
-            ),
-            Self::MissingTerminalRule {
-                rule_position,
-                rule_count,
-            } => write!(
-                f,
-                "runtime invariant violation: terminal rule {} does not exist; parsed rule count: {}",
-                rule_position.number().get(),
-                rule_count.get(),
-            ),
-            Self::TerminalRuleNotReturn { rule_position } => write!(
-                f,
-                "runtime invariant violation: terminal rule {} is not a return rule",
-                rule_position.number().get(),
-            ),
         }
     }
 }

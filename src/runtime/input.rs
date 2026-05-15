@@ -2,105 +2,44 @@ use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeStateByteCount};
-use crate::error::{
-    InputError, LimitError, RunError, RuntimeInputBytesError, RuntimeInvariantError,
-    StateLimitContext,
-};
+use crate::error::{InputError, LimitError, RunError, StateLimitContext};
 use crate::program::RunLimits;
 
-/// Borrowed runtime input after ASCII validation.
+/// Runtime input after ASCII validation and byte-domain classification.
 ///
 /// Runtime input is a separate byte domain from program source. It may contain
 /// ASCII whitespace, control bytes, and reserved syntax bytes, but it cannot
 /// contain non-ASCII bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuntimeInput<'input> {
-    bytes: &'input [u8],
-}
-
-/// Owned runtime input after ASCII validation.
-///
-/// This is the owned counterpart to [`RuntimeInput`]. It lets a host validate
-/// input once, store the validated bytes, and later borrow them as
-/// [`RuntimeInput`] without repeating validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeInputBytes {
-    bytes: Vec<u8>,
+pub struct RuntimeInput {
+    bytes: Vec<RuntimeByte>,
 }
 
-impl<'input> RuntimeInput<'input> {
+impl RuntimeInput {
     /// Validates raw bytes as runtime input.
     ///
     /// # Errors
     ///
-    /// Returns `InputError` if any input byte is non-ASCII or if its one-based
-    /// column cannot be represented.
-    pub fn validate(input: &'input [u8]) -> Result<Self, InputError> {
+    /// Returns `InputError` if any input byte is non-ASCII, if its one-based
+    /// column cannot be represented, or if owned storage cannot be allocated.
+    pub fn validate(input: &[u8]) -> Result<Self, InputError> {
+        let mut bytes = Vec::new();
+        try_reserve_total_exact(&mut bytes, input.len(), AllocationContext::RuntimeInput)?;
+
         for (zero_based_column, byte) in input.iter().copied().enumerate() {
-            RuntimeByte::validate_input(byte, zero_based_column)?;
+            try_push(
+                &mut bytes,
+                RuntimeByte::validate_input(byte, zero_based_column)?,
+                AllocationContext::RuntimeInput,
+            )?;
         }
 
-        Ok(Self { bytes: input })
-    }
-
-    /// Borrow the validated input bytes.
-    #[must_use]
-    pub const fn as_bytes(self) -> &'input [u8] {
-        self.bytes
-    }
-
-    /// Runtime input length in bytes.
-    #[must_use]
-    pub const fn byte_count(self) -> RuntimeStateByteCount {
-        RuntimeStateByteCount::new(self.bytes.len())
-    }
-
-    /// Whether this runtime input contains no bytes.
-    #[must_use]
-    pub const fn is_empty(self) -> bool {
-        self.bytes.is_empty()
-    }
-
-    pub(super) fn runtime_bytes(
-        self,
-    ) -> impl Iterator<Item = Result<RuntimeByte, RuntimeInvariantError>> + 'input {
-        self.bytes
-            .iter()
-            .copied()
-            .map(RuntimeByte::from_validated_input)
-    }
-}
-
-impl RuntimeInputBytes {
-    /// Validates raw bytes as runtime input and stores an owned copy.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RuntimeInputBytesError::Input` if validation fails. Returns
-    /// `RuntimeInputBytesError::Allocation` if owned storage cannot be
-    /// allocated.
-    pub fn from_slice(input: &[u8]) -> Result<Self, RuntimeInputBytesError> {
-        let input = RuntimeInput::validate(input)?;
-        let mut bytes = Vec::new();
-        try_reserve_total_exact(
-            &mut bytes,
-            input.as_bytes().len(),
-            AllocationContext::RuntimeInput,
-        )?;
-        bytes.extend_from_slice(input.as_bytes());
         Ok(Self { bytes })
     }
 
-    /// Borrow this owned value as validated runtime input.
-    #[must_use]
-    pub fn as_input(&self) -> RuntimeInput<'_> {
-        RuntimeInput { bytes: &self.bytes }
-    }
-
-    /// Borrow the validated input bytes.
-    #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.bytes
+    /// Runtime input bytes as a materializing iterator.
+    pub fn bytes(&self) -> impl Iterator<Item = u8> + '_ {
+        self.bytes.iter().copied().map(RuntimeByte::materialize)
     }
 
     /// Runtime input length in bytes.
@@ -114,6 +53,10 @@ impl RuntimeInputBytes {
     pub fn is_empty(&self) -> bool {
         self.bytes.is_empty()
     }
+
+    pub(super) fn runtime_bytes(&self) -> impl Iterator<Item = RuntimeByte> + '_ {
+        self.bytes.iter().copied()
+    }
 }
 
 /// Runtime input materialized into the mutable execution byte domain.
@@ -124,7 +67,7 @@ pub(super) struct InitialStateBytes {
 
 impl InitialStateBytes {
     pub(super) fn materialize(
-        input: RuntimeInput<'_>,
+        input: &RuntimeInput,
         limits: RunLimits,
     ) -> Result<Self, RunError> {
         let byte_count = input.byte_count();
@@ -141,12 +84,12 @@ impl InitialStateBytes {
         let mut bytes = Vec::new();
         try_reserve_total_exact(
             &mut bytes,
-            input.as_bytes().len(),
+            byte_count.get(),
             AllocationContext::RuntimeInput,
         )?;
 
         for byte in input.runtime_bytes() {
-            try_push(&mut bytes, byte?, AllocationContext::RuntimeInput)?;
+            try_push(&mut bytes, byte, AllocationContext::RuntimeInput)?;
         }
 
         Ok(Self { bytes })

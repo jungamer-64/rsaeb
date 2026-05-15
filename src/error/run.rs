@@ -1,11 +1,8 @@
 use core::error::Error;
 
 use crate::allocation::AllocationError;
-use crate::bytes::{
-    NonAsciiInputByte, PayloadByteCount, ReturnOutputByteCount, RuntimeStateByteCount,
-};
+use crate::bytes::{NonAsciiInputByte, PayloadByteCount, ReturnOutputByteCount, RuntimeStateByteCount};
 use crate::program::{ReturnByteLimit, StateByteLimit, StepCount, StepLimit};
-use crate::rule::{RuleCount, RulePosition};
 
 /// Runtime execution error.
 #[derive(Debug, PartialEq, Eq)]
@@ -16,8 +13,6 @@ pub enum RunError {
     StateSize(StateSizeError),
     /// A configured runtime budget would be exceeded.
     Limit(LimitError),
-    /// An internal runtime invariant was violated.
-    Invariant(RuntimeInvariantError),
 }
 
 impl Error for RunError {
@@ -26,38 +21,7 @@ impl Error for RunError {
             Self::Allocation(error) => Some(error),
             Self::StateSize(error) => Some(error),
             Self::Limit(error) => Some(error),
-            Self::Invariant(error) => Some(error),
         }
-    }
-}
-
-/// Owned runtime input construction error.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RuntimeInputBytesError {
-    /// Runtime input validation failed.
-    Input(InputError),
-    /// Copying validated runtime input into owned storage failed.
-    Allocation(AllocationError),
-}
-
-impl Error for RuntimeInputBytesError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Input(error) => Some(error),
-            Self::Allocation(error) => Some(error),
-        }
-    }
-}
-
-impl From<InputError> for RuntimeInputBytesError {
-    fn from(value: InputError) -> Self {
-        Self::Input(value)
-    }
-}
-
-impl From<AllocationError> for RuntimeInputBytesError {
-    fn from(value: AllocationError) -> Self {
-        Self::Allocation(value)
     }
 }
 
@@ -78,79 +42,6 @@ impl From<LimitError> for RunError {
         Self::Limit(value)
     }
 }
-
-impl From<RuntimeInvariantError> for RunError {
-    fn from(value: RuntimeInvariantError) -> Self {
-        Self::Invariant(value)
-    }
-}
-
-/// Internal runtime invariant violation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RuntimeInvariantError {
-    /// A parsed `(once)` rule referred to a runtime slot that does not exist.
-    MissingOnceRuleState {
-        /// Zero-based `(once)` slot embedded in the parsed rule.
-        once_slot: usize,
-        /// Number of runtime `(once)` states allocated for this execution.
-        once_state_count: usize,
-    },
-    /// A matched `(once)` rule was applied after its slot had already been consumed.
-    ConsumedOnceRuleSlot {
-        /// Zero-based `(once)` slot that was already consumed.
-        once_slot: usize,
-    },
-    /// A runtime input byte escaped the ASCII guarantee after validation.
-    ValidatedInputBecameNonAscii {
-        /// Non-ASCII byte found while materializing validated runtime input.
-        byte: NonAsciiInputByte,
-    },
-    /// Stored execution terminal state referred to a rule outside the program.
-    MissingTerminalRule {
-        /// Program-local rule position stored by the execution terminal.
-        rule_position: RulePosition,
-        /// Number of rules in the parsed program.
-        rule_count: RuleCount,
-    },
-    /// Stored execution terminal state referred to a non-return rule.
-    TerminalRuleNotReturn {
-        /// Program-local rule position stored by the execution terminal.
-        rule_position: RulePosition,
-    },
-}
-
-impl RuntimeInvariantError {
-    pub(crate) const fn missing_once_rule_state(once_slot: usize, once_state_count: usize) -> Self {
-        Self::MissingOnceRuleState {
-            once_slot,
-            once_state_count,
-        }
-    }
-
-    pub(crate) const fn consumed_once_rule_slot(once_slot: usize) -> Self {
-        Self::ConsumedOnceRuleSlot { once_slot }
-    }
-
-    pub(crate) const fn validated_input_became_non_ascii(byte: NonAsciiInputByte) -> Self {
-        Self::ValidatedInputBecameNonAscii { byte }
-    }
-
-    pub(crate) const fn missing_terminal_rule(
-        rule_position: RulePosition,
-        rule_count: RuleCount,
-    ) -> Self {
-        Self::MissingTerminalRule {
-            rule_position,
-            rule_count,
-        }
-    }
-
-    pub(crate) const fn terminal_rule_not_return(rule_position: RulePosition) -> Self {
-        Self::TerminalRuleNotReturn { rule_position }
-    }
-}
-
-impl Error for RuntimeInvariantError {}
 
 /// Runtime input boundary error.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -2,10 +2,8 @@
 //!
 //! `rsaeb` is a `no_std + alloc` library crate. It parses compact A=B source
 //! into an immutable [`Program`] and runs that program against typed
-//! [`RuntimeInput`] validated before execution. Hosts that need an owned
-//! validated input can store [`RuntimeInputBytes`] and borrow it as
-//! [`RuntimeInput`]. Files, stdout, stderr, arguments, and lossy display
-//! formatting are outside the interpreter core.
+//! [`RuntimeInput`] validated before execution. Files, stdout, stderr,
+//! arguments, and lossy display formatting are outside the interpreter core.
 //!
 //! # Domain boundary
 //!
@@ -285,5 +283,5 @@ pub use program::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, Program, ReturnOutput,
     RunLimits, RunOutcome, RunResult, RuntimeStateSnapshot,
 };
-pub use runtime::{Execution, ExecutionStep, OwnedExecution, RuntimeInput, RuntimeInputBytes};
+pub use runtime::{RunningExecution, RuntimeInput};
 pub use source::ProgramSource;
