@@ -70,7 +70,7 @@ use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, Pr
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_str("a=b"))?;
-    let input = RuntimeInput::parse(b"a")?;
+    let input = RuntimeInput::validate(b"a")?;
     let result = program.run(input, RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN))?;
     assert!(matches!(
         result.outcome(),
@@ -88,7 +88,7 @@ use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSourc
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_bytes(b"a=b#\xff is allowed in comments\n"))?;
-    let input = RuntimeInput::parse(b"a")?;
+    let input = RuntimeInput::validate(b"a")?;
     let result = program.run(input, RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN))?;
     assert!(matches!(
         result.outcome(),
@@ -107,7 +107,7 @@ use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSourc
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_str("(once)a=b\na=c"))?;
     let limits = RunLimits::new(StepLimit::new(10_000), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let input = RuntimeInput::parse(b"aa")?;
+    let input = RuntimeInput::validate(b"aa")?;
 
     let first = program.run(input, limits)?;
     let second = program.run(input, limits)?;
@@ -146,7 +146,7 @@ use rsaeb::limits::StepLimit;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_str("a=b\nb=c"))?;
     let mut execution = program.start_execution(
-        RuntimeInput::parse(b"a")?,
+        RuntimeInput::validate(b"a")?,
         RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
     )?;
 
@@ -186,7 +186,7 @@ use rsaeb::{DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, ExecutionStep, Progra
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_str("a=(return)ok"))?;
     let mut execution = program.start_execution(
-        RuntimeInput::parse(b"a")?,
+        RuntimeInput::validate(b"a")?,
         RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
     )?;
 
@@ -225,7 +225,7 @@ use rsaeb::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSourc
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
     let result = Program::parse(ProgramSource::from_str("ab=bb"))?
-        .run(RuntimeInput::parse(b"a bc")?, limits)?;
+        .run(RuntimeInput::validate(b"a bc")?, limits)?;
     assert!(matches!(
         result.outcome(),
         RunOutcome::Stable(output) if output.as_bytes() == b"a bc"
@@ -276,7 +276,7 @@ raw line bytes
 
 runtime input bytes
   -> AsciiByte         # runtime input domain validation
-  -> RuntimeByte       # private Editable(ProgramByte) or Opaque(AsciiByte)
+  -> RuntimeByte       # private ProgramConstructible(ProgramByte) or Opaque(AsciiByte)
 ```
 
 The implementation follows the same boundaries as the data flow. Parser stages
@@ -539,7 +539,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let limits = limits.with_state_byte_limit(StateByteLimit::new(2));
-    let input = RuntimeInput::parse(b"")?;
+    let input = RuntimeInput::validate(b"")?;
     let error = Program::parse(ProgramSource::from_str("=a"))?.run(input, limits);
     assert!(matches!(
         error,
@@ -569,7 +569,7 @@ use rsaeb::limits::StepLimit;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let exact_limits = RunLimits::new(StepLimit::new(1), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
     let exact = Program::parse(ProgramSource::from_str("a=b"))?.run(
-        RuntimeInput::parse(b"a")?,
+        RuntimeInput::validate(b"a")?,
         exact_limits,
     )?;
     assert!(matches!(
@@ -580,7 +580,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let no_match_limits = RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
     let no_match = Program::parse(ProgramSource::from_str("a=b"))?.run(
-        RuntimeInput::parse(b"x")?,
+        RuntimeInput::validate(b"x")?,
         no_match_limits,
     )?;
     assert!(matches!(
@@ -591,7 +591,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let would_apply_limits = RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
     let would_apply = Program::parse(ProgramSource::from_str("a=b"))?.run(
-        RuntimeInput::parse(b"a")?,
+        RuntimeInput::validate(b"a")?,
         would_apply_limits,
     );
     assert!(matches!(
@@ -654,7 +654,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut lengths = Vec::new();
 
     let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let result = program.run_with_borrowed_trace(RuntimeInput::parse(b"a")?, limits, |event| {
+    let result = program.run_with_borrowed_trace(RuntimeInput::validate(b"a")?, limits, |event| {
         lengths.push(event.byte_count().get());
         if let BorrowedTraceEvent::Step { rule, .. } = event {
             let _line = rule.line_number();
@@ -690,7 +690,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         TraceSnapshotByteLimit::new(1024),
     );
     let result = program.run_with_trace_snapshots(
-        RuntimeInput::parse(b"a")?,
+        RuntimeInput::validate(b"a")?,
         limits,
         |event| {
             events.push(event);
@@ -748,7 +748,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(_) => return Err("expected parse error".into()),
     }
 
-    let input_error = RuntimeInput::parse("aあ".as_bytes());
+    let input_error = RuntimeInput::validate("aあ".as_bytes());
 
     if let Err(InputError::NonAscii { column, .. }) = input_error {
         assert_eq!(column.get(), 2);
@@ -798,7 +798,7 @@ because snapshot materialization is outside runtime execution. Use borrowed
 tracing when the last state bytes are needed for diagnostics.
 Filesystem failures are not part of the library error model. External I/O must
 be handled before bytes enter `ProgramSource::from_bytes`,
-`ProgramSource::from_str`, or `RuntimeInput::parse`.
+`ProgramSource::from_str`, or `RuntimeInput::validate`.
 
 ## Public API overview
 
@@ -807,6 +807,7 @@ the primary execution path:
 
 - `ProgramSource`
 - `RuntimeInput`
+- `RuntimeInput::validate(bytes)`
 - `Program`
 - `Execution`
 - `ExecutionStep`

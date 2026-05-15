@@ -1,5 +1,5 @@
 use super::*;
-use crate::error::{InputError, LimitError, StateLimitContext};
+use crate::error::{AebError, InputError, LimitError, StateLimitContext};
 use crate::inspect::{RuleActionView, RuleAnchor, RuleCount, RuleRepeat};
 use crate::limits::{
     ReturnByteLimit, ReturnOutputByteCount, RuntimeStateByteCount, StateByteLimit,
@@ -27,19 +27,19 @@ fn public_typed_run_works() -> TestResult {
         crate::DEFAULT_MAX_RETURN_LEN,
     );
     let program = Program::parse(crate::ProgramSource::from_str("a=b"))?;
-    let result = program.run(crate::RuntimeInput::parse(b"a")?, limits)?;
+    let result = program.run(crate::RuntimeInput::validate(b"a")?, limits)?;
     expect_stable_output(&result, b"b")?;
     ensure_eq!(result.steps().get(), 1)?;
 
     let program = Program::parse(crate::ProgramSource::from_bytes(b"a=b#\xff"))?;
-    let result = program.run(crate::RuntimeInput::parse(b"a")?, limits)?;
+    let result = program.run(crate::RuntimeInput::validate(b"a")?, limits)?;
     expect_stable_output(&result, b"b")?;
     Ok(())
 }
 
 #[test]
 fn runtime_input_boundary_is_validated_before_run() -> TestResult {
-    let Err(error) = crate::RuntimeInput::parse(&[0xff]) else {
+    let Err(error) = crate::RuntimeInput::validate(&[0xff]) else {
         return Err(TestFailure::message("expected input error"));
     };
 
@@ -50,6 +50,19 @@ fn runtime_input_boundary_is_validated_before_run() -> TestResult {
                 if column.get() == 1
         ),
         "expected runtime input error",
+    )
+}
+
+#[test]
+fn aeb_error_covers_runtime_input_validation() -> TestResult {
+    let Err(input_error) = crate::RuntimeInput::validate("あ".as_bytes()) else {
+        return Err(TestFailure::message("expected input validation error"));
+    };
+    let error = AebError::from(input_error);
+
+    ensure_matches(
+        matches!(error, AebError::Input(_)),
+        "expected top-level input error",
     )
 }
 
@@ -267,7 +280,7 @@ fn expect_state_limit_from_run(
 ) -> Result<LimitError, TestFailure> {
     let error = expect_run_error(
         Program::parse(crate::ProgramSource::from_str(source))?
-            .run(crate::RuntimeInput::parse(input)?, limits),
+            .run(crate::RuntimeInput::validate(input)?, limits),
     )?;
     expect_state_limit(error)
 }
@@ -328,10 +341,13 @@ fn trace_snapshots_are_derived_from_borrowed_trace() -> TestResult {
         ),
         DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
     );
-    let result =
-        program.run_with_trace_snapshots(crate::RuntimeInput::parse(b"a")?, limits, |event| {
+    let result = program.run_with_trace_snapshots(
+        crate::RuntimeInput::validate(b"a")?,
+        limits,
+        |event| {
             events.push(event);
-        })?;
+        },
+    )?;
 
     expect_return_output(&result, b"ok")?;
     ensure_eq!(events.len(), 3)?;

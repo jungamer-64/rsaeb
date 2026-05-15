@@ -169,7 +169,8 @@ pub enum TraceSnapshotEvent<'program> {
 ///
 /// The event borrows runtime bytes only for the duration of the callback. This
 /// API is the allocation-free tracing primitive; snapshot tracing is derived
-/// from it by materializing snapshots under `RunLimits`.
+/// from it by materializing snapshots under an explicit
+/// [`TraceSnapshotByteLimit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BorrowedTraceEvent<'program, 'run> {
     /// Initial runtime state before any rewrite step.
@@ -280,7 +281,7 @@ mod tests {
         );
 
         let result = program.run_with_borrowed_trace(
-            crate::RuntimeInput::parse(b"a")?,
+            crate::RuntimeInput::validate(b"a")?,
             limits,
             |event| {
                 let bytes = match event {
@@ -319,7 +320,7 @@ mod tests {
             DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
         );
         let result = program.run_with_trace_snapshots(
-            crate::RuntimeInput::parse(b"a")?,
+            crate::RuntimeInput::validate(b"a")?,
             limits,
             |event| {
                 events.push(event);
@@ -422,7 +423,7 @@ mod tests {
         let mut materialization = None;
 
         program.run_with_borrowed_trace(
-            crate::RuntimeInput::parse(b"a")?,
+            crate::RuntimeInput::validate(b"a")?,
             RunLimits::new(
                 StepLimit::new(10),
                 crate::DEFAULT_MAX_STATE_LEN,
@@ -448,7 +449,7 @@ mod tests {
     fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult {
         let program = Program::parse(crate::ProgramSource::from_str("a=b"))?;
         let runtime_error = program.run_with_trace_snapshots(
-            crate::RuntimeInput::parse(b"a")?,
+            crate::RuntimeInput::validate(b"a")?,
             TraceSnapshotLimits::new(
                 RunLimits::new(
                     StepLimit::new(0),
@@ -469,7 +470,7 @@ mod tests {
         )?;
 
         let snapshot_error = program.run_with_trace_snapshots(
-            crate::RuntimeInput::parse(b"a")?,
+            crate::RuntimeInput::validate(b"a")?,
             TraceSnapshotLimits::new(
                 RunLimits::new(
                     StepLimit::new(10),
@@ -490,7 +491,7 @@ mod tests {
         )?;
 
         let sink_error = program.try_run_with_trace_snapshots(
-            crate::RuntimeInput::parse(b"a")?,
+            crate::RuntimeInput::validate(b"a")?,
             TraceSnapshotLimits::new(
                 RunLimits::new(
                     StepLimit::new(10),
@@ -520,7 +521,7 @@ mod tests {
             DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
         );
         let result = program.try_run_with_trace_snapshots(
-            crate::RuntimeInput::parse(b"a")?,
+            crate::RuntimeInput::validate(b"a")?,
             limits,
             |_event| Err::<(), _>("trace sink full"),
         );
@@ -546,7 +547,7 @@ mod tests {
         );
 
         let result = program.run_with_trace_snapshots(
-            crate::RuntimeInput::parse(b"a")?,
+            crate::RuntimeInput::validate(b"a")?,
             limits,
             |event| {
                 events.push(event);

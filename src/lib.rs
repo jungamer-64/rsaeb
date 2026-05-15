@@ -27,7 +27,7 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_str("a=b"))?;
-//! let input = RuntimeInput::parse(b"a")?;
+//! let input = RuntimeInput::validate(b"a")?;
 //! let result = program.run(input, RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN))?;
 //!
 //! assert!(matches!(
@@ -53,7 +53,7 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_str("(once)a=b\na=c"))?;
 //! let limits = RunLimits::new(StepLimit::new(10_000), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-//! let input = RuntimeInput::parse(b"aa")?;
+//! let input = RuntimeInput::validate(b"aa")?;
 //!
 //! let first = program.run(input, limits)?;
 //! let second = program.run(input, limits)?;
@@ -85,7 +85,7 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_str("a=b\nb=c"))?;
 //! let mut execution = program.start_execution(
-//!     RuntimeInput::parse(b"a")?,
+//!     RuntimeInput::validate(b"a")?,
 //!     RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
 //! )?;
 //!
@@ -130,7 +130,7 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let result = Program::parse(ProgramSource::from_str("a=b"))?.run(
-//!     RuntimeInput::parse(b"a")?,
+//!     RuntimeInput::validate(b"a")?,
 //!     RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
 //! );
 //!
@@ -184,7 +184,7 @@
 //! let mut byte_counts = Vec::new();
 //!
 //! program.run_with_borrowed_trace(
-//!     RuntimeInput::parse(b"a")?,
+//!     RuntimeInput::validate(b"a")?,
 //!     RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
 //!     |event| {
 //!         byte_counts.push(event.byte_count().get());
@@ -207,8 +207,8 @@
 //! [`error::RunError`], [`error::RuntimeInvariantError`],
 //! [`error::TraceSnapshotError`], [`error::TraceSnapshotRunError`],
 //! [`error::FallibleTraceSnapshotRunError`], and [`error::TracedRunError`].
-//! [`error::AebError`] is available as a parse/run umbrella for callers that
-//! want one top-level error type.
+//! [`error::AebError`] is available as a parse/input/run umbrella for callers
+//! that want one top-level error type.
 
 #![no_std]
 #![forbid(unsafe_code)]

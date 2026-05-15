@@ -22,9 +22,9 @@ impl<'input> RuntimeInput<'input> {
     ///
     /// Returns `InputError` if any input byte is non-ASCII or if its one-based
     /// column cannot be represented.
-    pub fn parse(input: &'input [u8]) -> Result<Self, InputError> {
+    pub fn validate(input: &'input [u8]) -> Result<Self, InputError> {
         for (zero_based_column, byte) in input.iter().copied().enumerate() {
-            RuntimeByte::parse_input(byte, zero_based_column)?;
+            RuntimeByte::validate_input(byte, zero_based_column)?;
         }
 
         Ok(Self { bytes: input })
@@ -46,6 +46,13 @@ impl<'input> RuntimeInput<'input> {
     #[must_use]
     pub const fn is_empty(self) -> bool {
         self.bytes.is_empty()
+    }
+
+    pub(super) fn runtime_bytes(self) -> impl Iterator<Item = RuntimeByte> + 'input {
+        self.bytes
+            .iter()
+            .copied()
+            .map(RuntimeByte::from_validated_input)
     }
 }
 
@@ -78,12 +85,8 @@ impl InitialStateBytes {
             AllocationContext::RuntimeInput,
         )?;
 
-        for (zero_based_column, byte) in input.as_bytes().iter().copied().enumerate() {
-            try_push(
-                &mut bytes,
-                RuntimeByte::parse_input(byte, zero_based_column)?,
-                AllocationContext::RuntimeInput,
-            )?;
+        for byte in input.runtime_bytes() {
+            try_push(&mut bytes, byte, AllocationContext::RuntimeInput)?;
         }
 
         Ok(Self { bytes })

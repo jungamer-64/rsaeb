@@ -304,17 +304,18 @@ impl ProgramByte {
 pub(crate) struct AsciiByte(u8);
 
 impl AsciiByte {
-    pub(crate) fn parse(byte: u8, zero_based_column: usize) -> Result<Self, InputError> {
+    pub(crate) fn validate(byte: u8, zero_based_column: usize) -> Result<Self, InputError> {
         if let Some(rejected) = NonAsciiInputByte::parse(byte) {
-            let column = InputColumn::from_zero_based(zero_based_column).ok_or_else(|| {
-                InputError::from(AllocationError::capacity_overflow(
-                    AllocationContext::RuntimeInput,
-                ))
-            })?;
+            let column = InputColumn::from_zero_based(zero_based_column)
+                .ok_or_else(InputError::column_overflow)?;
             Err(InputError::non_ascii(column, rejected))
         } else {
             Ok(Self(byte))
         }
+    }
+
+    pub(crate) const fn from_validated_input(byte: u8) -> Self {
+        Self(byte)
     }
 
     pub(crate) const fn get(self) -> u8 {
@@ -347,8 +348,15 @@ pub(crate) enum RuntimeByte {
 }
 
 impl RuntimeByte {
-    pub(crate) fn parse_input(byte: u8, zero_based_column: usize) -> Result<Self, InputError> {
-        Ok(Self::from_ascii(AsciiByte::parse(byte, zero_based_column)?))
+    pub(crate) fn validate_input(byte: u8, zero_based_column: usize) -> Result<Self, InputError> {
+        Ok(Self::from_ascii(AsciiByte::validate(
+            byte,
+            zero_based_column,
+        )?))
+    }
+
+    pub(crate) fn from_validated_input(byte: u8) -> Self {
+        Self::from_ascii(AsciiByte::from_validated_input(byte))
     }
 
     pub(crate) const fn from_program(byte: ProgramByte) -> Self {
@@ -594,7 +602,7 @@ mod tests {
 
     #[test]
     fn runtime_input_classifies_program_constructible_and_opaque_ascii_separately() -> TestResult {
-        let parsed = RuntimeByte::parse_input(b'a', 0).map_err(TestFailure::from)?;
+        let parsed = RuntimeByte::validate_input(b'a', 0).map_err(TestFailure::from)?;
         ensure_matches(
             matches!(parsed, RuntimeByte::ProgramConstructible(byte) if byte.get() == b'a'),
             "expected program-constructible input byte",
@@ -602,7 +610,7 @@ mod tests {
         ensure_eq!(parsed.materialize(), b'a')?;
 
         for byte in [0x00, b' ', b'=', b'#', b'(', b')'] {
-            let parsed = RuntimeByte::parse_input(byte, 0).map_err(TestFailure::from)?;
+            let parsed = RuntimeByte::validate_input(byte, 0).map_err(TestFailure::from)?;
             ensure_eq!(parsed.materialize(), byte)?;
             ensure_matches(
                 matches!(parsed, RuntimeByte::Opaque(_)),

@@ -136,7 +136,7 @@ pub(crate) fn run_source(source: &str, input: &str) -> Result<String, TestFailur
 }
 
 pub(crate) fn runtime_input(input: &[u8]) -> Result<RuntimeInput<'_>, TestFailure> {
-    RuntimeInput::parse(input).map_err(TestFailure::from)
+    RuntimeInput::validate(input).map_err(TestFailure::from)
 }
 
 pub(crate) fn run_program(
@@ -144,7 +144,7 @@ pub(crate) fn run_program(
     input: &[u8],
     limits: RunLimits,
 ) -> Result<RunResult, TestFailure> {
-    let input = RuntimeInput::parse(input)?;
+    let input = RuntimeInput::validate(input)?;
     program.run(input, limits).map_err(TestFailure::from)
 }
 
@@ -239,8 +239,7 @@ pub(crate) fn source_column(one_based: usize) -> Result<SourceColumn, TestFailur
 pub(crate) fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::Step { .. }) => Ok(error),
-        RunError::Input(_)
-        | RunError::Allocation(_)
+        RunError::Allocation(_)
         | RunError::StateSize(_)
         | RunError::Limit(_)
         | RunError::Invariant(_) => Err(TestFailure::message("expected step limit error")),
@@ -250,8 +249,7 @@ pub(crate) fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailu
 pub(crate) fn expect_state_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::State { .. }) => Ok(error),
-        RunError::Input(_)
-        | RunError::Allocation(_)
+        RunError::Allocation(_)
         | RunError::StateSize(_)
         | RunError::Limit(_)
         | RunError::Invariant(_) => Err(TestFailure::message("expected state limit error")),

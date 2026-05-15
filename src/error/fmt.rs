@@ -54,6 +54,7 @@ impl fmt::Display for AebError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Parse(error) => error.fmt(f),
+            Self::Input(error) => error.fmt(f),
             Self::Run(error) => error.fmt(f),
         }
     }
@@ -141,7 +142,6 @@ impl fmt::Display for PayloadKind {
 impl fmt::Display for RunError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Input(error) => error.fmt(f),
             Self::Allocation(error) => error.fmt(f),
             Self::StateSize(error) => error.fmt(f),
             Self::Limit(error) => error.fmt(f),
@@ -226,7 +226,7 @@ impl fmt::Display for InputError {
                 "input error: non-ASCII byte 0x{:02x} at column {column}",
                 byte.get(),
             ),
-            Self::Allocation(error) => error.fmt(f),
+            Self::ColumnOverflow => write!(f, "input error: column number overflow"),
         }
     }
 }
@@ -350,7 +350,7 @@ mod tests {
 
     #[test]
     fn input_error_display_keeps_byte_and_original_column() -> TestResult {
-        let Err(error) = crate::RuntimeInput::parse(&[0xff]) else {
+        let Err(error) = crate::RuntimeInput::validate(&[0xff]) else {
             return Err(TestFailure::message("expected input error"));
         };
 
@@ -370,7 +370,7 @@ mod tests {
         );
         let error = expect_run_error(
             Program::parse(crate::ProgramSource::from_str("# no executable rules"))?
-                .run(crate::RuntimeInput::parse(b"aa")?, limits),
+                .run(crate::RuntimeInput::validate(b"aa")?, limits),
         )?;
         let error = expect_state_limit(error)?;
 
@@ -389,7 +389,7 @@ mod tests {
             crate::DEFAULT_MAX_STATE_LEN,
             crate::DEFAULT_MAX_RETURN_LEN,
         );
-        let error = expect_run_error(program.run(crate::RuntimeInput::parse(b"a")?, limits))?;
+        let error = expect_run_error(program.run(crate::RuntimeInput::validate(b"a")?, limits))?;
         let error = expect_step_limit(error)?;
 
         ensure_eq!(

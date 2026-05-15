@@ -1,9 +1,9 @@
 use core::error::Error;
 
+use crate::allocation::AllocationError;
 use crate::bytes::{
     NonAsciiInputByte, PayloadByteCount, ReturnOutputByteCount, RuntimeStateByteCount,
 };
-use crate::error::AllocationError;
 use crate::program::{ReturnByteLimit, StateByteLimit, StepCount, StepLimit};
 
 /// Runtime execution error.
@@ -113,8 +113,7 @@ impl InputError {
 impl Error for InputError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::NonAscii { .. } => None,
-            Self::ColumnOverflow => None,
+            Self::NonAscii { .. } | Self::ColumnOverflow => None,
         }
     }
 }

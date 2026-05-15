@@ -16,7 +16,7 @@ pub enum AllocationContext {
     ProgramRuleTable,
     /// Building canonical source bytes from structured rule data.
     CanonicalSource,
-    /// Storing validated runtime input.
+    /// Materializing validated runtime input into mutable runtime state.
     RuntimeInput,
     /// Storing `(once)` execution state.
     RuntimeOnceRuleState,

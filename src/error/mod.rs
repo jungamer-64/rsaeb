@@ -26,7 +26,7 @@ pub use traced::{
     FallibleTraceSnapshotRunError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
 };
 
-/// Top-level interpreter error.
+/// Top-level source parsing, input validation, and runtime execution error.
 #[derive(Debug, PartialEq, Eq)]
 pub enum AebError {
     /// Source program parse error.

@@ -27,7 +27,7 @@ impl Program {
     ///
     /// Returns `TraceSnapshotRunError::Run` for ordinary runtime failures.
     /// Returns `TraceSnapshotRunError::Snapshot` when snapshot materialization
-    /// exceeds `trace_snapshot_limit` or allocation fails.
+    /// exceeds `limits.snapshot_byte_limit()` or allocation fails.
     pub fn run_with_trace_snapshots<'program, F>(
         &'program self,
         input: RuntimeInput<'_>,
