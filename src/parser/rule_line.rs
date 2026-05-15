@@ -21,7 +21,8 @@ impl RuleSyntaxLine {
         line_number: SourceLineNumber,
         bytes: Vec<CompactByte>,
     ) -> Result<Self, ParseError> {
-        let parts = EqualsPosition::find(line_number, &bytes)?.split(line_number, &bytes)?;
+        let equals = EqualsPosition::find(line_number, &bytes)?;
+        let parts = equals.split(line_number, bytes)?;
         Ok(Self {
             line_number,
             left: parts.left,
@@ -98,7 +99,7 @@ impl EqualsPosition {
     fn split(
         self,
         line_number: SourceLineNumber,
-        bytes: &[CompactByte],
+        bytes: Vec<CompactByte>,
     ) -> Result<RuleSyntaxParts, ParseError> {
         let right_len = bytes.len().checked_sub(self.right_start).ok_or_else(|| {
             parse_allocation_error(
@@ -107,36 +108,64 @@ impl EqualsPosition {
             )
         })?;
 
-        Ok(RuleSyntaxParts {
-            left: collect_syntax_side(
-                line_number,
-                self.equals_index,
-                bytes.iter().copied().take(self.equals_index),
-            )?,
-            right: collect_syntax_side(
-                line_number,
-                right_len,
-                bytes.iter().copied().skip(self.right_start),
-            )?,
-        })
+        let mut parts = RuleSyntaxParts::new(line_number, self.equals_index, right_len)?;
+        for (index, byte) in bytes.into_iter().enumerate() {
+            if index < self.equals_index {
+                parts.push_left(line_number, byte)?;
+            } else if index >= self.right_start {
+                parts.push_right(line_number, byte)?;
+            }
+        }
+
+        Ok(parts)
     }
 }
 
-fn collect_syntax_side(
-    line_number: SourceLineNumber,
-    capacity: usize,
-    bytes: impl IntoIterator<Item = CompactByte>,
-) -> Result<Vec<CompactByte>, ParseError> {
-    let mut output = Vec::new();
-    try_reserve_total_exact(&mut output, capacity, AllocationContext::ProgramCodeLine)
+impl RuleSyntaxParts {
+    fn new(
+        line_number: SourceLineNumber,
+        left_capacity: usize,
+        right_capacity: usize,
+    ) -> Result<Self, ParseError> {
+        let mut left = Vec::new();
+        try_reserve_total_exact(&mut left, left_capacity, AllocationContext::ProgramCodeLine)
+            .map_err(|error| parse_allocation_error(line_number, error))?;
+
+        let mut right = Vec::new();
+        try_reserve_total_exact(
+            &mut right,
+            right_capacity,
+            AllocationContext::ProgramCodeLine,
+        )
         .map_err(|error| parse_allocation_error(line_number, error))?;
 
-    for byte in bytes {
-        try_push(&mut output, byte, AllocationContext::ProgramCodeLine)
-            .map_err(|error| parse_allocation_error(line_number, error))?;
+        Ok(Self { left, right })
     }
 
-    Ok(output)
+    fn push_left(
+        &mut self,
+        line_number: SourceLineNumber,
+        byte: CompactByte,
+    ) -> Result<(), ParseError> {
+        push_syntax_byte(line_number, &mut self.left, byte)
+    }
+
+    fn push_right(
+        &mut self,
+        line_number: SourceLineNumber,
+        byte: CompactByte,
+    ) -> Result<(), ParseError> {
+        push_syntax_byte(line_number, &mut self.right, byte)
+    }
+}
+
+fn push_syntax_byte(
+    line_number: SourceLineNumber,
+    output: &mut Vec<CompactByte>,
+    byte: CompactByte,
+) -> Result<(), ParseError> {
+    try_push(output, byte, AllocationContext::ProgramCodeLine)
+        .map_err(|error| parse_allocation_error(line_number, error))
 }
 
 #[derive(Clone, Copy)]
