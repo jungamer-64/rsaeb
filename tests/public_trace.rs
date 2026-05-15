@@ -11,9 +11,8 @@ use rsaeb::trace::{
 };
 use rsaeb::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RunOutcome,
-    RuntimeInput,
 };
-use support::{TestFailure, TestResult, ensure_eq, ensure_matches};
+use support::{TestFailure, TestResult, ensure_eq, ensure_matches, runtime_input};
 
 fn expect_trace_snapshot_error<T>(
     result: Result<T, TraceSnapshotRunError>,
@@ -36,10 +35,9 @@ fn trace_snapshot_example(
         ),
         DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
     );
-    let result =
-        program.run_with_trace_snapshots(&RuntimeInput::validate(b"a")?, limits, |event| {
-            events.push(event);
-        })?;
+    let result = program.run_with_trace_snapshots(&runtime_input(b"a")?, limits, |event| {
+        events.push(event);
+    })?;
 
     Ok((result, events))
 }
@@ -64,21 +62,20 @@ fn borrowed_trace_events_are_emitted_without_snapshots() -> TestResult {
         DEFAULT_MAX_RETURN_LEN,
     );
 
-    let result =
-        program.run_with_borrowed_trace(&RuntimeInput::validate(b"a")?, limits, |event| {
-            let bytes = match event {
-                BorrowedTraceEvent::Initial { state }
-                | BorrowedTraceEvent::Step {
-                    effect: BorrowedTraceEffect::Continue { state },
-                    ..
-                } => state.bytes().collect::<Vec<_>>(),
-                BorrowedTraceEvent::Step {
-                    effect: BorrowedTraceEffect::Return { output },
-                    ..
-                } => output.bytes().collect::<Vec<_>>(),
-            };
-            seen.push((event.byte_count().get(), bytes));
-        })?;
+    let result = program.run_with_borrowed_trace(&runtime_input(b"a")?, limits, |event| {
+        let bytes = match event {
+            BorrowedTraceEvent::Initial { state }
+            | BorrowedTraceEvent::Step {
+                effect: BorrowedTraceEffect::Continue { state },
+                ..
+            } => state.bytes().collect::<Vec<_>>(),
+            BorrowedTraceEvent::Step {
+                effect: BorrowedTraceEffect::Return { output },
+                ..
+            } => output.bytes().collect::<Vec<_>>(),
+        };
+        seen.push((event.byte_count().get(), bytes));
+    })?;
 
     ensure_matches(
         matches!(result.outcome(), RunOutcome::Return(output) if output.as_bytes() == b"ok"),
@@ -166,7 +163,7 @@ fn borrowed_trace_to_snapshot_uses_only_snapshot_limit() -> TestResult {
     let mut materialization = None;
 
     program.run_with_borrowed_trace(
-        &RuntimeInput::validate(b"a")?,
+        &runtime_input(b"a")?,
         RunLimits::new(
             StepLimit::new(10),
             DEFAULT_MAX_STATE_LEN,
@@ -195,7 +192,7 @@ fn borrowed_trace_to_snapshot_uses_only_snapshot_limit() -> TestResult {
 fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult {
     let program = Program::parse(ProgramSource::from_str("a=b"))?;
     let runtime_error = program.run_with_trace_snapshots(
-        &RuntimeInput::validate(b"a")?,
+        &runtime_input(b"a")?,
         TraceSnapshotLimits::new(
             RunLimits::new(
                 StepLimit::new(0),
@@ -216,7 +213,7 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
     )?;
 
     let snapshot_error = program.run_with_trace_snapshots(
-        &RuntimeInput::validate(b"a")?,
+        &runtime_input(b"a")?,
         TraceSnapshotLimits::new(
             RunLimits::new(
                 StepLimit::new(10),
@@ -239,7 +236,7 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
     )?;
 
     let sink_error = program.try_run_with_trace_snapshots(
-        &RuntimeInput::validate(b"a")?,
+        &runtime_input(b"a")?,
         TraceSnapshotLimits::new(
             RunLimits::new(
                 StepLimit::new(10),
@@ -269,10 +266,9 @@ fn traced_final_event_matches_run_result() -> TestResult {
         DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
     );
 
-    let result =
-        program.run_with_trace_snapshots(&RuntimeInput::validate(b"a")?, limits, |event| {
-            events.push(event);
-        })?;
+    let result = program.run_with_trace_snapshots(&runtime_input(b"a")?, limits, |event| {
+        events.push(event);
+    })?;
 
     let last = events
         .last()

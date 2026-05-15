@@ -142,27 +142,6 @@ pub(super) struct NonEmptyCompactCodeLine {
 
 impl NonEmptyCompactCodeLine {
     pub(super) fn into_rule_syntax(self) -> Result<RuleSyntaxLine, ParseError> {
-        let mut equals_index = None;
-        for (index, byte) in self.bytes.iter().copied().enumerate() {
-            if byte.as_u8() == b'=' && equals_index.replace(index).is_some() {
-                return Err(ParseError::at_position(
-                    SourcePosition::new(self.line_number, byte.source_column()),
-                    ParseErrorKind::MultipleEquals,
-                ));
-            }
-        }
-
-        let Some(equals_index) = equals_index else {
-            return Err(ParseError::at_line(
-                self.line_number,
-                ParseErrorKind::MissingEquals,
-            ));
-        };
-
-        Ok(RuleSyntaxLine::new(
-            self.line_number,
-            self.bytes,
-            equals_index,
-        ))
+        RuleSyntaxLine::new(self.line_number, self.bytes)
     }
 }

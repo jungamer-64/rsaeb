@@ -6,9 +6,9 @@ use rsaeb::limits::{ReturnByteLimit, StateByteLimit, StepLimit};
 use rsaeb::{
     AppliedExecution, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
     ExecutionStepError, ExecutionTransition, Program, ProgramSource, ReturnedExecution, RunLimits,
-    RunOutcome, RunResult, RunningExecution, RuntimeInput, StableExecution,
+    RunOutcome, RunResult, RunningExecution, StableExecution,
 };
-use support::{TestFailure, TestResult, ensure, ensure_eq, ensure_matches};
+use support::{TestFailure, TestResult, ensure, ensure_eq, ensure_matches, runtime_input};
 
 fn expect_stable_bytes<'result>(
     result: &'result RunResult,
@@ -142,13 +142,13 @@ fn public_typed_boundaries_parse_and_run_programs() -> TestResult {
     );
 
     let program = Program::parse(ProgramSource::from_str("a=b"))?;
-    let input = RuntimeInput::validate(b"a")?;
+    let input = runtime_input(b"a")?;
     let result = program.run(&input, limits)?;
     expect_stable_bytes(&result, b"b")?;
     ensure_eq!(result.steps().get(), 1)?;
 
     let program = Program::parse(ProgramSource::from_bytes(b"a=b#\xff"))?;
-    let input = RuntimeInput::validate(b"a")?;
+    let input = runtime_input(b"a")?;
     let result = program.run(&input, limits)?;
     expect_stable_bytes(&result, b"b")?;
     Ok(())
@@ -163,35 +163,35 @@ fn language_whitespace_comments_and_actions_are_public_contract() -> TestResult 
     );
 
     let program = Program::parse(ProgramSource::from_str("a b=bb"))?;
-    let result = program.run(&RuntimeInput::validate(b"abc")?, limits)?;
+    let result = program.run(&runtime_input(b"abc")?, limits)?;
     expect_stable_bytes(&result, b"bbc")?;
 
     let program = Program::parse(ProgramSource::from_str("a=b\r\nb=c\r\n"))?;
-    let result = program.run(&RuntimeInput::validate(b"a")?, limits)?;
+    let result = program.run(&runtime_input(b"a")?, limits)?;
     expect_stable_bytes(&result, b"c")?;
 
     let program = Program::parse(ProgramSource::from_str("a\tb = c\tc"))?;
-    let result = program.run(&RuntimeInput::validate(b"ab")?, limits)?;
+    let result = program.run(&runtime_input(b"ab")?, limits)?;
     expect_stable_bytes(&result, b"cc")?;
 
     let program = Program::parse(ProgramSource::from_str("a=b#ignored"))?;
-    let result = program.run(&RuntimeInput::validate(b"a")?, limits)?;
+    let result = program.run(&runtime_input(b"a")?, limits)?;
     expect_stable_bytes(&result, b"b")?;
 
     let program = Program::parse(ProgramSource::from_str("#a=b"))?;
-    let result = program.run(&RuntimeInput::validate(b"a")?, limits)?;
+    let result = program.run(&runtime_input(b"a")?, limits)?;
     expect_stable_bytes(&result, b"a")?;
 
     let program = Program::parse(ProgramSource::from_str("a=(start)x"))?;
-    let result = program.run(&RuntimeInput::validate(b"ba")?, limits)?;
+    let result = program.run(&runtime_input(b"ba")?, limits)?;
     expect_stable_bytes(&result, b"xb")?;
 
     let program = Program::parse(ProgramSource::from_str("a=(end)x"))?;
-    let result = program.run(&RuntimeInput::validate(b"ba")?, limits)?;
+    let result = program.run(&runtime_input(b"ba")?, limits)?;
     expect_stable_bytes(&result, b"bx")?;
 
     let program = Program::parse(ProgramSource::from_str("a=(return)ok"))?;
-    let result = program.run(&RuntimeInput::validate(b"a")?, limits)?;
+    let result = program.run(&runtime_input(b"a")?, limits)?;
     expect_return_bytes(&result, b"ok")?;
     Ok(())
 }
@@ -205,27 +205,27 @@ fn rewrite_order_anchors_once_and_runtime_only_bytes_are_public_contract() -> Te
     );
 
     let program = Program::parse(ProgramSource::from_str("aa=x\na=y"))?;
-    let result = program.run(&RuntimeInput::validate(b"aaaa")?, limits)?;
+    let result = program.run(&runtime_input(b"aaaa")?, limits)?;
     expect_stable_bytes(&result, b"xx")?;
 
     let program = Program::parse(ProgramSource::from_str("(start)a=x"))?;
-    let result = program.run(&RuntimeInput::validate(b"aba")?, limits)?;
+    let result = program.run(&runtime_input(b"aba")?, limits)?;
     expect_stable_bytes(&result, b"xba")?;
 
     let program = Program::parse(ProgramSource::from_str("(end)a=x"))?;
-    let result = program.run(&RuntimeInput::validate(b"aba")?, limits)?;
+    let result = program.run(&runtime_input(b"aba")?, limits)?;
     expect_stable_bytes(&result, b"abx")?;
 
     let program = Program::parse(ProgramSource::from_str("(once)a=b\na=c"))?;
-    let result = program.run(&RuntimeInput::validate(b"aa")?, limits)?;
+    let result = program.run(&runtime_input(b"aa")?, limits)?;
     expect_stable_bytes(&result, b"bc")?;
 
     let program = Program::parse(ProgramSource::from_str("ab=x"))?;
-    let result = program.run(&RuntimeInput::validate(b"a=b")?, limits)?;
+    let result = program.run(&runtime_input(b"a=b")?, limits)?;
     expect_stable_bytes(&result, b"a=b")?;
 
     let program = Program::parse(ProgramSource::from_str("a= b"))?;
-    let result = program.run(&RuntimeInput::validate(b"a bc")?, limits)?;
+    let result = program.run(&runtime_input(b"a bc")?, limits)?;
     expect_stable_bytes(&result, b"b bc")?;
     Ok(())
 }
@@ -238,8 +238,8 @@ fn parsed_program_is_reusable_and_rule_views_are_structured() -> TestResult {
         DEFAULT_MAX_RETURN_LEN,
     );
     let program = Program::parse(ProgramSource::from_str("(once)a=b\na=c"))?;
-    let first = program.run(&RuntimeInput::validate(b"aa")?, limits)?;
-    let second = program.run(&RuntimeInput::validate(b"aa")?, limits)?;
+    let first = program.run(&runtime_input(b"aa")?, limits)?;
+    let second = program.run(&runtime_input(b"aa")?, limits)?;
 
     expect_stable_bytes(&first, b"bc")?;
     expect_stable_bytes(&second, b"bc")?;
@@ -318,7 +318,7 @@ fn stepwise_execution_matches_full_run_and_waits_after_each_rule() -> TestResult
         DEFAULT_MAX_RETURN_LEN,
     );
     let program = Program::parse(ProgramSource::from_str("a=b\nb=c"))?;
-    let input = RuntimeInput::validate(b"a")?;
+    let input = runtime_input(b"a")?;
     let execution = program.start_execution(&input, limits)?;
     ensure_eq!(execution.completed_steps().get(), 0)?;
 
@@ -382,7 +382,7 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
         DEFAULT_MAX_RETURN_LEN,
     );
     let program = Program::parse(ProgramSource::from_str("a=b"))?;
-    let input = RuntimeInput::validate(b"a")?;
+    let input = runtime_input(b"a")?;
     let execution = program.start_execution(&input, limits)?;
 
     ensure_eq!(
@@ -411,7 +411,7 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
 
 #[test]
 fn runtime_input_owns_typed_bytes_without_revalidation() -> TestResult {
-    let input = RuntimeInput::validate(b"a=()# ")?;
+    let input = runtime_input(b"a=()# ")?;
 
     ensure_eq!(input.to_vec()?.as_slice(), b"a=()# ".as_slice())?;
     ensure_eq!(input.byte_count().get(), 6)?;
@@ -438,7 +438,7 @@ fn reusable_runtime_input_matches_repeated_stepwise_execution() -> TestResult {
         DEFAULT_MAX_RETURN_LEN,
     );
     let program = Program::parse(ProgramSource::from_str("(once)a=b\na=c"))?;
-    let input = RuntimeInput::validate(b"aa")?;
+    let input = runtime_input(b"aa")?;
 
     let first = program.start_execution(&input, limits)?;
     let second = program.start_execution(&input, limits)?;
@@ -471,7 +471,7 @@ fn reusable_runtime_input_matches_repeated_stepwise_execution() -> TestResult {
 #[test]
 fn public_limits_preserve_distinct_step_state_and_return_errors() -> TestResult {
     let step_limited = Program::parse(ProgramSource::from_str("a=b"))?.run(
-        &RuntimeInput::validate(b"a")?,
+        &runtime_input(b"a")?,
         RunLimits::new(
             StepLimit::new(0),
             DEFAULT_MAX_STATE_LEN,
@@ -494,7 +494,7 @@ fn public_limits_preserve_distinct_step_state_and_return_errors() -> TestResult 
     )?;
 
     let state_limited = Program::parse(ProgramSource::from_str("# no executable rules"))?.run(
-        &RuntimeInput::validate(b"aa")?,
+        &runtime_input(b"aa")?,
         RunLimits::new(
             StepLimit::new(10),
             StateByteLimit::new(1),
@@ -516,7 +516,7 @@ fn public_limits_preserve_distinct_step_state_and_return_errors() -> TestResult 
     )?;
 
     let return_limited = Program::parse(ProgramSource::from_str("a=(return)ok"))?.run(
-        &RuntimeInput::validate(b"a")?,
+        &runtime_input(b"a")?,
         RunLimits::new(
             StepLimit::new(1),
             StateByteLimit::new(10),
@@ -542,7 +542,7 @@ fn runtime_input_public_boundary_accepts_ascii_and_rejects_non_ascii() -> TestRe
     let input: Vec<u8> = (0x00..=0x7f).collect();
     let program = Program::parse(ProgramSource::from_str("# no executable rules"))?;
     let result = program.run(
-        &RuntimeInput::validate(&input)?,
+        &runtime_input(&input)?,
         RunLimits::new(
             DEFAULT_MAX_STEPS,
             DEFAULT_MAX_STATE_LEN,
@@ -553,10 +553,7 @@ fn runtime_input_public_boundary_accepts_ascii_and_rejects_non_ascii() -> TestRe
     ensure_eq!(result.steps().get(), 0)?;
 
     for byte in 0x80..=0xff {
-        ensure(
-            RuntimeInput::validate(&[byte]).is_err(),
-            "byte should be rejected",
-        )?;
+        ensure(runtime_input(&[byte]).is_err(), "byte should be rejected")?;
     }
     Ok(())
 }

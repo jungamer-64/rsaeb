@@ -295,40 +295,57 @@ impl ProgramByte {
     }
 }
 
-/// ASCII byte accepted by runtime input.
-///
-/// This newtype centralizes the ASCII invariant for runtime-only bytes. Raw
-/// runtime input crosses into this domain only through validation or through
-/// invariant-checked reconstruction from a validated input witness.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct AsciiByte(u8);
+use runtime_ascii::{AsciiByte, ClassifiedAsciiByte, NonProgramAsciiByte};
 
-impl AsciiByte {
-    pub(crate) fn validate(byte: u8, zero_based_column: usize) -> Result<Self, RuntimeInputError> {
-        if let Some(rejected) = NonAsciiInputByte::parse(byte) {
-            let column = InputColumn::from_zero_based(zero_based_column)
-                .ok_or_else(RuntimeInputError::column_overflow)?;
-            Err(RuntimeInputError::non_ascii(column, rejected))
-        } else {
-            Ok(Self(byte))
+mod runtime_ascii {
+    use super::{InputColumn, NonAsciiInputByte, ProgramByte, RuntimeInputError};
+
+    /// ASCII byte accepted by runtime input.
+    ///
+    /// Raw runtime input crosses into this domain only through validation.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct AsciiByte(u8);
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum ClassifiedAsciiByte {
+        Program(ProgramByte),
+        NonProgram(NonProgramAsciiByte),
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct NonProgramAsciiByte(AsciiByte);
+
+    impl AsciiByte {
+        pub(crate) fn validate(
+            byte: u8,
+            zero_based_column: usize,
+        ) -> Result<Self, RuntimeInputError> {
+            if let Some(rejected) = NonAsciiInputByte::parse(byte) {
+                let column = InputColumn::from_zero_based(zero_based_column)
+                    .ok_or_else(RuntimeInputError::column_overflow)?;
+                Err(RuntimeInputError::non_ascii(column, rejected))
+            } else {
+                Ok(Self(byte))
+            }
+        }
+
+        pub(crate) const fn get(self) -> u8 {
+            self.0
+        }
+
+        pub(crate) fn classify(self) -> ClassifiedAsciiByte {
+            if let Some(byte) = ProgramByte::from_valid_raw(self.get()) {
+                ClassifiedAsciiByte::Program(byte)
+            } else {
+                ClassifiedAsciiByte::NonProgram(NonProgramAsciiByte(self))
+            }
         }
     }
 
-    pub(crate) const fn get(self) -> u8 {
-        self.0
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct OpaqueRuntimeByte(AsciiByte);
-
-impl OpaqueRuntimeByte {
-    const fn new(byte: AsciiByte) -> Self {
-        Self(byte)
-    }
-
-    pub(crate) const fn materialize(self) -> u8 {
-        self.0.get()
+    impl NonProgramAsciiByte {
+        pub(crate) const fn materialize(self) -> u8 {
+            self.0.get()
+        }
     }
 }
 
@@ -340,7 +357,7 @@ impl OpaqueRuntimeByte {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeByte {
     ProgramConstructible(ProgramByte),
-    Opaque(OpaqueRuntimeByte),
+    Opaque(NonProgramAsciiByte),
 }
 
 impl RuntimeByte {
@@ -359,10 +376,9 @@ impl RuntimeByte {
     }
 
     fn from_ascii(byte: AsciiByte) -> Self {
-        if let Some(program_byte) = ProgramByte::from_valid_raw(byte.get()) {
-            Self::ProgramConstructible(program_byte)
-        } else {
-            Self::Opaque(OpaqueRuntimeByte::new(byte))
+        match byte.classify() {
+            ClassifiedAsciiByte::Program(byte) => Self::ProgramConstructible(byte),
+            ClassifiedAsciiByte::NonProgram(byte) => Self::Opaque(byte),
         }
     }
 

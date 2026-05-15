@@ -12,3 +12,4 @@ pub use crate::program::{
     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, ReturnByteLimit, RunLimits, StateByteLimit, StepCount,
     StepLimit, TraceSnapshotByteLimit, TraceSnapshotLimits,
 };
+pub use crate::runtime::RuntimeInputLimits;

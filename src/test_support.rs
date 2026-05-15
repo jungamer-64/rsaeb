@@ -7,7 +7,9 @@ use crate::error::{
     AebError, AllocationError, ParseError, ParseErrorLocation, RunError, RuntimeInputError,
     TraceSnapshotRunError,
 };
+use crate::limits::StateByteLimit;
 use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
+use crate::{DEFAULT_MAX_STATE_LEN, RuntimeInput, RuntimeInputLimits};
 
 pub(crate) enum TestFailure {
     Message(String),
@@ -86,6 +88,17 @@ impl From<RuntimeInputError> for TestFailure {
 }
 
 pub(crate) type TestResult = Result<(), TestFailure>;
+
+pub(crate) fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
+    runtime_input_with_limit(bytes, DEFAULT_MAX_STATE_LEN)
+}
+
+pub(crate) fn runtime_input_with_limit(
+    bytes: &[u8],
+    limit: StateByteLimit,
+) -> Result<RuntimeInput, RuntimeInputError> {
+    RuntimeInput::validate(bytes, RuntimeInputLimits::new(limit))
+}
 
 pub(crate) fn ensure(condition: bool, message: impl Into<String>) -> TestResult {
     if condition {

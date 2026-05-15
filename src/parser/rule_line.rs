@@ -13,20 +13,20 @@ use super::location::parse_allocation_error;
 pub(super) struct RuleSyntaxLine {
     line_number: SourceLineNumber,
     bytes: Vec<CompactByte>,
-    equals_index: usize,
+    equals: EqualsPosition,
 }
 
 impl RuleSyntaxLine {
     pub(super) fn new(
         line_number: SourceLineNumber,
         bytes: Vec<CompactByte>,
-        equals_index: usize,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, ParseError> {
+        let equals = EqualsPosition::find(line_number, &bytes)?;
+        Ok(Self {
             line_number,
             bytes,
-            equals_index,
-        }
+            equals,
+        })
     }
 
     pub(super) fn parse(&self) -> Result<ParsedRule, ParseError> {
@@ -38,12 +38,7 @@ impl RuleSyntaxLine {
     }
 
     fn syntax_parts(&self) -> Result<(LeftSyntax<'_>, RightSyntax<'_>), ParseError> {
-        let Some((left, equals_and_right)) = self.bytes.split_at_checked(self.equals_index) else {
-            return Err(ParseError::at_line(
-                self.line_number,
-                ParseErrorKind::MissingEquals,
-            ));
-        };
+        let (left, equals_and_right) = self.bytes.split_at(self.equals.get());
         let Some((equals, right)) = equals_and_right.split_first() else {
             return Err(ParseError::at_line(
                 self.line_number,
@@ -67,6 +62,38 @@ impl RuleSyntaxLine {
                 bytes: right,
             },
         ))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EqualsPosition {
+    index: usize,
+}
+
+impl EqualsPosition {
+    fn find(line_number: SourceLineNumber, bytes: &[CompactByte]) -> Result<Self, ParseError> {
+        let mut found = None;
+
+        for (index, byte) in bytes.iter().copied().enumerate() {
+            if byte.as_u8() != b'=' {
+                continue;
+            }
+
+            if found.replace(index).is_some() {
+                return Err(ParseError::at_position(
+                    SourcePosition::new(line_number, byte.source_column()),
+                    ParseErrorKind::MultipleEquals,
+                ));
+            }
+        }
+
+        found
+            .map(|index| Self { index })
+            .ok_or_else(|| ParseError::at_line(line_number, ParseErrorKind::MissingEquals))
+    }
+
+    const fn get(self) -> usize {
+        self.index
     }
 }
 

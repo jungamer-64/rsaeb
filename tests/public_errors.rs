@@ -7,8 +7,9 @@ use rsaeb::error::{
 use rsaeb::limits::{ReturnByteLimit, StateByteLimit, StepLimit};
 use rsaeb::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RuntimeInput,
+    RuntimeInputLimits,
 };
-use support::{TestFailure, TestResult, ensure_eq, ensure_matches};
+use support::{TestFailure, TestResult, ensure_eq, ensure_matches, runtime_input};
 
 fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFailure> {
     match result {
@@ -87,7 +88,7 @@ fn payload_and_modifier_errors_keep_domain_information() -> TestResult {
 
 #[test]
 fn input_error_and_top_level_aeb_error_are_structured() -> TestResult {
-    let Err(error) = RuntimeInput::validate(&[0xff]) else {
+    let Err(error) = runtime_input(&[0xff]) else {
         return Err(TestFailure::message("expected input error"));
     };
 
@@ -105,6 +106,24 @@ fn input_error_and_top_level_aeb_error_are_structured() -> TestResult {
         "expected top-level input error",
     )?;
 
+    let Err(limit_error) =
+        RuntimeInput::validate(b"aa", RuntimeInputLimits::new(StateByteLimit::new(1)))
+    else {
+        return Err(TestFailure::message(
+            "expected input construction limit error",
+        ));
+    };
+    ensure_matches(
+        matches!(
+            limit_error,
+            RuntimeInputError::Limit {
+                limit,
+                attempted_len,
+            } if limit == StateByteLimit::new(1) && attempted_len.get() == 2
+        ),
+        "expected runtime input construction limit details",
+    )?;
+
     Ok(())
 }
 
@@ -118,7 +137,7 @@ fn display_errors_name_their_domain_contexts() -> TestResult {
         "parse error at line 1, column 4: multiple '=' characters are not allowed",
     )?;
 
-    let Err(input_error) = RuntimeInput::validate(&[0xff]) else {
+    let Err(input_error) = runtime_input(&[0xff]) else {
         return Err(TestFailure::message("expected input error"));
     };
     ensure_eq!(
@@ -132,7 +151,7 @@ fn display_errors_name_their_domain_contexts() -> TestResult {
 #[test]
 fn limit_errors_report_step_state_and_return_domains() -> TestResult {
     let state_error = Program::parse(ProgramSource::from_str("# no executable rules"))?.run(
-        &RuntimeInput::validate(b"aa")?,
+        &runtime_input(b"aa")?,
         RunLimits::new(
             StepLimit::new(10),
             StateByteLimit::new(1),
@@ -157,7 +176,7 @@ fn limit_errors_report_step_state_and_return_domains() -> TestResult {
     )?;
 
     let step_error = Program::parse(ProgramSource::from_str("a=b"))?.run(
-        &RuntimeInput::validate(b"a")?,
+        &runtime_input(b"a")?,
         RunLimits::new(
             StepLimit::new(0),
             DEFAULT_MAX_STATE_LEN,
@@ -171,7 +190,7 @@ fn limit_errors_report_step_state_and_return_domains() -> TestResult {
     )?;
 
     let return_error = Program::parse(ProgramSource::from_str("a=(return)ok"))?.run(
-        &RuntimeInput::validate(b"a")?,
+        &runtime_input(b"a")?,
         RunLimits::new(
             StepLimit::new(1),
             DEFAULT_MAX_STATE_LEN,

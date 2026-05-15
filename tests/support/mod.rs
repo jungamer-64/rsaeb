@@ -4,6 +4,8 @@ use rsaeb::error::{
     AebError, AllocationError, FallibleTraceSnapshotRunError, ParseError, RunError,
     RuntimeInputError, TraceSnapshotRunError,
 };
+use rsaeb::limits::StateByteLimit;
+use rsaeb::{DEFAULT_MAX_STATE_LEN, RuntimeInput, RuntimeInputLimits};
 
 pub enum TestFailure {
     Message(String),
@@ -93,6 +95,17 @@ impl From<AllocationError> for TestFailure {
 }
 
 pub type TestResult = Result<(), TestFailure>;
+
+pub fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
+    runtime_input_with_limit(bytes, DEFAULT_MAX_STATE_LEN)
+}
+
+pub fn runtime_input_with_limit(
+    bytes: &[u8],
+    limit: StateByteLimit,
+) -> Result<RuntimeInput, RuntimeInputError> {
+    RuntimeInput::validate(bytes, RuntimeInputLimits::new(limit))
+}
 
 pub fn ensure(condition: bool, message: impl Into<String>) -> TestResult {
     if condition {

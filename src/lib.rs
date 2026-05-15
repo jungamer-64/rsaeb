@@ -22,12 +22,12 @@
 //! ```
 //! use rsaeb::{
 //!     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, Program, ProgramSource,
-//!     RunLimits, RunOutcome, RuntimeInput,
+//!     RunLimits, RunOutcome, RuntimeInput, RuntimeInputLimits,
 //! };
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_str("a=b"))?;
-//! let input = RuntimeInput::validate(b"a")?;
+//! let input = RuntimeInput::validate(b"a", RuntimeInputLimits::new(DEFAULT_MAX_STATE_LEN))?;
 //! let result = program.run(&input, RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN))?;
 //!
 //! assert!(matches!(
@@ -47,13 +47,16 @@
 //! use rsaeb::limits::StepLimit;
 //! use rsaeb::{
 //!     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits,
-//!     RunOutcome, RuntimeInput,
+//!     RunOutcome, RuntimeInput, RuntimeInputLimits,
 //! };
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_str("(once)a=b\na=c"))?;
 //! let limits = RunLimits::new(StepLimit::new(10_000), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-//! let input = RuntimeInput::validate(b"aa")?;
+//! let input = RuntimeInput::validate(
+//!     b"aa",
+//!     RuntimeInputLimits::new(limits.state_byte_limit()),
+//! )?;
 //!
 //! let first = program.run(&input, limits)?;
 //! let second = program.run(&input, limits)?;
@@ -78,13 +81,13 @@
 //! ```
 //! use rsaeb::{
 //!     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ExecutionTransition, Program, ProgramSource,
-//!     RunLimits, RuntimeInput,
+//!     RunLimits, RuntimeInput, RuntimeInputLimits,
 //! };
 //! use rsaeb::limits::StepLimit;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_str("a=b\nb=c"))?;
-//! let input = RuntimeInput::validate(b"a")?;
+//! let input = RuntimeInput::validate(b"a", RuntimeInputLimits::new(DEFAULT_MAX_STATE_LEN))?;
 //! let execution = program.start_execution(
 //!     &input,
 //!     RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
@@ -125,8 +128,9 @@
 //!
 //! # Limits
 //!
-//! [`RunLimits`] carries the step budget and byte budgets for runtime states
-//! and `(return)` outputs. Trace snapshot materialization uses an explicit
+//! [`RuntimeInputLimits`] bounds owned input classification before allocation.
+//! [`RunLimits`] carries the step budget and byte budgets for runtime states and
+//! `(return)` outputs. Trace snapshot materialization uses an explicit
 //! [`limits::TraceSnapshotByteLimit`]. Step limits are checked only when another
 //! matching rule would apply after the configured number of completed steps:
 //!
@@ -135,14 +139,13 @@
 //! use rsaeb::limits::StepLimit;
 //! use rsaeb::{
 //!     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits,
-//!     RuntimeInput,
+//!     RuntimeInput, RuntimeInputLimits,
 //! };
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let result = Program::parse(ProgramSource::from_str("a=b"))?.run(
-//!     &RuntimeInput::validate(b"a")?,
-//!     RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
-//! );
+//! let limits = RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
+//! let input = RuntimeInput::validate(b"a", RuntimeInputLimits::new(limits.state_byte_limit()))?;
+//! let result = Program::parse(ProgramSource::from_str("a=b"))?.run(&input, limits);
 //!
 //! assert!(matches!(
 //!     result,
@@ -186,16 +189,18 @@
 //! use rsaeb::trace::BorrowedTraceEvent;
 //! use rsaeb::{
 //!     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits,
-//!     RuntimeInput,
+//!     RuntimeInput, RuntimeInputLimits,
 //! };
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
 //! let mut byte_counts = Vec::new();
+//! let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
+//! let input = RuntimeInput::validate(b"a", RuntimeInputLimits::new(limits.state_byte_limit()))?;
 //!
 //! program.run_with_borrowed_trace(
-//!     &RuntimeInput::validate(b"a")?,
-//!     RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
+//!     &input,
+//!     limits,
 //!     |event| {
 //!         byte_counts.push(event.byte_count().get());
 //!         if let BorrowedTraceEvent::Step { rule, .. } = event {

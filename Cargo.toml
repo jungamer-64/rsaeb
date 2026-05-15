@@ -9,8 +9,10 @@ repository = "https://github.com/jungamer-64/rsaeb"
 documentation = "https://docs.rs/rsaeb"
 license = "MIT OR Apache-2.0"
 keywords = ["a-b", "interpreter", "rewrite", "no-std"]
+categories = ["compilers", "parser-implementations", "no-std"]
 include = [
     "/src/**",
+    "/tests/**",
     "/README.md",
     "/LICENSE-MIT",
     "/LICENSE-APACHE",
