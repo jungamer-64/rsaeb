@@ -5,6 +5,9 @@ pub const DEFAULT_MAX_STEPS: StepLimit = StepLimit::new(1_000_000);
 /// Default runtime-state byte budget for callers that want the crate policy value.
 pub const DEFAULT_MAX_STATE_LEN: RuntimeStateByteLimit =
     RuntimeStateByteLimit::new(DEFAULT_BYTE_BUDGET);
+/// Default runtime-input byte budget for callers that want the crate policy value.
+pub const DEFAULT_MAX_INPUT_LEN: RuntimeInputByteLimit =
+    RuntimeInputByteLimit::new(DEFAULT_BYTE_BUDGET);
 /// Default `(return)` output byte budget for callers that want the crate policy value.
 pub const DEFAULT_MAX_RETURN_LEN: ReturnByteLimit = ReturnByteLimit::new(DEFAULT_BYTE_BUDGET);
 /// Default trace snapshot byte budget for callers that want the crate default.
@@ -39,6 +42,26 @@ pub struct RuntimeStateByteLimit {
 
 impl RuntimeStateByteLimit {
     /// Creates a runtime-state byte limit from a primitive length.
+    #[must_use]
+    pub const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    /// Returns this limit as a primitive length.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+}
+
+/// Maximum runtime input length accepted before owned byte classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RuntimeInputByteLimit {
+    value: usize,
+}
+
+impl RuntimeInputByteLimit {
+    /// Creates a runtime-input byte limit from a primitive length.
     #[must_use]
     pub const fn new(value: usize) -> Self {
         Self { value }

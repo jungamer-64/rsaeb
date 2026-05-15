@@ -1,14 +1,22 @@
-use super::action::{AppliedRule, StepApplication, apply_matched_rule};
-use super::budget::StepBudget;
-use super::input::{InitialStateBytes, RuntimeInput};
-use super::matcher::{RuleSearch, find_next_match};
-use super::once::RuntimeRules;
-use super::rewrite::RewriteScratch;
-use super::state::State;
-use crate::error::RunError;
-use crate::program::{Program, RunLimits, RunResult, StepCount};
-use crate::rule::{PayloadView, RuleView};
-use crate::trace::RuntimeStateView;
+//! Public stepwise execution typestates.
+//!
+//! These types represent the observable execution lifecycle. The mutable
+//! runtime engine remains in `runtime`; this module owns the public states that
+//! callers can hold between applied rewrite steps.
+
+use crate::error::{RunError, TracedRunError};
+use crate::program::{Program, RunLimits, StepCount};
+use crate::runtime::action::{AppliedRule, StepApplication, apply_matched_rule};
+use crate::runtime::budget::StepBudget;
+use crate::runtime::input::{InitialStateBytes, RuntimeInput};
+use crate::runtime::matcher::{RuleSearch, find_next_match};
+use crate::runtime::once::RuntimeRules;
+use crate::runtime::rewrite::RewriteScratch;
+use crate::runtime::state::State;
+use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
+use crate::{inspect::PayloadView, inspect::RuleView};
+
+pub use crate::program::{ReturnOutput, RunResult, RuntimeStateSnapshot};
 
 /// Stateful execution that can still apply rules.
 ///
@@ -17,16 +25,16 @@ use crate::trace::RuntimeStateView;
 /// cannot step after completion.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RunningExecution<'program> {
-    pub(super) core: ExecutionCore<'program>,
+    pub(crate) core: ExecutionCore<'program>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ExecutionCore<'program> {
-    pub(super) state: State,
-    pub(super) scratch: RewriteScratch,
-    pub(super) step_budget: StepBudget,
-    pub(super) runtime_rules: RuntimeRules<'program>,
-    pub(super) limits: RunLimits,
+    pub(crate) state: State,
+    pub(crate) scratch: RewriteScratch,
+    pub(crate) step_budget: StepBudget,
+    pub(crate) runtime_rules: RuntimeRules<'program>,
+    pub(crate) limits: RunLimits,
 }
 
 /// Result of advancing a running execution once.
@@ -94,11 +102,11 @@ impl<'program> ExecutionCore<'program> {
         })
     }
 
-    pub(super) const fn completed_steps(&self) -> StepCount {
+    pub(crate) const fn completed_steps(&self) -> StepCount {
         self.step_budget.completed_steps()
     }
 
-    pub(super) fn state(&self) -> RuntimeStateView<'_> {
+    pub(crate) fn state(&self) -> RuntimeStateView<'_> {
         self.state.view()
     }
 
@@ -107,7 +115,7 @@ impl<'program> ExecutionCore<'program> {
     /// # Errors
     ///
     /// Returns `RunError` if final state materialization cannot allocate.
-    pub(super) fn into_stable_result(self, steps: StepCount) -> Result<RunResult, RunError> {
+    pub(crate) fn into_stable_result(self, steps: StepCount) -> Result<RunResult, RunError> {
         Ok(RunResult::stable(self.state.into_snapshot()?, steps))
     }
 }
@@ -211,7 +219,7 @@ impl<'program> RunningExecution<'program> {
     }
 
     #[cfg(test)]
-    pub(super) fn find_next_match(&mut self) -> RuleSearch<'program, '_> {
+    pub(crate) fn find_next_match(&mut self) -> RuleSearch<'program, '_> {
         find_next_match(&mut self.core.runtime_rules, &self.core.state)
     }
 }
@@ -356,5 +364,74 @@ impl core::fmt::Display for ExecutionStepError<'_> {
 impl core::error::Error for ExecutionStepError<'_> {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         Some(&self.error)
+    }
+}
+
+impl<'program> RunningExecution<'program> {
+    /// Runs to completion while emitting borrowed trace events.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TracedRunError::Trace` if the trace sink fails. Returns
+    /// `TracedRunError::Run` if runtime execution fails.
+    pub(crate) fn run_with_borrowed_trace<F, E>(
+        mut self,
+        mut trace: F,
+    ) -> Result<RunResult, TracedRunError<E>>
+    where
+        F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
+    {
+        trace(BorrowedTraceEvent::Initial {
+            state: self.state(),
+        })
+        .map_err(TracedRunError::Trace)?;
+
+        loop {
+            match self.step() {
+                Ok(ExecutionTransition::Applied(applied)) => {
+                    Self::emit_step_trace(
+                        &mut trace,
+                        applied.step(),
+                        applied.rule(),
+                        BorrowedTraceEffect::Continue {
+                            state: applied.state(),
+                        },
+                    )?;
+                    self = applied.into_running();
+                }
+                Ok(ExecutionTransition::Stable(stable)) => {
+                    return stable.into_result().map_err(TracedRunError::Run);
+                }
+                Ok(ExecutionTransition::Returned(returned)) => {
+                    Self::emit_step_trace(
+                        &mut trace,
+                        returned.step(),
+                        returned.rule(),
+                        BorrowedTraceEffect::Return {
+                            output: returned.output(),
+                        },
+                    )?;
+                    return returned.into_result().map_err(TracedRunError::Run);
+                }
+                Err(error) => return Err(TracedRunError::Run(error.into_error())),
+            }
+        }
+    }
+
+    /// Emits one borrowed step trace event.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TracedRunError::Trace` if the trace sink rejects the event.
+    fn emit_step_trace<F, E>(
+        trace: &mut F,
+        step: StepCount,
+        rule: RuleView<'program>,
+        effect: BorrowedTraceEffect<'program, '_>,
+    ) -> Result<(), TracedRunError<E>>
+    where
+        F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
+    {
+        trace(BorrowedTraceEvent::Step { step, rule, effect }).map_err(TracedRunError::Trace)
     }
 }

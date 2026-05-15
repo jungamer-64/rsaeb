@@ -8,8 +8,7 @@ pub use crate::bytes::{
     PayloadByteCount, ReturnOutputByteCount, RuntimeStateByteCount, TraceSnapshotByteCount,
 };
 pub use crate::program::{
-    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
-    DEFAULT_MAX_TRACE_SNAPSHOT_LEN, ReturnByteLimit, RunLimits, StateByteLimit, StepCount,
-    StepLimit, TraceSnapshotByteLimit, TraceSnapshotLimits,
+    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
+    DEFAULT_MAX_TRACE_SNAPSHOT_LEN, ReturnByteLimit, RunLimits, RuntimeInputByteLimit,
+    RuntimeStateByteLimit, StepCount, StepLimit, TraceSnapshotByteLimit, TraceSnapshotLimits,
 };
-pub use crate::runtime::RuntimeInputLimits;

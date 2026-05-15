@@ -3,13 +3,13 @@
 use std::string::{FromUtf8Error, String};
 
 use crate::Program;
+use crate::RuntimeInput;
 use crate::error::{
     AebError, AllocationError, ParseError, ParseErrorLocation, RunError, RuntimeInputError,
     TraceSnapshotRunError,
 };
-use crate::limits::StateByteLimit;
+use crate::limits::{DEFAULT_MAX_INPUT_LEN, RuntimeInputByteLimit};
 use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
-use crate::{DEFAULT_MAX_STATE_LEN, RuntimeInput, RuntimeInputLimits};
 
 pub(crate) enum TestFailure {
     Message(String),
@@ -89,17 +89,17 @@ impl From<RuntimeInputError> for TestFailure {
 
 pub(crate) type TestResult = Result<(), TestFailure>;
 
-/// Validates runtime input with the default state byte limit.
+/// Validates runtime input with the default input byte limit.
 ///
 /// # Errors
 ///
 /// Returns `RuntimeInputError` if the test input violates runtime input
 /// validation or allocation constraints.
 pub(crate) fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
-    runtime_input_with_limit(bytes, DEFAULT_MAX_STATE_LEN)
+    runtime_input_with_limit(bytes, DEFAULT_MAX_INPUT_LEN)
 }
 
-/// Validates runtime input with a test-provided state byte limit.
+/// Validates runtime input with a test-provided input byte limit.
 ///
 /// # Errors
 ///
@@ -107,9 +107,9 @@ pub(crate) fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputEr
 /// validation, the provided limit, or allocation constraints.
 pub(crate) fn runtime_input_with_limit(
     bytes: &[u8],
-    limit: StateByteLimit,
+    limit: RuntimeInputByteLimit,
 ) -> Result<RuntimeInput, RuntimeInputError> {
-    RuntimeInput::validate(bytes, RuntimeInputLimits::new(limit))
+    RuntimeInput::validate(bytes, limit)
 }
 
 /// Converts a boolean assertion into the shared test result type.

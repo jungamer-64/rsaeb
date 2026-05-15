@@ -1,13 +1,16 @@
 mod support;
 
 use rsaeb::error::{LimitError, RunError};
-use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
-use rsaeb::limits::{ReturnByteLimit, StateByteLimit, StepLimit};
-use rsaeb::{
-    AppliedExecution, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
-    ExecutionStepError, ExecutionTransition, Program, ProgramSource, ReturnedExecution, RunLimits,
-    RunOutcome, RunResult, RunningExecution, StableExecution,
+use rsaeb::execution::{
+    AppliedExecution, ExecutionStepError, ExecutionTransition, ReturnedExecution, RunResult,
+    RunningExecution, StableExecution,
 };
+use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
+use rsaeb::limits::{
+    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, ReturnByteLimit,
+    RuntimeStateByteLimit, StepLimit,
+};
+use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome};
 use support::{TestFailure, TestResult, ensure, ensure_eq, ensure_matches, runtime_input};
 
 /// Returns stable output bytes when they match `expected`.
@@ -584,7 +587,7 @@ fn public_limits_preserve_distinct_step_state_and_return_errors() -> TestResult 
         &runtime_input(b"aa")?,
         RunLimits::new(
             StepLimit::new(10),
-            StateByteLimit::new(1),
+            RuntimeStateByteLimit::new(1),
             ReturnByteLimit::new(10),
         ),
     );
@@ -596,7 +599,7 @@ fn public_limits_preserve_distinct_step_state_and_return_errors() -> TestResult 
                 context: rsaeb::error::StateLimitContext::Input,
                 limit,
                 attempted_len,
-            } if limit == StateByteLimit::new(1)
+            } if limit == RuntimeStateByteLimit::new(1)
                 && attempted_len.get() == 2
         ),
         "expected runtime input state limit",
@@ -606,7 +609,7 @@ fn public_limits_preserve_distinct_step_state_and_return_errors() -> TestResult 
         &runtime_input(b"a")?,
         RunLimits::new(
             StepLimit::new(1),
-            StateByteLimit::new(10),
+            RuntimeStateByteLimit::new(10),
             ReturnByteLimit::new(1),
         ),
     );

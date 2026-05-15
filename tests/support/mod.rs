@@ -1,11 +1,11 @@
 use std::string::{FromUtf8Error, String};
 
+use rsaeb::RuntimeInput;
 use rsaeb::error::{
     AebError, AllocationError, FallibleTraceSnapshotRunError, ParseError, RunError,
     RuntimeInputError, TraceSnapshotRunError,
 };
-use rsaeb::limits::StateByteLimit;
-use rsaeb::{DEFAULT_MAX_STATE_LEN, RuntimeInput, RuntimeInputLimits};
+use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, RuntimeInputByteLimit};
 
 pub enum TestFailure {
     Message(String),
@@ -96,17 +96,17 @@ impl From<AllocationError> for TestFailure {
 
 pub type TestResult = Result<(), TestFailure>;
 
-/// Validates runtime input with the default state byte limit.
+/// Validates runtime input with the default input byte limit.
 ///
 /// # Errors
 ///
 /// Returns `RuntimeInputError` if the test input violates runtime input
 /// validation or allocation constraints.
 pub fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
-    runtime_input_with_limit(bytes, DEFAULT_MAX_STATE_LEN)
+    runtime_input_with_limit(bytes, DEFAULT_MAX_INPUT_LEN)
 }
 
-/// Validates runtime input with a test-provided state byte limit.
+/// Validates runtime input with a test-provided input byte limit.
 ///
 /// # Errors
 ///
@@ -114,9 +114,9 @@ pub fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
 /// validation, the provided limit, or allocation constraints.
 pub fn runtime_input_with_limit(
     bytes: &[u8],
-    limit: StateByteLimit,
+    limit: RuntimeInputByteLimit,
 ) -> Result<RuntimeInput, RuntimeInputError> {
-    RuntimeInput::validate(bytes, RuntimeInputLimits::new(limit))
+    RuntimeInput::validate(bytes, limit)
 }
 
 /// Converts a boolean assertion into the shared test result type.

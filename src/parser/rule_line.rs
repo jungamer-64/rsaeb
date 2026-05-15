@@ -3,7 +3,8 @@ use alloc::vec::Vec;
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::{CompactByte, Payload};
 use crate::error::{LeftModifierKind, ParseError, ParseErrorKind, PayloadKind, RightActionKind};
-use crate::rule::{Action, ParsedRule, RuleAnchor, RuleBody, RuleHead, RuleRepeat};
+use crate::inspect::{RuleAnchor, RuleRepeat};
+use crate::rule::{Action, ParsedRule, RuleBody, RuleHead};
 use crate::source::{SourceLineNumber, SourcePosition};
 use crate::syntax::SyntaxToken;
 

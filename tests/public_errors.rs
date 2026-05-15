@@ -4,11 +4,11 @@ use rsaeb::error::{
     AebError, LimitError, ParseErrorKind, ParseErrorLocation, PayloadKind, RunError,
     RuntimeInputError, StateLimitContext,
 };
-use rsaeb::limits::{ReturnByteLimit, StateByteLimit, StepLimit};
-use rsaeb::{
-    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RuntimeInput,
-    RuntimeInputLimits,
+use rsaeb::limits::{
+    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit,
+    RuntimeInputByteLimit, RuntimeStateByteLimit, StepLimit,
 };
+use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, runtime_input};
 
 /// Returns the expected runtime error.
@@ -133,9 +133,7 @@ fn input_error_and_top_level_aeb_error_are_structured() -> TestResult {
         "expected top-level input error",
     )?;
 
-    let Err(limit_error) =
-        RuntimeInput::validate(b"aa", RuntimeInputLimits::new(StateByteLimit::new(1)))
-    else {
+    let Err(limit_error) = RuntimeInput::validate(b"aa", RuntimeInputByteLimit::new(1)) else {
         return Err(TestFailure::message(
             "expected input construction limit error",
         ));
@@ -146,7 +144,7 @@ fn input_error_and_top_level_aeb_error_are_structured() -> TestResult {
             RuntimeInputError::Limit {
                 limit,
                 attempted_len,
-            } if limit == StateByteLimit::new(1) && attempted_len.get() == 2
+            } if limit == RuntimeInputByteLimit::new(1) && attempted_len.get() == 2
         ),
         "expected runtime input construction limit details",
     )?;
@@ -160,7 +158,7 @@ fn input_error_and_top_level_aeb_error_are_structured() -> TestResult {
 /// domain names or bytes drift.
 #[test]
 fn runtime_input_debug_materializes_public_bytes() -> TestResult {
-    let input = RuntimeInput::validate(b"a=\n", RuntimeInputLimits::new(DEFAULT_MAX_STATE_LEN))?;
+    let input = RuntimeInput::validate(b"a=\n", DEFAULT_MAX_INPUT_LEN)?;
     let debug = format!("{input:?}");
 
     ensure_eq!(debug.as_str(), "RuntimeInput { bytes: [97, 61, 10] }")?;
@@ -207,7 +205,7 @@ fn limit_errors_report_step_state_and_return_domains() -> TestResult {
         &runtime_input(b"aa")?,
         RunLimits::new(
             StepLimit::new(10),
-            StateByteLimit::new(1),
+            RuntimeStateByteLimit::new(1),
             ReturnByteLimit::new(10),
         ),
     );
@@ -219,7 +217,7 @@ fn limit_errors_report_step_state_and_return_domains() -> TestResult {
                 context: StateLimitContext::Input,
                 limit,
                 attempted_len,
-            } if limit == StateByteLimit::new(1) && attempted_len.get() == 2
+            } if limit == RuntimeStateByteLimit::new(1) && attempted_len.get() == 2
         ),
         "expected input state limit details",
     )?;

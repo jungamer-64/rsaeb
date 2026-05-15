@@ -1,10 +1,11 @@
 use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
-use crate::rule::{Rule, RuleRepeat};
+use crate::inspect::RuleRepeat;
+use crate::rule::Rule;
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct RuntimeRules<'program> {
+pub(crate) struct RuntimeRules<'program> {
     entries: Vec<RuntimeRule<'program>>,
 }
 
@@ -21,13 +22,13 @@ enum RuleAvailability {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum OnceRuleState {
+pub(crate) enum OnceRuleState {
     Fresh,
     Consumed,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum MatchedRuleCommit<'runtime> {
+pub(crate) enum MatchedRuleCommit<'runtime> {
     Always,
     Once(&'runtime mut OnceRuleState),
 }
@@ -39,7 +40,7 @@ impl<'program> RuntimeRules<'program> {
     ///
     /// Returns `AllocationError` if the per-execution rule-state table cannot
     /// be allocated.
-    pub(super) fn new(rules: &'program [Rule]) -> Result<Self, AllocationError> {
+    pub(crate) fn new(rules: &'program [Rule]) -> Result<Self, AllocationError> {
         let mut entries = Vec::new();
         try_reserve_total_exact(
             &mut entries,
@@ -61,7 +62,7 @@ impl<'program> RuntimeRules<'program> {
         Ok(Self { entries })
     }
 
-    pub(super) fn iter_available_mut(
+    pub(crate) fn iter_available_mut(
         &mut self,
     ) -> impl Iterator<Item = (&'program Rule, MatchedRuleCommit<'_>)> {
         self.entries
@@ -95,7 +96,7 @@ impl RuleAvailability {
 }
 
 impl MatchedRuleCommit<'_> {
-    pub(super) fn commit(self) {
+    pub(crate) fn commit(self) {
         match self {
             Self::Always => {}
             Self::Once(state) => {

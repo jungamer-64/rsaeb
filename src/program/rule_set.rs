@@ -1,7 +1,8 @@
 use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push};
-use crate::rule::{ParsedRule, Rule, RuleCount, RulePosition, RuleRepeat};
+use crate::inspect::{RuleCount, RulePosition, RuleRepeat};
+use crate::rule::{ParsedRule, Rule};
 
 #[derive(Debug, PartialEq, Eq, Default)]
 pub(crate) struct RuleSet {

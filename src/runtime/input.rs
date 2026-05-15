@@ -4,7 +4,7 @@ use core::fmt;
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeStateByteCount};
 use crate::error::{LimitError, RunError, RuntimeInputError, StateLimitContext};
-use crate::program::RunLimits;
+use crate::program::{RunLimits, RuntimeInputByteLimit};
 
 /// Runtime input after ASCII validation and byte-domain classification.
 ///
@@ -100,15 +100,15 @@ impl RuntimeInput {
         self.bytes.is_empty()
     }
 
-    pub(super) fn runtime_bytes(&self) -> impl Iterator<Item = RuntimeByte> + '_ {
+    pub(crate) fn runtime_bytes(&self) -> impl Iterator<Item = RuntimeByte> + '_ {
         self.bytes.iter().copied()
     }
 }
 
 /// Runtime input materialized into the mutable execution byte domain.
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct InitialStateBytes {
-    pub(super) bytes: Vec<RuntimeByte>,
+pub(crate) struct InitialStateBytes {
+    pub(crate) bytes: Vec<RuntimeByte>,
 }
 
 impl InitialStateBytes {
@@ -118,7 +118,7 @@ impl InitialStateBytes {
     ///
     /// Returns `RunError` if the input exceeds runtime state limits or the
     /// initial state buffer cannot be allocated.
-    pub(super) fn materialize(input: &RuntimeInput, limits: RunLimits) -> Result<Self, RunError> {
+    pub(crate) fn materialize(input: &RuntimeInput, limits: RunLimits) -> Result<Self, RunError> {
         let byte_count = input.byte_count();
 
         if byte_count.get() > limits.state_byte_limit().get() {

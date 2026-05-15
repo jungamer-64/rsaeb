@@ -3,25 +3,25 @@ use crate::error::LimitError;
 use crate::program::{StepCount, StepLimit};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct StepBudget {
+pub(crate) struct StepBudget {
     max_steps: StepLimit,
     completed_steps: StepCount,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct StepPermit {
+pub(crate) struct StepPermit {
     next_step: StepCount,
 }
 
 impl StepBudget {
-    pub(super) const fn new(max_steps: StepLimit) -> Self {
+    pub(crate) const fn new(max_steps: StepLimit) -> Self {
         Self {
             max_steps,
             completed_steps: StepCount::ZERO,
         }
     }
 
-    pub(super) const fn completed_steps(self) -> StepCount {
+    pub(crate) const fn completed_steps(self) -> StepCount {
         self.completed_steps
     }
 
@@ -49,7 +49,7 @@ impl StepBudget {
     ///
     /// Returns `LimitError` if the step limit is reached or the next step
     /// count cannot be represented.
-    pub(super) fn reserve_next_step(
+    pub(crate) fn reserve_next_step(
         self,
         state_len: RuntimeStateByteCount,
     ) -> Result<StepPermit, LimitError> {
@@ -66,7 +66,7 @@ impl StepBudget {
         Ok(StepPermit { next_step })
     }
 
-    pub(super) fn commit(&mut self, permit: StepPermit) -> StepCount {
+    pub(crate) fn commit(&mut self, permit: StepPermit) -> StepCount {
         self.completed_steps = permit.next_step;
         permit.next_step
     }

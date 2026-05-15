@@ -9,46 +9,46 @@ use crate::program::{RunLimits, RuntimeStateSnapshot};
 use crate::trace::RuntimeStateView;
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct State {
-    pub(super) bytes: Vec<RuntimeByte>,
+pub(crate) struct State {
+    pub(crate) bytes: Vec<RuntimeByte>,
 }
 
 impl State {
-    pub(super) fn from_input(input: InitialStateBytes) -> Self {
+    pub(crate) fn from_input(input: InitialStateBytes) -> Self {
         Self { bytes: input.bytes }
     }
 
-    pub(super) fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.bytes.len()
     }
 
-    pub(super) fn byte_count(&self) -> RuntimeStateByteCount {
+    pub(crate) fn byte_count(&self) -> RuntimeStateByteCount {
         RuntimeStateByteCount::new(self.bytes.len())
     }
 
-    pub(super) fn view(&self) -> RuntimeStateView<'_> {
+    pub(crate) fn view(&self) -> RuntimeStateView<'_> {
         RuntimeStateView::new(&self.bytes)
     }
 
-    pub(super) fn swap_with_scratch(&mut self, scratch: &mut RewriteScratch) {
+    pub(crate) fn swap_with_scratch(&mut self, scratch: &mut RewriteScratch) {
         core::mem::swap(&mut self.bytes, &mut scratch.bytes);
     }
 
     #[cfg(test)]
-    pub(super) fn materialized_byte_at(&self, index: usize) -> Option<u8> {
+    pub(crate) fn materialized_byte_at(&self, index: usize) -> Option<u8> {
         self.bytes.get(index).copied().map(RuntimeByte::materialize)
     }
 
-    pub(super) fn starts_with_payload(&self, payload: &Payload) -> Option<MatchedStateSpan> {
+    pub(crate) fn starts_with_payload(&self, payload: &Payload) -> Option<MatchedStateSpan> {
         self.matches_payload_at(StateIndex::new(0), payload)
     }
 
-    pub(super) fn ends_with_payload(&self, payload: &Payload) -> Option<MatchedStateSpan> {
+    pub(crate) fn ends_with_payload(&self, payload: &Payload) -> Option<MatchedStateSpan> {
         let start = self.len().checked_sub(payload.len())?;
         self.matches_payload_at(StateIndex::new(start), payload)
     }
 
-    pub(super) fn find_payload(&self, payload: &Payload) -> Option<MatchedStateSpan> {
+    pub(crate) fn find_payload(&self, payload: &Payload) -> Option<MatchedStateSpan> {
         if payload.is_empty() {
             return MatchedStateSpan::checked(
                 StateIndex::new(0),
@@ -94,7 +94,7 @@ impl State {
     ///
     /// Returns `RunError` if replacement size arithmetic overflows, the
     /// rewritten state exceeds limits, or scratch allocation fails.
-    pub(super) fn rewrite_into(
+    pub(crate) fn rewrite_into(
         &self,
         request: RewriteRequest<'_>,
         output: &mut RewriteScratch,
@@ -215,7 +215,7 @@ impl State {
     /// # Errors
     ///
     /// Returns `RunError` if final output allocation fails.
-    pub(super) fn into_snapshot(self) -> Result<RuntimeStateSnapshot, RunError> {
+    pub(crate) fn into_snapshot(self) -> Result<RuntimeStateSnapshot, RunError> {
         let bytes = self
             .materialize(AllocationContext::FinalOutput)
             .map_err(RunError::from)?;
@@ -224,12 +224,12 @@ impl State {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct StateIndex {
+pub(crate) struct StateIndex {
     zero_based: usize,
 }
 
 impl StateIndex {
-    pub(super) const fn new(zero_based: usize) -> Self {
+    pub(crate) const fn new(zero_based: usize) -> Self {
         Self { zero_based }
     }
 
@@ -239,14 +239,14 @@ impl StateIndex {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct MatchedStateSpan {
+pub(crate) struct MatchedStateSpan {
     start: StateIndex,
     end: StateIndex,
     matched_len: PayloadByteCount,
 }
 
 impl MatchedStateSpan {
-    pub(super) fn checked(
+    pub(crate) fn checked(
         start: StateIndex,
         matched_len: PayloadByteCount,
         state_len: RuntimeStateByteCount,
@@ -259,15 +259,15 @@ impl MatchedStateSpan {
         })
     }
 
-    pub(super) const fn start(self) -> usize {
+    pub(crate) const fn start(self) -> usize {
         self.start.get()
     }
 
-    pub(super) const fn matched_len(self) -> PayloadByteCount {
+    pub(crate) const fn matched_len(self) -> PayloadByteCount {
         self.matched_len
     }
 
-    pub(super) const fn end(self) -> usize {
+    pub(crate) const fn end(self) -> usize {
         self.end.get()
     }
 }

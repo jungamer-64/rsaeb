@@ -3,15 +3,15 @@ mod support;
 use rsaeb::error::{
     FallibleTraceSnapshotRunError, RunError, TraceSnapshotError, TraceSnapshotRunError,
 };
+use rsaeb::execution::RunResult;
 use rsaeb::limits::{
-    DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit, TraceSnapshotByteLimit, TraceSnapshotLimits,
+    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit,
+    TraceSnapshotByteLimit, TraceSnapshotLimits,
 };
 use rsaeb::trace::{
     BorrowedTraceEffect, BorrowedTraceEvent, TraceSnapshotEffect, TraceSnapshotEvent,
 };
-use rsaeb::{
-    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RunOutcome,
-};
+use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, runtime_input};
 
 /// Returns the expected trace snapshot run error.
@@ -36,7 +36,7 @@ fn expect_trace_snapshot_error<T>(
 /// trace snapshot materialization fails.
 fn trace_snapshot_example(
     program: &Program,
-) -> Result<(rsaeb::RunResult, Vec<TraceSnapshotEvent<'_>>), TestFailure> {
+) -> Result<(RunResult, Vec<TraceSnapshotEvent<'_>>), TestFailure> {
     let mut events = Vec::new();
     let limits = TraceSnapshotLimits::new(
         RunLimits::new(

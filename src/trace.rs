@@ -8,8 +8,8 @@ use alloc::vec::Vec;
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeStateByteCount, TraceSnapshotByteCount};
 use crate::error::TraceSnapshotError;
+use crate::inspect::{PayloadView, RuleView};
 use crate::program::{ReturnOutput, RuntimeStateSnapshot, StepCount, TraceSnapshotByteLimit};
-use crate::rule::{PayloadView, RuleView};
 
 /// Borrowed view of runtime-state bytes.
 ///

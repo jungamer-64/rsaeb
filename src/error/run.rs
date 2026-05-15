@@ -4,7 +4,9 @@ use crate::allocation::AllocationError;
 use crate::bytes::{
     NonAsciiInputByte, PayloadByteCount, ReturnOutputByteCount, RuntimeStateByteCount,
 };
-use crate::program::{ReturnByteLimit, StateByteLimit, StepCount, StepLimit};
+use crate::program::{
+    ReturnByteLimit, RuntimeInputByteLimit, RuntimeStateByteLimit, StepCount, StepLimit,
+};
 
 /// Runtime execution error.
 #[derive(Debug, PartialEq, Eq)]
@@ -60,7 +62,7 @@ pub enum RuntimeInputError {
     /// Runtime input exceeded its construction byte budget.
     Limit {
         /// Configured maximum runtime input length.
-        limit: StateByteLimit,
+        limit: RuntimeInputByteLimit,
         /// Runtime input length that would have been classified.
         attempted_len: RuntimeStateByteCount,
     },
@@ -77,7 +79,10 @@ impl RuntimeInputError {
         Self::ColumnOverflow
     }
 
-    pub(crate) const fn limit(limit: StateByteLimit, attempted_len: RuntimeStateByteCount) -> Self {
+    pub(crate) const fn limit(
+        limit: RuntimeInputByteLimit,
+        attempted_len: RuntimeStateByteCount,
+    ) -> Self {
         Self::Limit {
             limit,
             attempted_len,
@@ -178,7 +183,7 @@ pub enum LimitError {
         /// Whether the limit was exceeded by input or by a rewrite.
         context: StateLimitContext,
         /// Configured maximum runtime state length.
-        limit: StateByteLimit,
+        limit: RuntimeStateByteLimit,
         /// State length that would have been accepted without this guard.
         attempted_len: RuntimeStateByteCount,
     },
@@ -203,7 +208,7 @@ pub enum LimitError {
 impl LimitError {
     pub(crate) const fn state(
         context: StateLimitContext,
-        limit: StateByteLimit,
+        limit: RuntimeStateByteLimit,
         attempted_len: RuntimeStateByteCount,
     ) -> Self {
         Self::State {

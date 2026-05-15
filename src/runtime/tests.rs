@@ -3,16 +3,17 @@ use super::matcher::RuleSearch;
 use super::state::State;
 use crate::bytes::{CompactByte, Payload, ProgramByte, RuntimeByte};
 use crate::error::{LimitError, PayloadKind, RunError, RuntimeInputError, StateLimitContext};
+use crate::execution::{ExecutionStepError, ExecutionTransition};
 use crate::limits::{
-    ReturnByteLimit, ReturnOutputByteCount, RuntimeStateByteCount, StateByteLimit, StepCount,
-    StepLimit,
+    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit, ReturnOutputByteCount,
+    RuntimeStateByteCount, RuntimeStateByteLimit, StepCount, StepLimit,
 };
 use crate::test_support::{
     TestFailure, TestResult, ensure, ensure_eq, ensure_matches, runtime_input, source_column,
     source_line_number,
 };
 use crate::trace::RuntimeStateView;
-use crate::{ExecutionStepError, ExecutionTransition, Program, ProgramSource, RunLimits};
+use crate::{Program, ProgramSource, RunLimits};
 use std::vec::Vec;
 
 fn runtime_view_bytes(view: RuntimeStateView<'_>) -> Vec<u8> {
@@ -128,8 +129,8 @@ fn once_rule_lookup_does_not_consume_before_step_commit() -> TestResult {
         &input,
         RunLimits::new(
             StepLimit::new(1),
-            crate::DEFAULT_MAX_STATE_LEN,
-            crate::DEFAULT_MAX_RETURN_LEN,
+            DEFAULT_MAX_STATE_LEN,
+            DEFAULT_MAX_RETURN_LEN,
         ),
     )?;
 
@@ -155,8 +156,8 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
         &no_match_input,
         RunLimits::new(
             StepLimit::new(0),
-            crate::DEFAULT_MAX_STATE_LEN,
-            crate::DEFAULT_MAX_RETURN_LEN,
+            DEFAULT_MAX_STATE_LEN,
+            DEFAULT_MAX_RETURN_LEN,
         ),
     )?;
     match expect_step_transition(no_match.step())? {
@@ -177,8 +178,8 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
         &would_match_input,
         RunLimits::new(
             StepLimit::new(0),
-            crate::DEFAULT_MAX_STATE_LEN,
-            crate::DEFAULT_MAX_RETURN_LEN,
+            DEFAULT_MAX_STATE_LEN,
+            DEFAULT_MAX_RETURN_LEN,
         ),
     )?;
     let error = expect_step_error(would_match.step())?;
@@ -194,8 +195,8 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
         &would_match_input,
         RunLimits::new(
             StepLimit::new(0),
-            crate::DEFAULT_MAX_STATE_LEN,
-            crate::DEFAULT_MAX_RETURN_LEN,
+            DEFAULT_MAX_STATE_LEN,
+            DEFAULT_MAX_RETURN_LEN,
         ),
     )?;
     let error = expect_step_error(would_match.step())?;
@@ -224,7 +225,7 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
 fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     let state_limits = RunLimits::new(
         StepLimit::new(1),
-        StateByteLimit::new(2),
+        RuntimeStateByteLimit::new(2),
         ReturnByteLimit::new(10),
     );
     let state_program = Program::parse(ProgramSource::from_str("=a"))?;
@@ -235,7 +236,7 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
         state_error.error(),
         &RunError::Limit(LimitError::State {
             context: StateLimitContext::Rewrite,
-            limit: StateByteLimit::new(2),
+            limit: RuntimeStateByteLimit::new(2),
             attempted_len: RuntimeStateByteCount::new(3),
         }),
     )?;
@@ -249,14 +250,14 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
         state_error.into_error(),
         RunError::Limit(LimitError::State {
             context: StateLimitContext::Rewrite,
-            limit: StateByteLimit::new(2),
+            limit: RuntimeStateByteLimit::new(2),
             attempted_len: RuntimeStateByteCount::new(3),
         }),
     )?;
 
     let return_limits = RunLimits::new(
         StepLimit::new(1),
-        StateByteLimit::new(10),
+        RuntimeStateByteLimit::new(10),
         ReturnByteLimit::new(1),
     );
     let return_program = Program::parse(ProgramSource::from_str("a=(return)ok"))?;
@@ -317,8 +318,8 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
         &input,
         RunLimits::new(
             StepLimit::new(10_000),
-            crate::DEFAULT_MAX_STATE_LEN,
-            crate::DEFAULT_MAX_RETURN_LEN,
+            DEFAULT_MAX_STATE_LEN,
+            DEFAULT_MAX_RETURN_LEN,
         ),
     )?);
 
