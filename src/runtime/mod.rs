@@ -11,6 +11,8 @@ mod state;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use execution::ExecutionCore;
-pub use execution::RunningExecution;
+pub use execution::{
+    AppliedExecution, ExecutionStepError, ExecutionTransition, ReturnedExecution, RunningExecution,
+    StableExecution,
+};
 pub use input::RuntimeInput;

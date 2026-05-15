@@ -1,7 +1,9 @@
 use core::error::Error;
 
 use crate::allocation::AllocationError;
-use crate::bytes::{NonAsciiInputByte, PayloadByteCount, ReturnOutputByteCount, RuntimeStateByteCount};
+use crate::bytes::{
+    NonAsciiInputByte, PayloadByteCount, ReturnOutputByteCount, RuntimeStateByteCount,
+};
 use crate::program::{ReturnByteLimit, StateByteLimit, StepCount, StepLimit};
 
 /// Runtime execution error.
@@ -45,7 +47,7 @@ impl From<LimitError> for RunError {
 
 /// Runtime input boundary error.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InputError {
+pub enum RuntimeInputError {
     /// Runtime input contained a non-ASCII byte.
     NonAscii {
         /// One-based input column.
@@ -55,9 +57,11 @@ pub enum InputError {
     },
     /// A one-based input column could not be represented.
     ColumnOverflow,
+    /// Storing validated runtime input failed.
+    Allocation(AllocationError),
 }
 
-impl InputError {
+impl RuntimeInputError {
     pub(crate) const fn non_ascii(column: InputColumn, byte: NonAsciiInputByte) -> Self {
         Self::NonAscii { column, byte }
     }
@@ -67,11 +71,18 @@ impl InputError {
     }
 }
 
-impl Error for InputError {
+impl Error for RuntimeInputError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Allocation(error) => Some(error),
             Self::NonAscii { .. } | Self::ColumnOverflow => None,
         }
+    }
+}
+
+impl From<AllocationError> for RuntimeInputError {
+    fn from(value: AllocationError) -> Self {
+        Self::Allocation(value)
     }
 }
 

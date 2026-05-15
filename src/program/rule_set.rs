@@ -1,12 +1,11 @@
 use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push};
-use crate::rule::{OnceRuleSlotCount, ParsedRule, Rule, RuleCount, RulePosition};
+use crate::rule::{ParsedRule, Rule, RuleCount, RulePosition, RuleRepeat};
 
 #[derive(Debug, PartialEq, Eq, Default)]
 pub(crate) struct RuleSet {
     rules: Vec<Rule>,
-    once_slot_count: OnceRuleSlotCount,
 }
 
 impl RuleSet {
@@ -19,12 +18,9 @@ impl RuleSet {
             AllocationError::capacity_overflow(AllocationContext::ProgramRuleTable)
         })?;
 
-        let (rule, next_once_slot_count) =
-            Rule::from_parsed(parsed, position, self.once_slot_count)?;
+        let rule = Rule::from_parsed(parsed, position);
 
         try_push(&mut self.rules, rule, AllocationContext::ProgramRuleTable)?;
-
-        self.once_slot_count = next_once_slot_count;
         Ok(())
     }
 
@@ -33,15 +29,12 @@ impl RuleSet {
     }
 
     pub(crate) fn once_rule_count(&self) -> RuleCount {
-        self.once_slot_count.as_rule_count()
-    }
-
-    pub(crate) const fn once_slot_count(&self) -> OnceRuleSlotCount {
-        self.once_slot_count
-    }
-
-    pub(crate) fn rule_at_position(&self, position: RulePosition) -> Option<&Rule> {
-        self.rules.get(position.zero_based())
+        RuleCount::new(
+            self.rules
+                .iter()
+                .filter(|rule| rule.repeat() == RuleRepeat::Once)
+                .count(),
+        )
     }
 
     pub(crate) fn as_slice(&self) -> &[Rule] {

@@ -3,8 +3,8 @@ use core::fmt;
 use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind};
 
 use super::{
-    AebError, FallibleTraceSnapshotRunError, InputColumn, InputError, LeftModifierKind, LimitError,
-    ParseError, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind, RunError,
+    AebError, FallibleTraceSnapshotRunError, InputColumn, LeftModifierKind, LimitError, ParseError,
+    ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind, RunError, RuntimeInputError,
     StateLimitContext, StateSizeError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
 };
 
@@ -198,7 +198,7 @@ where
     }
 }
 
-impl fmt::Display for InputError {
+impl fmt::Display for RuntimeInputError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NonAscii { column, byte } => write!(
@@ -207,6 +207,7 @@ impl fmt::Display for InputError {
                 byte.get(),
             ),
             Self::ColumnOverflow => write!(f, "input error: column number overflow"),
+            Self::Allocation(error) => error.fmt(f),
         }
     }
 }

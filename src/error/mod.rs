@@ -19,7 +19,7 @@ pub use parse::{
     LeftModifierKind, ParseError, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind,
 };
 pub use run::{
-    InputColumn, InputError, LimitError, RunError, StateLimitContext, StateSizeError,
+    InputColumn, LimitError, RunError, RuntimeInputError, StateLimitContext, StateSizeError,
 };
 pub use traced::{
     FallibleTraceSnapshotRunError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
@@ -31,7 +31,7 @@ pub enum AebError {
     /// Source program parse error.
     Parse(ParseError),
     /// Runtime input validation error.
-    Input(InputError),
+    Input(RuntimeInputError),
     /// Runtime execution error.
     Run(RunError),
 }
@@ -52,8 +52,8 @@ impl From<ParseError> for AebError {
     }
 }
 
-impl From<InputError> for AebError {
-    fn from(value: InputError) -> Self {
+impl From<RuntimeInputError> for AebError {
+    fn from(value: RuntimeInputError) -> Self {
         Self::Input(value)
     }
 }

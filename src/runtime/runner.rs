@@ -1,188 +1,64 @@
-use core::convert::Infallible;
-
-use crate::error::{RunError, TracedRunError};
-use crate::program::{Program, RunResult, StepCount};
-use crate::rule::Rule;
+use crate::error::TracedRunError;
+use crate::program::{RunResult, StepCount};
+use crate::rule::RuleView;
 use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent};
 
-use super::action::StepApplication;
-use super::execution::{Execution, ExecutionCore, OwnedExecution};
-use super::matcher::RuleSearch;
-use super::terminal::ExecutionTerminal;
+use super::execution::{ExecutionTransition, RunningExecution};
 
-type NoTrace<'program> = for<'run> fn(BorrowedTraceEvent<'program, 'run>) -> Result<(), Infallible>;
-
-impl<'program> Execution<'program> {
-    /// Runs this execution from its current state to completion.
-    ///
-    /// This consumes the execution and preserves already-applied steps, `(once)`
-    /// state, and byte budgets. It is the non-tracing counterpart to repeated
-    /// calls to [`Execution::step`].
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` when applying a later matching rule would exceed the
-    /// configured limits, allocation fails, state-size arithmetic overflows, or
-    /// an internal runtime invariant is violated.
-    pub fn finish(self) -> Result<RunResult, RunError> {
-        self.core.finish(self.program)
-    }
-
+impl<'program> RunningExecution<'program> {
     pub(crate) fn run_with_borrowed_trace<F, E>(
-        self,
-        trace: F,
-    ) -> Result<RunResult, TracedRunError<E>>
-    where
-        F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
-    {
-        self.core.run_with_borrowed_trace(self.program, trace)
-    }
-}
-
-impl OwnedExecution {
-    /// Runs this owned execution from its current state to completion.
-    ///
-    /// This consumes the execution and preserves already-applied steps, `(once)`
-    /// state, and byte budgets.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` when applying a later matching rule would exceed the
-    /// configured limits, allocation fails, state-size arithmetic overflows, or
-    /// an internal runtime invariant is violated.
-    pub fn finish(self) -> Result<RunResult, RunError> {
-        self.core.finish(&self.program)
-    }
-}
-
-impl ExecutionCore {
-    fn finish<'program>(self, program: &'program Program) -> Result<RunResult, RunError> {
-        match self.run_impl::<NoTrace<'program>, Infallible>(program, None) {
-            Ok(result) => Ok(result),
-            Err(TracedRunError::Run(error)) => Err(error),
-            Err(TracedRunError::Trace(error)) => match error {},
-        }
-    }
-
-    pub(crate) fn run_with_borrowed_trace<'program, F, E>(
-        self,
-        program: &'program Program,
-        trace: F,
-    ) -> Result<RunResult, TracedRunError<E>>
-    where
-        F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
-    {
-        self.run_impl(program, Some(trace))
-    }
-
-    fn run_impl<'program, F, E>(
         mut self,
-        program: &'program Program,
-        mut trace: Option<F>,
+        mut trace: F,
     ) -> Result<RunResult, TracedRunError<E>>
     where
         F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
     {
-        self.emit_initial_trace(&mut trace)?;
+        trace(BorrowedTraceEvent::Initial {
+            state: self.state(),
+        })
+        .map_err(TracedRunError::Trace)?;
 
         loop {
-            match self.terminal {
-                ExecutionTerminal::Running => {}
-                ExecutionTerminal::Stable => {
-                    return Ok(RunResult::stable(
-                        self.state.into_snapshot()?,
-                        self.step_budget.completed_steps(),
-                    ));
-                }
-                ExecutionTerminal::Return {
-                    step,
-                    rule_position,
-                } => {
-                    let output = program
-                        .return_output_at(rule_position)
-                        .map_err(TracedRunError::Run)?;
-                    return Ok(RunResult::from_return(
-                        Self::materialize_return_output(output).map_err(TracedRunError::Run)?,
-                        step,
-                    ));
-                }
-            }
-
-            let matched = match self.find_next_match(program).map_err(TracedRunError::Run)? {
-                RuleSearch::Matched(matched) => matched,
-                RuleSearch::Stable => {
-                    return Ok(RunResult::stable(
-                        self.state.into_snapshot()?,
-                        self.step_budget.completed_steps(),
-                    ));
-                }
-            };
-
-            let applied = self
-                .apply_matched_rule(matched)
-                .map_err(TracedRunError::Run)?;
-            match applied.effect {
-                StepApplication::Continue => {
+            match self.step() {
+                Ok(ExecutionTransition::Applied(applied)) => {
                     Self::emit_step_trace(
                         &mut trace,
-                        applied.step,
-                        applied.rule,
+                        applied.step(),
+                        applied.rule(),
                         BorrowedTraceEffect::Continue {
-                            state: self.state.view(),
+                            state: applied.state(),
                         },
                     )?;
+                    self = applied.into_running();
                 }
-                StepApplication::Return(output) => {
+                Ok(ExecutionTransition::Stable(stable)) => {
+                    return stable.into_result().map_err(TracedRunError::Run);
+                }
+                Ok(ExecutionTransition::Returned(returned)) => {
                     Self::emit_step_trace(
                         &mut trace,
-                        applied.step,
-                        applied.rule,
-                        BorrowedTraceEffect::Return { output },
+                        returned.step(),
+                        returned.rule(),
+                        BorrowedTraceEffect::Return {
+                            output: returned.output(),
+                        },
                     )?;
-                    return Ok(RunResult::from_return(
-                        Self::materialize_return_output(output).map_err(TracedRunError::Run)?,
-                        applied.step,
-                    ));
+                    return returned.into_result().map_err(TracedRunError::Run);
                 }
+                Err(error) => return Err(TracedRunError::Run(error.into_error())),
             }
         }
     }
 
-    fn emit_initial_trace<'program, F, E>(
-        &self,
-        trace: &mut Option<F>,
-    ) -> Result<(), TracedRunError<E>>
-    where
-        F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
-    {
-        if let Some(trace) = trace.as_mut() {
-            trace(BorrowedTraceEvent::Initial {
-                state: self.state.view(),
-            })
-            .map_err(TracedRunError::Trace)?;
-        }
-
-        Ok(())
-    }
-
-    fn emit_step_trace<'program, F, E>(
-        trace: &mut Option<F>,
+    fn emit_step_trace<F, E>(
+        trace: &mut F,
         step: StepCount,
-        rule: &'program Rule,
+        rule: RuleView<'program>,
         effect: BorrowedTraceEffect<'program, '_>,
     ) -> Result<(), TracedRunError<E>>
     where
         F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
     {
-        if let Some(trace) = trace.as_mut() {
-            trace(BorrowedTraceEvent::Step {
-                step,
-                rule: rule.view(),
-                effect,
-            })
-            .map_err(TracedRunError::Trace)?;
-        }
-
-        Ok(())
+        trace(BorrowedTraceEvent::Step { step, rule, effect }).map_err(TracedRunError::Trace)
     }
 }

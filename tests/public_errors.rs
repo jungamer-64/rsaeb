@@ -1,13 +1,12 @@
 mod support;
 
 use rsaeb::error::{
-    AebError, InputError, LimitError, ParseErrorKind, ParseErrorLocation, PayloadKind, RunError,
-    RuntimeInputBytesError, StateLimitContext,
+    AebError, LimitError, ParseErrorKind, ParseErrorLocation, PayloadKind, RunError,
+    RuntimeInputError, StateLimitContext,
 };
 use rsaeb::limits::{ReturnByteLimit, StateByteLimit, StepLimit};
 use rsaeb::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, Program, ProgramSource, RunLimits, RuntimeInput,
-    RuntimeInputBytes,
 };
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches};
 
@@ -21,20 +20,18 @@ fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFail
 fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::Step { .. }) => Ok(error),
-        RunError::Allocation(_)
-        | RunError::StateSize(_)
-        | RunError::Limit(_)
-        | RunError::Invariant(_) => Err(TestFailure::message("expected step limit error")),
+        RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_) => {
+            Err(TestFailure::message("expected step limit error"))
+        }
     }
 }
 
 fn expect_state_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::State { .. }) => Ok(error),
-        RunError::Allocation(_)
-        | RunError::StateSize(_)
-        | RunError::Limit(_)
-        | RunError::Invariant(_) => Err(TestFailure::message("expected state limit error")),
+        RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_) => {
+            Err(TestFailure::message("expected state limit error"))
+        }
     }
 }
 
@@ -97,7 +94,7 @@ fn input_error_and_top_level_aeb_error_are_structured() -> TestResult {
     ensure_matches(
         matches!(
             error,
-            InputError::NonAscii { column, .. } if column.get() == 1
+            RuntimeInputError::NonAscii { column, .. } if column.get() == 1
         ),
         "expected runtime input error",
     )?;
@@ -108,17 +105,7 @@ fn input_error_and_top_level_aeb_error_are_structured() -> TestResult {
         "expected top-level input error",
     )?;
 
-    let Err(error) = RuntimeInputBytes::from_slice(&[0xff]) else {
-        return Err(TestFailure::message("expected owned input error"));
-    };
-    ensure_matches(
-        matches!(
-            error,
-            RuntimeInputBytesError::Input(InputError::NonAscii { column, .. })
-                if column.get() == 1
-        ),
-        "expected owned runtime input validation error",
-    )
+    Ok(())
 }
 
 #[test]
@@ -139,19 +126,13 @@ fn display_errors_name_their_domain_contexts() -> TestResult {
         "input error: non-ASCII byte 0xff at column 1",
     )?;
 
-    let Err(input_error) = RuntimeInputBytes::from_slice(&[0xff]) else {
-        return Err(TestFailure::message("expected owned input error"));
-    };
-    ensure_eq!(
-        input_error.to_string(),
-        "input error: non-ASCII byte 0xff at column 1",
-    )
+    Ok(())
 }
 
 #[test]
 fn limit_errors_report_step_state_and_return_domains() -> TestResult {
     let state_error = Program::parse(ProgramSource::from_str("# no executable rules"))?.run(
-        RuntimeInput::validate(b"aa")?,
+        &RuntimeInput::validate(b"aa")?,
         RunLimits::new(
             StepLimit::new(10),
             StateByteLimit::new(1),
@@ -176,7 +157,7 @@ fn limit_errors_report_step_state_and_return_domains() -> TestResult {
     )?;
 
     let step_error = Program::parse(ProgramSource::from_str("a=b"))?.run(
-        RuntimeInput::validate(b"a")?,
+        &RuntimeInput::validate(b"a")?,
         RunLimits::new(
             StepLimit::new(0),
             DEFAULT_MAX_STATE_LEN,
@@ -190,7 +171,7 @@ fn limit_errors_report_step_state_and_return_domains() -> TestResult {
     )?;
 
     let return_error = Program::parse(ProgramSource::from_str("a=(return)ok"))?.run(
-        RuntimeInput::validate(b"a")?,
+        &RuntimeInput::validate(b"a")?,
         RunLimits::new(
             StepLimit::new(1),
             DEFAULT_MAX_STATE_LEN,

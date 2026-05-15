@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
 
-use crate::allocation::{AllocationContext, try_push, try_reserve_total_exact};
+use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeStateByteCount};
-use crate::error::{InputError, LimitError, RunError, StateLimitContext};
+use crate::error::{LimitError, RunError, RuntimeInputError, StateLimitContext};
 use crate::program::RunLimits;
 
 /// Runtime input after ASCII validation and byte-domain classification.
@@ -20,9 +20,10 @@ impl RuntimeInput {
     ///
     /// # Errors
     ///
-    /// Returns `InputError` if any input byte is non-ASCII, if its one-based
-    /// column cannot be represented, or if owned storage cannot be allocated.
-    pub fn validate(input: &[u8]) -> Result<Self, InputError> {
+    /// Returns `RuntimeInputError` if any input byte is non-ASCII, if its
+    /// one-based column cannot be represented, or if owned storage cannot be
+    /// allocated.
+    pub fn validate(input: &[u8]) -> Result<Self, RuntimeInputError> {
         let mut bytes = Vec::new();
         try_reserve_total_exact(&mut bytes, input.len(), AllocationContext::RuntimeInput)?;
 
@@ -40,6 +41,24 @@ impl RuntimeInput {
     /// Runtime input bytes as a materializing iterator.
     pub fn bytes(&self) -> impl Iterator<Item = u8> + '_ {
         self.bytes.iter().copied().map(RuntimeByte::materialize)
+    }
+
+    /// Materializes this runtime input as raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the output buffer cannot be allocated.
+    pub fn to_vec(&self) -> Result<Vec<u8>, AllocationError> {
+        let mut output = Vec::new();
+        try_reserve_total_exact(
+            &mut output,
+            self.bytes.len(),
+            AllocationContext::RuntimeInput,
+        )?;
+        for byte in self.bytes() {
+            try_push(&mut output, byte, AllocationContext::RuntimeInput)?;
+        }
+        Ok(output)
     }
 
     /// Runtime input length in bytes.
@@ -66,10 +85,7 @@ pub(super) struct InitialStateBytes {
 }
 
 impl InitialStateBytes {
-    pub(super) fn materialize(
-        input: &RuntimeInput,
-        limits: RunLimits,
-    ) -> Result<Self, RunError> {
+    pub(super) fn materialize(input: &RuntimeInput, limits: RunLimits) -> Result<Self, RunError> {
         let byte_count = input.byte_count();
 
         if byte_count.get() > limits.state_byte_limit().get() {

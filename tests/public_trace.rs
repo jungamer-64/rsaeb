@@ -37,7 +37,7 @@ fn trace_snapshot_example(
         DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
     );
     let result =
-        program.run_with_trace_snapshots(RuntimeInput::validate(b"a")?, limits, |event| {
+        program.run_with_trace_snapshots(&RuntimeInput::validate(b"a")?, limits, |event| {
             events.push(event);
         })?;
 
@@ -65,7 +65,7 @@ fn borrowed_trace_events_are_emitted_without_snapshots() -> TestResult {
     );
 
     let result =
-        program.run_with_borrowed_trace(RuntimeInput::validate(b"a")?, limits, |event| {
+        program.run_with_borrowed_trace(&RuntimeInput::validate(b"a")?, limits, |event| {
             let bytes = match event {
                 BorrowedTraceEvent::Initial { state }
                 | BorrowedTraceEvent::Step {
@@ -166,7 +166,7 @@ fn borrowed_trace_to_snapshot_uses_only_snapshot_limit() -> TestResult {
     let mut materialization = None;
 
     program.run_with_borrowed_trace(
-        RuntimeInput::validate(b"a")?,
+        &RuntimeInput::validate(b"a")?,
         RunLimits::new(
             StepLimit::new(10),
             DEFAULT_MAX_STATE_LEN,
@@ -195,7 +195,7 @@ fn borrowed_trace_to_snapshot_uses_only_snapshot_limit() -> TestResult {
 fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult {
     let program = Program::parse(ProgramSource::from_str("a=b"))?;
     let runtime_error = program.run_with_trace_snapshots(
-        RuntimeInput::validate(b"a")?,
+        &RuntimeInput::validate(b"a")?,
         TraceSnapshotLimits::new(
             RunLimits::new(
                 StepLimit::new(0),
@@ -216,7 +216,7 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
     )?;
 
     let snapshot_error = program.run_with_trace_snapshots(
-        RuntimeInput::validate(b"a")?,
+        &RuntimeInput::validate(b"a")?,
         TraceSnapshotLimits::new(
             RunLimits::new(
                 StepLimit::new(10),
@@ -239,7 +239,7 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
     )?;
 
     let sink_error = program.try_run_with_trace_snapshots(
-        RuntimeInput::validate(b"a")?,
+        &RuntimeInput::validate(b"a")?,
         TraceSnapshotLimits::new(
             RunLimits::new(
                 StepLimit::new(10),
@@ -270,7 +270,7 @@ fn traced_final_event_matches_run_result() -> TestResult {
     );
 
     let result =
-        program.run_with_trace_snapshots(RuntimeInput::validate(b"a")?, limits, |event| {
+        program.run_with_trace_snapshots(&RuntimeInput::validate(b"a")?, limits, |event| {
             events.push(event);
         })?;
 

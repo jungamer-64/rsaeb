@@ -1,96 +1,99 @@
 use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
-use crate::error::RuntimeInvariantError;
-use crate::rule::{OnceRuleSlot, OnceRuleSlotCount, RuleSchedule};
+use crate::rule::{Rule, RuleRepeat};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RuleEligibility {
-    Eligible(MatchedRuleSchedule),
-    ConsumedOnce,
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct RuntimeRules<'program> {
+    entries: Vec<RuntimeRule<'program>>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct RuntimeRule<'program> {
+    rule: &'program Rule,
+    availability: RuleAvailability,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum MatchedRuleSchedule {
+enum RuleAvailability {
     Always,
-    Once(OnceRuleSlot),
+    Once(OnceRuleState),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OnceRuleState {
+pub(super) enum OnceRuleState {
     Fresh,
     Consumed,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct OnceRunStates {
-    states: Vec<OnceRuleState>,
+pub(super) enum MatchedRuleCommit<'runtime> {
+    Always,
+    Once(&'runtime mut OnceRuleState),
 }
 
-impl OnceRunStates {
-    pub(super) fn new(once_slot_count: OnceRuleSlotCount) -> Result<Self, AllocationError> {
-        let mut states = Vec::new();
-        let state_count = once_slot_count.get();
+impl<'program> RuntimeRules<'program> {
+    pub(super) fn new(rules: &'program [Rule]) -> Result<Self, AllocationError> {
+        let mut entries = Vec::new();
         try_reserve_total_exact(
-            &mut states,
-            state_count,
+            &mut entries,
+            rules.len(),
             AllocationContext::RuntimeOnceRuleState,
         )?;
 
-        for _ in 0..state_count {
+        for rule in rules {
             try_push(
-                &mut states,
-                OnceRuleState::Fresh,
+                &mut entries,
+                RuntimeRule {
+                    rule,
+                    availability: RuleAvailability::from_repeat(rule.repeat()),
+                },
                 AllocationContext::RuntimeOnceRuleState,
             )?;
         }
 
-        Ok(Self { states })
+        Ok(Self { entries })
     }
 
-    pub(super) fn eligibility(
-        &self,
-        schedule: RuleSchedule,
-    ) -> Result<RuleEligibility, RuntimeInvariantError> {
-        match schedule {
-            RuleSchedule::Always => Ok(RuleEligibility::Eligible(MatchedRuleSchedule::Always)),
-            RuleSchedule::Once(slot) => {
-                let once_state_count = self.states.len();
-                let state = self.states.get(slot.get()).copied().ok_or_else(|| {
-                    RuntimeInvariantError::missing_once_rule_state(slot.get(), once_state_count)
-                })?;
+    pub(super) fn iter_available_mut(
+        &mut self,
+    ) -> impl Iterator<Item = (&'program Rule, MatchedRuleCommit<'_>)> {
+        self.entries
+            .iter_mut()
+            .filter_map(RuntimeRule::available_rule)
+    }
+}
 
-                match state {
-                    OnceRuleState::Fresh => {
-                        Ok(RuleEligibility::Eligible(MatchedRuleSchedule::Once(slot)))
-                    }
-                    OnceRuleState::Consumed => Ok(RuleEligibility::ConsumedOnce),
-                }
-            }
+impl<'program> RuntimeRule<'program> {
+    fn available_rule(&mut self) -> Option<(&'program Rule, MatchedRuleCommit<'_>)> {
+        let commit = self.availability.commit_token()?;
+        Some((self.rule, commit))
+    }
+}
+
+impl RuleAvailability {
+    const fn from_repeat(repeat: RuleRepeat) -> Self {
+        match repeat {
+            RuleRepeat::Always => Self::Always,
+            RuleRepeat::Once => Self::Once(OnceRuleState::Fresh),
         }
     }
 
-    pub(super) fn consume(
-        &mut self,
-        schedule: MatchedRuleSchedule,
-    ) -> Result<(), RuntimeInvariantError> {
-        match schedule {
-            MatchedRuleSchedule::Always => Ok(()),
-            MatchedRuleSchedule::Once(slot) => {
-                let once_state_count = self.states.len();
-                let state = self.states.get_mut(slot.get()).ok_or_else(|| {
-                    RuntimeInvariantError::missing_once_rule_state(slot.get(), once_state_count)
-                })?;
+    fn commit_token(&mut self) -> Option<MatchedRuleCommit<'_>> {
+        match self {
+            Self::Always => Some(MatchedRuleCommit::Always),
+            Self::Once(state @ OnceRuleState::Fresh) => Some(MatchedRuleCommit::Once(state)),
+            Self::Once(OnceRuleState::Consumed) => None,
+        }
+    }
+}
 
-                match state {
-                    OnceRuleState::Fresh => {
-                        *state = OnceRuleState::Consumed;
-                        Ok(())
-                    }
-                    OnceRuleState::Consumed => {
-                        Err(RuntimeInvariantError::consumed_once_rule_slot(slot.get()))
-                    }
-                }
+impl MatchedRuleCommit<'_> {
+    pub(super) fn commit(self) {
+        match self {
+            Self::Always => {}
+            Self::Once(state) => {
+                *state = OnceRuleState::Consumed;
             }
         }
     }

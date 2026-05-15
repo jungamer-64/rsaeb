@@ -28,7 +28,7 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_str("a=b"))?;
 //! let input = RuntimeInput::validate(b"a")?;
-//! let result = program.run(input, RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN))?;
+//! let result = program.run(&input, RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN))?;
 //!
 //! assert!(matches!(
 //!     result.outcome(),
@@ -40,8 +40,8 @@
 //!
 //! Parse [`Program`] once when the same rules should be reused. Per-run
 //! `(once)` state is owned by each runtime invocation, not by the program.
-//! Parsed `(once)` rules carry private slots, so runtime code does not rebuild
-//! slot indexes from rule order while scanning:
+//! Each execution owns runtime rule state derived from the parsed rule list, so
+//! `(once)` state cannot drift away from rule order while scanning:
 //!
 //! ```
 //! use rsaeb::limits::StepLimit;
@@ -55,8 +55,8 @@
 //! let limits = RunLimits::new(StepLimit::new(10_000), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
 //! let input = RuntimeInput::validate(b"aa")?;
 //!
-//! let first = program.run(input, limits)?;
-//! let second = program.run(input, limits)?;
+//! let first = program.run(&input, limits)?;
+//! let second = program.run(&input, limits)?;
 //!
 //! assert!(matches!(
 //!     first.outcome(),
@@ -77,66 +77,48 @@
 //!
 //! ```
 //! use rsaeb::{
-//!     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ExecutionStep, Program, ProgramSource,
+//!     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ExecutionTransition, Program, ProgramSource,
 //!     RunLimits, RuntimeInput,
 //! };
 //! use rsaeb::limits::StepLimit;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_str("a=b\nb=c"))?;
-//! let mut execution = program.start_execution(
-//!     RuntimeInput::validate(b"a")?,
+//! let input = RuntimeInput::validate(b"a")?;
+//! let execution = program.start_execution(
+//!     &input,
 //!     RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
 //! )?;
 //!
-//! let first = execution.step()?;
-//! assert!(matches!(
-//!     first,
-//!     ExecutionStep::Applied { state, .. }
-//!         if state.bytes().eq(b"b".iter().copied())
-//! ));
-//!
-//! let second = execution.step()?;
-//! assert!(matches!(
-//!     second,
-//!     ExecutionStep::Applied { state, .. }
-//!         if state.bytes().eq(b"c".iter().copied())
-//! ));
-//!
-//! let completed = execution.step()?;
-//! assert!(matches!(
-//!     completed,
-//!     ExecutionStep::Stable { steps, state }
-//!         if steps.get() == 2 && state.bytes().eq(b"c".iter().copied())
-//! ));
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! Use [`Program::into_execution`] when a host needs one owned execution object
-//! that stores both the parsed program and the mutable runtime state:
-//!
-//! ```
-//! use rsaeb::{
-//!     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ExecutionStep, Program, ProgramSource,
-//!     RunLimits, RuntimeInputBytes,
+//! let execution = match execution.step().map_err(|step| step.into_error())? {
+//!     ExecutionTransition::Applied(applied) => {
+//!         assert!(applied.state().bytes().eq(b"b".iter().copied()));
+//!         applied.into_running()
+//!     }
+//!     ExecutionTransition::Stable(_) | ExecutionTransition::Returned(_) => {
+//!         return Err("expected first applied step".into());
+//!     }
 //! };
-//! use rsaeb::limits::StepLimit;
 //!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let input = RuntimeInputBytes::from_slice(b"a")?;
-//! let mut execution = Program::parse(ProgramSource::from_str("a=b"))?.into_execution(
-//!     input.as_input(),
-//!     RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
-//! )?;
-//! drop(input);
+//! let execution = match execution.step().map_err(|step| step.into_error())? {
+//!     ExecutionTransition::Applied(applied) => {
+//!         assert!(applied.state().bytes().eq(b"c".iter().copied()));
+//!         applied.into_running()
+//!     }
+//!     ExecutionTransition::Stable(_) | ExecutionTransition::Returned(_) => {
+//!         return Err("expected second applied step".into());
+//!     }
+//! };
 //!
-//! assert!(execution.state().bytes().eq(b"a".iter().copied()));
-//! assert!(matches!(
-//!     execution.step()?,
-//!     ExecutionStep::Applied { state, .. }
-//!         if state.bytes().eq(b"b".iter().copied())
-//! ));
+//! match execution.step().map_err(|step| step.into_error())? {
+//!     ExecutionTransition::Stable(stable) => {
+//!         assert_eq!(stable.steps().get(), 2);
+//!         assert!(stable.state().bytes().eq(b"c".iter().copied()));
+//!     }
+//!     ExecutionTransition::Applied(_) | ExecutionTransition::Returned(_) => {
+//!         return Err("expected stable completion".into());
+//!     }
+//! }
 //! # Ok(())
 //! # }
 //! ```
@@ -158,7 +140,7 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let result = Program::parse(ProgramSource::from_str("a=b"))?.run(
-//!     RuntimeInput::validate(b"a")?,
+//!     &RuntimeInput::validate(b"a")?,
 //!     RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
 //! );
 //!
@@ -212,7 +194,7 @@
 //! let mut byte_counts = Vec::new();
 //!
 //! program.run_with_borrowed_trace(
-//!     RuntimeInput::validate(b"a")?,
+//!     &RuntimeInput::validate(b"a")?,
 //!     RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
 //!     |event| {
 //!         byte_counts.push(event.byte_count().get());
@@ -229,11 +211,10 @@
 //!
 //! # Error model
 //!
-//! Source parsing, runtime input validation, owned runtime input construction,
-//! runtime execution, trace snapshot materialization, and user trace-sink
-//! failures are reported with structured error types such as
-//! [`error::ParseError`], [`error::InputError`],
-//! [`error::RuntimeInputBytesError`], [`error::RunError`], [`error::RuntimeInvariantError`],
+//! Source parsing, runtime input validation, runtime execution, trace snapshot
+//! materialization, and user trace-sink failures are reported with structured
+//! error types such as [`error::ParseError`], [`error::RuntimeInputError`],
+//! [`error::RunError`],
 //! [`error::TraceSnapshotError`], [`error::TraceSnapshotRunError`],
 //! [`error::FallibleTraceSnapshotRunError`], and [`error::TracedRunError`].
 //! [`error::AebError`] is available as a parse/input/run umbrella for callers
@@ -283,5 +264,8 @@ pub use program::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, Program, ReturnOutput,
     RunLimits, RunOutcome, RunResult, RuntimeStateSnapshot,
 };
-pub use runtime::{RunningExecution, RuntimeInput};
+pub use runtime::{
+    AppliedExecution, ExecutionStepError, ExecutionTransition, ReturnedExecution, RunningExecution,
+    RuntimeInput, StableExecution,
+};
 pub use source::ProgramSource;

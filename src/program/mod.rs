@@ -5,7 +5,7 @@ mod tracing;
 
 use crate::error::{ParseError, RunError};
 use crate::parser::parse_program_impl;
-use crate::rule::{OnceRuleSlotCount, Rule, RuleCount, RuleView};
+use crate::rule::{Rule, RuleCount, RuleView};
 use crate::runtime::{RunningExecution, RuntimeInput};
 use crate::source::ProgramSource;
 
@@ -65,25 +65,20 @@ impl Program {
         self.rule_set.as_slice()
     }
 
-    pub(crate) const fn once_slot_count(&self) -> OnceRuleSlotCount {
-        self.rule_set.once_slot_count()
-    }
-
     /// Starts a stateful execution session for this program.
     ///
     /// The input must already be validated as [`RuntimeInput`]. This function
     /// materializes it into the mutable runtime-state byte domain under
     /// `limits`.
     ///
-    /// The returned [`Execution`] can be advanced one matching rule at a time.
-    /// Use [`Program::run`] when the caller wants to run to completion in one
-    /// call.
+    /// The returned [`RunningExecution`] can be advanced one matching rule at a
+    /// time. Use [`Program::run`] when the caller wants to run to completion in
+    /// one call.
     ///
     /// # Errors
     ///
     /// Returns `RunError` when the validated input exceeds this run's state
-    /// limit, when allocating per-run `(once)` state fails, or when an internal
-    /// runtime invariant is violated.
+    /// limit or when allocating per-run execution state fails.
     pub fn start_execution(
         &self,
         input: &RuntimeInput,
@@ -97,9 +92,8 @@ impl Program {
     /// # Errors
     ///
     /// Returns `RunError` when the input exceeds this run's state limit,
-    /// allocation fails, state-size arithmetic overflows, a configured
-    /// `RunLimits` budget would be exceeded, or an internal runtime invariant
-    /// is violated.
+    /// allocation fails, state-size arithmetic overflows, or a configured
+    /// `RunLimits` budget would be exceeded.
     pub fn run(&self, input: &RuntimeInput, limits: RunLimits) -> Result<RunResult, RunError> {
         RunningExecution::new(self, input, limits)?.finish()
     }

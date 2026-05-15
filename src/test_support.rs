@@ -4,7 +4,7 @@ use std::string::{FromUtf8Error, String};
 
 use crate::Program;
 use crate::error::{
-    AebError, AllocationError, InputError, ParseError, ParseErrorLocation, RunError,
+    AebError, AllocationError, ParseError, ParseErrorLocation, RunError, RuntimeInputError,
     TraceSnapshotRunError,
 };
 use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
@@ -12,7 +12,7 @@ use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
 pub(crate) enum TestFailure {
     Message(String),
     Parse(ParseError),
-    Input(InputError),
+    Input(RuntimeInputError),
     Run(RunError),
     TraceSnapshot(TraceSnapshotRunError),
     Aeb(AebError),
@@ -79,8 +79,8 @@ impl From<AllocationError> for TestFailure {
     }
 }
 
-impl From<InputError> for TestFailure {
-    fn from(value: InputError) -> Self {
+impl From<RuntimeInputError> for TestFailure {
+    fn from(value: RuntimeInputError) -> Self {
         Self::Input(value)
     }
 }
@@ -120,13 +120,6 @@ pub(crate) use ensure_eq;
 pub(crate) fn expect_parse_error(source: &str) -> Result<ParseError, TestFailure> {
     match Program::parse(crate::ProgramSource::from_str(source)) {
         Ok(_) => Err(TestFailure::message("expected parse error")),
-        Err(error) => Ok(error),
-    }
-}
-
-pub(crate) fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFailure> {
-    match result {
-        Ok(_) => Err(TestFailure::message("expected runtime error")),
         Err(error) => Ok(error),
     }
 }

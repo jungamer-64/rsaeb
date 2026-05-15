@@ -1,48 +1,86 @@
+use super::action::{AppliedRule, StepApplication, apply_matched_rule};
 use super::budget::StepBudget;
 use super::input::{InitialStateBytes, RuntimeInput};
 use super::matcher::{RuleSearch, find_next_match};
-use super::once::OnceRunStates;
-use super::rewrite::RewriteScratch;
+use super::once::RuntimeRules;
 use super::state::State;
 use crate::error::RunError;
-use crate::program::{Program, RunLimits, StepCount};
+use crate::program::{Program, RunLimits, RunResult, StepCount};
+use crate::rule::{PayloadView, RuleView};
 use crate::trace::RuntimeStateView;
 
-/// Stateful execution of one parsed program against one runtime input.
+/// Stateful execution that can still apply rules.
 ///
-/// An execution owns the mutable runtime state, rewrite scratch buffer,
-/// completed-step budget, and per-run `(once)` state for one invocation.
-#[derive(Debug)]
+/// This type represents the only state with a `step` method. Stable and
+/// returned executions are represented by separate terminal types, so callers
+/// cannot step after completion.
+#[derive(Debug, PartialEq, Eq)]
 pub struct RunningExecution<'program> {
-    pub(super) program: &'program Program,
-    pub(super) core: ExecutionCore,
+    pub(super) core: ExecutionCore<'program>,
 }
 
-#[derive(Debug)]
-pub(crate) struct ExecutionCore {
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ExecutionCore<'program> {
     pub(super) state: State,
-    pub(super) scratch: RewriteScratch,
     pub(super) step_budget: StepBudget,
-    pub(super) once_states: OnceRunStates,
+    pub(super) runtime_rules: RuntimeRules<'program>,
     pub(super) limits: RunLimits,
 }
 
-impl ExecutionCore {
+/// Result of advancing a running execution once.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ExecutionTransition<'program> {
+    /// One ordinary rewrite rule was applied and execution can continue.
+    Applied(AppliedExecution<'program>),
+    /// No rule matched the final runtime state.
+    Stable(StableExecution<'program>),
+    /// A matched rule executed `(return)`.
+    Returned(ReturnedExecution<'program>),
+}
+
+/// One committed non-terminal rule application.
+#[derive(Debug, PartialEq, Eq)]
+pub struct AppliedExecution<'program> {
+    step: StepCount,
+    rule: RuleView<'program>,
+    execution: RunningExecution<'program>,
+}
+
+/// Terminal execution state reached by no matching rule.
+#[derive(Debug, PartialEq, Eq)]
+pub struct StableExecution<'program> {
+    steps: StepCount,
+    core: ExecutionCore<'program>,
+}
+
+/// Terminal execution state reached by `(return)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReturnedExecution<'program> {
+    step: StepCount,
+    rule: RuleView<'program>,
+    output: PayloadView<'program>,
+}
+
+/// Runtime failure that preserves the uncommitted running execution.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ExecutionStepError<'program> {
+    error: RunError,
+    execution: RunningExecution<'program>,
+}
+
+impl<'program> ExecutionCore<'program> {
     pub(crate) fn new(
-        program: &Program,
+        program: &'program Program,
         input: &RuntimeInput,
         limits: RunLimits,
     ) -> Result<Self, RunError> {
         let input = InitialStateBytes::materialize(input, limits)?;
         let state = State::from_input(input);
-        let once_states = OnceRunStates::new(program.once_slot_count())?;
-        let scratch = RewriteScratch::new();
-
+        let runtime_rules = RuntimeRules::new(program.rule_slice())?;
         Ok(Self {
             state,
-            scratch,
             step_budget: StepBudget::new(limits.step_limit()),
-            once_states,
+            runtime_rules,
             limits,
         })
     }
@@ -55,11 +93,8 @@ impl ExecutionCore {
         self.state.view()
     }
 
-    pub(super) fn find_next_match<'program>(
-        &self,
-        program: &'program Program,
-    ) -> Result<RuleSearch<'program>, RunError> {
-        find_next_match(program.rule_slice(), &self.state, &self.once_states)
+    pub(super) fn into_stable_result(self, steps: StepCount) -> Result<RunResult, RunError> {
+        Ok(RunResult::stable(self.state.into_snapshot()?, steps))
     }
 }
 
@@ -70,7 +105,6 @@ impl<'program> RunningExecution<'program> {
         limits: RunLimits,
     ) -> Result<Self, RunError> {
         Ok(Self {
-            program,
             core: ExecutionCore::new(program, input, limits)?,
         })
     }
@@ -87,8 +121,209 @@ impl<'program> RunningExecution<'program> {
         self.core.state()
     }
 
+    /// Advances this execution by exactly one matching rule when possible.
+    ///
+    /// Consuming `self` makes terminal states explicit. Call
+    /// [`AppliedExecution::into_running`] to continue after an applied rule.
+    pub fn step(mut self) -> Result<ExecutionTransition<'program>, ExecutionStepError<'program>> {
+        let applied = {
+            let ExecutionCore {
+                state,
+                step_budget,
+                runtime_rules,
+                limits,
+            } = &mut self.core;
+
+            let matched = match find_next_match(runtime_rules, state) {
+                RuleSearch::Matched(matched) => matched,
+                RuleSearch::Stable => {
+                    let steps = step_budget.completed_steps();
+                    return Ok(ExecutionTransition::Stable(StableExecution {
+                        steps,
+                        core: self.core,
+                    }));
+                }
+            };
+
+            apply_matched_rule(state, step_budget, *limits, matched)
+        };
+
+        let applied = match applied {
+            Ok(applied) => applied,
+            Err(error) => return Err(ExecutionStepError::new(error, self)),
+        };
+
+        Ok(applied.into_transition(self))
+    }
+
+    /// Runs this execution to completion.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` when applying a later matching rule would exceed the
+    /// configured limits, allocation fails, or state-size arithmetic overflows.
+    pub fn finish(mut self) -> Result<RunResult, RunError> {
+        loop {
+            match self.step() {
+                Ok(ExecutionTransition::Applied(applied)) => {
+                    self = applied.into_running();
+                }
+                Ok(ExecutionTransition::Stable(stable)) => {
+                    return stable.into_result();
+                }
+                Ok(ExecutionTransition::Returned(returned)) => {
+                    return returned.into_result();
+                }
+                Err(error) => return Err(error.into_error()),
+            }
+        }
+    }
+
     #[cfg(test)]
-    pub(super) fn find_next_match(&self) -> Result<RuleSearch<'program>, RunError> {
-        self.core.find_next_match(self.program)
+    pub(super) fn find_next_match(&mut self) -> RuleSearch<'program, '_> {
+        find_next_match(&mut self.core.runtime_rules, &self.core.state)
+    }
+}
+
+impl<'program> AppliedRule<'program> {
+    fn into_transition(
+        self,
+        execution: RunningExecution<'program>,
+    ) -> ExecutionTransition<'program> {
+        match self.effect {
+            StepApplication::Continue => ExecutionTransition::Applied(AppliedExecution {
+                step: self.step,
+                rule: self.rule.view(),
+                execution,
+            }),
+            StepApplication::Return(output) => ExecutionTransition::Returned(ReturnedExecution {
+                step: self.step,
+                rule: self.rule.view(),
+                output,
+            }),
+        }
+    }
+}
+
+impl<'program> AppliedExecution<'program> {
+    /// One-based applied step count.
+    #[must_use]
+    pub const fn step(&self) -> StepCount {
+        self.step
+    }
+
+    /// Structured view of the applied rule.
+    #[must_use]
+    pub const fn rule(&self) -> RuleView<'program> {
+        self.rule
+    }
+
+    /// Runtime state after the applied rewrite step.
+    #[must_use]
+    pub fn state(&self) -> RuntimeStateView<'_> {
+        self.execution.state()
+    }
+
+    /// Continue running after observing this applied step.
+    #[must_use]
+    pub fn into_running(self) -> RunningExecution<'program> {
+        self.execution
+    }
+}
+
+impl StableExecution<'_> {
+    /// Number of rewrite steps applied before reaching the stable state.
+    #[must_use]
+    pub const fn steps(&self) -> StepCount {
+        self.steps
+    }
+
+    /// Borrowed final runtime state.
+    #[must_use]
+    pub fn state(&self) -> RuntimeStateView<'_> {
+        self.core.state()
+    }
+
+    /// Materializes this stable execution as a run result.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if final state materialization cannot allocate.
+    pub fn into_result(self) -> Result<RunResult, RunError> {
+        self.core.into_stable_result(self.steps)
+    }
+}
+
+impl<'program> ReturnedExecution<'program> {
+    /// One-based applied step count for the return rule.
+    #[must_use]
+    pub const fn step(&self) -> StepCount {
+        self.step
+    }
+
+    /// Structured view of the return rule.
+    #[must_use]
+    pub const fn rule(&self) -> RuleView<'program> {
+        self.rule
+    }
+
+    /// Borrowed return payload from the parsed program.
+    #[must_use]
+    pub const fn output(&self) -> PayloadView<'program> {
+        self.output
+    }
+
+    /// Materializes this returned execution as a run result.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if return output materialization cannot allocate.
+    pub fn into_result(self) -> Result<RunResult, RunError> {
+        Ok(RunResult::from_return(
+            ExecutionCore::materialize_return_output(self.output)?,
+            self.step,
+        ))
+    }
+}
+
+impl<'program> ExecutionStepError<'program> {
+    fn new(error: RunError, execution: RunningExecution<'program>) -> Self {
+        Self { error, execution }
+    }
+
+    /// Runtime error that prevented the step from committing.
+    #[must_use]
+    pub const fn error(&self) -> &RunError {
+        &self.error
+    }
+
+    /// Borrow the uncommitted execution.
+    #[must_use]
+    pub const fn execution(&self) -> &RunningExecution<'program> {
+        &self.execution
+    }
+
+    /// Recover the uncommitted execution.
+    #[must_use]
+    pub fn into_execution(self) -> RunningExecution<'program> {
+        self.execution
+    }
+
+    /// Discard the uncommitted execution and return the runtime error.
+    #[must_use]
+    pub fn into_error(self) -> RunError {
+        self.error
+    }
+}
+
+impl core::fmt::Display for ExecutionStepError<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.error.fmt(formatter)
+    }
+}
+
+impl core::error::Error for ExecutionStepError<'_> {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        Some(&self.error)
     }
 }

@@ -1,44 +1,37 @@
-use super::once::{MatchedRuleSchedule, OnceRunStates, RuleEligibility};
+use super::once::{MatchedRuleCommit, RuntimeRules};
 use super::state::{MatchedStateSpan, State};
-use crate::error::RunError;
 use crate::rule::{Rule, RuleAnchor};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RuleSearch<'program> {
-    Matched(MatchedRule<'program>),
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum RuleSearch<'program, 'runtime> {
+    Matched(MatchedRule<'program, 'runtime>),
     Stable,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct MatchedRule<'program> {
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct MatchedRule<'program, 'runtime> {
     pub(super) rule: &'program Rule,
-    pub(super) schedule: MatchedRuleSchedule,
+    pub(super) commit: MatchedRuleCommit<'runtime>,
     pub(super) state_match: MatchedStateSpan,
 }
 
-pub(super) fn find_next_match<'program>(
-    rules: &'program [Rule],
+pub(super) fn find_next_match<'program, 'runtime>(
+    rules: &'runtime mut RuntimeRules<'program>,
     state: &State,
-    once_states: &OnceRunStates,
-) -> Result<RuleSearch<'program>, RunError> {
-    for rule in rules {
-        let schedule = match once_states.eligibility(rule.schedule())? {
-            RuleEligibility::Eligible(schedule) => schedule,
-            RuleEligibility::ConsumedOnce => continue,
-        };
-
+) -> RuleSearch<'program, 'runtime> {
+    for (rule, commit) in rules.iter_available_mut() {
         let Some(state_match) = find_match(state, rule) else {
             continue;
         };
 
-        return Ok(RuleSearch::Matched(MatchedRule {
+        return RuleSearch::Matched(MatchedRule {
             rule,
-            schedule,
+            commit,
             state_match,
-        }));
+        });
     }
 
-    Ok(RuleSearch::Stable)
+    RuleSearch::Stable
 }
 
 fn find_match(state: &State, rule: &Rule) -> Option<MatchedStateSpan> {

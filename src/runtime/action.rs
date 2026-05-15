@@ -1,14 +1,14 @@
 use crate::allocation::AllocationContext;
 use crate::bytes::ReturnOutputByteCount;
 use crate::error::{LimitError, RunError};
-use crate::program::{ReturnOutput, StepCount};
+use crate::program::{ReturnOutput, RunLimits, StepCount};
 use crate::rule::{Action, PayloadView, Rule};
 
+use super::budget::StepBudget;
 use super::execution::ExecutionCore;
 use super::matcher::MatchedRule;
-use super::rewrite::{RewritePlacement, RewriteRequest};
-use super::state::MatchedStateSpan;
-use super::terminal::ExecutionTerminal;
+use super::rewrite::{RewritePlacement, RewriteRequest, RewriteScratch};
+use super::state::{MatchedStateSpan, State};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StepApplication<'program> {
@@ -23,96 +23,93 @@ pub(super) struct AppliedRule<'program> {
     pub(super) effect: StepApplication<'program>,
 }
 
-impl ExecutionCore {
-    pub(super) fn apply_matched_rule<'program>(
-        &mut self,
-        matched: MatchedRule<'program>,
-    ) -> Result<AppliedRule<'program>, RunError> {
-        let permit = self
-            .step_budget
-            .reserve_next_step(self.state.byte_count())
-            .map_err(RunError::from)?;
-
-        let effect = self.apply_action_to_scratch(matched.state_match, matched.rule.action())?;
-        self.once_states
-            .consume(matched.schedule)
-            .map_err(RunError::from)?;
-
-        let step = self.step_budget.commit(permit);
-
-        match effect {
-            StepApplication::Continue => {
-                self.state.swap_with_scratch(&mut self.scratch);
-                Ok(AppliedRule {
-                    step,
-                    rule: matched.rule,
-                    effect: StepApplication::Continue,
-                })
-            }
-            StepApplication::Return(output) => {
-                self.terminal = ExecutionTerminal::Return {
-                    step,
-                    rule_position: matched.rule.position(),
-                };
-                Ok(AppliedRule {
-                    step,
-                    rule: matched.rule,
-                    effect: StepApplication::Return(output),
-                })
-            }
-        }
-    }
-
-    pub(super) fn materialize_return_output<'program>(
-        output: PayloadView<'program>,
+impl ExecutionCore<'_> {
+    pub(super) fn materialize_return_output(
+        output: PayloadView<'_>,
     ) -> Result<ReturnOutput, RunError> {
         Ok(ReturnOutput::from_vec(
             output.to_vec_with_context(AllocationContext::ReturnOutput)?,
         ))
     }
+}
 
-    fn apply_action_to_scratch<'program>(
-        &mut self,
-        state_match: MatchedStateSpan,
-        action: &'program Action,
-    ) -> Result<StepApplication<'program>, RunError> {
-        match action {
-            Action::Replace(rhs) => {
-                self.state.rewrite_into(
-                    RewriteRequest::new(state_match, rhs, RewritePlacement::Replace),
-                    &mut self.scratch,
-                    self.limits,
-                )?;
-                Ok(StepApplication::Continue)
-            }
-            Action::MoveStart(rhs) => {
-                self.state.rewrite_into(
-                    RewriteRequest::new(state_match, rhs, RewritePlacement::MoveStart),
-                    &mut self.scratch,
-                    self.limits,
-                )?;
-                Ok(StepApplication::Continue)
-            }
-            Action::MoveEnd(rhs) => {
-                self.state.rewrite_into(
-                    RewriteRequest::new(state_match, rhs, RewritePlacement::MoveEnd),
-                    &mut self.scratch,
-                    self.limits,
-                )?;
-                Ok(StepApplication::Continue)
-            }
-            Action::Return(output) => {
-                let output_len = ReturnOutputByteCount::new(output.len());
-                if output_len.get() > self.limits.return_byte_limit().get() {
-                    return Err(LimitError::return_output(
-                        self.limits.return_byte_limit(),
-                        output_len,
-                    )
-                    .into());
-                }
+pub(super) fn apply_matched_rule<'program>(
+    state: &mut State,
+    step_budget: &mut StepBudget,
+    limits: RunLimits,
+    matched: MatchedRule<'program, '_>,
+) -> Result<AppliedRule<'program>, RunError> {
+    let permit = step_budget.reserve_next_step(state.byte_count())?;
+    let mut scratch = RewriteScratch::new();
+    let effect = apply_action_to_scratch(
+        state,
+        &mut scratch,
+        limits,
+        matched.state_match,
+        matched.rule.action(),
+    )?;
+    matched.commit.commit();
 
-                Ok(StepApplication::Return(PayloadView::new(output)))
+    let step = step_budget.commit(permit);
+
+    match effect {
+        StepApplication::Continue => {
+            state.swap_with_scratch(&mut scratch);
+            Ok(AppliedRule {
+                step,
+                rule: matched.rule,
+                effect: StepApplication::Continue,
+            })
+        }
+        StepApplication::Return(output) => Ok(AppliedRule {
+            step,
+            rule: matched.rule,
+            effect: StepApplication::Return(output),
+        }),
+    }
+}
+
+fn apply_action_to_scratch<'program>(
+    state: &State,
+    scratch: &mut RewriteScratch,
+    limits: RunLimits,
+    state_match: MatchedStateSpan,
+    action: &'program Action,
+) -> Result<StepApplication<'program>, RunError> {
+    match action {
+        Action::Replace(rhs) => {
+            state.rewrite_into(
+                RewriteRequest::new(state_match, rhs, RewritePlacement::Replace),
+                scratch,
+                limits,
+            )?;
+            Ok(StepApplication::Continue)
+        }
+        Action::MoveStart(rhs) => {
+            state.rewrite_into(
+                RewriteRequest::new(state_match, rhs, RewritePlacement::MoveStart),
+                scratch,
+                limits,
+            )?;
+            Ok(StepApplication::Continue)
+        }
+        Action::MoveEnd(rhs) => {
+            state.rewrite_into(
+                RewriteRequest::new(state_match, rhs, RewritePlacement::MoveEnd),
+                scratch,
+                limits,
+            )?;
+            Ok(StepApplication::Continue)
+        }
+        Action::Return(output) => {
+            let output_len = ReturnOutputByteCount::new(output.len());
+            if output_len.get() > limits.return_byte_limit().get() {
+                return Err(
+                    LimitError::return_output(limits.return_byte_limit(), output_len).into(),
+                );
             }
+
+            Ok(StepApplication::Return(PayloadView::new(output)))
         }
     }
 }
