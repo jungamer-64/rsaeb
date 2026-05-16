@@ -69,6 +69,10 @@ rule instead of running to completion in one call. The public typestate API
 lives under `rsaeb::execution`: only `RunningExecution` can step, while
 `AppliedExecution`, `StableExecution`, and `ReturnedExecution` represent
 post-step states. `(return)` is terminal, not an ordinary continuation step.
+Running, applied, and stable executions expose borrowed `RuntimeStateView`
+values for observation. A failed step returns `ExecutionStepError`, preserving
+the uncommitted `RunningExecution` so a host can inspect it, replace limits with
+`RunningExecution::with_limits`, or discard it explicitly.
 
 The docs.rs crate page contains a complete doctested stepwise example.
 
@@ -387,8 +391,11 @@ bytes from input become opaque ASCII bytes. Ordinary rules match only editable
 bytes. Opaque input bytes are preserved by surrounding rewrites but cannot be
 directly matched, created, or deleted by program payloads.
 
-Runtime state is materialized only at output boundaries. Stable states use
-`RuntimeStateSnapshot`; `(return)` payloads use `ReturnOutput`. During
+Runtime state stays in the typed byte domain during execution. Public
+observation crosses an explicit materialization boundary: `RuntimeStateView`
+iterates or copies state bytes on demand, stable run results use
+`RuntimeStateSnapshot`, `(return)` outputs use `ReturnOutput`, and snapshot
+tracing materializes owned event bytes under `TraceSnapshotLimits`. During
 execution, the active state and the rewrite scratch buffer are distinct typed
 buffers, and the runtime swaps them only after a successful continuation step.
 `(once)` rules carry private slots assigned during parsing; only a committed
@@ -398,8 +405,8 @@ application can consume that slot.
 
 The library crate is `#![no_std]` and uses `alloc` only at owned-buffer
 boundaries such as parsed rules, runtime input state, per-run `(once)` state,
-run results, canonical rule source, and trace snapshots. It requires an
-allocator, but not `std`.
+run results, canonical rule source, explicit view materialization, and trace
+snapshots. It requires an allocator, but not `std`.
 
 Allocation is explicit and fallible. Parser/runtime paths reserve explicitly
 and report `AllocationError` instead of relying on accidental `Vec` growth.
@@ -480,6 +487,8 @@ cargo check --lib --all-features --target thumbv7em-none-eabihf
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 cargo test --doc --all-features
+latest_rlib="$(find target/debug/deps -maxdepth 1 -name 'librsaeb-*.rlib' -printf '%T@ %p\n' | sort -nr | awk 'NR == 1 { print $2 }')"
+rustdoc --edition=2024 --test README.md -L dependency=target/debug/deps --extern "rsaeb=${latest_rlib}"
 RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
 cargo package --list
 cargo package
