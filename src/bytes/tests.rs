@@ -103,7 +103,10 @@ fn payload_exposes_validated_bytes_without_leaking_the_internal_domain_type() ->
         .map_err(TestFailure::from)?;
 
     ensure(payload.eq_bytes(b"ab"), "expected payload bytes")?;
-    ensure_eq!(payload.first_byte().map(ProgramByte::get), Some(b'a'))?;
+    ensure_eq!(
+        payload.first_byte().map(program::ProgramByte::get),
+        Some(b'a')
+    )?;
     Ok(())
 }
 

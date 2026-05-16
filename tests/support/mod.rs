@@ -1,30 +1,26 @@
-#![cfg(test)]
-
 use std::string::{FromUtf8Error, String};
 
-use crate::Program;
-use crate::RuntimeInput;
-use crate::error::{
-    AebError, AllocationError, ParseError, ParseErrorLocation, RunError, RuntimeInputError,
-    TraceSnapshotRunError,
+use rsaeb::error::{
+    AebError, AllocationError, FallibleTraceSnapshotRunError, ParseError, RunError,
+    RuntimeInputError, TraceSnapshotRunError,
 };
-use crate::limits::DEFAULT_MAX_INPUT_LEN;
-use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
-use crate::{ProgramSource, limits::DEFAULT_PARSE_LIMITS};
+use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS};
+use rsaeb::{Program, ProgramSource, RuntimeInput};
 
-pub(crate) enum TestFailure {
+pub enum TestFailure {
     Message(String),
     Parse(ParseError),
     Input(RuntimeInputError),
     Run(RunError),
     TraceSnapshot(TraceSnapshotRunError),
+    FallibleTraceSnapshot(FallibleTraceSnapshotRunError<&'static str>),
     Aeb(AebError),
     Utf8(FromUtf8Error),
     Allocation(AllocationError),
 }
 
 impl TestFailure {
-    pub(crate) fn message(message: impl Into<String>) -> Self {
+    pub fn message(message: impl Into<String>) -> Self {
         Self::Message(message.into())
     }
 }
@@ -39,6 +35,10 @@ impl core::fmt::Debug for TestFailure {
             Self::TraceSnapshot(error) => {
                 formatter.debug_tuple("TraceSnapshot").field(error).finish()
             }
+            Self::FallibleTraceSnapshot(error) => formatter
+                .debug_tuple("FallibleTraceSnapshot")
+                .field(error)
+                .finish(),
             Self::Aeb(error) => formatter.debug_tuple("Aeb").field(error).finish(),
             Self::Utf8(error) => formatter.debug_tuple("Utf8").field(error).finish(),
             Self::Allocation(error) => formatter.debug_tuple("Allocation").field(error).finish(),
@@ -52,6 +52,12 @@ impl From<ParseError> for TestFailure {
     }
 }
 
+impl From<RuntimeInputError> for TestFailure {
+    fn from(value: RuntimeInputError) -> Self {
+        Self::Input(value)
+    }
+}
+
 impl From<RunError> for TestFailure {
     fn from(value: RunError) -> Self {
         Self::Run(value)
@@ -61,6 +67,12 @@ impl From<RunError> for TestFailure {
 impl From<TraceSnapshotRunError> for TestFailure {
     fn from(value: TraceSnapshotRunError) -> Self {
         Self::TraceSnapshot(value)
+    }
+}
+
+impl From<FallibleTraceSnapshotRunError<&'static str>> for TestFailure {
+    fn from(value: FallibleTraceSnapshotRunError<&'static str>) -> Self {
+        Self::FallibleTraceSnapshot(value)
     }
 }
 
@@ -82,13 +94,7 @@ impl From<AllocationError> for TestFailure {
     }
 }
 
-impl From<RuntimeInputError> for TestFailure {
-    fn from(value: RuntimeInputError) -> Self {
-        Self::Input(value)
-    }
-}
-
-pub(crate) type TestResult = Result<(), TestFailure>;
+pub type TestResult = Result<(), TestFailure>;
 
 /// Validates runtime input with the default input byte limit.
 ///
@@ -96,7 +102,7 @@ pub(crate) type TestResult = Result<(), TestFailure>;
 ///
 /// Returns `RuntimeInputError` if the test input violates runtime input
 /// validation or allocation constraints.
-pub(crate) fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
+pub fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
     RuntimeInput::validate(bytes, DEFAULT_MAX_INPUT_LEN)
 }
 
@@ -106,18 +112,8 @@ pub(crate) fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputEr
 ///
 /// Returns `ParseError` if the source violates parser syntax, resource, or
 /// allocation constraints.
-pub(crate) fn parse_program(source: &str) -> Result<Program, ParseError> {
+pub fn parse_program(source: &str) -> Result<Program, ParseError> {
     Program::parse(ProgramSource::from_text(source), DEFAULT_PARSE_LIMITS)
-}
-
-/// Parses source bytes with the default parser limits.
-///
-/// # Errors
-///
-/// Returns `ParseError` if the source violates parser syntax, resource, or
-/// allocation constraints.
-pub(crate) fn parse_program_bytes(source: &[u8]) -> Result<Program, ParseError> {
-    Program::parse(ProgramSource::from_bytes(source), DEFAULT_PARSE_LIMITS)
 }
 
 /// Converts a boolean assertion into the shared test result type.
@@ -125,7 +121,7 @@ pub(crate) fn parse_program_bytes(source: &[u8]) -> Result<Program, ParseError> 
 /// # Errors
 ///
 /// Returns `TestFailure` with `message` when `condition` is false.
-pub(crate) fn ensure(condition: bool, message: impl Into<String>) -> TestResult {
+pub fn ensure(condition: bool, message: impl Into<String>) -> TestResult {
     if condition {
         Ok(())
     } else {
@@ -138,7 +134,7 @@ pub(crate) fn ensure(condition: bool, message: impl Into<String>) -> TestResult 
 /// # Errors
 ///
 /// Returns `TestFailure` with `message` when `condition` is false.
-pub(crate) fn ensure_matches(condition: bool, message: &'static str) -> TestResult {
+pub fn ensure_matches(condition: bool, message: &'static str) -> TestResult {
     ensure(condition, message)
 }
 
@@ -149,7 +145,7 @@ macro_rules! ensure_eq {
                 if *actual == *expected {
                     Ok(())
                 } else {
-                    Err($crate::test_support::TestFailure::message(::std::format!(
+                    Err($crate::support::TestFailure::message(::std::format!(
                         "values differed\nactual:   {actual:?}\nexpected: {expected:?}",
                     )))
                 }
@@ -159,56 +155,3 @@ macro_rules! ensure_eq {
 }
 
 pub(crate) use ensure_eq;
-
-/// Parses source and returns the expected parse error.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if parsing succeeds.
-pub(crate) fn expect_parse_error(source: &str) -> Result<ParseError, TestFailure> {
-    match parse_program(source) {
-        Ok(_) => Err(TestFailure::message("expected parse error")),
-        Err(error) => Ok(error),
-    }
-}
-
-/// Asserts that a parse error has the expected source position.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if the expected position cannot be represented or the
-/// parse error location differs.
-pub(crate) fn expect_error_position(error: &ParseError, line: usize, column: usize) -> TestResult {
-    let line = source_line_number(line)?;
-    let column = source_column(column)?;
-    ensure_eq!(
-        error.location(),
-        ParseErrorLocation::Position(SourcePosition::new(line, column)),
-    )
-}
-
-/// Converts a test literal into a source line number.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if `one_based` is zero.
-pub(crate) fn source_line_number(one_based: usize) -> Result<SourceLineNumber, TestFailure> {
-    let zero_based = one_based
-        .checked_sub(1)
-        .ok_or(TestFailure::message("expected non-zero source line"))?;
-    SourceLineNumber::from_zero_based(zero_based)
-        .ok_or(TestFailure::message("expected representable source line"))
-}
-
-/// Converts a test literal into a source column.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if `one_based` is zero.
-pub(crate) fn source_column(one_based: usize) -> Result<SourceColumn, TestFailure> {
-    let zero_based = one_based
-        .checked_sub(1)
-        .ok_or(TestFailure::message("expected non-zero source column"))?;
-    SourceColumn::from_zero_based(zero_based)
-        .ok_or(TestFailure::message("expected representable source column"))
-}

@@ -1,7 +1,7 @@
 use super::input::{InitialStateBytes, RuntimeInput};
 use super::state::State;
 use crate::RunLimits;
-use crate::bytes::{CompactByte, Payload, ProgramByte};
+use crate::bytes::{CompactByte, Payload};
 use crate::error::{LimitError, PayloadKind, RunError, RuntimeInputError, StateLimitContext};
 use crate::execution::{ExecutionStepError, ExecutionTransition};
 use crate::limits::{
@@ -40,10 +40,8 @@ fn expect_runtime_byte(state: &State, index: usize) -> Result<u8, TestFailure> {
 /// Returns `TestFailure` if the payload has no byte at `index`.
 fn expect_payload_byte(payload: &Payload, index: usize) -> Result<u8, TestFailure> {
     payload
-        .program_bytes()
-        .get(index)
-        .copied()
-        .map(ProgramByte::get)
+        .bytes()
+        .nth(index)
         .ok_or(TestFailure::message("expected payload byte"))
 }
 
