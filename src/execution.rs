@@ -316,12 +316,12 @@ impl<'program> AppliedRule<'program> {
         match self.effect {
             StepApplication::Continue => ExecutionTransition::Applied(AppliedExecution {
                 step: self.step,
-                rule: self.rule.view(),
+                rule: self.rule,
                 execution,
             }),
             StepApplication::Return(output) => ExecutionTransition::Returned(ReturnedExecution {
                 step: self.step,
-                rule: self.rule.view(),
+                rule: self.rule,
                 output,
             }),
         }

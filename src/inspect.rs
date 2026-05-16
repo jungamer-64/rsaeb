@@ -71,6 +71,15 @@ impl RuleNumber {
         Some(Self { one_based })
     }
 
+    const fn first() -> Self {
+        Self { one_based: 1 }
+    }
+
+    fn next(self) -> Option<Self> {
+        let one_based = self.one_based.checked_add(1)?;
+        Some(Self { one_based })
+    }
+
     /// One-based rule number as a primitive value.
     #[must_use]
     pub const fn get(self) -> usize {
@@ -94,10 +103,43 @@ impl RulePosition {
         Some(Self { number })
     }
 
+    const fn first() -> Self {
+        Self {
+            number: RuleNumber::first(),
+        }
+    }
+
+    fn next(self) -> Option<Self> {
+        let number = self.number.next()?;
+        Some(Self { number })
+    }
+
     /// One-based rule number for display.
     #[must_use]
     pub const fn number(self) -> RuleNumber {
         self.number
+    }
+}
+
+pub(crate) struct RulePositions {
+    next: Option<RulePosition>,
+}
+
+impl RulePositions {
+    pub(crate) const fn new() -> Self {
+        Self {
+            next: Some(RulePosition::first()),
+        }
+    }
+}
+
+impl Iterator for RulePositions {
+    type Item = RulePosition;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let position = self.next?;
+        self.next = position.next();
+        Some(position)
     }
 }
 
@@ -218,11 +260,12 @@ pub enum RuleActionView<'program> {
 
 /// Read-only structured view of a parsed rule.
 ///
-/// The view borrows the parsed rule itself. Canonical source text is generated
-/// from the structured rule when requested; it is not stored as a second source
-/// of truth beside the parsed fields.
+/// The view borrows the parsed rule and carries the rule's execution position.
+/// Canonical source text is generated from the structured rule when requested;
+/// it is not stored as a second source of truth beside the parsed fields.
 #[derive(Clone, Copy)]
 pub struct RuleView<'program> {
+    position: RulePosition,
     rule: &'program Rule,
 }
 
@@ -254,14 +297,14 @@ impl PartialEq for RuleView<'_> {
 impl Eq for RuleView<'_> {}
 
 impl<'program> RuleView<'program> {
-    pub(crate) fn new(rule: &'program Rule) -> Self {
-        Self { rule }
+    pub(crate) const fn new(position: RulePosition, rule: &'program Rule) -> Self {
+        Self { position, rule }
     }
 
     /// Program-local parsed-rule position.
     #[must_use]
     pub const fn position(self) -> RulePosition {
-        self.rule.position()
+        self.position
     }
 
     /// One-based source line number.

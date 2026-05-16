@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::inspect::RuleCount;
-use crate::rule::{OnceRuleSlot, Rule};
+use crate::rule::{OnceRuleSlot, Rule, RuleRepeatState};
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct OnceStateSet {
@@ -15,10 +15,25 @@ pub(crate) enum OnceRuleState {
     Consumed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum MatchedRuleCommit {
     Always,
-    Once(OnceRuleSlot),
+    Once(ValidOnceCommit),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ValidOnceCommit {
+    slot: OnceRuleSlot,
+}
+
+impl ValidOnceCommit {
+    const fn new(slot: OnceRuleSlot) -> Self {
+        Self { slot }
+    }
+
+    const fn slot(&self) -> OnceRuleSlot {
+        self.slot
+    }
 }
 
 impl OnceStateSet {
@@ -48,25 +63,30 @@ impl OnceStateSet {
     }
 
     pub(crate) fn commit_token_for_rule(&self, rule: &Rule) -> Option<MatchedRuleCommit> {
-        match rule.once_slot() {
-            None => Some(MatchedRuleCommit::Always),
-            Some(slot) => self
-                .states
-                .get(slot.zero_based())
-                .is_some_and(OnceRuleState::is_fresh)
-                .then_some(MatchedRuleCommit::Once(slot)),
+        match rule.repeat_state() {
+            RuleRepeatState::Always => Some(MatchedRuleCommit::Always),
+            RuleRepeatState::Once(slot) => {
+                self.valid_once_commit(slot).map(MatchedRuleCommit::Once)
+            }
         }
     }
 
     pub(crate) fn commit(&mut self, token: MatchedRuleCommit) {
         match token {
             MatchedRuleCommit::Always => {}
-            MatchedRuleCommit::Once(slot) => {
-                if let Some(state) = self.states.get_mut(slot.zero_based()) {
+            MatchedRuleCommit::Once(commit) => {
+                if let Some(state) = self.states.get_mut(commit.slot().zero_based()) {
                     *state = OnceRuleState::Consumed;
                 }
             }
         }
+    }
+
+    fn valid_once_commit(&self, slot: OnceRuleSlot) -> Option<ValidOnceCommit> {
+        self.states
+            .get(slot.zero_based())
+            .is_some_and(OnceRuleState::is_fresh)
+            .then_some(ValidOnceCommit::new(slot))
     }
 }
 

@@ -1,6 +1,6 @@
 use super::once::{MatchedRuleCommit, OnceStateSet};
 use super::state::{MatchedStateSpan, State};
-use crate::inspect::RuleAnchor;
+use crate::inspect::{RuleAnchor, RulePosition, RulePositions};
 use crate::rule::Rule;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -11,6 +11,7 @@ pub(crate) enum RuleSearch<'program> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct MatchedRule<'program> {
+    pub(crate) position: RulePosition,
     pub(crate) rule: &'program Rule,
     pub(crate) commit: MatchedRuleCommit,
     pub(crate) state_match: MatchedStateSpan,
@@ -21,7 +22,7 @@ pub(crate) fn find_next_match<'program>(
     once_states: &OnceStateSet,
     state: &State,
 ) -> RuleSearch<'program> {
-    for rule in rules {
+    for (rule, position) in rules.iter().zip(RulePositions::new()) {
         let Some(commit) = once_states.commit_token_for_rule(rule) else {
             continue;
         };
@@ -31,6 +32,7 @@ pub(crate) fn find_next_match<'program>(
         };
 
         return RuleSearch::Matched(MatchedRule {
+            position,
             rule,
             commit,
             state_match,

@@ -5,7 +5,7 @@ mod tracing;
 
 use crate::error::{ParseError, RunError};
 use crate::execution::RunningExecution;
-use crate::inspect::{RuleCount, RuleView};
+use crate::inspect::{RuleCount, RulePositions, RuleView};
 use crate::parser::parse_rules_impl;
 use crate::rule::Rule;
 use crate::runtime::RuntimeInput;
@@ -87,7 +87,11 @@ impl Program {
     /// from a [`RuleView`] when needed, but source text is not stored as a
     /// second truth beside the parsed rule fields.
     pub fn rules(&self) -> impl Iterator<Item = RuleView<'_>> + '_ {
-        self.rule_set.as_slice().iter().map(Rule::view)
+        self.rule_set
+            .as_slice()
+            .iter()
+            .zip(RulePositions::new())
+            .map(|(rule, position)| RuleView::new(position, rule))
     }
 
     pub(crate) fn rule_slice(&self) -> &[Rule] {

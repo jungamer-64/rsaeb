@@ -470,9 +470,10 @@ Run the public documentation and package checks before publishing changes:
 
 ```sh
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all-targets
-cargo test --doc
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features
+cargo test --doc --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
 cargo package --list
 cargo package
 ```

@@ -1,9 +1,9 @@
 use crate::allocation::AllocationContext;
 use crate::bytes::ReturnOutputByteCount;
 use crate::error::{LimitError, RunError};
-use crate::inspect::PayloadView;
+use crate::inspect::{PayloadView, RuleView};
 use crate::program::{ReturnOutput, RunLimits, StepCount};
-use crate::rule::{Action, Rule};
+use crate::rule::Action;
 
 use super::budget::StepBudget;
 use super::matcher::MatchedRule;
@@ -21,7 +21,7 @@ pub(crate) enum StepApplication<'program> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AppliedRule<'program> {
     pub(crate) step: StepCount,
-    pub(crate) rule: &'program Rule,
+    pub(crate) rule: RuleView<'program>,
     pub(crate) effect: StepApplication<'program>,
 }
 
@@ -71,13 +71,13 @@ pub(crate) fn apply_matched_rule<'program>(
             state.swap_with_scratch(scratch);
             Ok(AppliedRule {
                 step,
-                rule: matched.rule,
+                rule: RuleView::new(matched.position, matched.rule),
                 effect: StepApplication::Continue,
             })
         }
         StepApplication::Return(output) => Ok(AppliedRule {
             step,
-            rule: matched.rule,
+            rule: RuleView::new(matched.position, matched.rule),
             effect: StepApplication::Return(output),
         }),
     }

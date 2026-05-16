@@ -1,5 +1,5 @@
 use crate::bytes::Payload;
-use crate::inspect::{PayloadView, RuleActionView, RuleAnchor, RuleRepeat, RuleView};
+use crate::inspect::{PayloadView, RuleActionView, RuleAnchor, RuleRepeat};
 use crate::source::SourceLineNumber;
 use crate::syntax::SyntaxToken;
 
@@ -116,13 +116,6 @@ impl RuleRepeatState {
             Self::Once(_) => RuleRepeat::Once,
         }
     }
-
-    pub(crate) const fn once_slot(self) -> Option<OnceRuleSlot> {
-        match self {
-            Self::Always => None,
-            Self::Once(slot) => Some(slot),
-        }
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -167,9 +160,5 @@ impl Rule {
 
     pub(crate) const fn action(&self) -> &Action {
         &self.action
-    }
-
-    pub(crate) fn view(&self) -> RuleView<'_> {
-        RuleView::new(self)
     }
 }

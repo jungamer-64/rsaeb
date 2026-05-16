@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push};
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
-use crate::inspect::{RuleCount, RuleRepeat};
+use crate::inspect::{RuleCount, RulePosition, RuleRepeat};
 use crate::rule::{OnceRuleSlot, ParsedRule, Rule, RuleRepeatState};
 
 use super::RuleLimit;
@@ -45,6 +45,15 @@ impl RuleSet {
                 ParseErrorKind::Limit(ParseLimitError::rules(
                     limit,
                     RuleCount::new(attempted_rule_count),
+                )),
+            ));
+        }
+
+        if RulePosition::from_zero_based(self.rules.len()).is_none() {
+            return Err(ParseError::at_line(
+                line_number,
+                ParseErrorKind::Allocation(AllocationError::capacity_overflow(
+                    AllocationContext::ProgramRuleTable,
                 )),
             ));
         }
