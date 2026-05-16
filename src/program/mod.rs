@@ -15,7 +15,7 @@ pub(crate) use rule_set::RuleSet;
 
 pub use limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
-    DEFAULT_MAX_TRACE_SNAPSHOT_LEN, ReturnByteLimit, RunLimits, RuntimeInputByteLimit,
+    DEFAULT_MAX_TRACE_SNAPSHOT_LEN, ParseLimits, ReturnByteLimit, RunLimits, RuntimeInputByteLimit,
     RuntimeStateByteLimit, StepCount, StepLimit, TraceSnapshotByteLimit, TraceSnapshotLimits,
 };
 pub use result::{ReturnOutput, RunOutcome, RunResult, RuntimeStateSnapshot};
@@ -25,7 +25,6 @@ pub use result::{ReturnOutput, RunOutcome, RunResult, RuntimeStateSnapshot};
 /// A parsed program is immutable and reusable. Per-run `(once)` state lives in
 /// the runtime invocation, not in this value, so repeated runs with the same
 /// [`Program`] start from fresh rule availability.
-#[derive(Debug, PartialEq, Eq)]
 pub struct Program {
     rule_set: RuleSet,
 }
@@ -46,8 +45,8 @@ impl Program {
     /// when a non-empty code line does not contain exactly one `=`, when
     /// reserved syntax appears as payload data, or when allocation fails while
     /// building the parsed program.
-    pub fn parse(source: ProgramSource<'_>) -> Result<Self, ParseError> {
-        Ok(Self::from_rule_set(parse_rules_impl(source)?))
+    pub fn parse(source: ProgramSource<'_>, limits: ParseLimits) -> Result<Self, ParseError> {
+        Ok(Self::from_rule_set(parse_rules_impl(source, limits)?))
     }
 
     /// Returns the number of executable rules in the parsed program.

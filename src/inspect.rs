@@ -220,7 +220,7 @@ pub enum RuleActionView<'program> {
 /// The view borrows the parsed rule itself. Canonical source text is generated
 /// from the structured rule when requested; it is not stored as a second source
 /// of truth beside the parsed fields.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub struct RuleView<'program> {
     rule: &'program Rule,
 }

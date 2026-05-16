@@ -44,17 +44,6 @@ impl<'source> ProgramSource<'source> {
         Self { bytes }
     }
 
-    /// Labels a UTF-8 string as parser input.
-    ///
-    /// This is the ergonomic constructor for ordinary source literals. It is
-    /// equivalent to [`ProgramSource::from_bytes`] on `source.as_bytes()`.
-    #[must_use]
-    pub const fn from_str(source: &'source str) -> Self {
-        Self {
-            bytes: source.as_bytes(),
-        }
-    }
-
     /// Borrows the original source bytes.
     #[must_use]
     pub const fn as_bytes(self) -> &'source [u8] {

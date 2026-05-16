@@ -29,7 +29,6 @@ use crate::{inspect::PayloadView, inspect::RuleView};
 /// returned executions are represented by separate terminal types, so callers
 /// cannot step after completion. A running execution owns per-run `(once)`
 /// state and the current runtime state.
-#[derive(Debug, PartialEq, Eq)]
 pub struct RunningExecution<'program> {
     pub(crate) core: ExecutionCore<'program>,
 }
@@ -48,7 +47,6 @@ pub(crate) struct ExecutionCore<'program> {
 /// The transition is exhaustive over the public execution lifecycle: one rule
 /// committed and execution can continue, no rule matched, or a `(return)` rule
 /// produced final output.
-#[derive(Debug, PartialEq, Eq)]
 pub enum ExecutionTransition<'program> {
     /// One ordinary rewrite rule was applied and execution can continue.
     Applied(AppliedExecution<'program>),
@@ -62,7 +60,6 @@ pub enum ExecutionTransition<'program> {
 ///
 /// This value lets a caller inspect the applied rule and post-step state before
 /// deciding whether to continue execution.
-#[derive(Debug, PartialEq, Eq)]
 pub struct AppliedExecution<'program> {
     step: StepCount,
     rule: RuleView<'program>,
@@ -73,7 +70,6 @@ pub struct AppliedExecution<'program> {
 ///
 /// Stable executions still own the final runtime state until the caller either
 /// borrows it or materializes it with [`StableExecution::into_result`].
-#[derive(Debug, PartialEq, Eq)]
 pub struct StableExecution<'program> {
     steps: StepCount,
     core: ExecutionCore<'program>,
@@ -83,7 +79,7 @@ pub struct StableExecution<'program> {
 ///
 /// The output is a borrowed parsed payload until the caller materializes the
 /// terminal [`RunResult`] through [`ReturnedExecution::into_result`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub struct ReturnedExecution<'program> {
     step: StepCount,
     rule: RuleView<'program>,
@@ -95,7 +91,6 @@ pub struct ReturnedExecution<'program> {
 /// Step failures happen before the candidate rewrite is committed. The failed
 /// [`RunningExecution`] is therefore returned by value so hosts can inspect,
 /// retry with different limits, or discard it explicitly.
-#[derive(Debug, PartialEq, Eq)]
 pub struct ExecutionStepError<'program> {
     error: RunError,
     execution: RunningExecution<'program>,
