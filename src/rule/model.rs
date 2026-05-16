@@ -1,5 +1,5 @@
 use crate::bytes::Payload;
-use crate::inspect::{PayloadView, RuleActionView, RuleAnchor, RulePosition, RuleRepeat, RuleView};
+use crate::inspect::{PayloadView, RuleActionView, RuleAnchor, RuleRepeat, RuleView};
 use crate::source::SourceLineNumber;
 use crate::syntax::SyntaxToken;
 
@@ -103,40 +103,46 @@ impl OnceRuleSlot {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuleRepeatState {
+    Always,
+    Once(OnceRuleSlot),
+}
+
+impl RuleRepeatState {
+    pub(crate) const fn public_repeat(self) -> RuleRepeat {
+        match self {
+            Self::Always => RuleRepeat::Always,
+            Self::Once(_) => RuleRepeat::Once,
+        }
+    }
+
+    pub(crate) const fn once_slot(self) -> Option<OnceRuleSlot> {
+        match self {
+            Self::Always => None,
+            Self::Once(slot) => Some(slot),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Rule {
-    position: RulePosition,
-    once_slot: Option<OnceRuleSlot>,
     line_number: SourceLineNumber,
-    repeat: RuleRepeat,
+    repeat: RuleRepeatState,
     anchor: RuleAnchor,
     lhs: Payload,
     action: Action,
 }
 
 impl Rule {
-    pub(crate) fn from_parsed(
-        parsed: ParsedRule,
-        position: RulePosition,
-        once_slot: Option<OnceRuleSlot>,
-    ) -> Self {
+    pub(crate) fn from_parsed(parsed: ParsedRule, repeat: RuleRepeatState) -> Self {
         Self {
-            position,
-            once_slot,
             line_number: parsed.line_number,
-            repeat: parsed.head.repeat,
+            repeat,
             anchor: parsed.head.anchor,
             lhs: parsed.head.lhs,
             action: parsed.body.action,
         }
-    }
-
-    pub(crate) const fn position(&self) -> RulePosition {
-        self.position
-    }
-
-    pub(crate) const fn once_slot(&self) -> Option<OnceRuleSlot> {
-        self.once_slot
     }
 
     pub(crate) const fn line_number(&self) -> SourceLineNumber {
@@ -144,6 +150,10 @@ impl Rule {
     }
 
     pub(crate) const fn repeat(&self) -> RuleRepeat {
+        self.repeat.public_repeat()
+    }
+
+    pub(crate) const fn repeat_state(&self) -> RuleRepeatState {
         self.repeat
     }
 
