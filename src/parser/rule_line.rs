@@ -52,6 +52,14 @@ impl RuleSyntaxLine {
         Ok(ParsedRule::from_parts(self.line_number, head, body))
     }
 
+    /// Borrows the compact line as left and right syntax slices.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if the stored side ranges no longer describe valid
+    /// slices of this compact line. Construction validates that invariant, so
+    /// this error path is an invariant guard rather than ordinary syntax
+    /// rejection.
     fn syntax_parts(&self) -> Result<(LeftSyntax<'_>, RightSyntax<'_>), ParseError> {
         let slices = self.sides.slices(self.line_number, &self.bytes)?;
         Ok((
