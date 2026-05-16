@@ -51,8 +51,8 @@ pub struct AllocationError {
 pub enum AllocationErrorKind {
     /// The required capacity could not be represented as `usize`.
     CapacityOverflow,
-    /// The allocator rejected the requested capacity.
-    ReserveFailed {
+    /// Reserving the requested capacity failed.
+    ReservationFailed {
         /// Vector capacity requested at the failing site.
         requested_capacity: usize,
     },
@@ -66,13 +66,13 @@ impl AllocationError {
         }
     }
 
-    pub(crate) const fn reserve_failed(
+    pub(crate) const fn reservation_failed(
         context: AllocationContext,
         requested_capacity: usize,
     ) -> Self {
         Self {
             context,
-            kind: AllocationErrorKind::ReserveFailed { requested_capacity },
+            kind: AllocationErrorKind::ReservationFailed { requested_capacity },
         }
     }
 
@@ -93,7 +93,9 @@ impl AllocationError {
     pub const fn requested_capacity(&self) -> Option<usize> {
         match self.kind {
             AllocationErrorKind::CapacityOverflow => None,
-            AllocationErrorKind::ReserveFailed { requested_capacity } => Some(requested_capacity),
+            AllocationErrorKind::ReservationFailed { requested_capacity } => {
+                Some(requested_capacity)
+            }
         }
     }
 }
@@ -120,7 +122,7 @@ pub(crate) fn try_reserve_total_exact<T>(
         .ok_or_else(|| AllocationError::capacity_overflow(context))?;
 
     vec.try_reserve_exact(additional)
-        .map_err(|_| AllocationError::reserve_failed(context, total_capacity))
+        .map_err(|_| AllocationError::reservation_failed(context, total_capacity))
 }
 
 /// Pushes one value after reserving through the explicit allocation boundary.
@@ -161,11 +163,11 @@ mod tests {
     /// expected public value.
     #[test]
     fn allocation_contexts_are_publicly_inspectable() -> TestResult {
-        let error = AllocationError::reserve_failed(AllocationContext::TraceSnapshot, 123);
+        let error = AllocationError::reservation_failed(AllocationContext::TraceSnapshot, 123);
         ensure_eq!(error.context(), AllocationContext::TraceSnapshot)?;
         ensure_eq!(
             error.kind(),
-            AllocationErrorKind::ReserveFailed {
+            AllocationErrorKind::ReservationFailed {
                 requested_capacity: 123,
             },
         )?;
@@ -176,13 +178,14 @@ mod tests {
         ensure_eq!(error.kind(), AllocationErrorKind::CapacityOverflow)?;
         ensure_eq!(error.requested_capacity(), None)?;
 
-        let error = AllocationError::reserve_failed(AllocationContext::RuntimeInputValidation, 4);
+        let error =
+            AllocationError::reservation_failed(AllocationContext::RuntimeInputValidation, 4);
         ensure_eq!(error.context(), AllocationContext::RuntimeInputValidation)?;
 
-        let error = AllocationError::reserve_failed(AllocationContext::RuntimeInputView, 4);
+        let error = AllocationError::reservation_failed(AllocationContext::RuntimeInputView, 4);
         ensure_eq!(error.context(), AllocationContext::RuntimeInputView)?;
 
-        let error = AllocationError::reserve_failed(AllocationContext::InitialRuntimeState, 4);
+        let error = AllocationError::reservation_failed(AllocationContext::InitialRuntimeState, 4);
         ensure_eq!(error.context(), AllocationContext::InitialRuntimeState)?;
         Ok(())
     }
@@ -193,39 +196,41 @@ mod tests {
     /// the expected domain wording.
     #[test]
     fn allocation_display_names_the_failed_context_and_capacity() -> TestResult {
-        let error = AllocationError::reserve_failed(AllocationContext::TraceSnapshot, 123);
+        let error = AllocationError::reservation_failed(AllocationContext::TraceSnapshot, 123);
 
         ensure_eq!(
             error.to_string(),
-            "allocation failure while building trace snapshot; requested capacity: 123",
+            "allocation reservation failure while building trace snapshot; requested capacity: 123",
         )?;
 
-        let error = AllocationError::reserve_failed(AllocationContext::RuntimeStateView, 456);
+        let error = AllocationError::reservation_failed(AllocationContext::RuntimeStateView, 456);
 
         ensure_eq!(
             error.to_string(),
-            "allocation failure while building runtime state view; requested capacity: 456",
+            "allocation reservation failure while building runtime state view; requested capacity: 456",
         )?;
 
-        let error = AllocationError::reserve_failed(AllocationContext::RuntimeInputValidation, 789);
+        let error =
+            AllocationError::reservation_failed(AllocationContext::RuntimeInputValidation, 789);
 
         ensure_eq!(
             error.to_string(),
-            "allocation failure while building runtime input validation; requested capacity: 789",
+            "allocation reservation failure while building runtime input validation; requested capacity: 789",
         )?;
 
-        let error = AllocationError::reserve_failed(AllocationContext::RuntimeInputView, 789);
+        let error = AllocationError::reservation_failed(AllocationContext::RuntimeInputView, 789);
 
         ensure_eq!(
             error.to_string(),
-            "allocation failure while building runtime input view; requested capacity: 789",
+            "allocation reservation failure while building runtime input view; requested capacity: 789",
         )?;
 
-        let error = AllocationError::reserve_failed(AllocationContext::InitialRuntimeState, 789);
+        let error =
+            AllocationError::reservation_failed(AllocationContext::InitialRuntimeState, 789);
 
         ensure_eq!(
             error.to_string(),
-            "allocation failure while building initial runtime state; requested capacity: 789",
+            "allocation reservation failure while building initial runtime state; requested capacity: 789",
         )?;
 
         let error = AllocationError::capacity_overflow(AllocationContext::CanonicalSource);

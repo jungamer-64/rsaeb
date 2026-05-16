@@ -45,8 +45,9 @@ impl Payload {
         line_number: SourceLineNumber,
         payload_kind: PayloadKind,
     ) -> Result<Self, ParseError> {
-        // Validate the whole payload before allocation so syntax errors keep
-        // precedence over allocation failures.
+        // Error ordering is part of the parser contract: payload syntax is
+        // validated before any owned payload allocation, so invalid source
+        // bytes cannot be hidden behind an allocation failure.
         for byte in input.iter().copied() {
             ProgramByte::parse(byte, line_number, payload_kind)?;
         }

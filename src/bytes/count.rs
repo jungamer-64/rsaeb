@@ -32,6 +32,38 @@ impl fmt::Display for PayloadByteCount {
     }
 }
 
+/// Byte length of validated runtime input before execution-state materialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RuntimeInputByteCount {
+    value: usize,
+}
+
+impl RuntimeInputByteCount {
+    /// Creates a runtime-input byte count from a primitive length.
+    #[must_use]
+    pub(crate) const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    /// Returns this byte count as a primitive length.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+
+    /// Returns whether this count is zero.
+    #[must_use]
+    pub const fn is_zero(self) -> bool {
+        self.value == 0
+    }
+}
+
+impl fmt::Display for RuntimeInputByteCount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
 /// Byte length of materialized runtime state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuntimeStateByteCount {

@@ -264,6 +264,6 @@ pub mod source;
 mod syntax;
 pub mod trace;
 
-pub use program::{Program, RunLimits, RunOutcome};
+pub use program::{Program, ReturnOutput, RunLimits, RunOutcome, RunResult, RuntimeStateSnapshot};
 pub use runtime::RuntimeInput;
 pub use source::ProgramSource;

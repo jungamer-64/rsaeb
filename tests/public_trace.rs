@@ -3,7 +3,6 @@ mod support;
 use rsaeb::error::{
     FallibleTraceSnapshotRunError, RunError, TraceSnapshotError, TraceSnapshotRunError,
 };
-use rsaeb::execution::RunResult;
 use rsaeb::limits::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit,
     TraceSnapshotByteLimit, TraceSnapshotLimits,
@@ -11,7 +10,7 @@ use rsaeb::limits::{
 use rsaeb::trace::{
     BorrowedTraceEffect, BorrowedTraceEvent, TraceSnapshotEffect, TraceSnapshotEvent,
 };
-use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome};
+use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RunResult};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, runtime_input};
 
 /// Returns the expected trace snapshot run error.

@@ -1,4 +1,4 @@
-use super::input::InitialStateBytes;
+use super::input::{InitialStateBytes, RuntimeInput};
 use super::matcher::RuleSearch;
 use super::state::State;
 use crate::bytes::{CompactByte, Payload, ProgramByte, RuntimeByte};
@@ -6,7 +6,8 @@ use crate::error::{LimitError, PayloadKind, RunError, RuntimeInputError, StateLi
 use crate::execution::{ExecutionStepError, ExecutionTransition};
 use crate::limits::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit, ReturnOutputByteCount,
-    RuntimeStateByteCount, RuntimeStateByteLimit, StepCount, StepLimit,
+    RuntimeInputByteCount, RuntimeInputByteLimit, RuntimeStateByteCount, RuntimeStateByteLimit,
+    StepCount, StepLimit,
 };
 use crate::test_support::{
     TestFailure, TestResult, ensure, ensure_eq, ensure_matches, runtime_input, source_column,
@@ -292,6 +293,18 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
 /// information.
 #[test]
 fn runtime_input_error_is_structured_at_the_runtime_boundary() -> TestResult {
+    let Err(error) = RuntimeInput::validate(b"abc", RuntimeInputByteLimit::new(2)) else {
+        return Err(TestFailure::message("expected input limit error"));
+    };
+
+    ensure_eq!(
+        error,
+        RuntimeInputError::Limit {
+            limit: RuntimeInputByteLimit::new(2),
+            attempted_len: RuntimeInputByteCount::new(3),
+        },
+    )?;
+
     let Err(error) = runtime_input("a\u{80}".as_bytes()) else {
         return Err(TestFailure::message("expected input error"));
     };

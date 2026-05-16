@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
-use crate::bytes::{RuntimeByte, RuntimeStateByteCount};
+use crate::bytes::{RuntimeByte, RuntimeInputByteCount, RuntimeStateByteCount};
 use crate::error::{LimitError, RunError, RuntimeInputError, StateLimitContext};
 use crate::program::{RunLimits, RuntimeInputByteLimit};
 
@@ -42,7 +42,7 @@ impl RuntimeInput {
     /// byte is non-ASCII, if its one-based column cannot be represented, or if
     /// owned storage cannot be allocated.
     pub fn validate(input: &[u8], limit: RuntimeInputByteLimit) -> Result<Self, RuntimeInputError> {
-        let byte_count = RuntimeStateByteCount::new(input.len());
+        let byte_count = RuntimeInputByteCount::new(input.len());
         if byte_count.get() > limit.get() {
             return Err(RuntimeInputError::limit(limit, byte_count));
         }
@@ -90,8 +90,8 @@ impl RuntimeInput {
 
     /// Runtime input length in bytes.
     #[must_use]
-    pub fn byte_count(&self) -> RuntimeStateByteCount {
-        RuntimeStateByteCount::new(self.bytes.len())
+    pub fn byte_count(&self) -> RuntimeInputByteCount {
+        RuntimeInputByteCount::new(self.bytes.len())
     }
 
     /// Whether this runtime input contains no bytes.
@@ -125,7 +125,7 @@ impl InitialStateBytes {
             return Err(LimitError::state(
                 StateLimitContext::Input,
                 limits.state_byte_limit(),
-                byte_count,
+                RuntimeStateByteCount::new(byte_count.get()),
             )
             .into());
         }

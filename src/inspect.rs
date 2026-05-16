@@ -53,14 +53,13 @@ impl RuleNumber {
 /// Program-local position of a parsed rule in execution order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RulePosition {
-    zero_based: usize,
     number: RuleNumber,
 }
 
 impl RulePosition {
     pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
         let number = RuleNumber::from_zero_based(zero_based)?;
-        Some(Self { zero_based, number })
+        Some(Self { number })
     }
 
     /// One-based rule number for display.

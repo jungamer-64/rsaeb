@@ -2,7 +2,8 @@ use core::error::Error;
 
 use crate::allocation::AllocationError;
 use crate::bytes::{
-    NonAsciiInputByte, PayloadByteCount, ReturnOutputByteCount, RuntimeStateByteCount,
+    NonAsciiInputByte, PayloadByteCount, ReturnOutputByteCount, RuntimeInputByteCount,
+    RuntimeStateByteCount,
 };
 use crate::program::{
     ReturnByteLimit, RuntimeInputByteLimit, RuntimeStateByteLimit, StepCount, StepLimit,
@@ -64,7 +65,7 @@ pub enum RuntimeInputError {
         /// Configured maximum runtime input length.
         limit: RuntimeInputByteLimit,
         /// Runtime input length that would have been classified.
-        attempted_len: RuntimeStateByteCount,
+        attempted_len: RuntimeInputByteCount,
     },
     /// Storing validated runtime input failed.
     Allocation(AllocationError),
@@ -81,7 +82,7 @@ impl RuntimeInputError {
 
     pub(crate) const fn limit(
         limit: RuntimeInputByteLimit,
-        attempted_len: RuntimeStateByteCount,
+        attempted_len: RuntimeInputByteCount,
     ) -> Self {
         Self::Limit {
             limit,

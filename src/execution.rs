@@ -5,7 +5,7 @@
 //! callers can hold between applied rewrite steps.
 
 use crate::error::{RunError, TracedRunError};
-use crate::program::{Program, RunLimits, StepCount};
+use crate::program::{Program, RunLimits, RunResult, StepCount};
 use crate::runtime::action::{AppliedRule, StepApplication, apply_matched_rule};
 use crate::runtime::budget::StepBudget;
 use crate::runtime::input::{InitialStateBytes, RuntimeInput};
@@ -15,8 +15,6 @@ use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
 use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
 use crate::{inspect::PayloadView, inspect::RuleView};
-
-pub use crate::program::{ReturnOutput, RunResult, RuntimeStateSnapshot};
 
 /// Stateful execution that can still apply rules.
 ///

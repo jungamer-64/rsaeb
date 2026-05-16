@@ -10,7 +10,8 @@ mod tests;
 
 pub(crate) use compact::CompactByte;
 pub use count::{
-    PayloadByteCount, ReturnOutputByteCount, RuntimeStateByteCount, TraceSnapshotByteCount,
+    PayloadByteCount, ReturnOutputByteCount, RuntimeInputByteCount, RuntimeStateByteCount,
+    TraceSnapshotByteCount,
 };
 pub(crate) use payload::Payload;
 #[cfg(test)]

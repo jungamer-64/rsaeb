@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
+use core::ops::Range;
 
-use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
+use crate::allocation::{AllocationContext, AllocationError};
 use crate::bytes::{CompactByte, Payload};
 use crate::error::{LeftModifierKind, ParseError, ParseErrorKind, PayloadKind, RightActionKind};
 use crate::inspect::{RuleAnchor, RuleRepeat};
@@ -13,8 +14,8 @@ use super::location::parse_allocation_error;
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct RuleSyntaxLine {
     line_number: SourceLineNumber,
-    left: Vec<CompactByte>,
-    right: Vec<CompactByte>,
+    bytes: Vec<CompactByte>,
+    sides: RuleSideRanges,
 }
 
 impl RuleSyntaxLine {
@@ -29,11 +30,11 @@ impl RuleSyntaxLine {
         bytes: Vec<CompactByte>,
     ) -> Result<Self, ParseError> {
         let equals = EqualsPosition::find(line_number, &bytes)?;
-        let parts = equals.split(line_number, bytes)?;
+        let sides = RuleSideRanges::new(line_number, &bytes, equals)?;
         Ok(Self {
             line_number,
-            left: parts.left,
-            right: parts.right,
+            bytes,
+            sides,
         })
     }
 
@@ -44,24 +45,25 @@ impl RuleSyntaxLine {
     /// Returns `ParseError` if either rule side contains invalid modifier,
     /// action, or payload syntax.
     pub(super) fn parse(&self) -> Result<ParsedRule, ParseError> {
-        let (left, right) = self.syntax_parts();
+        let (left, right) = self.syntax_parts()?;
         let head = left.parse()?;
         let body = right.parse()?;
 
         Ok(ParsedRule::from_parts(self.line_number, head, body))
     }
 
-    fn syntax_parts(&self) -> (LeftSyntax<'_>, RightSyntax<'_>) {
-        (
+    fn syntax_parts(&self) -> Result<(LeftSyntax<'_>, RightSyntax<'_>), ParseError> {
+        let slices = self.sides.slices(self.line_number, &self.bytes)?;
+        Ok((
             LeftSyntax {
                 line_number: self.line_number,
-                bytes: &self.left,
+                bytes: slices.left,
             },
             RightSyntax {
                 line_number: self.line_number,
-                bytes: &self.right,
+                bytes: slices.right,
             },
-        )
+        ))
     }
 }
 
@@ -71,9 +73,16 @@ struct EqualsPosition {
     right_start: usize,
 }
 
-struct RuleSyntaxParts {
-    left: Vec<CompactByte>,
-    right: Vec<CompactByte>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuleSideRanges {
+    left: Range<usize>,
+    right: Range<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct RuleSideSlices<'code> {
+    left: &'code [CompactByte],
+    right: &'code [CompactByte],
 }
 
 impl EqualsPosition {
@@ -114,104 +123,55 @@ impl EqualsPosition {
 
         found.ok_or_else(|| ParseError::at_line(line_number, ParseErrorKind::MissingEquals))
     }
+}
 
-    /// Splits compact bytes into left and right rule syntax buffers.
+impl RuleSideRanges {
+    /// Creates rule-side ranges and validates them against the compact line.
     ///
     /// # Errors
     ///
-    /// Returns `ParseError` if allocation fails or the calculated right-side
-    /// length cannot be represented.
-    fn split(
-        self,
+    /// Returns `ParseError` if the separator indexes do not describe valid
+    /// side slices for this compact line.
+    fn new(
         line_number: SourceLineNumber,
-        bytes: Vec<CompactByte>,
-    ) -> Result<RuleSyntaxParts, ParseError> {
-        let right_len = bytes.len().checked_sub(self.right_start).ok_or_else(|| {
+        bytes: &[CompactByte],
+        separator: EqualsPosition,
+    ) -> Result<Self, ParseError> {
+        let ranges = Self {
+            left: 0..separator.equals_index,
+            right: separator.right_start..bytes.len(),
+        };
+        ranges.slices(line_number, bytes)?;
+        Ok(ranges)
+    }
+
+    /// Borrows the proven left and right slices from compact line bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if the stored ranges no longer fit the compact
+    /// line. Normal construction prevents this; the error keeps the invariant
+    /// checked without panicking.
+    fn slices<'code>(
+        &self,
+        line_number: SourceLineNumber,
+        bytes: &'code [CompactByte],
+    ) -> Result<RuleSideSlices<'code>, ParseError> {
+        let left = bytes.get(self.left.clone()).ok_or_else(|| {
+            parse_allocation_error(
+                line_number,
+                AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
+            )
+        })?;
+        let right = bytes.get(self.right.clone()).ok_or_else(|| {
             parse_allocation_error(
                 line_number,
                 AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
             )
         })?;
 
-        let mut parts = RuleSyntaxParts::new(line_number, self.equals_index, right_len)?;
-        for (index, byte) in bytes.into_iter().enumerate() {
-            if index < self.equals_index {
-                parts.push_left(line_number, byte)?;
-            } else if index >= self.right_start {
-                parts.push_right(line_number, byte)?;
-            }
-        }
-
-        Ok(parts)
+        Ok(RuleSideSlices { left, right })
     }
-}
-
-impl RuleSyntaxParts {
-    /// Allocates left and right rule syntax buffers.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError` if either syntax buffer cannot reserve its
-    /// requested capacity.
-    fn new(
-        line_number: SourceLineNumber,
-        left_capacity: usize,
-        right_capacity: usize,
-    ) -> Result<Self, ParseError> {
-        let mut left = Vec::new();
-        try_reserve_total_exact(&mut left, left_capacity, AllocationContext::ProgramCodeLine)
-            .map_err(|error| parse_allocation_error(line_number, error))?;
-
-        let mut right = Vec::new();
-        try_reserve_total_exact(
-            &mut right,
-            right_capacity,
-            AllocationContext::ProgramCodeLine,
-        )
-        .map_err(|error| parse_allocation_error(line_number, error))?;
-
-        Ok(Self { left, right })
-    }
-
-    /// Appends one compact byte to the left-side syntax buffer.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError` if the left-side syntax buffer cannot grow.
-    fn push_left(
-        &mut self,
-        line_number: SourceLineNumber,
-        byte: CompactByte,
-    ) -> Result<(), ParseError> {
-        push_syntax_byte(line_number, &mut self.left, byte)
-    }
-
-    /// Appends one compact byte to the right-side syntax buffer.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError` if the right-side syntax buffer cannot grow.
-    fn push_right(
-        &mut self,
-        line_number: SourceLineNumber,
-        byte: CompactByte,
-    ) -> Result<(), ParseError> {
-        push_syntax_byte(line_number, &mut self.right, byte)
-    }
-}
-
-/// Appends one compact byte to a syntax buffer.
-///
-/// # Errors
-///
-/// Returns `ParseError` if the syntax buffer cannot grow.
-fn push_syntax_byte(
-    line_number: SourceLineNumber,
-    output: &mut Vec<CompactByte>,
-    byte: CompactByte,
-) -> Result<(), ParseError> {
-    try_push(output, byte, AllocationContext::ProgramCodeLine)
-        .map_err(|error| parse_allocation_error(line_number, error))
 }
 
 #[derive(Clone, Copy)]

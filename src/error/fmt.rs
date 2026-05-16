@@ -39,10 +39,10 @@ impl fmt::Display for AllocationError {
                     self.context(),
                 )
             }
-            AllocationErrorKind::ReserveFailed { requested_capacity } => {
+            AllocationErrorKind::ReservationFailed { requested_capacity } => {
                 write!(
                     f,
-                    "allocation failure while building {}; requested capacity: {}",
+                    "allocation reservation failure while building {}; requested capacity: {}",
                     self.context(),
                     requested_capacity,
                 )

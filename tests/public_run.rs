@@ -2,15 +2,15 @@ mod support;
 
 use rsaeb::error::{LimitError, RunError};
 use rsaeb::execution::{
-    AppliedExecution, ExecutionStepError, ExecutionTransition, ReturnedExecution, RunResult,
-    RunningExecution, StableExecution,
+    AppliedExecution, ExecutionStepError, ExecutionTransition, ReturnedExecution, RunningExecution,
+    StableExecution,
 };
 use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
 use rsaeb::limits::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, ReturnByteLimit,
     RuntimeStateByteLimit, StepLimit,
 };
-use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome};
+use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RunResult};
 use support::{TestFailure, TestResult, ensure, ensure_eq, ensure_matches, runtime_input};
 
 /// Returns stable output bytes when they match `expected`.
