@@ -53,7 +53,9 @@ limits before allocating oversized states or return outputs. Trace snapshot
 materialization is budgeted separately through an explicit
 `TraceSnapshotByteLimit`. Owned public values that contain byte buffers
 intentionally do not implement `Clone`; copying bytes is an explicit
-materialization step, not a hidden infallible API.
+materialization step, not a hidden infallible API. Parser payload validation is
+reported before payload storage allocation, so invalid source bytes are not
+hidden behind allocation failures.
 
 ```sh
 cargo fmt --check
@@ -88,134 +90,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Parse and run from raw source bytes:
-
-```rust
-use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit};
-use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let program = Program::parse(ProgramSource::from_bytes(b"a=b#\xff is allowed in comments\n"))?;
-    let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
-    let result = program.run(&input, limits)?;
-    assert!(matches!(
-        result.outcome(),
-        RunOutcome::Stable(output) if output.as_bytes() == b"b"
-    ));
-    Ok(())
-}
-```
-
-Reusable parsed program with typed runtime input:
-
-```rust
-use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit};
-use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let program = Program::parse(ProgramSource::from_str("(once)a=b\na=c"))?;
-    let limits = RunLimits::new(StepLimit::new(10_000), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let input = RuntimeInput::validate(b"aa", DEFAULT_MAX_INPUT_LEN)?;
-
-    let first = program.run(&input, limits)?;
-    let second = program.run(&input, limits)?;
-
-    assert!(matches!(
-        first.outcome(),
-        RunOutcome::Stable(output) if output.as_bytes() == b"bc"
-    ));
-    assert!(matches!(
-        second.outcome(),
-        RunOutcome::Stable(output) if output.as_bytes() == b"bc"
-    ));
-    Ok(())
-}
-```
-
-`(once)` consumption is runtime-local. Reusing `Program` is safe because parsed
-programs are immutable. Each execution owns runtime rule state derived directly
-from the parsed rule list, so `(once)` state cannot drift away from rule order.
+Use `ProgramSource::from_bytes` when source comments may contain non-UTF-8
+bytes. Reusing a parsed `Program` is safe: parsed programs are immutable, and
+`(once)` consumption is runtime-local to each execution.
 
 ## Stepwise execution
 
 Use `Program::start_execution` when a host needs to regain control after each
-applied rule instead of running to completion in one call:
-
-```rust
-use rsaeb::execution::ExecutionTransition;
-use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit};
-use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let program = Program::parse(ProgramSource::from_str("a=b\nb=c"))?;
-    let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
-    let execution = program.start_execution(
-        &input,
-        limits,
-    )?;
-
-    let execution = match execution.step().map_err(|step| step.into_error())? {
-        ExecutionTransition::Applied(applied) => {
-            assert!(applied.state().bytes().eq(b"b".iter().copied()));
-            applied.into_running()
-        }
-        ExecutionTransition::Stable(_) | ExecutionTransition::Returned(_) => {
-            return Err("expected first applied step".into());
-        }
-    };
-
-    let execution = match execution.step().map_err(|step| step.into_error())? {
-        ExecutionTransition::Applied(applied) => {
-            assert!(applied.state().bytes().eq(b"c".iter().copied()));
-            applied.into_running()
-        }
-        ExecutionTransition::Stable(_) | ExecutionTransition::Returned(_) => {
-            return Err("expected second applied step".into());
-        }
-    };
-
-    match execution.step().map_err(|step| step.into_error())? {
-        ExecutionTransition::Stable(stable) => {
-            assert_eq!(stable.steps().get(), 2);
-            assert!(stable.state().bytes().eq(b"c".iter().copied()));
-        }
-        ExecutionTransition::Applied(_) | ExecutionTransition::Returned(_) => {
-            return Err("expected stable completion".into());
-        }
-    }
-    Ok(())
-}
-```
-
-`(return)` is a completion state, not an ordinary continuation step. Its output
-is exposed as a borrowed parsed payload; callers that need ownership can
-materialize it explicitly from the payload view:
-
-```rust
-use rsaeb::execution::ExecutionTransition;
-use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, StepLimit};
-use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let program = Program::parse(ProgramSource::from_str("a=(return)ok"))?;
-    let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
-    let execution = program.start_execution(
-        &input,
-        limits,
-    )?;
-
-    let owned_output = match execution.step().map_err(|step| step.into_error())? {
-        ExecutionTransition::Returned(returned) => returned.output().to_vec()?,
-        _ => Vec::new(),
-    };
-
-    assert_eq!(owned_output, b"ok");
-    Ok(())
-}
-```
+applied rule instead of running to completion in one call. The public typestate
+API lives under `rsaeb::execution`: only `RunningExecution` can step, while
+`AppliedExecution`, `StableExecution`, and `ReturnedExecution` represent the
+post-step states. `(return)` is a terminal state, not an ordinary continuation
+step. See crate-level docs for the full stepwise example.
 
 ## Parser behavior
 
@@ -658,90 +544,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 Tracing has two layers.
 
 Borrowed tracing is the allocation-free primitive. Events borrow the runtime
-state or return payload only for the callback invocation:
-
-```rust
-use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, StepLimit};
-use rsaeb::trace::BorrowedTraceEvent;
-use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
-    let mut lengths = Vec::new();
-
-    let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
-    let result = program.run_with_borrowed_trace(&input, limits, |event| {
-        lengths.push(event.byte_count().get());
-        if let BorrowedTraceEvent::Step { rule, .. } = event {
-            let _line = rule.line_number();
-        }
-    })?;
-
-    assert!(matches!(
-        result.outcome(),
-        RunOutcome::Return(output) if output.as_bytes() == b"ok"
-    ));
-    assert_eq!(lengths.as_slice(), &[1, 1, 2]);
-    Ok(())
-}
-```
-
-Trace snapshotting materializes state/output bytes into typed owned snapshots
-under explicit `TraceSnapshotLimits`: runtime limits still govern interpreter
-execution, while `TraceSnapshotByteLimit` governs one materialized event. Step
-events still borrow `RuleView` from the parsed `Program`, so retained trace
-snapshot events cannot outlive that program:
-
-```rust
-use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN, StepLimit, TraceSnapshotByteLimit, TraceSnapshotLimits};
-use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
-use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
-    let mut events = Vec::new();
-
-    let limits = TraceSnapshotLimits::new(
-        RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN),
-        TraceSnapshotByteLimit::new(1024),
-    );
-    let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
-    let result = program.run_with_trace_snapshots(
-        &input,
-        limits,
-        |event| {
-            events.push(event);
-        },
-    )?;
-
-    assert!(matches!(
-        result.outcome(),
-        RunOutcome::Return(output) if output.as_bytes() == b"ok"
-    ));
-    let initial = events.first().ok_or("missing initial trace event")?;
-    let first_step = events.get(1).ok_or("missing first step trace event")?;
-    let second_step = events.get(2).ok_or("missing second step trace event")?;
-
-    assert!(matches!(initial, TraceSnapshotEvent::Initial { state } if state.as_bytes() == b"a"));
-    assert!(matches!(first_step, TraceSnapshotEvent::Step {
-        effect: TraceSnapshotEffect::Continue { state },
-        ..
-    } if state.as_bytes() == b"b"));
-    assert!(matches!(second_step, TraceSnapshotEvent::Step {
-        effect: TraceSnapshotEffect::Return { output },
-        ..
-    } if output.as_bytes() == b"ok"));
-    assert!(matches!(
-        second_step,
-        TraceSnapshotEvent::Step {
-            effect: TraceSnapshotEffect::Return { .. },
-            ..
-        }
-    ));
-    Ok(())
-}
-```
+state or return payload only for the callback invocation. Trace snapshotting
+materializes state/output bytes into typed owned snapshots under explicit
+`TraceSnapshotLimits`: runtime limits still govern interpreter execution, while
+`TraceSnapshotByteLimit` governs one materialized event. Step events still
+borrow `RuleView` from the parsed `Program`, so retained trace snapshot events
+cannot outlive that program. See crate-level docs for retained trace examples.
 
 Fallible borrowed sinks use `try_run_with_borrowed_trace`, which separates
 runtime errors and trace-sink errors with `TracedRunError`. Snapshot tracing has
@@ -752,53 +560,10 @@ failures, and callback failures cannot collapse into one variant.
 
 ## Error model
 
-The library error model is intentionally split:
-
-```rust
-use rsaeb::error::RuntimeInputError;
-use rsaeb::limits::DEFAULT_MAX_INPUT_LEN;
-use rsaeb::{Program, ProgramSource, RuntimeInput};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    match Program::parse(ProgramSource::from_str("a=b=c")) {
-        Err(parse_error) => assert_eq!(parse_error.line().get(), 1),
-        Ok(_) => return Err("expected parse error".into()),
-    }
-
-    let input_error = RuntimeInput::validate("aあ".as_bytes(), DEFAULT_MAX_INPUT_LEN);
-
-    if let Err(RuntimeInputError::NonAscii { column, .. }) = input_error {
-        assert_eq!(column.get(), 2);
-    }
-
-    Ok(())
-}
-```
-
-Allocation failures are structured:
-
-```rust
-use rsaeb::error::{AllocationContext, RunError, TraceSnapshotError};
-
-fn inspect_run(error: RunError) {
-    if let RunError::Allocation(error) = error {
-        match error.context() {
-            AllocationContext::RuntimeRewriteState => {
-                eprintln!("failed to allocate next rewrite state");
-            }
-            _ => {}
-        }
-    }
-}
-
-fn inspect_snapshot(error: TraceSnapshotError) {
-    if let TraceSnapshotError::Allocation(error) = error {
-        if error.context() == AllocationContext::TraceSnapshot {
-            eprintln!("failed to allocate trace snapshot");
-        }
-    }
-}
-```
+The library error model is intentionally split. Parse errors, runtime input
+errors, runtime execution errors, allocation errors, configured limit errors,
+and trace materialization errors have separate structured types under
+`rsaeb::error`.
 
 State length arithmetic overflow is separate from allocation failure and is
 reported as `RunError::StateSize`. Configured byte budgets and step budgets are
@@ -823,18 +588,21 @@ the primary execution path:
 - `RuntimeInput`
 - `Program`
 - `RunLimits`
+- `RunResult`
 - `RunOutcome`
+- `RuntimeStateSnapshot`
+- `ReturnOutput`
 - `RuntimeInput::validate(bytes, limit)`
 
 Secondary domains live under explicit namespaces:
 
 - `rsaeb::limits`: `StepLimit`, `RuntimeInputByteLimit`,
   `RuntimeStateByteLimit`, `ReturnByteLimit`, `TraceSnapshotByteLimit`,
-  `TraceSnapshotLimits`, byte-count value types, `StepCount`, and default
-  budget constants
+  `TraceSnapshotLimits`, `RuntimeInputByteCount`, `RuntimeStateByteCount`,
+  other byte-count value types, `StepCount`, and default budget constants
 - `rsaeb::execution`: `RunningExecution`, `ExecutionTransition`,
   `AppliedExecution`, `StableExecution`, `ReturnedExecution`,
-  `ExecutionStepError`, `RunResult`, `RuntimeStateSnapshot`, and `ReturnOutput`
+  and `ExecutionStepError`
 - `rsaeb::inspect`: `RuleView`, `RuleActionView`, `PayloadView`, rule
   position/count types, `RuleRepeat`, and `RuleAnchor`
 - `rsaeb::trace`: borrowed trace events/effects, snapshot trace events/effects,
