@@ -16,65 +16,15 @@ programming-puzzle idea. This crate exists because that design is worth
 studying, testing, and reimplementing. If this interpreter interests you,
 please support the original game.
 
-## Design boundary
+## Quick Start
 
-The important split is deliberately strict: program source and runtime input are
-different byte domains.
-
-- Program code is compact printable ASCII syntax.
-- ASCII whitespace in program code is ignored before parsing.
-- `#` starts a comment for the rest of the source line.
-- Comments may contain non-ASCII or non-UTF-8 bytes.
-- Executable code outside comments must be ASCII.
-- Program payloads cannot contain whitespace, `=`, `#`, `(`, `)`, non-ASCII
-  bytes, or ASCII control bytes.
-- Runtime input is ASCII data and may contain spaces, ASCII control bytes, and
-  reserved syntax bytes.
-- Normal rewrites preserve runtime-only bytes that program code cannot construct
-  or match.
-- `(return)` stops execution and replaces the whole output with its return
-  payload.
-
-The crate intentionally contains no filesystem, process, stdout/stderr,
-argument parsing, environment access, or lossy display boundary. Those belong in
-a CLI or host application, not in the interpreter core.
-
-## `no_std + alloc` boundary
-
-The library crate is `#![no_std]` and uses `alloc` for owned buffers such as
-parsed rules, runtime input state, per-run `(once)` state, run results, and
-trace snapshots. It requires an allocator, but not `std`.
-
-Allocation is explicit and fallible. Parser/runtime paths reserve explicitly and
-report `AllocationError` instead of relying on accidental `Vec` growth.
-`RuntimeInputByteLimit` bounds owned input classification before allocation.
-Runtime expansion is budgeted through `RunLimits`; the runtime checks size
-limits before allocating oversized states or return outputs. Trace snapshot
-materialization is budgeted separately through an explicit
-`TraceSnapshotByteLimit`. Owned public values that contain byte buffers
-intentionally do not implement `Clone`; copying bytes is an explicit
-materialization step, not a hidden infallible API. Parser payload validation is
-reported before payload storage allocation, so invalid source bytes are not
-hidden behind allocation failures.
-
-```sh
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all-targets
-cargo test --doc
-cargo package --list
-cargo package
-```
-
-A downstream `std` application can use the library normally. A downstream
-`no_std` application must provide an allocator before calling APIs that allocate.
-
-## Basic usage
-
-Parse and run from UTF-8 source:
+Parse source into an immutable `Program`, validate runtime input, and run with
+explicit limits:
 
 ```rust
-use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS};
+use rsaeb::limits::{
+    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
+};
 use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -82,71 +32,97 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let limits = RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
     let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
     let result = program.run(&input, limits)?;
+
     assert!(matches!(
         result.outcome(),
         RunOutcome::Stable(output) if output.as_bytes() == b"b"
     ));
+
     Ok(())
 }
 ```
 
 Use `ProgramSource::from_bytes` when source comments may contain non-UTF-8
-bytes. Reusing a parsed `Program` is safe: parsed programs are immutable, and
-`(once)` consumption is runtime-local to each execution.
+bytes. Reuse parsed programs freely: a `Program` is immutable, and `(once)`
+consumption is local to each execution.
 
-## Stepwise execution
+## Execution APIs
 
-Use `Program::start_execution` when a host needs to regain control after each
-applied rule instead of running to completion in one call. The public typestate
-API lives under `rsaeb::execution`: only `RunningExecution` can step, while
-`AppliedExecution`, `StableExecution`, and `ReturnedExecution` represent the
-post-step states. `(return)` is a terminal state, not an ordinary continuation
-step. See crate-level docs for the full stepwise example.
+The primary execution path is:
 
-## Parser behavior
+1. Construct `ProgramSource`.
+2. Parse it with `Program::parse`.
+3. Validate bytes with `RuntimeInput::validate`.
+4. Run with `Program::run` or step with `Program::start_execution`.
 
-The parser is byte-oriented. Comments are removed before executable-code
-validation, so comments can contain arbitrary non-ASCII bytes:
+The crate intentionally contains no filesystem, process, stdout/stderr,
+argument parsing, environment access, or lossy display boundary. Hosts should
+perform I/O outside the interpreter and pass already-loaded bytes to
+`ProgramSource` and `RuntimeInput`.
+
+### Stepwise Execution
+
+Use `Program::start_execution` when a host needs control after each applied
+rule instead of running to completion in one call. The public typestate API
+lives under `rsaeb::execution`: only `RunningExecution` can step, while
+`AppliedExecution`, `StableExecution`, and `ReturnedExecution` represent
+post-step states. `(return)` is terminal, not an ordinary continuation step.
+
+The docs.rs crate page contains a complete doctested stepwise example.
+
+### Resource Limits
+
+`RunLimits` is the execution contract. Step count alone is not enough for a
+rewrite system because a short run can still expand state aggressively.
 
 ```rust
-use rsaeb::{Program, ProgramSource};
-
-fn main() -> Result<(), rsaeb::error::ParseError> {
-    let program = Program::parse(ProgramSource::from_bytes(b"a=b#\xff\xfe\n"))?;
-    assert_eq!(program.rule_count().get(), 1);
-    Ok(())
-}
-```
-
-ASCII whitespace in program code is ignored, but spaces in runtime input are
-data:
-
-```rust
-use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit};
-use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
+use rsaeb::error::{LimitError, RunError};
+use rsaeb::limits::{
+    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
+};
+use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let input = RuntimeInput::validate(b"a bc", DEFAULT_MAX_INPUT_LEN)?;
-    let result = Program::parse(ProgramSource::from_str("ab=bb"))?
-        .run(&input, limits)?;
+    let limits = RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
+    let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
+    let result = Program::parse(ProgramSource::from_str("a=b"))?.run(&input, limits);
+
     assert!(matches!(
-        result.outcome(),
-        RunOutcome::Stable(output) if output.as_bytes() == b"a bc"
+        result,
+        Err(RunError::Limit(LimitError::Step { completed_steps, .. }))
+            if completed_steps.get() == 0
     ));
+
     Ok(())
 }
 ```
 
-The reserved syntax bytes `=`, `#`, `(`, and `)` cannot appear in executable
-payloads. They may appear in runtime input and will be preserved unless a rule
-rewrites around them or `(return)` replaces the whole output.
+Execution may succeed exactly at the step limit. The step limit becomes an
+error only when another rule would still apply after the configured number of
+completed steps.
 
-Parse error columns are one-based byte positions in the original source line
-before whitespace compaction. Diagnostics point at the user's source text, not
-at the internal compacted representation.
+Runtime input validation is also bounded by `RuntimeInputByteLimit` before the
+interpreter materializes owned input state. Trace snapshot materialization has
+its own `TraceSnapshotByteLimit` because tracing is outside runtime execution.
 
-## Program format
+### Tracing
+
+Tracing has two layers:
+
+- Borrowed tracing is the allocation-free primitive. Events borrow runtime
+  state or return payload bytes only for the callback invocation.
+- Snapshot tracing materializes owned event bytes under `TraceSnapshotLimits`.
+
+Fallible borrowed sinks use `try_run_with_borrowed_trace`, which separates
+runtime errors from trace-sink errors with `TracedRunError`. Snapshot tracing
+adds one more failure domain: `run_with_trace_snapshots` returns
+`TraceSnapshotRunError`, and `try_run_with_trace_snapshots` returns
+`FallibleTraceSnapshotRunError`.
+
+Parsed rule views inside trace events borrow from the parsed `Program`, so
+retained trace events cannot outlive that program.
+
+## A=B Language Reference
 
 A program source is a byte sequence containing one rewrite rule per non-empty
 code line:
@@ -165,51 +141,6 @@ Each line is parsed in this order:
 6. Non-empty compact code must contain exactly one `=`.
 7. The left side and right side are parsed as compact rule syntax.
 
-Internally, parser/runtime phases stay separate instead of passing a naked
-`Vec<u8>` through every stage:
-
-```text
-raw line bytes
-  -> RawSourceLine
-  -> CodeLine                # comment removed, executable code ASCII validated
-  -> CompactCodeLine         # whitespace removed, SourceColumn retained
-  -> NonEmptyCompactCodeLine # empty compact lines cannot enter rule parsing
-  -> RuleSyntaxLine          # exactly one '=' has been proven
-  -> LeftSyntax / RightSyntax
-  -> ProgramByte             # bytes that program code may construct and match
-
-runtime input bytes
-  -> AsciiByte         # runtime input domain validation
-  -> RuntimeByte       # private ProgramConstructible(ProgramByte) or Opaque(NonProgramAsciiByte)
-```
-
-The implementation follows the same boundaries as the data flow. Parser stages
-live under `parser/`: source location construction, raw-line cleanup, compact
-code lines, and left/right rule syntax are separate steps. Program-facing types
-live under `program/`: resource limits, run results, parsed rule storage, and
-trace convenience methods are separate from the `Program` entrypoint. Runtime
-execution lives under `runtime/`: validated input materialization, mutable
-state, rewrite scratch buffers, rule matching, `(once)` state, step budgeting,
-and the execution loop are separate modules. These module boundaries are not a
-second public API; they exist so the internal source of truth for each domain is
-singular.
-
-Program payloads are stored as `ProgramByte`, not raw `u8`. Runtime state is
-stored as `RuntimeByte`: payload-compatible input and rule output become
-editable program bytes, while whitespace, control bytes, and reserved syntax
-bytes from input become opaque ASCII bytes. Ordinary rules match only editable bytes.
-Opaque input bytes are preserved by surrounding rewrites but cannot be directly
-matched, created, or deleted by program payloads. Runtime state is materialized
-only at output boundaries, and the owned public values keep their purpose in the
-type: stable states use `RuntimeStateSnapshot`, while `(return)` payloads use
-`ReturnOutput`. During execution, the active state and the rewrite scratch
-buffer are distinct typed buffers; the runtime swaps them only after a
-successful continuation step, so a partially built rewrite cannot become the
-committed state. `(once)` rules carry private slots assigned during parsing;
-matching only observes whether a slot is still fresh, and only a committed
-application can consume that slot. There is no public constructor for `(once)`
-slots, so callers cannot forge indexes into the per-run table.
-
 Examples:
 
 ```text
@@ -218,23 +149,16 @@ a=b# this is parsed as a=b
 a b = b b  # this is parsed as ab=bb
 ```
 
-Non-ASCII text is allowed only in comments:
+Comments may contain arbitrary non-ASCII or non-UTF-8 bytes when source is
+provided with `ProgramSource::from_bytes`. Executable code outside comments must
+be ASCII. ASCII control bytes are invalid in executable code except for ASCII
+whitespace that is removed during compaction.
 
-```text
-a=b# 日本語コメントは許可
-```
+Parse error columns are one-based byte positions in the original source line
+before whitespace compaction. Diagnostics point at the user's source text, not
+at the internal compacted representation.
 
-This is invalid because the non-ASCII byte is in code:
-
-```text
-a=あ
-```
-
-ASCII control bytes are invalid in executable code, except for ASCII whitespace
-that is removed during compaction. Runtime input is separate and may contain
-ASCII control bytes as data.
-
-## Reserved characters
+### Reserved Characters
 
 The following characters are reserved in program code:
 
@@ -247,12 +171,6 @@ Their meanings are fixed:
 - `=` separates the left side from the right side.
 - `#` starts a comment.
 - `(` and `)` are only allowed as part of supported modifier/action tokens.
-
-Internally, payload construction rejects all reserved syntax bytes at the
-program-payload boundary. `=` and `#` are normally handled before payload
-parsing, but they still cannot become payload data even if a future parser path
-tries to feed them there. The implementation does not rely on “this should never
-arrive here” as a safety boundary.
 
 A second `=` in compact code is a parse error:
 
@@ -285,10 +203,7 @@ refuse them as rule data.
 Runtime input is different. Input bytes are runtime data, not program code.
 Input must be ASCII, but it may contain whitespace, ASCII control bytes, and
 reserved characters. Ordinary rewrite actions cannot match, create, or delete
-those bytes directly. The bytes themselves remain runtime data, although nearby
-editable bytes may be inserted, removed, or moved.
-
-Example:
+those bytes directly.
 
 ```text
 program: a=b
@@ -296,7 +211,7 @@ input:   a=()#c
 output:  b=()#c
 ```
 
-Rules also cannot match across preserved runtime-only bytes:
+Rules cannot match across preserved runtime-only bytes:
 
 ```text
 program: ab=bb
@@ -304,9 +219,9 @@ input:   a bc
 output:  a bc
 ```
 
-`(return)` is intentionally different from ordinary rewrite actions. It stops
-execution and replaces the final output with the return payload, so runtime-only
-input bytes are not preserved after a matching return rule:
+`(return)` stops execution and replaces the final output with its return
+payload, so runtime-only input bytes are not preserved after a matching return
+rule:
 
 ```text
 program: a=(return)x
@@ -314,7 +229,7 @@ input:   a=()#c
 output:  x
 ```
 
-## Left-side modifiers
+### Left-Side Modifiers
 
 The left side may start with one repeat modifier and one anchor modifier:
 
@@ -342,7 +257,7 @@ Because code whitespace is ignored, this is also valid and equivalent to
 ( once ) ( start ) a = b
 ```
 
-## Right-side actions
+### Right-Side Actions
 
 The right side selects the action for a matching rule:
 
@@ -366,7 +281,7 @@ x=(end)y
 x=(return)y
 ```
 
-## Empty sides
+### Empty Sides
 
 The left side and right side may be empty.
 
@@ -397,7 +312,7 @@ An unanchored empty-left rule without `(once)`, `(return)`, or some later rule
 that makes execution stop can rewrite forever until the step limit is reached.
 That is legal syntax; execution remains governed by `RunLimits`.
 
-## Execution semantics
+### Ordered Execution
 
 Execution is ordered and single-step.
 
@@ -423,142 +338,78 @@ xx
 The first rule is preferred over the second rule, and each application rewrites
 the leftmost matching `aa`.
 
-## Resource limits
+## Byte-Domain Boundary
 
-`RunLimits` is the execution contract. Step count alone is not enough for a
-rewrite system because a short run can still expand a state aggressively.
+Program source and runtime input are deliberately different byte domains:
 
-```rust
-use rsaeb::error::{LimitError, RunError, StateLimitContext};
-use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, ReturnByteLimit, RuntimeStateByteLimit, StepLimit};
-use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
+- Program code is compact printable ASCII syntax.
+- ASCII whitespace in program code is ignored before parsing.
+- `#` starts a comment for the rest of the source line.
+- Comments may contain non-ASCII or non-UTF-8 bytes.
+- Executable code outside comments must be ASCII.
+- Program payloads cannot contain whitespace, `=`, `#`, `(`, `)`, non-ASCII
+  bytes, or ASCII control bytes.
+- Runtime input is ASCII data and may contain spaces, ASCII control bytes, and
+  reserved syntax bytes.
+- Normal rewrites preserve runtime-only bytes that program code cannot
+  construct or match.
+- `(return)` stops execution and replaces the whole output with its return
+  payload.
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let limits = RunLimits::new(
-        StepLimit::new(10_000),
-        RuntimeStateByteLimit::new(1024),
-        ReturnByteLimit::new(1024),
-    );
+Internally, parser and runtime phases stay separate instead of passing raw byte
+buffers through every stage:
 
-    let limits = limits.with_state_byte_limit(RuntimeStateByteLimit::new(2));
-    let input = RuntimeInput::validate(b"", DEFAULT_MAX_INPUT_LEN)?;
-    let error = Program::parse(ProgramSource::from_str("=a"))?.run(&input, limits);
-    assert!(matches!(
-        error,
-        Err(RunError::Limit(LimitError::State {
-            context: StateLimitContext::Rewrite,
-            limit,
-            attempted_len,
-        })) if limit == RuntimeStateByteLimit::new(2)
-            && attempted_len.get() == 3
-    ));
+```text
+raw line bytes
+  -> RawSourceLine
+  -> CodeLine                # comment removed, executable code ASCII validated
+  -> CompactCodeLine         # whitespace removed, SourceColumn retained
+  -> NonEmptyCompactCodeLine # empty compact lines cannot enter rule parsing
+  -> RuleSyntaxLine          # exactly one '=' has been proven
+  -> LeftSyntax / RightSyntax
+  -> ProgramByte             # bytes that program code may construct and match
 
-    Ok(())
-}
+runtime input bytes
+  -> AsciiByte         # runtime input domain validation
+  -> RuntimeByte       # private ProgramConstructible(ProgramByte) or Opaque(NonProgramAsciiByte)
 ```
 
-Execution may succeed exactly at the step limit. The step limit becomes an error
-only when another rule would still apply after the configured number of steps.
+Program payloads are stored as `ProgramByte`, not raw `u8`. Runtime state is
+stored as `RuntimeByte`: payload-compatible input and rule output become
+editable program bytes, while whitespace, control bytes, and reserved syntax
+bytes from input become opaque ASCII bytes. Ordinary rules match only editable
+bytes. Opaque input bytes are preserved by surrounding rewrites but cannot be
+directly matched, created, or deleted by program payloads.
 
-```rust
-use rsaeb::error::{LimitError, RunError};
-use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit};
-use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
+Runtime state is materialized only at output boundaries. Stable states use
+`RuntimeStateSnapshot`; `(return)` payloads use `ReturnOutput`. During
+execution, the active state and the rewrite scratch buffer are distinct typed
+buffers, and the runtime swaps them only after a successful continuation step.
+`(once)` rules carry private slots assigned during parsing; only a committed
+application can consume that slot.
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let exact_limits = RunLimits::new(StepLimit::new(1), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let exact_input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
-    let exact = Program::parse(ProgramSource::from_str("a=b"))?.run(
-        &exact_input,
-        exact_limits,
-    )?;
-    assert!(matches!(
-        exact.outcome(),
-        RunOutcome::Stable(output) if output.as_bytes() == b"b"
-    ));
-    assert_eq!(exact.steps().get(), 1);
+## `no_std + alloc` Boundary
 
-    let no_match_limits = RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let no_match_input = RuntimeInput::validate(b"x", DEFAULT_MAX_INPUT_LEN)?;
-    let no_match = Program::parse(ProgramSource::from_str("a=b"))?.run(
-        &no_match_input,
-        no_match_limits,
-    )?;
-    assert!(matches!(
-        no_match.outcome(),
-        RunOutcome::Stable(output) if output.as_bytes() == b"x"
-    ));
-    assert_eq!(no_match.steps().get(), 0);
+The library crate is `#![no_std]` and uses `alloc` for owned buffers such as
+parsed rules, runtime input state, per-run `(once)` state, run results, and
+trace snapshots. It requires an allocator, but not `std`.
 
-    let would_apply_limits = RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let would_apply_input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
-    let would_apply = Program::parse(ProgramSource::from_str("a=b"))?.run(
-        &would_apply_input,
-        would_apply_limits,
-    );
-    assert!(matches!(
-        would_apply,
-        Err(RunError::Limit(LimitError::Step {
-            max_steps,
-            completed_steps,
-            state_len,
-        })) if max_steps == StepLimit::new(0)
-            && completed_steps.get() == 0
-            && state_len.get() == 1
-    ));
-    Ok(())
-}
-```
+Allocation is explicit and fallible. Parser/runtime paths reserve explicitly
+and report `AllocationError` instead of relying on accidental `Vec` growth.
+Runtime expansion is budgeted through `RunLimits`; the runtime checks size
+limits before allocating oversized states or return outputs. Trace snapshot
+materialization is budgeted separately through `TraceSnapshotByteLimit`.
 
-## Rule inspection
+Owned public values that contain byte buffers intentionally do not implement
+`Clone`; copying bytes is an explicit materialization step, not a hidden
+infallible API. Parser payload validation is reported before payload storage
+allocation, so invalid source bytes are not hidden behind allocation failures.
 
-Parsed rule inspection is structural. `RuleView` exposes repeat policy, anchor,
-left payload, and right action directly. There is no stored `compact_source`
-blob: canonical source is generated from the structured rule when requested.
-This removes the second source of truth.
+A downstream `std` application can use the library normally. A downstream
+`no_std` application must provide an allocator before calling APIs that
+allocate.
 
-```rust
-use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
-use rsaeb::{Program, ProgramSource};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let program = Program::parse(ProgramSource::from_str("( once ) ( start ) a = ( end ) b # comment"))?;
-    let rule = program.rules().next().ok_or("missing parsed rule")?;
-
-    assert_eq!(rule.position().number().get(), 1);
-    assert_eq!(rule.line_number().get(), 1);
-    assert_eq!(rule.repeat(), RuleRepeat::Once);
-    assert_eq!(rule.anchor(), RuleAnchor::Start);
-    assert!(rule.lhs().eq_bytes(b"a"));
-    assert!(matches!(
-        rule.action(),
-        RuleActionView::MoveEnd(payload) if payload.eq_bytes(b"b")
-    ));
-    assert_eq!(rule.canonical_source()?, b"(once)(start)a=(end)b");
-    Ok(())
-}
-```
-
-## Tracing
-
-Tracing has two layers.
-
-Borrowed tracing is the allocation-free primitive. Events borrow the runtime
-state or return payload only for the callback invocation. Trace snapshotting
-materializes state/output bytes into typed owned snapshots under explicit
-`TraceSnapshotLimits`: runtime limits still govern interpreter execution, while
-`TraceSnapshotByteLimit` governs one materialized event. Step events still
-borrow `RuleView` from the parsed `Program`, so retained trace snapshot events
-cannot outlive that program. See crate-level docs for retained trace examples.
-
-Fallible borrowed sinks use `try_run_with_borrowed_trace`, which separates
-runtime errors and trace-sink errors with `TracedRunError`. Snapshot tracing has
-one more failure domain: `run_with_trace_snapshots` returns
-`TraceSnapshotRunError`, and `try_run_with_trace_snapshots` returns
-`FallibleTraceSnapshotRunError` so runtime failures, snapshot materialization
-failures, and callback failures cannot collapse into one variant.
-
-## Error model
+## Error Model
 
 The library error model is intentionally split. Parse errors, runtime input
 errors, runtime execution errors, allocation errors, configured limit errors,
@@ -567,19 +418,15 @@ and trace materialization errors have separate structured types under
 
 State length arithmetic overflow is separate from allocation failure and is
 reported as `RunError::StateSize`. Configured byte budgets and step budgets are
-reported as `RunError::Limit(LimitError::...)`. Runtime input validation owns
-the typed input bytes, and stepwise execution uses terminal types, so the old
-runtime invariant error path is no longer part of the public execution model.
-Step-limit errors report the last state length, not the state bytes, so
-reporting the step limit cannot turn into an allocation failure. Trace snapshot
-byte limits are reported through `TraceSnapshotError`, not `RunError::Limit`,
-because snapshot materialization is outside runtime execution. Use borrowed
-tracing when the last state bytes are needed for diagnostics.
+reported as `RunError::Limit(LimitError::...)`. Trace snapshot byte limits are
+reported through `TraceSnapshotError`, not `RunError::Limit`, because snapshot
+materialization is outside runtime execution.
+
 Filesystem failures are not part of the library error model. External I/O must
 be handled before bytes enter `ProgramSource::from_bytes`,
 `ProgramSource::from_str`, or `RuntimeInput::validate`.
 
-## Public API overview
+## Public API Overview
 
 The generated rustdoc is the complete API reference. The crate root is kept to
 the primary execution path:
@@ -610,3 +457,16 @@ Secondary domains live under explicit namespaces:
 - `rsaeb::error`: parse, input, runtime, allocation, limit, and trace error
   types, including rejected-byte diagnostic value types
 - `rsaeb::source`: source-position value types used by parser diagnostics
+
+## Development Checks
+
+Run the public documentation and package checks before publishing changes:
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test --all-targets
+cargo test --doc
+cargo package --list
+cargo package
+```

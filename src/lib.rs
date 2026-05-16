@@ -1,19 +1,24 @@
 //! Byte-oriented interpreter for A=B ordered rewrite programs.
 //!
+//! This crate-level documentation is the docs.rs API guide. It shows the
+//! primary execution, stepping, inspection, tracing, limit, and error surfaces.
+//! The crate README carries the longer language reference and project overview.
+//!
 //! `rsaeb` is a `no_std + alloc` library crate. It parses compact A=B source
 //! into an immutable [`Program`] and runs that program against typed
 //! [`RuntimeInput`] validated before execution. Files, stdout, stderr,
-//! arguments, and lossy display formatting are outside the interpreter core.
+//! arguments, environment access, and lossy display formatting are outside the
+//! interpreter core.
 //!
-//! # Domain boundary
+//! # Core boundary
 //!
-//! Program syntax and runtime input are intentionally different byte domains:
+//! Program source and runtime input enter through separate typed boundaries:
 //!
-//! - program code is compact printable ASCII syntax;
-//! - comments are ignored bytes after `#` and may contain arbitrary bytes;
-//! - runtime input is ASCII data and may contain whitespace/reserved bytes;
-//! - program payloads cannot contain whitespace, reserved syntax characters, or
-//!   non-ASCII/control bytes.
+//! - [`ProgramSource`] labels bytes as A=B source before [`Program::parse`];
+//! - [`RuntimeInput`] owns already-validated ASCII input bytes;
+//! - [`RunLimits`] bounds each runtime invocation;
+//! - trace snapshots use [`limits::TraceSnapshotByteLimit`] separately from
+//!   runtime execution limits.
 //!
 //! # Basic execution
 //!
@@ -40,9 +45,8 @@
 //! ```
 //!
 //! Parse [`Program`] once when the same rules should be reused. Per-run
-//! `(once)` state is owned by each runtime invocation, not by the program.
-//! Each execution owns runtime rule state derived from the parsed rule list, so
-//! `(once)` state cannot drift away from rule order while scanning:
+//! `(once)` state is owned by each runtime invocation, not by the parsed
+//! program:
 //!
 //! ```
 //! use rsaeb::limits::{
@@ -128,7 +132,8 @@
 //!
 //! # Limits
 //!
-//! [`limits::RuntimeInputByteLimit`] bounds owned input classification before allocation.
+//! [`limits::RuntimeInputByteLimit`] bounds owned input classification before
+//! allocation.
 //! [`RunLimits`] carries the step budget and byte budgets for runtime states and
 //! `(return)` outputs. Trace snapshot materialization uses an explicit
 //! [`limits::TraceSnapshotByteLimit`]. Step limits are checked only when another
@@ -155,7 +160,7 @@
 //! # }
 //! ```
 //!
-//! # Rule inspection and tracing
+//! # Rule inspection
 //!
 //! Parsed rules are exposed as borrowed structured views, not as stored source
 //! strings:
@@ -179,6 +184,8 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Tracing
 //!
 //! Borrowed trace events allocate no snapshots. Snapshot tracing is layered on
 //! top when a caller needs owned event bytes:
