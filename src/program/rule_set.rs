@@ -3,14 +3,14 @@ use alloc::vec::Vec;
 use crate::allocation::{AllocationContext, AllocationError, try_push};
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
 use crate::inspect::{RuleCount, RulePosition, RuleRepeat};
-use crate::rule::{OnceRuleSlot, ParsedRule, Rule, RuleRepeatState};
+use crate::rule::{OnceRuleCount, ParsedRule, Rule, RuleRepeatState};
 
 use super::RuleLimit;
 
 #[derive(Debug, PartialEq, Eq, Default)]
 pub(crate) struct RuleSet {
     rules: Vec<Rule>,
-    once_rule_count: usize,
+    once_rule_count: OnceRuleCount,
 }
 
 impl RuleSet {
@@ -59,18 +59,16 @@ impl RuleSet {
         }
 
         let (repeat, next_once_rule_count) = if parsed.repeat() == RuleRepeat::Once {
-            let next_once_rule_count = self.once_rule_count.checked_add(1).ok_or_else(|| {
-                ParseError::at_line(
-                    line_number,
-                    ParseErrorKind::Allocation(AllocationError::capacity_overflow(
-                        AllocationContext::ProgramRuleTable,
-                    )),
-                )
-            })?;
-            (
-                RuleRepeatState::Once(OnceRuleSlot::new(self.once_rule_count)),
-                Some(next_once_rule_count),
-            )
+            let (slot, next_once_rule_count) =
+                self.once_rule_count.reserve_next_slot().ok_or_else(|| {
+                    ParseError::at_line(
+                        line_number,
+                        ParseErrorKind::Allocation(AllocationError::capacity_overflow(
+                            AllocationContext::ProgramRuleTable,
+                        )),
+                    )
+                })?;
+            (RuleRepeatState::Once(slot), Some(next_once_rule_count))
         } else {
             (RuleRepeatState::Always, None)
         };
@@ -90,7 +88,11 @@ impl RuleSet {
     }
 
     pub(crate) fn once_rule_count(&self) -> RuleCount {
-        RuleCount::new(self.once_rule_count)
+        RuleCount::new(self.once_rule_count.get())
+    }
+
+    pub(crate) const fn once_slot_count(&self) -> OnceRuleCount {
+        self.once_rule_count
     }
 
     pub(crate) fn as_slice(&self) -> &[Rule] {

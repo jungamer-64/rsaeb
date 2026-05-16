@@ -1,8 +1,7 @@
 use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
-use crate::inspect::RuleCount;
-use crate::rule::{OnceRuleSlot, Rule, RuleRepeatState};
+use crate::rule::{OnceRuleCount, OnceRuleSlot, Rule, RuleRepeatState};
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct OnceStateSet {
@@ -43,7 +42,7 @@ impl OnceStateSet {
     ///
     /// Returns `AllocationError` if the per-execution once-state table cannot
     /// be allocated.
-    pub(crate) fn new(once_rule_count: RuleCount) -> Result<Self, AllocationError> {
+    pub(crate) fn new(once_rule_count: OnceRuleCount) -> Result<Self, AllocationError> {
         let mut states = Vec::new();
         try_reserve_total_exact(
             &mut states,

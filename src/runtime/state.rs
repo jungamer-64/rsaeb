@@ -15,7 +15,9 @@ pub(crate) struct State {
 
 impl State {
     pub(crate) fn from_input(input: InitialStateBytes) -> Self {
-        Self { bytes: input.bytes }
+        Self {
+            bytes: input.into_runtime_bytes(),
+        }
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -31,7 +33,7 @@ impl State {
     }
 
     pub(crate) fn swap_with_scratch(&mut self, scratch: &mut RewriteScratch) {
-        core::mem::swap(&mut self.bytes, &mut scratch.bytes);
+        scratch.swap_with_state_bytes(&mut self.bytes);
     }
 
     pub(crate) fn starts_with_payload(&self, payload: &Payload) -> Option<MatchedStateSpan> {
@@ -73,7 +75,9 @@ impl State {
     ) -> Option<MatchedStateSpan> {
         let state_match =
             MatchedStateSpan::checked(position, payload.byte_count(), self.byte_count())?;
-        let window = self.bytes.get(state_match.start()..state_match.end())?;
+        let window = self
+            .bytes
+            .get(state_match.start.get()..state_match.end.get())?;
 
         window
             .iter()
@@ -175,7 +179,7 @@ impl State {
         output: &mut RewriteScratch,
         state_match: MatchedStateSpan,
     ) -> Result<(), AllocationError> {
-        output.push_existing(self.bytes.iter().copied().take(state_match.start()))
+        output.push_existing(self.bytes.iter().copied().take(state_match.start.get()))
     }
 
     /// Copies bytes after the matched span into scratch storage.
@@ -188,7 +192,7 @@ impl State {
         output: &mut RewriteScratch,
         state_match: MatchedStateSpan,
     ) -> Result<(), AllocationError> {
-        output.push_existing(self.bytes.iter().copied().skip(state_match.end()))
+        output.push_existing(self.bytes.iter().copied().skip(state_match.end.get()))
     }
 
     /// Materializes runtime state bytes at the requested allocation site.

@@ -98,6 +98,10 @@ impl Program {
         self.rule_set.as_slice()
     }
 
+    pub(crate) const fn once_slot_count(&self) -> crate::rule::OnceRuleCount {
+        self.rule_set.once_slot_count()
+    }
+
     /// Starts a stateful execution session for this program.
     ///
     /// The input must already be validated as [`RuntimeInput`]. This function

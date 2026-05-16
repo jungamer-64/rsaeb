@@ -174,7 +174,7 @@ impl<'program> ExecutionCore<'program> {
     ) -> Result<Self, RunError> {
         let input = InitialStateBytes::materialize(input, limits)?;
         let state = State::from_input(input);
-        let once_states = OnceStateSet::new(program.once_rule_count())?;
+        let once_states = OnceStateSet::new(program.once_slot_count())?;
         Ok(Self {
             state,
             scratch: RewriteScratch::new(),
@@ -301,7 +301,6 @@ impl<'program> RunningExecution<'program> {
             }
         }
     }
-
 }
 
 impl<'program> AppliedRule<'program> {

@@ -94,12 +94,29 @@ pub(crate) struct OnceRuleSlot {
 }
 
 impl OnceRuleSlot {
-    pub(crate) const fn new(zero_based: usize) -> Self {
-        Self { zero_based }
-    }
-
     pub(crate) const fn zero_based(self) -> usize {
         self.zero_based
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct OnceRuleCount {
+    value: usize,
+}
+
+impl OnceRuleCount {
+    pub(crate) const fn get(self) -> usize {
+        self.value
+    }
+
+    pub(crate) fn reserve_next_slot(self) -> Option<(OnceRuleSlot, Self)> {
+        let next = self.value.checked_add(1)?;
+        Some((
+            OnceRuleSlot {
+                zero_based: self.value,
+            },
+            Self { value: next },
+        ))
     }
 }
 

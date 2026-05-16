@@ -152,4 +152,8 @@ impl InitialStateBytes {
 
         Ok(Self { bytes })
     }
+
+    pub(crate) fn into_runtime_bytes(self) -> Vec<RuntimeByte> {
+        self.bytes
+    }
 }

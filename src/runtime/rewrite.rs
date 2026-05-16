@@ -55,6 +55,10 @@ impl RewriteScratch {
         Self { bytes: Vec::new() }
     }
 
+    pub(crate) fn swap_with_state_bytes(&mut self, state_bytes: &mut Vec<RuntimeByte>) {
+        core::mem::swap(state_bytes, &mut self.bytes);
+    }
+
     /// Clears scratch storage and reserves the requested rewrite capacity.
     ///
     /// # Errors

@@ -1,8 +1,7 @@
 use super::input::{InitialStateBytes, RuntimeInput};
-use super::matcher::RuleSearch;
 use super::state::State;
 use crate::RunLimits;
-use crate::bytes::{CompactByte, Payload, ProgramByte, RuntimeByte};
+use crate::bytes::{CompactByte, Payload, ProgramByte};
 use crate::error::{LimitError, PayloadKind, RunError, RuntimeInputError, StateLimitContext};
 use crate::execution::{ExecutionStepError, ExecutionTransition};
 use crate::limits::{
@@ -11,7 +10,7 @@ use crate::limits::{
     StepCount, StepLimit,
 };
 use crate::test_support::{
-    TestFailure, TestResult, ensure, ensure_eq, ensure_matches, parse_program, runtime_input,
+    TestFailure, TestResult, ensure_eq, ensure_matches, parse_program, runtime_input,
     source_column, source_line_number,
 };
 use crate::trace::RuntimeStateView;
@@ -28,38 +27,10 @@ fn runtime_view_bytes(view: RuntimeStateView<'_>) -> Vec<u8> {
 /// Returns `TestFailure` if the state has no byte at `index`.
 fn expect_runtime_byte(state: &State, index: usize) -> Result<u8, TestFailure> {
     state
-        .materialized_byte_at(index)
+        .view()
+        .bytes()
+        .nth(index)
         .ok_or(TestFailure::message("expected runtime byte"))
-}
-
-/// Returns the program-constructible runtime byte at `index`.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if the byte is missing or is runtime-only.
-fn expect_program_constructible_byte(state: &State, index: usize) -> Result<u8, TestFailure> {
-    match state.bytes.get(index).copied() {
-        Some(RuntimeByte::ProgramConstructible(byte)) => Ok(byte.get()),
-        Some(RuntimeByte::Opaque(_)) => {
-            Err(TestFailure::message("expected program-constructible byte"))
-        }
-        None => Err(TestFailure::message("expected runtime byte")),
-    }
-}
-
-/// Returns the opaque runtime-only byte at `index`.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if the byte is missing or is program-constructible.
-fn expect_opaque_runtime_byte(state: &State, index: usize) -> Result<u8, TestFailure> {
-    match state.bytes.get(index).copied() {
-        Some(RuntimeByte::Opaque(byte)) => Ok(byte.materialize()),
-        Some(RuntimeByte::ProgramConstructible(_)) => {
-            Err(TestFailure::message("expected opaque runtime byte"))
-        }
-        None => Err(TestFailure::message("expected runtime byte")),
-    }
 }
 
 /// Returns the program payload byte at `index`.
@@ -120,28 +91,36 @@ fn expect_step_transition<'program>(
 
 /// # Errors
 ///
-/// Returns `TestFailure` if once-rule lookup mutates rule availability before a
-/// step commits.
+/// Returns `TestFailure` if a failed once-rule commit attempt consumes rule
+/// availability.
 #[test]
-fn once_rule_lookup_does_not_consume_before_step_commit() -> TestResult {
-    let program = parse_program("(once)a=b")?;
+fn once_rule_failure_does_not_consume_before_step_commit() -> TestResult {
+    let program = parse_program("(once)a=(return)ok")?;
     let input = runtime_input(b"a")?;
-    let mut runtime = program.start_execution(
+    let runtime = program.start_execution(
         &input,
         RunLimits::new(
             StepLimit::new(1),
             DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
+            ReturnByteLimit::new(1),
         ),
     )?;
-
-    ensure(
-        matches!(runtime.find_next_match(), RuleSearch::Matched(_)),
-        "expected first lookup to find the once rule",
+    let error = expect_step_error(runtime.step())?;
+    ensure_eq!(
+        error.error(),
+        &RunError::Limit(LimitError::Return {
+            limit: ReturnByteLimit::new(1),
+            attempted_len: ReturnOutputByteCount::new(2),
+        }),
     )?;
-    ensure(
-        matches!(runtime.find_next_match(), RuleSearch::Matched(_)),
-        "lookup must not consume a once rule before the step commits",
+
+    let repeated_error = expect_step_error(error.into_execution().step())?;
+    ensure_eq!(
+        repeated_error.into_error(),
+        RunError::Limit(LimitError::Return {
+            limit: ReturnByteLimit::new(1),
+            attempted_len: ReturnOutputByteCount::new(2),
+        }),
     )
 }
 
@@ -341,8 +320,21 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
     ensure_eq!(expect_runtime_byte(&state, 1)?, b'=')?;
     ensure_eq!(expect_runtime_byte(&state, 2)?, b'(')?;
     ensure_eq!(expect_runtime_byte(&state, 5)?, b' ')?;
-    ensure_eq!(expect_program_constructible_byte(&state, 0)?, b'a')?;
-    ensure_eq!(expect_opaque_runtime_byte(&state, 1)?, b'=')?;
-    ensure_eq!(expect_opaque_runtime_byte(&state, 2)?, b'(')?;
-    ensure_eq!(expect_opaque_runtime_byte(&state, 5)?, b' ')
+
+    let program = parse_program("a=b")?;
+    let result = program.run(
+        &input,
+        RunLimits::new(
+            StepLimit::new(10_000),
+            DEFAULT_MAX_STATE_LEN,
+            DEFAULT_MAX_RETURN_LEN,
+        ),
+    )?;
+    ensure_matches(
+        matches!(
+            result.outcome(),
+            crate::RunOutcome::Stable(output) if output.as_bytes() == b"b=()# "
+        ),
+        "expected rewrite to leave runtime-only input bytes materialized but unmatched",
+    )
 }
