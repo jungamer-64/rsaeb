@@ -84,13 +84,14 @@ impl OnceStateSet {
     fn valid_once_commit(&self, slot: OnceRuleSlot) -> Option<ValidOnceCommit> {
         self.states
             .get(slot.zero_based())
+            .copied()
             .is_some_and(OnceRuleState::is_fresh)
             .then_some(ValidOnceCommit::new(slot))
     }
 }
 
 impl OnceRuleState {
-    const fn is_fresh(&self) -> bool {
+    const fn is_fresh(self) -> bool {
         matches!(self, Self::Fresh)
     }
 }

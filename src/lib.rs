@@ -14,7 +14,8 @@
 //!
 //! Use these public entry points according to the boundary being crossed:
 //!
-//! - [`ProgramSource`] labels bytes or strings as A=B source before parsing.
+//! - [`ProgramSource::from_bytes`] and [`ProgramSource::from_text`] explicitly
+//!   label host bytes or strings as A=B source before parsing.
 //! - [`Program::parse`] validates source syntax under [`ParseLimits`] and
 //!   returns a reusable [`Program`].
 //! - [`RuntimeInput::validate`] validates raw input bytes into the runtime input

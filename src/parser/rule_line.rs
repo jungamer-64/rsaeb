@@ -104,6 +104,11 @@ impl CompactLineIndex {
         Self { zero_based }
     }
 
+    /// Returns the following compact-line index.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if advancing the index would overflow.
     fn checked_next(self, line_number: SourceLineNumber) -> Result<Self, ParseError> {
         let zero_based = self.zero_based.checked_add(1).ok_or_else(|| {
             parse_allocation_error(
@@ -186,11 +191,11 @@ impl RuleSides {
     /// Returns `ParseError` if the stored separator no longer fits the compact
     /// line. Normal construction prevents this; the error keeps the invariant
     /// checked without panicking.
-    fn slices<'code>(
+    fn slices(
         self,
         line_number: SourceLineNumber,
-        bytes: &'code [CompactByte],
-    ) -> Result<RuleSideSlices<'code>, ParseError> {
+        bytes: &[CompactByte],
+    ) -> Result<RuleSideSlices<'_>, ParseError> {
         let left = bytes.get(..self.separator.equals().get()).ok_or_else(|| {
             parse_allocation_error(
                 line_number,
@@ -425,6 +430,11 @@ impl RightPayloadSyntax<'_> {
     }
 }
 
+/// Checks one parsed payload length against parser limits.
+///
+/// # Errors
+///
+/// Returns `ParseError` if the payload length exceeds `limit`.
 fn ensure_payload_within_limit(
     line_number: SourceLineNumber,
     len: usize,

@@ -42,15 +42,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Use `ProgramSource::from_bytes` when source comments may contain non-UTF-8
-bytes. Reuse parsed programs freely: a `Program` is immutable, and `(once)`
+Construct `ProgramSource` explicitly with `ProgramSource::from_text` or
+`ProgramSource::from_bytes`; there is no implicit source conversion at the API
+boundary. Use `from_bytes` when source comments may contain non-UTF-8 bytes.
+Reuse parsed programs freely: a `Program` is immutable, and `(once)`
 consumption is local to each execution.
 
 ## Execution APIs
 
 The primary execution path is:
 
-1. Construct `ProgramSource`.
+1. Construct `ProgramSource` with `from_text` or `from_bytes`.
 2. Parse it with `Program::parse`.
 3. Validate bytes with `RuntimeInput::validate`.
 4. Run with `Program::run` or step with `Program::start_execution`.
@@ -394,15 +396,18 @@ application can consume that slot.
 
 ## `no_std + alloc` Boundary
 
-The library crate is `#![no_std]` and uses `alloc` for owned buffers such as
-parsed rules, runtime input state, per-run `(once)` state, run results, and
-trace snapshots. It requires an allocator, but not `std`.
+The library crate is `#![no_std]` and uses `alloc` only at owned-buffer
+boundaries such as parsed rules, runtime input state, per-run `(once)` state,
+run results, canonical rule source, and trace snapshots. It requires an
+allocator, but not `std`.
 
 Allocation is explicit and fallible. Parser/runtime paths reserve explicitly
 and report `AllocationError` instead of relying on accidental `Vec` growth.
 Runtime expansion is budgeted through `RunLimits`; the runtime checks size
 limits before allocating oversized states or return outputs. Trace snapshot
 materialization is budgeted separately through `TraceSnapshotByteLimit`.
+Internal parser/runtime witnesses are borrowed slices or typed indexes; they do
+not allocate just to strengthen invariants.
 
 Owned public values that contain byte buffers intentionally do not implement
 `Clone`; copying bytes is an explicit materialization step, not a hidden

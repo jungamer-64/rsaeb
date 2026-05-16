@@ -46,6 +46,11 @@ pub(crate) fn parse_rules_impl(
     Ok(rule_set)
 }
 
+/// Checks raw source length before line parsing starts.
+///
+/// # Errors
+///
+/// Returns `ParseError` if the source length exceeds parser limits.
 fn ensure_source_within_limit(
     source: ProgramSource<'_>,
     limits: ParseLimits,
