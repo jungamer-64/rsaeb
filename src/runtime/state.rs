@@ -10,7 +10,7 @@ use crate::trace::RuntimeStateView;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct State {
-    pub(crate) bytes: Vec<RuntimeByte>,
+    bytes: Vec<RuntimeByte>,
 }
 
 impl State {
@@ -32,11 +32,6 @@ impl State {
 
     pub(crate) fn swap_with_scratch(&mut self, scratch: &mut RewriteScratch) {
         core::mem::swap(&mut self.bytes, &mut scratch.bytes);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn materialized_byte_at(&self, index: usize) -> Option<u8> {
-        self.bytes.get(index).copied().map(RuntimeByte::materialize)
     }
 
     pub(crate) fn starts_with_payload(&self, payload: &Payload) -> Option<MatchedStateSpan> {
@@ -259,15 +254,7 @@ impl MatchedStateSpan {
         })
     }
 
-    pub(crate) const fn start(self) -> usize {
-        self.start.get()
-    }
-
     pub(crate) const fn matched_len(self) -> PayloadByteCount {
         self.matched_len
-    }
-
-    pub(crate) const fn end(self) -> usize {
-        self.end.get()
     }
 }

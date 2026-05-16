@@ -69,18 +69,6 @@ impl<'source> ProgramSource<'source> {
     }
 }
 
-impl<'source> From<&'source [u8]> for ProgramSource<'source> {
-    fn from(bytes: &'source [u8]) -> Self {
-        Self::from_bytes(bytes)
-    }
-}
-
-impl<'source> From<&'source str> for ProgramSource<'source> {
-    fn from(source: &'source str) -> Self {
-        Self::from_text(source)
-    }
-}
-
 /// One-based source line number in parsed source diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceLineNumber {

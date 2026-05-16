@@ -302,10 +302,6 @@ impl<'program> RunningExecution<'program> {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn find_next_match(&mut self) -> RuleSearch<'program> {
-        find_next_match(self.core.rules, &self.core.once_states, &self.core.state)
-    }
 }
 
 impl<'program> AppliedRule<'program> {

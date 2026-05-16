@@ -1,5 +1,4 @@
 use alloc::vec::Vec;
-use core::ops::Range;
 
 use crate::allocation::{AllocationContext, AllocationError};
 use crate::bytes::{CompactByte, Payload, PayloadByteCount};
@@ -18,7 +17,7 @@ use super::location::parse_allocation_error;
 pub(super) struct RuleSyntaxLine {
     line_number: SourceLineNumber,
     bytes: Vec<CompactByte>,
-    sides: RuleSideRanges,
+    sides: RuleSides,
 }
 
 impl RuleSyntaxLine {
@@ -32,8 +31,8 @@ impl RuleSyntaxLine {
         line_number: SourceLineNumber,
         bytes: Vec<CompactByte>,
     ) -> Result<Self, ParseError> {
-        let equals = EqualsPosition::find(line_number, &bytes)?;
-        let sides = RuleSideRanges::new(line_number, &bytes, equals)?;
+        let separator = RuleSeparator::find(line_number, &bytes)?;
+        let sides = RuleSides::new(line_number, &bytes, separator)?;
         Ok(Self {
             line_number,
             bytes,
@@ -78,111 +77,10 @@ impl RuleSyntaxLine {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct EqualsPosition {
-    equals_index: usize,
-    right_start: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RuleSideRanges {
-    left: Range<usize>,
-    right: Range<usize>,
-}
-
 #[derive(Clone, Copy)]
 struct RuleSideSlices<'code> {
     left: &'code [CompactByte],
     right: &'code [CompactByte],
-}
-
-impl EqualsPosition {
-    /// Finds the single rule separator in a compact source line.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError` if the line has no `=`, more than one `=`, or the
-    /// right-side start index cannot be represented.
-    fn find(line_number: SourceLineNumber, bytes: &[CompactByte]) -> Result<Self, ParseError> {
-        let mut found = None;
-
-        for (index, byte) in bytes.iter().copied().enumerate() {
-            if byte.as_u8() != b'=' {
-                continue;
-            }
-
-            let right_start = index.checked_add(1).ok_or_else(|| {
-                parse_allocation_error(
-                    line_number,
-                    AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
-                )
-            })?;
-
-            if found
-                .replace(Self {
-                    equals_index: index,
-                    right_start,
-                })
-                .is_some()
-            {
-                return Err(ParseError::at_position(
-                    SourcePosition::new(line_number, byte.source_column()),
-                    ParseErrorKind::MultipleEquals,
-                ));
-            }
-        }
-
-        found.ok_or_else(|| ParseError::at_line(line_number, ParseErrorKind::MissingEquals))
-    }
-}
-
-impl RuleSideRanges {
-    /// Creates rule-side ranges and validates them against the compact line.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError` if the separator indexes do not describe valid
-    /// side slices for this compact line.
-    fn new(
-        line_number: SourceLineNumber,
-        bytes: &[CompactByte],
-        separator: EqualsPosition,
-    ) -> Result<Self, ParseError> {
-        let ranges = Self {
-            left: 0..separator.equals_index,
-            right: separator.right_start..bytes.len(),
-        };
-        ranges.slices(line_number, bytes)?;
-        Ok(ranges)
-    }
-
-    /// Borrows the proven left and right slices from compact line bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError` if the stored ranges no longer fit the compact
-    /// line. Normal construction prevents this; the error keeps the invariant
-    /// checked without panicking.
-    fn slices<'code>(
-        &self,
-        line_number: SourceLineNumber,
-        bytes: &'code [CompactByte],
-    ) -> Result<RuleSideSlices<'code>, ParseError> {
-        let left = bytes.get(self.left.clone()).ok_or_else(|| {
-            parse_allocation_error(
-                line_number,
-                AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
-            )
-        })?;
-        let right = bytes.get(self.right.clone()).ok_or_else(|| {
-            parse_allocation_error(
-                line_number,
-                AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
-            )
-        })?;
-
-        Ok(RuleSideSlices { left, right })
-    }
 }
 
 #[derive(Clone, Copy)]

@@ -117,7 +117,7 @@ impl RuntimeInput {
 /// Runtime input materialized into the mutable execution byte domain.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct InitialStateBytes {
-    pub(crate) bytes: Vec<RuntimeByte>,
+    bytes: Vec<RuntimeByte>,
 }
 
 impl InitialStateBytes {

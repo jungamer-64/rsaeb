@@ -47,7 +47,7 @@ impl<'rule> RewriteRequest<'rule> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RewriteScratch {
-    pub(crate) bytes: Vec<RuntimeByte>,
+    bytes: Vec<RuntimeByte>,
 }
 
 impl RewriteScratch {
