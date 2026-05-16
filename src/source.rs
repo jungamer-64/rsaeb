@@ -81,11 +81,6 @@ impl SourceLineNumber {
         one_based: usize::MAX,
     };
 
-    #[cfg(test)]
-    pub(crate) fn from_one_based(one_based: usize) -> Option<Self> {
-        (one_based != 0).then_some(Self { one_based })
-    }
-
     pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
         let one_based = zero_based.checked_add(1)?;
         Some(Self { one_based })
@@ -108,11 +103,6 @@ impl SourceColumn {
     pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
         let one_based = zero_based.checked_add(1)?;
         Some(Self { one_based })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn from_one_based(one_based: usize) -> Option<Self> {
-        (one_based != 0).then_some(Self { one_based })
     }
 
     /// One-based source column as a primitive value.

@@ -14,8 +14,6 @@ pub use count::{
     TraceSnapshotByteCount,
 };
 pub(crate) use payload::Payload;
-#[cfg(test)]
-pub(crate) use program::ProgramByte;
 pub use rejection::{
     NonAsciiCodeByte, NonAsciiInputByte, NonPrintableCodeByte, ReservedSyntaxByte,
 };
