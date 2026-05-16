@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  stable:
+    name: Stable
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+          rustup default stable
+
+      - name: Show toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Check lints
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Test all targets
+        run: cargo test --locked --all-targets --all-features
+
+      - name: Test crate documentation
+        run: cargo test --doc --locked --all-features
+
+      - name: Test README examples
+        run: |
+          latest_rlib="$(find target/debug/deps -maxdepth 1 -name 'librsaeb-*.rlib' -printf '%T@ %p\n' | sort -nr | awk 'NR == 1 { print $2 }')"
+          if [ -z "${latest_rlib}" ]; then
+            echo "failed to find compiled rsaeb rlib" >&2
+            exit 1
+          fi
+          rustdoc --edition=2024 --test README.md -L dependency=target/debug/deps --extern "rsaeb=${latest_rlib}"
+
+      - name: Build rustdoc
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --locked --all-features --no-deps
+
+      - name: List package contents
+        run: cargo package --list --locked
+
+      - name: Verify package
+        run: cargo package --locked
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust 1.90.0
+        run: rustup toolchain install 1.90.0 --profile minimal
+
+      - name: Show toolchain
+        run: |
+          rustc +1.90.0 --version
+          cargo +1.90.0 --version
+
+      - name: Test all targets
+        run: cargo +1.90.0 test --locked --all-targets --all-features
+
+      - name: Verify package
+        run: cargo +1.90.0 package --locked
