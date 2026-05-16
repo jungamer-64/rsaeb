@@ -1,9 +1,10 @@
 //! Borrowed and snapshot trace event types.
 //!
 //! Borrowed tracing observes runtime state during the callback without
-//! allocating per event. Snapshot tracing materializes bounded owned bytes at
-//! the trace boundary. Both surfaces describe the same event stream: the
-//! initial state followed by one event for each committed rewrite step.
+//! materializing owned event snapshots. Snapshot tracing materializes bounded
+//! owned bytes at the trace boundary. Both surfaces describe the same event
+//! stream: the initial state followed by one event for each committed rewrite
+//! step.
 //!
 //! Use borrowed events when a sink can decide immediately, and snapshot events
 //! when a sink must retain state/output bytes after the callback returns.
@@ -231,7 +232,7 @@ pub enum TraceSnapshotEvent<'program> {
 /// Trace event emitted by borrowed tracing APIs.
 ///
 /// The event borrows runtime bytes only for the duration of the callback. This
-/// API is the allocation-free tracing primitive; snapshot tracing is derived
+/// API does not materialize owned event snapshots; snapshot tracing is derived
 /// from it by materializing snapshots under an explicit
 /// [`TraceSnapshotByteLimit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -97,9 +97,9 @@ impl Program {
 
     /// Runs this program and emits infallible borrowed trace events.
     ///
-    /// Borrowed trace events allocate nothing. They are valid only for the
-    /// callback invocation, so a sink that wants to retain bytes must copy them
-    /// explicitly.
+    /// Borrowed trace events do not materialize owned snapshots. They are valid
+    /// only for the callback invocation, so a sink that wants to retain bytes
+    /// must copy them explicitly.
     ///
     /// # Errors
     ///

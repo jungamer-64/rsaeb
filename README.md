@@ -109,8 +109,8 @@ its own `TraceSnapshotByteLimit` because tracing is outside runtime execution.
 
 Tracing has two layers:
 
-- Borrowed tracing is the allocation-free primitive. Events borrow runtime
-  state or return payload bytes only for the callback invocation.
+- Borrowed tracing does not materialize owned event snapshots. Events borrow
+  runtime state or return payload bytes only for the callback invocation.
 - Snapshot tracing materializes owned event bytes under `TraceSnapshotLimits`.
 
 Fallible borrowed sinks use `try_run_with_borrowed_trace`, which separates
