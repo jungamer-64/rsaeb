@@ -5,7 +5,8 @@ use rsaeb::error::{
     AebError, AllocationError, FallibleTraceSnapshotRunError, ParseError, RunError,
     RuntimeInputError, TraceSnapshotRunError,
 };
-use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, RuntimeInputByteLimit};
+use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, RuntimeInputByteLimit};
+use rsaeb::{Program, ProgramSource};
 
 pub enum TestFailure {
     Message(String),
@@ -117,6 +118,16 @@ pub fn runtime_input_with_limit(
     limit: RuntimeInputByteLimit,
 ) -> Result<RuntimeInput, RuntimeInputError> {
     RuntimeInput::validate(bytes, limit)
+}
+
+/// Parses source text with the default parser limits.
+///
+/// # Errors
+///
+/// Returns `ParseError` if the source violates parser syntax, resource, or
+/// allocation constraints.
+pub fn parse_program(source: &str) -> Result<Program, ParseError> {
+    Program::parse(ProgramSource::from_text(source), DEFAULT_PARSE_LIMITS)
 }
 
 /// Converts a boolean assertion into the shared test result type.

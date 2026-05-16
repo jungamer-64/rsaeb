@@ -11,14 +11,14 @@
 //!
 //! ```
 //! use rsaeb::limits::{
-//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
+//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
 //!     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit, TraceSnapshotLimits,
 //! };
 //! use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
 //! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
+//! let program = Program::parse(ProgramSource::from_text("a=b\nb=(return)ok"), DEFAULT_PARSE_LIMITS)?;
 //! let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
 //! let run_limits = RunLimits::new(
 //!     StepLimit::new(10),

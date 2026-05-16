@@ -1,12 +1,16 @@
 use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push};
+use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
 use crate::inspect::{RuleCount, RulePosition, RuleRepeat};
-use crate::rule::{ParsedRule, Rule};
+use crate::rule::{OnceRuleSlot, ParsedRule, Rule};
+
+use super::RuleLimit;
 
 #[derive(Debug, PartialEq, Eq, Default)]
 pub(crate) struct RuleSet {
     rules: Vec<Rule>,
+    once_rule_count: usize,
 }
 
 impl RuleSet {
@@ -20,14 +24,64 @@ impl RuleSet {
     ///
     /// Returns `AllocationError` if the rule position cannot be represented or
     /// the rule table cannot grow.
-    pub(crate) fn push_parsed_rule(&mut self, parsed: ParsedRule) -> Result<(), AllocationError> {
-        let position = RulePosition::from_zero_based(self.rules.len()).ok_or_else(|| {
-            AllocationError::capacity_overflow(AllocationContext::ProgramRuleTable)
+    pub(crate) fn push_parsed_rule(
+        &mut self,
+        parsed: ParsedRule,
+        limit: RuleLimit,
+    ) -> Result<(), ParseError> {
+        let line_number = parsed.line_number();
+        let attempted_rule_count = self.rules.len().checked_add(1).ok_or_else(|| {
+            ParseError::at_line(
+                line_number,
+                ParseErrorKind::Allocation(AllocationError::capacity_overflow(
+                    AllocationContext::ProgramRuleTable,
+                )),
+            )
         })?;
 
-        let rule = Rule::from_parsed(parsed, position);
+        if attempted_rule_count > limit.get() {
+            return Err(ParseError::at_line(
+                line_number,
+                ParseErrorKind::Limit(ParseLimitError::rules(
+                    limit,
+                    RuleCount::new(attempted_rule_count),
+                )),
+            ));
+        }
 
-        try_push(&mut self.rules, rule, AllocationContext::ProgramRuleTable)?;
+        let position = RulePosition::from_zero_based(self.rules.len()).ok_or_else(|| {
+            ParseError::at_line(
+                line_number,
+                ParseErrorKind::Allocation(AllocationError::capacity_overflow(
+                    AllocationContext::ProgramRuleTable,
+                )),
+            )
+        })?;
+
+        let (once_slot, next_once_rule_count) = if parsed.repeat() == RuleRepeat::Once {
+            let next_once_rule_count = self.once_rule_count.checked_add(1).ok_or_else(|| {
+                ParseError::at_line(
+                    line_number,
+                    ParseErrorKind::Allocation(AllocationError::capacity_overflow(
+                        AllocationContext::ProgramRuleTable,
+                    )),
+                )
+            })?;
+            (
+                Some(OnceRuleSlot::new(self.once_rule_count)),
+                Some(next_once_rule_count),
+            )
+        } else {
+            (None, None)
+        };
+
+        let rule = Rule::from_parsed(parsed, position, once_slot);
+
+        try_push(&mut self.rules, rule, AllocationContext::ProgramRuleTable)
+            .map_err(|error| ParseError::at_line(line_number, ParseErrorKind::Allocation(error)))?;
+        if let Some(next_once_rule_count) = next_once_rule_count {
+            self.once_rule_count = next_once_rule_count;
+        }
         Ok(())
     }
 
@@ -36,12 +90,7 @@ impl RuleSet {
     }
 
     pub(crate) fn once_rule_count(&self) -> RuleCount {
-        RuleCount::new(
-            self.rules
-                .iter()
-                .filter(|rule| rule.repeat() == RuleRepeat::Once)
-                .count(),
-        )
+        RuleCount::new(self.once_rule_count)
     }
 
     pub(crate) fn as_slice(&self) -> &[Rule] {

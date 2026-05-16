@@ -2,9 +2,12 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use crate::allocation::{AllocationContext, AllocationError};
-use crate::bytes::{CompactByte, Payload};
-use crate::error::{LeftModifierKind, ParseError, ParseErrorKind, PayloadKind, RightActionKind};
+use crate::bytes::{CompactByte, Payload, PayloadByteCount};
+use crate::error::{
+    LeftModifierKind, ParseError, ParseErrorKind, ParseLimitError, PayloadKind, RightActionKind,
+};
 use crate::inspect::{RuleAnchor, RuleRepeat};
+use crate::program::PayloadByteLimit;
 use crate::rule::{Action, ParsedRule, RuleBody, RuleHead};
 use crate::source::{SourceLineNumber, SourcePosition};
 use crate::syntax::SyntaxToken;
@@ -44,10 +47,10 @@ impl RuleSyntaxLine {
     ///
     /// Returns `ParseError` if either rule side contains invalid modifier,
     /// action, or payload syntax.
-    pub(super) fn parse(&self) -> Result<ParsedRule, ParseError> {
+    pub(super) fn parse(&self, payload_limit: PayloadByteLimit) -> Result<ParsedRule, ParseError> {
         let (left, right) = self.syntax_parts()?;
-        let head = left.parse()?;
-        let body = right.parse()?;
+        let head = left.parse(payload_limit)?;
+        let body = right.parse(payload_limit)?;
 
         Ok(ParsedRule::from_parts(self.line_number, head, body))
     }
@@ -195,8 +198,8 @@ impl<'code> LeftSyntax<'code> {
     ///
     /// Returns `ParseError` if left-side modifier order or payload syntax is
     /// invalid.
-    fn parse(self) -> Result<RuleHead, ParseError> {
-        self.into_after_repeat().parse()
+    fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleHead, ParseError> {
+        self.into_after_repeat().parse(payload_limit)
     }
 
     fn into_after_repeat(self) -> LeftAfterRepeat<'code> {
@@ -230,8 +233,8 @@ impl<'code> LeftAfterRepeat<'code> {
     ///
     /// Returns `ParseError` if the remaining left-side syntax cannot become a
     /// valid payload with its anchor.
-    fn parse(self) -> Result<RuleHead, ParseError> {
-        self.into_payload_syntax()?.parse()
+    fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleHead, ParseError> {
+        self.into_payload_syntax()?.parse(payload_limit)
     }
 
     /// Classifies the left-side anchor and payload slice.
@@ -290,7 +293,8 @@ impl LeftPayloadSyntax<'_> {
     ///
     /// Returns `ParseError` if the left-side payload contains invalid
     /// executable payload bytes or allocation fails.
-    fn parse(self) -> Result<RuleHead, ParseError> {
+    fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleHead, ParseError> {
+        ensure_payload_within_limit(self.line_number, self.bytes.len(), payload_limit)?;
         let payload = Payload::parse(self.bytes, self.line_number, PayloadKind::LeftSideData)?;
         Ok(RuleHead::new(self.repeat, self.anchor, payload))
     }
@@ -308,8 +312,8 @@ impl<'code> RightSyntax<'code> {
     /// # Errors
     ///
     /// Returns `ParseError` if right-side action or payload syntax is invalid.
-    fn parse(self) -> Result<RuleBody, ParseError> {
-        self.into_payload_syntax().parse()
+    fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleBody, ParseError> {
+        self.into_payload_syntax().parse(payload_limit)
     }
 
     fn into_payload_syntax(self) -> RightPayloadSyntax<'code> {
@@ -385,14 +389,31 @@ impl RightPayloadSyntax<'_> {
     ///
     /// Returns `ParseError` if action syntax is nested, payload bytes are
     /// invalid, or allocation fails.
-    fn parse(self) -> Result<RuleBody, ParseError> {
+    fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleBody, ParseError> {
         if self.action != RightActionSyntax::Replace {
             reject_nested_rhs_action(self.bytes, self.line_number)?;
         }
 
+        ensure_payload_within_limit(self.line_number, self.bytes.len(), payload_limit)?;
         let payload = Payload::parse(self.bytes, self.line_number, self.action.payload_kind())?;
         Ok(self.action.into_body(payload))
     }
+}
+
+fn ensure_payload_within_limit(
+    line_number: SourceLineNumber,
+    len: usize,
+    limit: PayloadByteLimit,
+) -> Result<(), ParseError> {
+    let attempted_len = PayloadByteCount::new(len);
+    if attempted_len.get() <= limit.get() {
+        return Ok(());
+    }
+
+    Err(ParseError::at_line(
+        line_number,
+        ParseErrorKind::Limit(ParseLimitError::payload(limit, attempted_len)),
+    ))
 }
 
 fn strip_token(input: &[CompactByte], token: SyntaxToken) -> Option<&[CompactByte]> {

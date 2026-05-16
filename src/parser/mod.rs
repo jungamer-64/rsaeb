@@ -5,12 +5,12 @@ mod rule_line;
 #[cfg(test)]
 mod tests;
 
-use crate::error::ParseError;
-use crate::program::RuleSet;
-use crate::source::ProgramSource;
+use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
+use crate::program::{ParseLimits, RuleSet, SourceByteCount};
+use crate::source::{ProgramSource, SourceLineNumber};
 
 use line::RawSourceLine;
-use location::{parse_allocation_error, source_line_number};
+use location::source_line_number;
 
 /// Parses source bytes into a typed program.
 ///
@@ -18,12 +18,17 @@ use location::{parse_allocation_error, source_line_number};
 ///
 /// Returns `ParseError` if source location conversion, line compaction, rule
 /// parsing, or parsed-rule storage fails.
-pub(crate) fn parse_rules_impl(source: ProgramSource<'_>) -> Result<RuleSet, ParseError> {
+pub(crate) fn parse_rules_impl(
+    source: ProgramSource<'_>,
+    limits: ParseLimits,
+) -> Result<RuleSet, ParseError> {
+    ensure_source_within_limit(source, limits)?;
+
     let mut rule_set = RuleSet::new();
 
     for (zero_based_line, raw_line) in source.as_bytes().split(|&byte| byte == b'\n').enumerate() {
         let line_number = source_line_number(zero_based_line)?;
-        let compact_code = RawSourceLine::new(line_number, raw_line)
+        let compact_code = RawSourceLine::new(line_number, raw_line, limits.code_line_byte_limit())
             .into_code_line()?
             .into_compact_line()?;
 
@@ -31,12 +36,28 @@ pub(crate) fn parse_rules_impl(source: ProgramSource<'_>) -> Result<RuleSet, Par
             continue;
         };
 
-        let parsed_rule = non_empty_code.into_rule_syntax()?.parse()?;
+        let parsed_rule = non_empty_code
+            .into_rule_syntax()?
+            .parse(limits.payload_byte_limit())?;
 
-        rule_set
-            .push_parsed_rule(parsed_rule)
-            .map_err(|error| parse_allocation_error(line_number, error))?;
+        rule_set.push_parsed_rule(parsed_rule, limits.rule_limit())?;
     }
 
     Ok(rule_set)
+}
+
+fn ensure_source_within_limit(
+    source: ProgramSource<'_>,
+    limits: ParseLimits,
+) -> Result<(), ParseError> {
+    let attempted_len = SourceByteCount::new(source.as_bytes().len());
+    let limit = limits.source_byte_limit();
+    if attempted_len.get() <= limit.get() {
+        return Ok(());
+    }
+
+    Err(ParseError::at_line(
+        SourceLineNumber::ONE,
+        ParseErrorKind::Limit(ParseLimitError::source(limit, attempted_len)),
+    ))
 }

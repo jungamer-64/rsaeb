@@ -7,11 +7,13 @@ use rsaeb::execution::{
 };
 use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
 use rsaeb::limits::{
-    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, ReturnByteLimit,
-    RuntimeStateByteLimit, StepLimit,
+    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, DEFAULT_PARSE_LIMITS,
+    ReturnByteLimit, RuntimeStateByteLimit, StepLimit,
 };
-use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RunResult};
-use support::{TestFailure, TestResult, ensure, ensure_eq, ensure_matches, runtime_input};
+use rsaeb::{ProgramSource, RunLimits, RunOutcome, RunResult};
+use support::{
+    TestFailure, TestResult, ensure, ensure_eq, ensure_matches, parse_program, runtime_input,
+};
 
 /// Returns stable output bytes when they match `expected`.
 ///
@@ -195,13 +197,14 @@ fn public_typed_boundaries_parse_and_run_programs() -> TestResult {
         DEFAULT_MAX_RETURN_LEN,
     );
 
-    let program = Program::parse(ProgramSource::from_str("a=b"))?;
+    let program = parse_program("a=b")?;
     let input = runtime_input(b"a")?;
     let result = program.run(&input, limits)?;
     expect_stable_bytes(&result, b"b")?;
     ensure_eq!(result.steps().get(), 1)?;
 
-    let program = Program::parse(ProgramSource::from_bytes(b"a=b#\xff"))?;
+    let program =
+        rsaeb::Program::parse(ProgramSource::from_bytes(b"a=b#\xff"), DEFAULT_PARSE_LIMITS)?;
     let input = runtime_input(b"a")?;
     let result = program.run(&input, limits)?;
     expect_stable_bytes(&result, b"b")?;
@@ -220,35 +223,35 @@ fn language_whitespace_comments_and_actions_are_public_contract() -> TestResult 
         DEFAULT_MAX_RETURN_LEN,
     );
 
-    let program = Program::parse(ProgramSource::from_str("a b=bb"))?;
+    let program = parse_program("a b=bb")?;
     let result = program.run(&runtime_input(b"abc")?, limits)?;
     expect_stable_bytes(&result, b"bbc")?;
 
-    let program = Program::parse(ProgramSource::from_str("a=b\r\nb=c\r\n"))?;
+    let program = parse_program("a=b\r\nb=c\r\n")?;
     let result = program.run(&runtime_input(b"a")?, limits)?;
     expect_stable_bytes(&result, b"c")?;
 
-    let program = Program::parse(ProgramSource::from_str("a\tb = c\tc"))?;
+    let program = parse_program("a\tb = c\tc")?;
     let result = program.run(&runtime_input(b"ab")?, limits)?;
     expect_stable_bytes(&result, b"cc")?;
 
-    let program = Program::parse(ProgramSource::from_str("a=b#ignored"))?;
+    let program = parse_program("a=b#ignored")?;
     let result = program.run(&runtime_input(b"a")?, limits)?;
     expect_stable_bytes(&result, b"b")?;
 
-    let program = Program::parse(ProgramSource::from_str("#a=b"))?;
+    let program = parse_program("#a=b")?;
     let result = program.run(&runtime_input(b"a")?, limits)?;
     expect_stable_bytes(&result, b"a")?;
 
-    let program = Program::parse(ProgramSource::from_str("a=(start)x"))?;
+    let program = parse_program("a=(start)x")?;
     let result = program.run(&runtime_input(b"ba")?, limits)?;
     expect_stable_bytes(&result, b"xb")?;
 
-    let program = Program::parse(ProgramSource::from_str("a=(end)x"))?;
+    let program = parse_program("a=(end)x")?;
     let result = program.run(&runtime_input(b"ba")?, limits)?;
     expect_stable_bytes(&result, b"bx")?;
 
-    let program = Program::parse(ProgramSource::from_str("a=(return)ok"))?;
+    let program = parse_program("a=(return)ok")?;
     let result = program.run(&runtime_input(b"a")?, limits)?;
     expect_return_bytes(&result, b"ok")?;
     Ok(())
@@ -266,27 +269,27 @@ fn rewrite_order_anchors_once_and_runtime_only_bytes_are_public_contract() -> Te
         DEFAULT_MAX_RETURN_LEN,
     );
 
-    let program = Program::parse(ProgramSource::from_str("aa=x\na=y"))?;
+    let program = parse_program("aa=x\na=y")?;
     let result = program.run(&runtime_input(b"aaaa")?, limits)?;
     expect_stable_bytes(&result, b"xx")?;
 
-    let program = Program::parse(ProgramSource::from_str("(start)a=x"))?;
+    let program = parse_program("(start)a=x")?;
     let result = program.run(&runtime_input(b"aba")?, limits)?;
     expect_stable_bytes(&result, b"xba")?;
 
-    let program = Program::parse(ProgramSource::from_str("(end)a=x"))?;
+    let program = parse_program("(end)a=x")?;
     let result = program.run(&runtime_input(b"aba")?, limits)?;
     expect_stable_bytes(&result, b"abx")?;
 
-    let program = Program::parse(ProgramSource::from_str("(once)a=b\na=c"))?;
+    let program = parse_program("(once)a=b\na=c")?;
     let result = program.run(&runtime_input(b"aa")?, limits)?;
     expect_stable_bytes(&result, b"bc")?;
 
-    let program = Program::parse(ProgramSource::from_str("ab=x"))?;
+    let program = parse_program("ab=x")?;
     let result = program.run(&runtime_input(b"a=b")?, limits)?;
     expect_stable_bytes(&result, b"a=b")?;
 
-    let program = Program::parse(ProgramSource::from_str("a= b"))?;
+    let program = parse_program("a= b")?;
     let result = program.run(&runtime_input(b"a bc")?, limits)?;
     expect_stable_bytes(&result, b"b bc")?;
     Ok(())
@@ -303,7 +306,7 @@ fn parsed_program_is_reusable_and_rule_views_are_structured() -> TestResult {
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
-    let program = Program::parse(ProgramSource::from_str("(once)a=b\na=c"))?;
+    let program = parse_program("(once)a=b\na=c")?;
     let first = program.run(&runtime_input(b"aa")?, limits)?;
     let second = program.run(&runtime_input(b"aa")?, limits)?;
 
@@ -312,7 +315,7 @@ fn parsed_program_is_reusable_and_rule_views_are_structured() -> TestResult {
     ensure_eq!(program.rule_count().get(), 2)?;
     ensure_eq!(program.once_rule_count().get(), 1)?;
 
-    let inspected = Program::parse(ProgramSource::from_str("a = b # comment\n(start)c=(end)d"))?;
+    let inspected = parse_program("a = b # comment\n(start)c=(end)d")?;
     let mut rules = inspected.rules();
     let first = rules
         .next()
@@ -353,16 +356,17 @@ fn parsed_program_is_reusable_and_rule_views_are_structured() -> TestResult {
 /// public rule view.
 #[test]
 fn canonical_source_reparses_to_the_same_public_rule_view() -> TestResult {
-    let program = Program::parse(ProgramSource::from_str(
-        "( once ) ( start ) a = ( end ) b # comment",
-    ))?;
+    let program = parse_program("( once ) ( start ) a = ( end ) b # comment")?;
     let rule = program
         .rules()
         .next()
         .ok_or(TestFailure::message("expected parsed rule"))?;
     let canonical = rule.canonical_source()?;
 
-    let reparsed = Program::parse(ProgramSource::from_bytes(canonical.as_slice()))?;
+    let reparsed = rsaeb::Program::parse(
+        ProgramSource::from_bytes(canonical.as_slice()),
+        DEFAULT_PARSE_LIMITS,
+    )?;
     let reparsed_rule = reparsed
         .rules()
         .next()
@@ -391,7 +395,7 @@ fn stepwise_execution_matches_full_run_and_waits_after_each_rule() -> TestResult
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
-    let program = Program::parse(ProgramSource::from_str("a=b\nb=c"))?;
+    let program = parse_program("a=b\nb=c")?;
     let input = runtime_input(b"a")?;
     let execution = program.start_execution(&input, limits)?;
     ensure_eq!(execution.completed_steps().get(), 0)?;
@@ -459,7 +463,7 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
-    let program = Program::parse(ProgramSource::from_str("a=b"))?;
+    let program = parse_program("a=b")?;
     let input = runtime_input(b"a")?;
     let execution = program.start_execution(&input, limits)?;
 
@@ -499,7 +503,7 @@ fn runtime_input_owns_typed_bytes_without_revalidation() -> TestResult {
     ensure_eq!(input.byte_count().get(), 6)?;
     ensure(!input.is_empty(), "expected non-empty owned input")?;
 
-    let program = Program::parse(ProgramSource::from_str("a=b"))?;
+    let program = parse_program("a=b")?;
     let result = program.run(
         &input,
         RunLimits::new(
@@ -523,7 +527,7 @@ fn reusable_runtime_input_matches_repeated_stepwise_execution() -> TestResult {
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
-    let program = Program::parse(ProgramSource::from_str("(once)a=b\na=c"))?;
+    let program = parse_program("(once)a=b\na=c")?;
     let input = runtime_input(b"aa")?;
 
     let first = program.start_execution(&input, limits)?;
@@ -560,7 +564,7 @@ fn reusable_runtime_input_matches_repeated_stepwise_execution() -> TestResult {
 /// step, state, and return domains.
 #[test]
 fn public_limits_preserve_distinct_step_state_and_return_errors() -> TestResult {
-    let step_limited = Program::parse(ProgramSource::from_str("a=b"))?.run(
+    let step_limited = parse_program("a=b")?.run(
         &runtime_input(b"a")?,
         RunLimits::new(
             StepLimit::new(0),
@@ -583,7 +587,7 @@ fn public_limits_preserve_distinct_step_state_and_return_errors() -> TestResult 
         "expected step limit details",
     )?;
 
-    let state_limited = Program::parse(ProgramSource::from_str("# no executable rules"))?.run(
+    let state_limited = parse_program("# no executable rules")?.run(
         &runtime_input(b"aa")?,
         RunLimits::new(
             StepLimit::new(10),
@@ -605,7 +609,7 @@ fn public_limits_preserve_distinct_step_state_and_return_errors() -> TestResult 
         "expected runtime input state limit",
     )?;
 
-    let return_limited = Program::parse(ProgramSource::from_str("a=(return)ok"))?.run(
+    let return_limited = parse_program("a=(return)ok")?.run(
         &runtime_input(b"a")?,
         RunLimits::new(
             StepLimit::new(1),
@@ -634,7 +638,7 @@ fn public_limits_preserve_distinct_step_state_and_return_errors() -> TestResult 
 #[test]
 fn runtime_input_public_boundary_accepts_ascii_and_rejects_non_ascii() -> TestResult {
     let input: Vec<u8> = (0x00..=0x7f).collect();
-    let program = Program::parse(ProgramSource::from_str("# no executable rules"))?;
+    let program = parse_program("# no executable rules")?;
     let result = program.run(
         &runtime_input(&input)?,
         RunLimits::new(

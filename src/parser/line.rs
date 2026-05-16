@@ -2,7 +2,8 @@ use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::{CompactByte, NonAsciiCodeByte, NonPrintableCodeByte};
-use crate::error::{ParseError, ParseErrorKind};
+use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
+use crate::program::{CodeLineByteCount, CodeLineByteLimit};
 use crate::source::{SourceLineNumber, SourcePosition};
 
 use super::location::{parse_allocation_error, source_column};
@@ -11,11 +12,20 @@ use super::rule_line::RuleSyntaxLine;
 pub(super) struct RawSourceLine<'source> {
     line_number: SourceLineNumber,
     bytes: &'source [u8],
+    code_line_limit: CodeLineByteLimit,
 }
 
 impl<'source> RawSourceLine<'source> {
-    pub(super) fn new(line_number: SourceLineNumber, bytes: &'source [u8]) -> Self {
-        Self { line_number, bytes }
+    pub(super) fn new(
+        line_number: SourceLineNumber,
+        bytes: &'source [u8],
+        code_line_limit: CodeLineByteLimit,
+    ) -> Self {
+        Self {
+            line_number,
+            bytes,
+            code_line_limit,
+        }
     }
 
     /// Splits comments away and validates raw executable code bytes.
@@ -30,6 +40,17 @@ impl<'source> RawSourceLine<'source> {
             .split(|&byte| byte == b'#')
             .next()
             .unwrap_or(self.bytes);
+
+        let attempted_len = CodeLineByteCount::new(code_bytes.len());
+        if attempted_len.get() > self.code_line_limit.get() {
+            return Err(ParseError::at_line(
+                self.line_number,
+                ParseErrorKind::Limit(ParseLimitError::code_line(
+                    self.code_line_limit,
+                    attempted_len,
+                )),
+            ));
+        }
 
         if let Some((zero_based_column, byte)) = code_bytes
             .iter()

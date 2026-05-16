@@ -1,24 +1,12 @@
 use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
-use crate::inspect::RuleRepeat;
-use crate::rule::Rule;
+use crate::inspect::RuleCount;
+use crate::rule::{OnceRuleSlot, Rule};
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct RuntimeRules<'program> {
-    entries: Vec<RuntimeRule<'program>>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct RuntimeRule<'program> {
-    rule: &'program Rule,
-    availability: RuleAvailability,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuleAvailability {
-    Always,
-    Once(OnceRuleState),
+pub(crate) struct OnceStateSet {
+    states: Vec<OnceRuleState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,81 +15,63 @@ pub(crate) enum OnceRuleState {
     Consumed,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum MatchedRuleCommit<'runtime> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MatchedRuleCommit {
     Always,
-    Once(&'runtime mut OnceRuleState),
+    Once(OnceRuleSlot),
 }
 
-impl<'program> RuntimeRules<'program> {
-    /// Builds per-execution rule availability from parsed rules.
+impl OnceStateSet {
+    /// Builds per-execution `(once)` state from parse-time rule slots.
     ///
     /// # Errors
     ///
-    /// Returns `AllocationError` if the per-execution rule-state table cannot
+    /// Returns `AllocationError` if the per-execution once-state table cannot
     /// be allocated.
-    pub(crate) fn new(rules: &'program [Rule]) -> Result<Self, AllocationError> {
-        let mut entries = Vec::new();
+    pub(crate) fn new(once_rule_count: RuleCount) -> Result<Self, AllocationError> {
+        let mut states = Vec::new();
         try_reserve_total_exact(
-            &mut entries,
-            rules.len(),
+            &mut states,
+            once_rule_count.get(),
             AllocationContext::RuntimeOnceRuleState,
         )?;
 
-        for rule in rules {
+        for _ in 0..once_rule_count.get() {
             try_push(
-                &mut entries,
-                RuntimeRule {
-                    rule,
-                    availability: RuleAvailability::from_repeat(rule.repeat()),
-                },
+                &mut states,
+                OnceRuleState::Fresh,
                 AllocationContext::RuntimeOnceRuleState,
             )?;
         }
 
-        Ok(Self { entries })
+        Ok(Self { states })
     }
 
-    pub(crate) fn iter_available_mut(
-        &mut self,
-    ) -> impl Iterator<Item = (&'program Rule, MatchedRuleCommit<'_>)> {
-        self.entries
-            .iter_mut()
-            .filter_map(RuntimeRule::available_rule)
-    }
-}
-
-impl<'program> RuntimeRule<'program> {
-    fn available_rule(&mut self) -> Option<(&'program Rule, MatchedRuleCommit<'_>)> {
-        let commit = self.availability.commit_token()?;
-        Some((self.rule, commit))
-    }
-}
-
-impl RuleAvailability {
-    const fn from_repeat(repeat: RuleRepeat) -> Self {
-        match repeat {
-            RuleRepeat::Always => Self::Always,
-            RuleRepeat::Once => Self::Once(OnceRuleState::Fresh),
+    pub(crate) fn commit_token_for_rule(&self, rule: &Rule) -> Option<MatchedRuleCommit> {
+        match rule.once_slot() {
+            None => Some(MatchedRuleCommit::Always),
+            Some(slot) => self
+                .states
+                .get(slot.zero_based())
+                .is_some_and(OnceRuleState::is_fresh)
+                .then_some(MatchedRuleCommit::Once(slot)),
         }
     }
 
-    fn commit_token(&mut self) -> Option<MatchedRuleCommit<'_>> {
-        match self {
-            Self::Always => Some(MatchedRuleCommit::Always),
-            Self::Once(state @ OnceRuleState::Fresh) => Some(MatchedRuleCommit::Once(state)),
-            Self::Once(OnceRuleState::Consumed) => None,
-        }
-    }
-}
-
-impl MatchedRuleCommit<'_> {
-    pub(crate) fn commit(self) {
-        match self {
-            Self::Always => {}
-            Self::Once(state) => {
-                *state = OnceRuleState::Consumed;
+    pub(crate) fn commit(&mut self, token: MatchedRuleCommit) {
+        match token {
+            MatchedRuleCommit::Always => {}
+            MatchedRuleCommit::Once(slot) => {
+                if let Some(state) = self.states.get_mut(slot.zero_based()) {
+                    *state = OnceRuleState::Consumed;
+                }
             }
         }
+    }
+}
+
+impl OnceRuleState {
+    const fn is_fresh(&self) -> bool {
+        matches!(self, Self::Fresh)
     }
 }

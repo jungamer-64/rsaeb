@@ -1,12 +1,12 @@
+use crate::Program;
 use crate::error::{
     LeftModifierKind, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind,
 };
 use crate::inspect::{RuleActionView, RuleAnchor, RuleCount, RuleRepeat};
 use crate::test_support::{
     TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_error_position,
-    expect_parse_error, source_line_number,
+    expect_parse_error, parse_program, parse_program_bytes, source_line_number,
 };
-use crate::{Program, ProgramSource};
 
 /// Returns the parsed rule at `index`.
 ///
@@ -29,11 +29,11 @@ fn expect_rule(
 /// typed rule domain.
 #[test]
 fn compacting_source_whitespace_and_comments_preserves_rule_domain() -> TestResult {
-    let program = Program::parse(ProgramSource::from_str(
+    let program = parse_program(
         "a b=bb\n\
          a = b # trailing comment\n\
          ( once ) ( start ) x = ( end ) y",
-    ))?;
+    )?;
 
     ensure_eq!(program.rule_count(), RuleCount::new(3))?;
     ensure_eq!(
@@ -56,7 +56,7 @@ fn compacting_source_whitespace_and_comments_preserves_rule_domain() -> TestResu
 /// Returns `TestFailure` if empty code lines or comments become parsed rules.
 #[test]
 fn empty_code_lines_and_comments_do_not_become_rules() -> TestResult {
-    let program = Program::parse(ProgramSource::from_str(" \t\r\n# comment\n"))?;
+    let program = parse_program(" \t\r\n# comment\n")?;
     ensure_eq!(program.rule_count(), RuleCount::new(0))
 }
 
@@ -65,7 +65,7 @@ fn empty_code_lines_and_comments_do_not_become_rules() -> TestResult {
 /// Returns `TestFailure` if comment bytes affect executable parsing.
 #[test]
 fn comments_may_contain_non_utf8_bytes_because_source_is_byte_oriented() -> TestResult {
-    let program = Program::parse(ProgramSource::from_bytes(b"a=b#\xff\xfe\n"))?;
+    let program = parse_program_bytes(b"a=b#\xff\xfe\n")?;
     let rule = expect_rule(&program, 0)?;
 
     ensure_eq!(program.rule_count(), RuleCount::new(1))?;
@@ -95,7 +95,7 @@ fn code_body_rejects_non_ascii_and_non_printable_bytes_outside_comments() -> Tes
     )?;
 
     ensure(
-        Program::parse(ProgramSource::from_bytes(b"a=b#\xff")).is_ok(),
+        parse_program_bytes(b"a=b#\xff").is_ok(),
         "expected comment bytes to parse",
     )
 }
@@ -146,18 +146,15 @@ fn reserved_parentheses_are_rejected_outside_supported_modifier_slots() -> TestR
         "a=(once)b",
         "a(once)=b",
     ] {
-        ensure(
-            Program::parse(ProgramSource::from_str(source)).is_err(),
-            "source should fail",
-        )?;
+        ensure(parse_program(source).is_err(), "source should fail")?;
     }
 
     ensure(
-        Program::parse(ProgramSource::from_str("(once)(start)a=(end)b")).is_ok(),
+        parse_program("(once)(start)a=(end)b").is_ok(),
         "expected valid parenthesized modifiers",
     )?;
     ensure(
-        Program::parse(ProgramSource::from_str("a=(return)")).is_ok(),
+        parse_program("a=(return)").is_ok(),
         "expected empty return payload",
     )
 }
@@ -235,10 +232,8 @@ fn payload_and_left_modifier_errors_are_structured() -> TestResult {
 /// rule views.
 #[test]
 fn spaced_source_and_compact_source_parse_to_the_same_rule_view() -> TestResult {
-    let compact = Program::parse(ProgramSource::from_str("(once)(start)a=(end)b"))?;
-    let spaced = Program::parse(ProgramSource::from_str(
-        "( once ) ( start ) a = ( end ) b # comment",
-    ))?;
+    let compact = parse_program("(once)(start)a=(end)b")?;
+    let spaced = parse_program("( once ) ( start ) a = ( end ) b # comment")?;
     let compact_rule = expect_rule(&compact, 0)?;
     let spaced_rule = expect_rule(&spaced, 0)?;
 

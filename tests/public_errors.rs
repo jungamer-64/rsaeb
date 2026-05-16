@@ -1,15 +1,16 @@
 mod support;
 
 use rsaeb::error::{
-    AebError, LimitError, ParseErrorKind, ParseErrorLocation, PayloadKind, RunError,
-    RuntimeInputError, StateLimitContext,
+    AebError, LimitError, ParseErrorKind, ParseErrorLocation, ParseLimitError, PayloadKind,
+    RunError, RuntimeInputError, StateLimitContext,
 };
 use rsaeb::limits::{
-    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit,
-    RuntimeInputByteLimit, RuntimeStateByteLimit, StepLimit,
+    CodeLineByteLimit, DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
+    DEFAULT_PARSE_LIMITS, PayloadByteLimit, ReturnByteLimit, RuleLimit, RuntimeInputByteLimit,
+    RuntimeStateByteLimit, SourceByteLimit, StepLimit,
 };
 use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
-use support::{TestFailure, TestResult, ensure_eq, ensure_matches, runtime_input};
+use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program, runtime_input};
 
 /// Returns the expected runtime error.
 ///
@@ -57,7 +58,7 @@ fn expect_state_limit(error: RunError) -> Result<LimitError, TestFailure> {
 /// information.
 #[test]
 fn parse_error_location_and_kind_are_structured() -> TestResult {
-    let Err(error) = Program::parse(ProgramSource::from_str("a=b=c")) else {
+    let Err(error) = parse_program("a=b=c") else {
         return Err(TestFailure::message("expected parse error"));
     };
 
@@ -79,11 +80,80 @@ fn parse_error_location_and_kind_are_structured() -> TestResult {
 
 /// # Errors
 ///
+/// Returns `TestFailure` if parser resource limits are not reported through
+/// structured parse-limit errors.
+#[test]
+fn parse_resource_limits_are_structured() -> TestResult {
+    let limits = DEFAULT_PARSE_LIMITS.with_source_byte_limit(SourceByteLimit::new(3));
+    let Err(error) = Program::parse(ProgramSource::from_text("a=b\n"), limits) else {
+        return Err(TestFailure::message("expected source limit error"));
+    };
+    match error.kind() {
+        ParseErrorKind::Limit(ParseLimitError::Source {
+            limit,
+            attempted_len,
+        }) => {
+            ensure_eq!(*limit, SourceByteLimit::new(3))?;
+            ensure_eq!(attempted_len.get(), 4)?;
+        }
+        _ => return Err(TestFailure::message("expected source limit error")),
+    }
+
+    let limits = DEFAULT_PARSE_LIMITS.with_code_line_byte_limit(CodeLineByteLimit::new(3));
+    let Err(error) = Program::parse(ProgramSource::from_text("ab=c"), limits) else {
+        return Err(TestFailure::message("expected code-line limit error"));
+    };
+    match error.kind() {
+        ParseErrorKind::Limit(ParseLimitError::CodeLine {
+            limit,
+            attempted_len,
+        }) => {
+            ensure_eq!(*limit, CodeLineByteLimit::new(3))?;
+            ensure_eq!(attempted_len.get(), 4)?;
+        }
+        _ => return Err(TestFailure::message("expected code-line limit error")),
+    }
+
+    let limits = DEFAULT_PARSE_LIMITS.with_payload_byte_limit(PayloadByteLimit::new(1));
+    let Err(error) = Program::parse(ProgramSource::from_text("ab=c"), limits) else {
+        return Err(TestFailure::message("expected payload limit error"));
+    };
+    match error.kind() {
+        ParseErrorKind::Limit(ParseLimitError::Payload {
+            limit,
+            attempted_len,
+        }) => {
+            ensure_eq!(*limit, PayloadByteLimit::new(1))?;
+            ensure_eq!(attempted_len.get(), 2)?;
+        }
+        _ => return Err(TestFailure::message("expected payload limit error")),
+    }
+
+    let limits = DEFAULT_PARSE_LIMITS.with_rule_limit(RuleLimit::new(1));
+    let Err(error) = Program::parse(ProgramSource::from_text("a=b\nb=c"), limits) else {
+        return Err(TestFailure::message("expected rule limit error"));
+    };
+    match error.kind() {
+        ParseErrorKind::Limit(ParseLimitError::Rules {
+            limit,
+            attempted_count,
+        }) => {
+            ensure_eq!(*limit, RuleLimit::new(1))?;
+            ensure_eq!(attempted_count.get(), 2)?;
+        }
+        _ => return Err(TestFailure::message("expected rule limit error")),
+    }
+
+    Ok(())
+}
+
+/// # Errors
+///
 /// Returns `TestFailure` if payload or modifier errors lose domain-specific
 /// information.
 #[test]
 fn payload_and_modifier_errors_keep_domain_information() -> TestResult {
-    let Err(error) = Program::parse(ProgramSource::from_str("a = b (")) else {
+    let Err(error) = parse_program("a = b (") else {
         return Err(TestFailure::message("expected reserved syntax error"));
     };
     ensure_matches(
@@ -97,7 +167,7 @@ fn payload_and_modifier_errors_keep_domain_information() -> TestResult {
         "expected right payload syntax error",
     )?;
 
-    let Err(error) = Program::parse(ProgramSource::from_str("(start)(once)a=b")) else {
+    let Err(error) = parse_program("(start)(once)a=b") else {
         return Err(TestFailure::message("expected modifier order error"));
     };
     ensure_matches(
@@ -176,7 +246,7 @@ fn runtime_input_debug_materializes_public_bytes() -> TestResult {
 /// contexts.
 #[test]
 fn display_errors_name_their_domain_contexts() -> TestResult {
-    let Err(parse_error) = Program::parse(ProgramSource::from_str("a=b=c")) else {
+    let Err(parse_error) = parse_program("a=b=c") else {
         return Err(TestFailure::message("expected parse error"));
     };
     ensure_eq!(
@@ -201,7 +271,7 @@ fn display_errors_name_their_domain_contexts() -> TestResult {
 /// public domain details.
 #[test]
 fn limit_errors_report_step_state_and_return_domains() -> TestResult {
-    let state_error = Program::parse(ProgramSource::from_str("# no executable rules"))?.run(
+    let state_error = parse_program("# no executable rules")?.run(
         &runtime_input(b"aa")?,
         RunLimits::new(
             StepLimit::new(10),
@@ -226,7 +296,7 @@ fn limit_errors_report_step_state_and_return_domains() -> TestResult {
         "state limit exceeded by runtime input; attempted length: 2, limit: 1",
     )?;
 
-    let step_error = Program::parse(ProgramSource::from_str("a=b"))?.run(
+    let step_error = parse_program("a=b")?.run(
         &runtime_input(b"a")?,
         RunLimits::new(
             StepLimit::new(0),
@@ -240,7 +310,7 @@ fn limit_errors_report_step_state_and_return_domains() -> TestResult {
         "step limit exceeded after 0 steps; max steps: 0, state length: 1 bytes",
     )?;
 
-    let return_error = Program::parse(ProgramSource::from_str("a=(return)ok"))?.run(
+    let return_error = parse_program("a=(return)ok")?.run(
         &runtime_input(b"a")?,
         RunLimits::new(
             StepLimit::new(1),

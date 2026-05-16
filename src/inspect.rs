@@ -6,13 +6,14 @@
 //! cannot outlive the parsed program they describe.
 //!
 //! ```
+//! use rsaeb::limits::DEFAULT_PARSE_LIMITS;
 //! use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
 //! use rsaeb::{Program, ProgramSource};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_str(
+//! let program = Program::parse(ProgramSource::from_text(
 //!     "(once)(start)a=(return)done",
-//! ))?;
+//! ), DEFAULT_PARSE_LIMITS)?;
 //! let rule = program.rules().next().ok_or("missing rule")?;
 //!
 //! assert_eq!(rule.position().number().get(), 1);
@@ -224,6 +225,33 @@ pub enum RuleActionView<'program> {
 pub struct RuleView<'program> {
     rule: &'program Rule,
 }
+
+impl core::fmt::Debug for RuleView<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("RuleView")
+            .field("position", &self.position())
+            .field("line_number", &self.line_number())
+            .field("repeat", &self.repeat())
+            .field("anchor", &self.anchor())
+            .field("lhs", &self.lhs())
+            .field("action", &self.action())
+            .finish()
+    }
+}
+
+impl PartialEq for RuleView<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.position() == other.position()
+            && self.line_number() == other.line_number()
+            && self.repeat() == other.repeat()
+            && self.anchor() == other.anchor()
+            && self.lhs() == other.lhs()
+            && self.action() == other.action()
+    }
+}
+
+impl Eq for RuleView<'_> {}
 
 impl<'program> RuleView<'program> {
     pub(crate) fn new(rule: &'program Rule) -> Self {

@@ -10,8 +10,8 @@ use rsaeb::limits::{
 use rsaeb::trace::{
     BorrowedTraceEffect, BorrowedTraceEvent, TraceSnapshotEffect, TraceSnapshotEvent,
 };
-use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RunResult};
-use support::{TestFailure, TestResult, ensure_eq, ensure_matches, runtime_input};
+use rsaeb::{Program, RunLimits, RunOutcome, RunResult};
+use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program, runtime_input};
 
 /// Returns the expected trace snapshot run error.
 ///
@@ -68,7 +68,7 @@ fn snapshot_event_bytes<'event>(event: &'event TraceSnapshotEvent<'_>) -> &'even
 /// incorrect byte data.
 #[test]
 fn borrowed_trace_events_are_emitted_without_snapshots() -> TestResult {
-    let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
+    let program = parse_program("a=b\nb=(return)ok")?;
     let mut seen = Vec::new();
     let limits = RunLimits::new(
         StepLimit::new(10_000),
@@ -107,7 +107,7 @@ fn borrowed_trace_events_are_emitted_without_snapshots() -> TestResult {
 /// structured effects.
 #[test]
 fn trace_snapshot_events_carry_bytes_and_structured_effects() -> TestResult {
-    let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
+    let program = parse_program("a=b\nb=(return)ok")?;
     let (result, events) = trace_snapshot_example(&program)?;
 
     ensure_matches(
@@ -157,7 +157,7 @@ fn trace_snapshot_events_carry_bytes_and_structured_effects() -> TestResult {
 /// expected rule view.
 #[test]
 fn trace_snapshot_continue_step_carries_rule_view() -> TestResult {
-    let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
+    let program = parse_program("a=b\nb=(return)ok")?;
     let (_, events) = trace_snapshot_example(&program)?;
     let first_step = events
         .get(1)
@@ -185,7 +185,7 @@ fn trace_snapshot_continue_step_carries_rule_view() -> TestResult {
 /// instead of only the snapshot limit.
 #[test]
 fn borrowed_trace_to_snapshot_uses_only_snapshot_limit() -> TestResult {
-    let program = Program::parse(ProgramSource::from_str("a=b"))?;
+    let program = parse_program("a=b")?;
     let mut materialization = None;
 
     program.run_with_borrowed_trace(
@@ -220,7 +220,7 @@ fn borrowed_trace_to_snapshot_uses_only_snapshot_limit() -> TestResult {
 /// sink failures.
 #[test]
 fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult {
-    let program = Program::parse(ProgramSource::from_str("a=b"))?;
+    let program = parse_program("a=b")?;
     let runtime_error = program.run_with_trace_snapshots(
         &runtime_input(b"a")?,
         TraceSnapshotLimits::new(
@@ -289,7 +289,7 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
 /// result.
 #[test]
 fn traced_final_event_matches_run_result() -> TestResult {
-    let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)c"))?;
+    let program = parse_program("a=b\nb=(return)c")?;
     let mut events = Vec::new();
     let limits = TraceSnapshotLimits::new(
         RunLimits::new(

@@ -13,11 +13,12 @@
 
 use crate::error::{RunError, TracedRunError};
 use crate::program::{Program, RunLimits, RunResult, StepCount};
+use crate::rule::Rule;
 use crate::runtime::action::{AppliedRule, StepApplication, apply_matched_rule};
 use crate::runtime::budget::StepBudget;
 use crate::runtime::input::{InitialStateBytes, RuntimeInput};
 use crate::runtime::matcher::{RuleSearch, find_next_match};
-use crate::runtime::once::RuntimeRules;
+use crate::runtime::once::OnceStateSet;
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
 use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
@@ -38,7 +39,8 @@ pub(crate) struct ExecutionCore<'program> {
     pub(crate) state: State,
     pub(crate) scratch: RewriteScratch,
     pub(crate) step_budget: StepBudget,
-    pub(crate) runtime_rules: RuntimeRules<'program>,
+    pub(crate) rules: &'program [Rule],
+    pub(crate) once_states: OnceStateSet,
     pub(crate) limits: RunLimits,
 }
 
@@ -96,6 +98,68 @@ pub struct ExecutionStepError<'program> {
     execution: RunningExecution<'program>,
 }
 
+impl core::fmt::Debug for RunningExecution<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("RunningExecution")
+            .field("completed_steps", &self.completed_steps())
+            .field("state", &self.state())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for ExecutionTransition<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Applied(applied) => formatter.debug_tuple("Applied").field(applied).finish(),
+            Self::Stable(stable) => formatter.debug_tuple("Stable").field(stable).finish(),
+            Self::Returned(returned) => formatter.debug_tuple("Returned").field(returned).finish(),
+        }
+    }
+}
+
+impl core::fmt::Debug for AppliedExecution<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("AppliedExecution")
+            .field("step", &self.step())
+            .field("rule", &self.rule())
+            .field("state", &self.state())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for StableExecution<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("StableExecution")
+            .field("steps", &self.steps())
+            .field("state", &self.state())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for ReturnedExecution<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ReturnedExecution")
+            .field("step", &self.step())
+            .field("rule", &self.rule())
+            .field("output", &self.output())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for ExecutionStepError<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ExecutionStepError")
+            .field("error", &self.error())
+            .field("execution", &self.execution())
+            .finish()
+    }
+}
+
 impl<'program> ExecutionCore<'program> {
     /// Builds the mutable runtime core for one execution.
     ///
@@ -110,12 +174,13 @@ impl<'program> ExecutionCore<'program> {
     ) -> Result<Self, RunError> {
         let input = InitialStateBytes::materialize(input, limits)?;
         let state = State::from_input(input);
-        let runtime_rules = RuntimeRules::new(program.rule_slice())?;
+        let once_states = OnceStateSet::new(program.once_rule_count())?;
         Ok(Self {
             state,
             scratch: RewriteScratch::new(),
             step_budget: StepBudget::new(limits.step_limit()),
-            runtime_rules,
+            rules: program.rule_slice(),
+            once_states,
             limits,
         })
     }
@@ -187,11 +252,12 @@ impl<'program> RunningExecution<'program> {
                 state,
                 scratch,
                 step_budget,
-                runtime_rules,
+                rules,
+                once_states,
                 limits,
             } = &mut self.core;
 
-            let matched = match find_next_match(runtime_rules, state) {
+            let matched = match find_next_match(rules, once_states, state) {
                 RuleSearch::Matched(matched) => matched,
                 RuleSearch::Stable => {
                     let steps = step_budget.completed_steps();
@@ -202,7 +268,7 @@ impl<'program> RunningExecution<'program> {
                 }
             };
 
-            apply_matched_rule(state, scratch, step_budget, *limits, matched)
+            apply_matched_rule(state, scratch, step_budget, once_states, *limits, matched)
         };
 
         let applied = match applied {
@@ -237,8 +303,8 @@ impl<'program> RunningExecution<'program> {
     }
 
     #[cfg(test)]
-    pub(crate) fn find_next_match(&mut self) -> RuleSearch<'program, '_> {
-        find_next_match(&mut self.core.runtime_rules, &self.core.state)
+    pub(crate) fn find_next_match(&mut self) -> RuleSearch<'program> {
+        find_next_match(self.core.rules, &self.core.once_states, &self.core.state)
     }
 }
 

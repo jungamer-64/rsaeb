@@ -1,5 +1,16 @@
+use core::fmt;
+
 const DEFAULT_BYTE_BUDGET: usize = 16_777_216;
 
+/// Default program-source byte budget for callers that want the crate policy value.
+pub const DEFAULT_MAX_SOURCE_LEN: SourceByteLimit = SourceByteLimit::new(DEFAULT_BYTE_BUDGET);
+/// Default executable code-line byte budget for callers that want the crate policy value.
+pub const DEFAULT_MAX_CODE_LINE_LEN: CodeLineByteLimit =
+    CodeLineByteLimit::new(DEFAULT_BYTE_BUDGET);
+/// Default executable payload byte budget for callers that want the crate policy value.
+pub const DEFAULT_MAX_PAYLOAD_LEN: PayloadByteLimit = PayloadByteLimit::new(DEFAULT_BYTE_BUDGET);
+/// Default parsed-rule budget for callers that want the crate policy value.
+pub const DEFAULT_MAX_RULES: RuleLimit = RuleLimit::new(1_000_000);
 /// Default rewrite step budget for callers that want the crate policy value.
 pub const DEFAULT_MAX_STEPS: StepLimit = StepLimit::new(1_000_000);
 /// Default runtime-state byte budget for callers that want the crate policy value.
@@ -13,6 +24,227 @@ pub const DEFAULT_MAX_RETURN_LEN: ReturnByteLimit = ReturnByteLimit::new(DEFAULT
 /// Default trace snapshot byte budget for callers that want the crate default.
 pub const DEFAULT_MAX_TRACE_SNAPSHOT_LEN: TraceSnapshotByteLimit =
     TraceSnapshotByteLimit::new(DEFAULT_BYTE_BUDGET);
+/// Default parser budgets for callers that want the crate policy value.
+pub const DEFAULT_PARSE_LIMITS: ParseLimits = ParseLimits::new(
+    DEFAULT_MAX_SOURCE_LEN,
+    DEFAULT_MAX_CODE_LINE_LEN,
+    DEFAULT_MAX_PAYLOAD_LEN,
+    DEFAULT_MAX_RULES,
+);
+
+/// Source byte length measured before parsing starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SourceByteCount {
+    value: usize,
+}
+
+impl SourceByteCount {
+    /// Creates a source byte count from a primitive length.
+    #[must_use]
+    pub(crate) const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    /// Returns this count as a primitive length.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+}
+
+impl fmt::Display for SourceByteCount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
+/// Executable code-line byte length after comment removal and before whitespace compaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CodeLineByteCount {
+    value: usize,
+}
+
+impl CodeLineByteCount {
+    /// Creates a code-line byte count from a primitive length.
+    #[must_use]
+    pub(crate) const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    /// Returns this count as a primitive length.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+}
+
+impl fmt::Display for CodeLineByteCount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
+/// Maximum source length accepted by [`Program::parse`](crate::Program::parse).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SourceByteLimit {
+    value: usize,
+}
+
+impl SourceByteLimit {
+    /// Creates a source byte limit from a primitive length.
+    #[must_use]
+    pub const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    /// Returns this limit as a primitive length.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+}
+
+/// Maximum executable code-line length accepted by [`Program::parse`](crate::Program::parse).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CodeLineByteLimit {
+    value: usize,
+}
+
+impl CodeLineByteLimit {
+    /// Creates a code-line byte limit from a primitive length.
+    #[must_use]
+    pub const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    /// Returns this limit as a primitive length.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+}
+
+/// Maximum parsed payload length accepted by [`Program::parse`](crate::Program::parse).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PayloadByteLimit {
+    value: usize,
+}
+
+impl PayloadByteLimit {
+    /// Creates a payload byte limit from a primitive length.
+    #[must_use]
+    pub const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    /// Returns this limit as a primitive length.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+}
+
+/// Maximum executable rule count accepted by [`Program::parse`](crate::Program::parse).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RuleLimit {
+    value: usize,
+}
+
+impl RuleLimit {
+    /// Creates a parsed-rule limit from a primitive count.
+    #[must_use]
+    pub const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    /// Returns this limit as a primitive count.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+}
+
+/// Resource limits for one parser invocation.
+///
+/// Parser limits are host policy. They are checked before parser-owned
+/// allocations grow beyond the declared source, line, payload, or rule budgets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParseLimits {
+    source_len: SourceByteLimit,
+    code_line_len: CodeLineByteLimit,
+    payload_len: PayloadByteLimit,
+    rules: RuleLimit,
+}
+
+impl ParseLimits {
+    /// Creates parser limits with every budget specified explicitly.
+    #[must_use]
+    pub const fn new(
+        max_source_len: SourceByteLimit,
+        max_code_line_len: CodeLineByteLimit,
+        max_payload_len: PayloadByteLimit,
+        max_rules: RuleLimit,
+    ) -> Self {
+        Self {
+            source_len: max_source_len,
+            code_line_len: max_code_line_len,
+            payload_len: max_payload_len,
+            rules: max_rules,
+        }
+    }
+
+    /// Maximum source bytes accepted before line parsing starts.
+    #[must_use]
+    pub const fn source_byte_limit(self) -> SourceByteLimit {
+        self.source_len
+    }
+
+    /// Maximum bytes accepted in one executable code line before whitespace compaction.
+    #[must_use]
+    pub const fn code_line_byte_limit(self) -> CodeLineByteLimit {
+        self.code_line_len
+    }
+
+    /// Maximum bytes accepted in one executable payload.
+    #[must_use]
+    pub const fn payload_byte_limit(self) -> PayloadByteLimit {
+        self.payload_len
+    }
+
+    /// Maximum executable rules accepted in one parsed program.
+    #[must_use]
+    pub const fn rule_limit(self) -> RuleLimit {
+        self.rules
+    }
+
+    /// Returns limits with a different source byte budget.
+    #[must_use]
+    pub const fn with_source_byte_limit(mut self, max_source_len: SourceByteLimit) -> Self {
+        self.source_len = max_source_len;
+        self
+    }
+
+    /// Returns limits with a different code-line byte budget.
+    #[must_use]
+    pub const fn with_code_line_byte_limit(mut self, max_code_line_len: CodeLineByteLimit) -> Self {
+        self.code_line_len = max_code_line_len;
+        self
+    }
+
+    /// Returns limits with a different payload byte budget.
+    #[must_use]
+    pub const fn with_payload_byte_limit(mut self, max_payload_len: PayloadByteLimit) -> Self {
+        self.payload_len = max_payload_len;
+        self
+    }
+
+    /// Returns limits with a different parsed-rule budget.
+    #[must_use]
+    pub const fn with_rule_limit(mut self, max_rules: RuleLimit) -> Self {
+        self.rules = max_rules;
+        self
+    }
+}
 
 /// Maximum number of rewrite steps allowed before the next matching rule fails.
 ///

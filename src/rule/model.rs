@@ -78,11 +78,35 @@ impl ParsedRule {
             body,
         }
     }
+
+    pub(crate) const fn line_number(&self) -> SourceLineNumber {
+        self.line_number
+    }
+
+    pub(crate) const fn repeat(&self) -> RuleRepeat {
+        self.head.repeat
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OnceRuleSlot {
+    zero_based: usize,
+}
+
+impl OnceRuleSlot {
+    pub(crate) const fn new(zero_based: usize) -> Self {
+        Self { zero_based }
+    }
+
+    pub(crate) const fn zero_based(self) -> usize {
+        self.zero_based
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Rule {
     position: RulePosition,
+    once_slot: Option<OnceRuleSlot>,
     line_number: SourceLineNumber,
     repeat: RuleRepeat,
     anchor: RuleAnchor,
@@ -91,9 +115,14 @@ pub(crate) struct Rule {
 }
 
 impl Rule {
-    pub(crate) fn from_parsed(parsed: ParsedRule, position: RulePosition) -> Self {
+    pub(crate) fn from_parsed(
+        parsed: ParsedRule,
+        position: RulePosition,
+        once_slot: Option<OnceRuleSlot>,
+    ) -> Self {
         Self {
             position,
+            once_slot,
             line_number: parsed.line_number,
             repeat: parsed.head.repeat,
             anchor: parsed.head.anchor,
@@ -104,6 +133,10 @@ impl Rule {
 
     pub(crate) const fn position(&self) -> RulePosition {
         self.position
+    }
+
+    pub(crate) const fn once_slot(&self) -> Option<OnceRuleSlot> {
+        self.once_slot
     }
 
     pub(crate) const fn line_number(&self) -> SourceLineNumber {

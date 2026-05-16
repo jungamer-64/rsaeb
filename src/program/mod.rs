@@ -14,9 +14,12 @@ use crate::source::ProgramSource;
 pub(crate) use rule_set::RuleSet;
 
 pub use limits::{
-    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
-    DEFAULT_MAX_TRACE_SNAPSHOT_LEN, ParseLimits, ReturnByteLimit, RunLimits, RuntimeInputByteLimit,
-    RuntimeStateByteLimit, StepCount, StepLimit, TraceSnapshotByteLimit, TraceSnapshotLimits,
+    CodeLineByteCount, CodeLineByteLimit, DEFAULT_MAX_CODE_LINE_LEN, DEFAULT_MAX_INPUT_LEN,
+    DEFAULT_MAX_PAYLOAD_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_RULES, DEFAULT_MAX_SOURCE_LEN,
+    DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, DEFAULT_MAX_TRACE_SNAPSHOT_LEN, DEFAULT_PARSE_LIMITS,
+    ParseLimits, PayloadByteLimit, ReturnByteLimit, RuleLimit, RunLimits, RuntimeInputByteLimit,
+    RuntimeStateByteLimit, SourceByteCount, SourceByteLimit, StepCount, StepLimit,
+    TraceSnapshotByteLimit, TraceSnapshotLimits,
 };
 pub use result::{ReturnOutput, RunOutcome, RunResult, RuntimeStateSnapshot};
 
@@ -29,6 +32,16 @@ pub struct Program {
     rule_set: RuleSet,
 }
 
+impl core::fmt::Debug for Program {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("Program")
+            .field("rule_count", &self.rule_count())
+            .field("once_rule_count", &self.once_rule_count())
+            .finish()
+    }
+}
+
 impl Program {
     pub(crate) fn from_rule_set(rule_set: RuleSet) -> Self {
         Self { rule_set }
@@ -36,15 +49,16 @@ impl Program {
 
     /// Parses typed program source into a reusable program value.
     ///
-    /// [`ProgramSource`] marks the source boundary; this method performs the
+    /// [`ProgramSource`] marks the source boundary, while [`ParseLimits`]
+    /// carries the host's parser resource policy. This method performs the
     /// actual A=B syntax validation and builds the immutable rule table.
     ///
     /// # Errors
     ///
-    /// Returns `ParseError` when executable code is not ASCII printable syntax,
-    /// when a non-empty code line does not contain exactly one `=`, when
-    /// reserved syntax appears as payload data, or when allocation fails while
-    /// building the parsed program.
+    /// Returns `ParseError` when source exceeds parser limits, executable code
+    /// is not ASCII printable syntax, a non-empty code line does not contain
+    /// exactly one `=`, reserved syntax appears as payload data, or allocation
+    /// fails while building the parsed program.
     pub fn parse(source: ProgramSource<'_>, limits: ParseLimits) -> Result<Self, ParseError> {
         Ok(Self::from_rule_set(parse_rules_impl(source, limits)?))
     }

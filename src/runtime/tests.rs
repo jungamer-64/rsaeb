@@ -1,6 +1,7 @@
 use super::input::{InitialStateBytes, RuntimeInput};
 use super::matcher::RuleSearch;
 use super::state::State;
+use crate::RunLimits;
 use crate::bytes::{CompactByte, Payload, ProgramByte, RuntimeByte};
 use crate::error::{LimitError, PayloadKind, RunError, RuntimeInputError, StateLimitContext};
 use crate::execution::{ExecutionStepError, ExecutionTransition};
@@ -10,11 +11,10 @@ use crate::limits::{
     StepCount, StepLimit,
 };
 use crate::test_support::{
-    TestFailure, TestResult, ensure, ensure_eq, ensure_matches, runtime_input, source_column,
-    source_line_number,
+    TestFailure, TestResult, ensure, ensure_eq, ensure_matches, parse_program, runtime_input,
+    source_column, source_line_number,
 };
 use crate::trace::RuntimeStateView;
-use crate::{Program, ProgramSource, RunLimits};
 use std::vec::Vec;
 
 fn runtime_view_bytes(view: RuntimeStateView<'_>) -> Vec<u8> {
@@ -124,7 +124,7 @@ fn expect_step_transition<'program>(
 /// step commits.
 #[test]
 fn once_rule_lookup_does_not_consume_before_step_commit() -> TestResult {
-    let program = Program::parse(ProgramSource::from_str("(once)a=b"))?;
+    let program = parse_program("(once)a=b")?;
     let input = runtime_input(b"a")?;
     let mut runtime = program.start_execution(
         &input,
@@ -151,7 +151,7 @@ fn once_rule_lookup_does_not_consume_before_step_commit() -> TestResult {
 /// running execution.
 #[test]
 fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
-    let program = Program::parse(ProgramSource::from_str("a=b"))?;
+    let program = parse_program("a=b")?;
     let no_match_input = runtime_input(b"x")?;
     let no_match = program.start_execution(
         &no_match_input,
@@ -229,7 +229,7 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
         RuntimeStateByteLimit::new(2),
         ReturnByteLimit::new(10),
     );
-    let state_program = Program::parse(ProgramSource::from_str("=a"))?;
+    let state_program = parse_program("=a")?;
     let state_input = runtime_input(b"aa")?;
     let state_limited = state_program.start_execution(&state_input, state_limits)?;
     let state_error = expect_step_error(state_limited.step())?;
@@ -261,7 +261,7 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
         RuntimeStateByteLimit::new(10),
         ReturnByteLimit::new(1),
     );
-    let return_program = Program::parse(ProgramSource::from_str("a=(return)ok"))?;
+    let return_program = parse_program("a=(return)ok")?;
     let return_input = runtime_input(b"a")?;
     let return_limited = return_program.start_execution(&return_input, return_limits)?;
     let return_error = expect_step_error(return_limited.step())?;

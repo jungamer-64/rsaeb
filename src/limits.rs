@@ -1,11 +1,11 @@
 //! Runtime budgets and public byte-count value types.
 //!
-//! Runtime limits and trace snapshot limits are separate domains. Runtime limits
-//! decide whether execution may allocate or continue; trace snapshot limits
-//! decide whether a borrowed trace event may be materialized as owned bytes.
-//! Count types report measured byte lengths from parsed payloads, runtime
-//! input, runtime states, return outputs, and trace snapshots without erasing
-//! those domains into plain `usize` values.
+//! Parser limits, runtime limits, and trace snapshot limits are separate
+//! domains. Parser limits bound source ingestion and parsed program size;
+//! runtime limits decide whether execution may allocate or continue; trace
+//! snapshot limits decide whether a borrowed trace event may be materialized as
+//! owned bytes. Count types report measured lengths without erasing those
+//! domains into plain `usize` values.
 //!
 //! ```
 //! use rsaeb::limits::{
@@ -32,7 +32,10 @@ pub use crate::bytes::{
     TraceSnapshotByteCount,
 };
 pub use crate::program::{
-    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
-    DEFAULT_MAX_TRACE_SNAPSHOT_LEN, ReturnByteLimit, RunLimits, RuntimeInputByteLimit,
-    RuntimeStateByteLimit, StepCount, StepLimit, TraceSnapshotByteLimit, TraceSnapshotLimits,
+    CodeLineByteCount, CodeLineByteLimit, DEFAULT_MAX_CODE_LINE_LEN, DEFAULT_MAX_INPUT_LEN,
+    DEFAULT_MAX_PAYLOAD_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_RULES, DEFAULT_MAX_SOURCE_LEN,
+    DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, DEFAULT_MAX_TRACE_SNAPSHOT_LEN, DEFAULT_PARSE_LIMITS,
+    ParseLimits, PayloadByteLimit, ReturnByteLimit, RuleLimit, RunLimits, RuntimeInputByteLimit,
+    RuntimeStateByteLimit, SourceByteCount, SourceByteLimit, StepCount, StepLimit,
+    TraceSnapshotByteLimit, TraceSnapshotLimits,
 };

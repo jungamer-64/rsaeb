@@ -15,8 +15,8 @@
 //! Use these public entry points according to the boundary being crossed:
 //!
 //! - [`ProgramSource`] labels bytes or strings as A=B source before parsing.
-//! - [`Program::parse`] validates source syntax and returns a reusable
-//!   [`Program`].
+//! - [`Program::parse`] validates source syntax under [`ParseLimits`] and
+//!   returns a reusable [`Program`].
 //! - [`RuntimeInput::validate`] validates raw input bytes into the runtime input
 //!   byte domain.
 //! - [`RunLimits`] and [`limits::TraceSnapshotLimits`] keep runtime execution
@@ -44,12 +44,12 @@
 //!
 //! ```
 //! use rsaeb::limits::{
-//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
+//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
 //! };
 //! use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_str("a=b"))?;
+//! let program = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?;
 //! let limits = RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
 //! let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
 //! let result = program.run(&input, limits)?;
@@ -68,14 +68,14 @@
 //!
 //! ```
 //! use rsaeb::limits::{
-//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
+//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 //! };
 //! use rsaeb::{
 //!     Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput,
 //! };
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_str("(once)a=b\na=c"))?;
+//! let program = Program::parse(ProgramSource::from_text("(once)a=b\na=c"), DEFAULT_PARSE_LIMITS)?;
 //! let limits = RunLimits::new(StepLimit::new(10_000), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
 //! let input = RuntimeInput::validate(b"aa", DEFAULT_MAX_INPUT_LEN)?;
 //!
@@ -102,12 +102,12 @@
 //! ```
 //! use rsaeb::execution::ExecutionTransition;
 //! use rsaeb::limits::{
-//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
+//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 //! };
 //! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_str("a=b\nb=c"))?;
+//! let program = Program::parse(ProgramSource::from_text("a=b\nb=c"), DEFAULT_PARSE_LIMITS)?;
 //! let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
 //! let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
 //! let execution = program.start_execution(
@@ -160,14 +160,14 @@
 //! ```
 //! use rsaeb::error::{LimitError, RunError};
 //! use rsaeb::limits::{
-//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
+//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 //! };
 //! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let limits = RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
 //! let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
-//! let result = Program::parse(ProgramSource::from_str("a=b"))?.run(&input, limits);
+//! let result = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?.run(&input, limits);
 //!
 //! assert!(matches!(
 //!     result,
@@ -184,11 +184,12 @@
 //! strings:
 //!
 //! ```
+//! use rsaeb::limits::DEFAULT_PARSE_LIMITS;
 //! use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
 //! use rsaeb::{Program, ProgramSource};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_str("( once ) ( start ) a = ( end ) b # comment"))?;
+//! let program = Program::parse(ProgramSource::from_text("( once ) ( start ) a = ( end ) b # comment"), DEFAULT_PARSE_LIMITS)?;
 //! let rule = program.rules().next().ok_or("missing parsed rule")?;
 //!
 //! assert_eq!(rule.repeat(), RuleRepeat::Once);
@@ -210,13 +211,13 @@
 //!
 //! ```
 //! use rsaeb::limits::{
-//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
+//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 //! };
 //! use rsaeb::trace::BorrowedTraceEvent;
 //! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
+//! let program = Program::parse(ProgramSource::from_text("a=b\nb=(return)ok"), DEFAULT_PARSE_LIMITS)?;
 //! let mut byte_counts = Vec::new();
 //! let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
 //! let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
@@ -242,14 +243,14 @@
 //!
 //! ```
 //! use rsaeb::limits::{
-//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
+//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
 //!     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit, TraceSnapshotLimits,
 //! };
 //! use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
 //! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
+//! let program = Program::parse(ProgramSource::from_text("a=b\nb=(return)ok"), DEFAULT_PARSE_LIMITS)?;
 //! let run_limits = RunLimits::new(
 //!     StepLimit::new(10),
 //!     DEFAULT_MAX_STATE_LEN,
@@ -353,6 +354,8 @@ pub mod source;
 mod syntax;
 pub mod trace;
 
-pub use program::{Program, ReturnOutput, RunLimits, RunOutcome, RunResult, RuntimeStateSnapshot};
+pub use program::{
+    ParseLimits, Program, ReturnOutput, RunLimits, RunOutcome, RunResult, RuntimeStateSnapshot,
+};
 pub use runtime::RuntimeInput;
 pub use source::ProgramSource;

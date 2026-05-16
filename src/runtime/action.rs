@@ -7,6 +7,7 @@ use crate::rule::{Action, Rule};
 
 use super::budget::StepBudget;
 use super::matcher::MatchedRule;
+use super::once::OnceStateSet;
 use super::rewrite::{RewritePlacement, RewriteRequest, RewriteScratch};
 use super::state::{MatchedStateSpan, State};
 use crate::execution::ExecutionCore;
@@ -49,8 +50,9 @@ pub(crate) fn apply_matched_rule<'program>(
     state: &mut State,
     scratch: &mut RewriteScratch,
     step_budget: &mut StepBudget,
+    once_states: &mut OnceStateSet,
     limits: RunLimits,
-    matched: MatchedRule<'program, '_>,
+    matched: MatchedRule<'program>,
 ) -> Result<AppliedRule<'program>, RunError> {
     let permit = step_budget.reserve_next_step(state.byte_count())?;
     let effect = apply_action_to_scratch(
@@ -60,7 +62,7 @@ pub(crate) fn apply_matched_rule<'program>(
         matched.state_match,
         matched.rule.action(),
     )?;
-    matched.commit.commit();
+    once_states.commit(matched.commit);
 
     let step = step_budget.commit(permit);
 

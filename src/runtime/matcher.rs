@@ -1,26 +1,31 @@
-use super::once::{MatchedRuleCommit, RuntimeRules};
+use super::once::{MatchedRuleCommit, OnceStateSet};
 use super::state::{MatchedStateSpan, State};
 use crate::inspect::RuleAnchor;
 use crate::rule::Rule;
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum RuleSearch<'program, 'runtime> {
-    Matched(MatchedRule<'program, 'runtime>),
+pub(crate) enum RuleSearch<'program> {
+    Matched(MatchedRule<'program>),
     Stable,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct MatchedRule<'program, 'runtime> {
+pub(crate) struct MatchedRule<'program> {
     pub(crate) rule: &'program Rule,
-    pub(crate) commit: MatchedRuleCommit<'runtime>,
+    pub(crate) commit: MatchedRuleCommit,
     pub(crate) state_match: MatchedStateSpan,
 }
 
-pub(crate) fn find_next_match<'program, 'runtime>(
-    rules: &'runtime mut RuntimeRules<'program>,
+pub(crate) fn find_next_match<'program>(
+    rules: &'program [Rule],
+    once_states: &OnceStateSet,
     state: &State,
-) -> RuleSearch<'program, 'runtime> {
-    for (rule, commit) in rules.iter_available_mut() {
+) -> RuleSearch<'program> {
+    for rule in rules {
+        let Some(commit) = once_states.commit_token_for_rule(rule) else {
+            continue;
+        };
+
         let Some(state_match) = find_match(state, rule) else {
             continue;
         };

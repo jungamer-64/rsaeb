@@ -10,6 +10,7 @@ use crate::error::{
 };
 use crate::limits::{DEFAULT_MAX_INPUT_LEN, RuntimeInputByteLimit};
 use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
+use crate::{ProgramSource, limits::DEFAULT_PARSE_LIMITS};
 
 pub(crate) enum TestFailure {
     Message(String),
@@ -112,6 +113,26 @@ pub(crate) fn runtime_input_with_limit(
     RuntimeInput::validate(bytes, limit)
 }
 
+/// Parses source text with the default parser limits.
+///
+/// # Errors
+///
+/// Returns `ParseError` if the source violates parser syntax, resource, or
+/// allocation constraints.
+pub(crate) fn parse_program(source: &str) -> Result<Program, ParseError> {
+    Program::parse(ProgramSource::from_text(source), DEFAULT_PARSE_LIMITS)
+}
+
+/// Parses source bytes with the default parser limits.
+///
+/// # Errors
+///
+/// Returns `ParseError` if the source violates parser syntax, resource, or
+/// allocation constraints.
+pub(crate) fn parse_program_bytes(source: &[u8]) -> Result<Program, ParseError> {
+    Program::parse(ProgramSource::from_bytes(source), DEFAULT_PARSE_LIMITS)
+}
+
 /// Converts a boolean assertion into the shared test result type.
 ///
 /// # Errors
@@ -158,7 +179,7 @@ pub(crate) use ensure_eq;
 ///
 /// Returns `TestFailure` if parsing succeeds.
 pub(crate) fn expect_parse_error(source: &str) -> Result<ParseError, TestFailure> {
-    match Program::parse(crate::ProgramSource::from_str(source)) {
+    match parse_program(source) {
         Ok(_) => Err(TestFailure::message("expected parse error")),
         Err(error) => Ok(error),
     }

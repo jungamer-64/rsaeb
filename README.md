@@ -23,12 +23,12 @@ explicit limits:
 
 ```rust
 use rsaeb::limits::{
-    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
+    DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
 };
 use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let program = Program::parse(ProgramSource::from_str("a=b"))?;
+    let program = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?;
     let limits = RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
     let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
     let result = program.run(&input, limits)?;
@@ -72,20 +72,24 @@ The docs.rs crate page contains a complete doctested stepwise example.
 
 ### Resource Limits
 
+`ParseLimits` is the parser contract. It bounds source bytes, executable
+code-line bytes, parsed payload bytes, and executable rule count before the
+parser accepts host-provided source into the program domain.
+
 `RunLimits` is the execution contract. Step count alone is not enough for a
 rewrite system because a short run can still expand state aggressively.
 
 ```rust
 use rsaeb::error::{LimitError, RunError};
 use rsaeb::limits::{
-    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
+    DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 };
 use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let limits = RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
     let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
-    let result = Program::parse(ProgramSource::from_str("a=b"))?.run(&input, limits);
+    let result = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?.run(&input, limits);
 
     assert!(matches!(
         result,
@@ -101,7 +105,7 @@ Execution may succeed exactly at the step limit. The step limit becomes an
 error only when another rule would still apply after the configured number of
 completed steps.
 
-Runtime input validation is also bounded by `RuntimeInputByteLimit` before the
+Runtime input validation is bounded by `RuntimeInputByteLimit` before the
 interpreter materializes owned input state. Trace snapshot materialization has
 its own `TraceSnapshotByteLimit` because tracing is outside runtime execution.
 
@@ -424,7 +428,7 @@ materialization is outside runtime execution.
 
 Filesystem failures are not part of the library error model. External I/O must
 be handled before bytes enter `ProgramSource::from_bytes`,
-`ProgramSource::from_str`, or `RuntimeInput::validate`.
+`ProgramSource::from_text`, or `RuntimeInput::validate`.
 
 ## Public API Overview
 
@@ -434,6 +438,7 @@ the primary execution path:
 - `ProgramSource`
 - `RuntimeInput`
 - `Program`
+- `ParseLimits`
 - `RunLimits`
 - `RunResult`
 - `RunOutcome`
@@ -443,10 +448,11 @@ the primary execution path:
 
 Secondary domains live under explicit namespaces:
 
-- `rsaeb::limits`: `StepLimit`, `RuntimeInputByteLimit`,
+- `rsaeb::limits`: `ParseLimits`, `SourceByteLimit`, `CodeLineByteLimit`,
+  `PayloadByteLimit`, `RuleLimit`, `StepLimit`, `RuntimeInputByteLimit`,
   `RuntimeStateByteLimit`, `ReturnByteLimit`, `TraceSnapshotByteLimit`,
-  `TraceSnapshotLimits`, `RuntimeInputByteCount`, `RuntimeStateByteCount`,
-  other byte-count value types, `StepCount`, and default budget constants
+  `TraceSnapshotLimits`, parser/runtime byte-count value types, `StepCount`,
+  and default budget constants
 - `rsaeb::execution`: `RunningExecution`, `ExecutionTransition`,
   `AppliedExecution`, `StableExecution`, `ReturnedExecution`,
   and `ExecutionStepError`

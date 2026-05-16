@@ -1,7 +1,12 @@
 use core::error::Error;
 
 use crate::allocation::AllocationError;
-use crate::bytes::{NonAsciiCodeByte, NonPrintableCodeByte, ReservedSyntaxByte};
+use crate::bytes::{NonAsciiCodeByte, NonPrintableCodeByte, PayloadByteCount, ReservedSyntaxByte};
+use crate::inspect::RuleCount;
+use crate::program::{
+    CodeLineByteCount, CodeLineByteLimit, PayloadByteLimit, RuleLimit, SourceByteCount,
+    SourceByteLimit,
+};
 use crate::source::{SourceLineNumber, SourcePosition};
 
 /// Source program parse error.
@@ -56,6 +61,7 @@ impl Error for ParseError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match &self.kind {
             ParseErrorKind::Allocation(error) => Some(error),
+            ParseErrorKind::Limit(error) => Some(error),
             ParseErrorKind::NonAsciiInCode { .. }
             | ParseErrorKind::NonPrintableAsciiInCode { .. }
             | ParseErrorKind::MissingEquals
@@ -87,6 +93,8 @@ pub enum ParseErrorLocation {
 pub enum ParseErrorKind {
     /// A fallible allocation failed while parsing source.
     Allocation(AllocationError),
+    /// A configured parser resource limit would be exceeded.
+    Limit(ParseLimitError),
     /// A non-ASCII byte appeared before the line comment marker.
     NonAsciiInCode {
         /// Rejected non-ASCII executable-code byte.
@@ -119,6 +127,77 @@ pub enum ParseErrorKind {
         action: RightActionKind,
     },
 }
+
+/// Configured parser budget failure.
+///
+/// Parser limits are checked before accepting source, code-line, payload, or
+/// rule table growth beyond the host-provided policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParseLimitError {
+    /// Source bytes would exceed the configured source limit.
+    Source {
+        /// Configured maximum source length.
+        limit: SourceByteLimit,
+        /// Source length that was passed to the parser.
+        attempted_len: SourceByteCount,
+    },
+    /// One executable source line would exceed the configured code-line limit.
+    CodeLine {
+        /// Configured maximum code-line length.
+        limit: CodeLineByteLimit,
+        /// Code-line length after comment removal and before whitespace compaction.
+        attempted_len: CodeLineByteCount,
+    },
+    /// One parsed payload would exceed the configured payload limit.
+    Payload {
+        /// Configured maximum payload length.
+        limit: PayloadByteLimit,
+        /// Payload length after syntax-token removal and whitespace compaction.
+        attempted_len: PayloadByteCount,
+    },
+    /// Parsed executable rules would exceed the configured rule limit.
+    Rules {
+        /// Configured maximum executable rule count.
+        limit: RuleLimit,
+        /// Rule count that would be reached by accepting the rejected rule.
+        attempted_count: RuleCount,
+    },
+}
+
+impl ParseLimitError {
+    pub(crate) const fn source(limit: SourceByteLimit, attempted_len: SourceByteCount) -> Self {
+        Self::Source {
+            limit,
+            attempted_len,
+        }
+    }
+
+    pub(crate) const fn code_line(
+        limit: CodeLineByteLimit,
+        attempted_len: CodeLineByteCount,
+    ) -> Self {
+        Self::CodeLine {
+            limit,
+            attempted_len,
+        }
+    }
+
+    pub(crate) const fn payload(limit: PayloadByteLimit, attempted_len: PayloadByteCount) -> Self {
+        Self::Payload {
+            limit,
+            attempted_len,
+        }
+    }
+
+    pub(crate) const fn rules(limit: RuleLimit, attempted_count: RuleCount) -> Self {
+        Self::Rules {
+            limit,
+            attempted_count,
+        }
+    }
+}
+
+impl Error for ParseLimitError {}
 
 /// Program payload context used by structured parse errors.
 ///

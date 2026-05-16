@@ -11,11 +11,12 @@
 //! boundary.
 //!
 //! ```
+//! use rsaeb::limits::DEFAULT_PARSE_LIMITS;
 //! use rsaeb::{Program, ProgramSource};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let source = ProgramSource::from_bytes(b"a=b # arbitrary comment bytes: \xff");
-//! let program = Program::parse(source)?;
+//! let program = Program::parse(source, DEFAULT_PARSE_LIMITS)?;
 //!
 //! assert_eq!(program.rule_count().get(), 1);
 //! # Ok(())
@@ -44,6 +45,17 @@ impl<'source> ProgramSource<'source> {
         Self { bytes }
     }
 
+    /// Labels a UTF-8 string as parser input.
+    ///
+    /// This is the ergonomic constructor for ordinary source literals. It is
+    /// equivalent to [`ProgramSource::from_bytes`] on `source.as_bytes()`.
+    #[must_use]
+    pub const fn from_text(source: &'source str) -> Self {
+        Self {
+            bytes: source.as_bytes(),
+        }
+    }
+
     /// Borrows the original source bytes.
     #[must_use]
     pub const fn as_bytes(self) -> &'source [u8] {
@@ -57,6 +69,18 @@ impl<'source> ProgramSource<'source> {
     }
 }
 
+impl<'source> From<&'source [u8]> for ProgramSource<'source> {
+    fn from(bytes: &'source [u8]) -> Self {
+        Self::from_bytes(bytes)
+    }
+}
+
+impl<'source> From<&'source str> for ProgramSource<'source> {
+    fn from(source: &'source str) -> Self {
+        Self::from_text(source)
+    }
+}
+
 /// One-based source line number in parsed source diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceLineNumber {
@@ -64,6 +88,7 @@ pub struct SourceLineNumber {
 }
 
 impl SourceLineNumber {
+    pub(crate) const ONE: Self = Self { one_based: 1 };
     pub(crate) const MAX: Self = Self {
         one_based: usize::MAX,
     };

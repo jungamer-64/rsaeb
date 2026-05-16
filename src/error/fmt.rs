@@ -81,6 +81,7 @@ impl fmt::Display for ParseErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Allocation(error) => error.fmt(f),
+            Self::Limit(error) => error.fmt(f),
             Self::NonAsciiInCode { byte } => {
                 write!(f, "non-ASCII byte 0x{:02x} in code", byte.get())
             }
@@ -104,6 +105,46 @@ impl fmt::Display for ParseErrorKind {
                     "nested or unsupported right-side action syntax at {action}"
                 )
             }
+        }
+    }
+}
+
+impl fmt::Display for super::ParseLimitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Source {
+                limit,
+                attempted_len,
+            } => write!(
+                f,
+                "source length {attempted_len} exceeds the configured source limit {}",
+                limit.get(),
+            ),
+            Self::CodeLine {
+                limit,
+                attempted_len,
+            } => write!(
+                f,
+                "code line length {attempted_len} exceeds the configured code-line limit {}",
+                limit.get(),
+            ),
+            Self::Payload {
+                limit,
+                attempted_len,
+            } => write!(
+                f,
+                "payload length {attempted_len} exceeds the configured payload limit {}",
+                limit.get(),
+            ),
+            Self::Rules {
+                limit,
+                attempted_count,
+            } => write!(
+                f,
+                "rule count {} exceeds the configured rule limit {}",
+                attempted_count.get(),
+                limit.get(),
+            ),
         }
     }
 }
