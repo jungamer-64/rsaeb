@@ -11,7 +11,7 @@
 //! state and rule views that are valid for observation without making the
 //! mutable runtime engine part of the API.
 
-use crate::error::{RunError, TracedRunError};
+use crate::error::{LimitError, RunError, StateLimitContext, TracedRunError};
 use crate::program::{Program, RunLimits, RunResult, StepCount};
 use crate::rule::Rule;
 use crate::runtime::action::{AppliedRule, StepApplication, apply_matched_rule};
@@ -92,7 +92,8 @@ pub struct ReturnedExecution<'program> {
 ///
 /// Step failures happen before the candidate rewrite is committed. The failed
 /// [`RunningExecution`] is therefore returned by value so hosts can inspect,
-/// retry with different limits, or discard it explicitly.
+/// update the limits with [`RunningExecution::with_limits`], or discard it
+/// explicitly.
 pub struct ExecutionStepError<'program> {
     error: RunError,
     execution: RunningExecution<'program>,
@@ -230,6 +231,34 @@ impl<'program> RunningExecution<'program> {
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
         self.core.state()
+    }
+
+    /// Replaces runtime limits for this uncommitted execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if the already-completed step count or the current
+    /// runtime state does not fit the replacement limits.
+    pub fn with_limits(mut self, limits: RunLimits) -> Result<Self, RunError> {
+        let completed_steps = self.core.step_budget.completed_steps();
+        let state_len = self.core.state.byte_count();
+
+        if completed_steps.get() > limits.step_limit().get() {
+            return Err(LimitError::step(limits.step_limit(), completed_steps, state_len).into());
+        }
+
+        if state_len.get() > limits.state_byte_limit().get() {
+            return Err(LimitError::state(
+                StateLimitContext::CurrentState,
+                limits.state_byte_limit(),
+                state_len,
+            )
+            .into());
+        }
+
+        self.core.limits = limits;
+        self.core.step_budget = self.core.step_budget.with_limit(limits.step_limit());
+        Ok(self)
     }
 
     /// Advances this execution by exactly one matching rule when possible.

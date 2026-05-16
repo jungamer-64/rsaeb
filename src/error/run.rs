@@ -189,6 +189,8 @@ pub enum StateLimitContext {
     Input,
     /// A rewrite would create a state larger than the configured state limit.
     Rewrite,
+    /// Existing runtime state is larger than a replacement state limit.
+    CurrentState,
 }
 
 /// Configured runtime budget failure.
@@ -200,7 +202,8 @@ pub enum StateLimitContext {
 pub enum LimitError {
     /// Runtime state would exceed the configured state length limit.
     State {
-        /// Whether the limit was exceeded by input or by a rewrite.
+        /// Whether the limit was exceeded by input, rewrite, or replacement
+        /// limits for an existing execution state.
         context: StateLimitContext,
         /// Configured maximum runtime state length.
         limit: RuntimeStateByteLimit,

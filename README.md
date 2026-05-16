@@ -474,7 +474,9 @@ Secondary domains live under explicit namespaces:
 Run the public documentation and package checks before publishing changes:
 
 ```sh
+rustup target add thumbv7em-none-eabihf
 cargo fmt --check
+cargo check --lib --all-features --target thumbv7em-none-eabihf
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 cargo test --doc --all-features

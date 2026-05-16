@@ -4,8 +4,8 @@ use rsaeb::error::{
     AebError, AllocationError, FallibleTraceSnapshotRunError, ParseError, RunError,
     RuntimeInputError, TraceSnapshotRunError,
 };
-use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS};
-use rsaeb::{Program, ProgramSource, RuntimeInput};
+use rsaeb::limits::DEFAULT_PARSE_LIMITS;
+use rsaeb::{Program, ProgramSource};
 
 pub enum TestFailure {
     Message(String),
@@ -96,16 +96,6 @@ impl From<AllocationError> for TestFailure {
 
 pub type TestResult = Result<(), TestFailure>;
 
-/// Validates runtime input with the default input byte limit.
-///
-/// # Errors
-///
-/// Returns `RuntimeInputError` if the test input violates runtime input
-/// validation or allocation constraints.
-pub fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
-    RuntimeInput::validate(bytes, DEFAULT_MAX_INPUT_LEN)
-}
-
 /// Parses source text with the default parser limits.
 ///
 /// # Errors
@@ -116,26 +106,17 @@ pub fn parse_program(source: &str) -> Result<Program, ParseError> {
     Program::parse(ProgramSource::from_text(source), DEFAULT_PARSE_LIMITS)
 }
 
-/// Converts a boolean assertion into the shared test result type.
-///
-/// # Errors
-///
-/// Returns `TestFailure` with `message` when `condition` is false.
-pub fn ensure(condition: bool, message: impl Into<String>) -> TestResult {
-    if condition {
-        Ok(())
-    } else {
-        Err(TestFailure::message(message))
-    }
-}
-
 /// Converts a pattern-match assertion into the shared test result type.
 ///
 /// # Errors
 ///
 /// Returns `TestFailure` with `message` when `condition` is false.
 pub fn ensure_matches(condition: bool, message: &'static str) -> TestResult {
-    ensure(condition, message)
+    if condition {
+        Ok(())
+    } else {
+        Err(TestFailure::message(message))
+    }
 }
 
 macro_rules! ensure_eq {

@@ -35,8 +35,14 @@ jobs:
           rustc --version
           cargo --version
 
+      - name: Install no_std target
+        run: rustup target add thumbv7em-none-eabihf
+
       - name: Check formatting
         run: cargo fmt -- --check
+
+      - name: Check no_std library target
+        run: cargo check --lib --all-features --target thumbv7em-none-eabihf
 
       - name: Check lints
         run: cargo clippy --all-targets --all-features -- -D warnings
@@ -79,6 +85,12 @@ jobs:
         run: |
           rustc +1.90.0 --version
           cargo +1.90.0 --version
+
+      - name: Install no_std target for MSRV
+        run: rustup +1.90.0 target add thumbv7em-none-eabihf
+
+      - name: Check no_std library target on MSRV
+        run: cargo +1.90.0 check --lib --all-features --target thumbv7em-none-eabihf
 
       - name: Test all targets
         run: cargo +1.90.0 test --all-targets --all-features

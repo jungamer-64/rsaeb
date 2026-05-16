@@ -1,7 +1,11 @@
-pub mod support;
+//! Public error model contract tests.
 
+mod support;
+
+use rsaeb::RuntimeInput;
 use rsaeb::error::{ParseErrorKind, ParseErrorLocation, PayloadKind, RunError};
-use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program, runtime_input};
+use rsaeb::limits::DEFAULT_MAX_INPUT_LEN;
+use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns the expected runtime error.
 ///
@@ -13,6 +17,10 @@ fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFail
         Ok(_) => Err(TestFailure::message("expected runtime error")),
         Err(error) => Ok(error),
     }
+}
+
+fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
+    RuntimeInput::validate(bytes, DEFAULT_MAX_INPUT_LEN)
 }
 
 /// # Errors

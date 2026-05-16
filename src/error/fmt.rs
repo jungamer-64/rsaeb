@@ -287,6 +287,7 @@ impl fmt::Display for StateLimitContext {
         match self {
             Self::Input => f.write_str("runtime input"),
             Self::Rewrite => f.write_str("rewrite result"),
+            Self::CurrentState => f.write_str("current runtime state"),
         }
     }
 }

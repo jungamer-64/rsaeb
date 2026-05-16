@@ -1,11 +1,13 @@
-pub mod support;
+//! Public `RuntimeInput` contract tests.
+
+mod support;
 
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
     RuntimeInputByteLimit,
 };
 use rsaeb::{RunLimits, RuntimeInput};
-use support::{TestFailure, TestResult, ensure, ensure_eq, ensure_matches, parse_program};
+use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns stable output bytes when they match `expected`.
 ///
@@ -30,7 +32,7 @@ fn runtime_input_owns_public_bytes_for_reuse() -> TestResult {
 
     ensure_eq!(input.to_vec()?.as_slice(), b"a=()# ".as_slice())?;
     ensure_eq!(input.byte_count().get(), 6)?;
-    ensure(!input.is_empty(), "expected non-empty owned input")?;
+    ensure_matches(!input.is_empty(), "expected non-empty owned input")?;
 
     let program = parse_program("a=b")?;
     let result = program.run(
@@ -64,7 +66,7 @@ fn runtime_input_validates_ascii_boundary() -> TestResult {
     ensure_eq!(result.steps().get(), 0)?;
 
     for byte in 0x80..=0xff {
-        ensure(
+        ensure_matches(
             RuntimeInput::validate(&[byte], DEFAULT_MAX_INPUT_LEN).is_err(),
             "byte should be rejected",
         )?;

@@ -1,9 +1,11 @@
-pub mod support;
+//! Public inspection view contract tests.
+
+mod support;
 
 use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
 use rsaeb::limits::DEFAULT_PARSE_LIMITS;
 use rsaeb::{Program, ProgramSource};
-use support::{TestFailure, TestResult, ensure, ensure_eq, ensure_matches, parse_program};
+use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// # Errors
 ///
@@ -23,7 +25,7 @@ fn inspect_rule_views_expose_structured_public_data() -> TestResult {
     ensure_eq!(first.line_number().get(), 1)?;
     ensure_eq!(first.repeat(), RuleRepeat::Always)?;
     ensure_eq!(first.anchor(), RuleAnchor::Anywhere)?;
-    ensure(first.lhs().eq_bytes(b"a"), "expected first lhs")?;
+    ensure_matches(first.lhs().eq_bytes(b"a"), "expected first lhs")?;
     ensure_matches(
         matches!(
             first.action(),
@@ -71,7 +73,7 @@ fn inspect_canonical_source_reparses_to_same_public_rule_view() -> TestResult {
     ensure_eq!(reparsed.once_rule_count().get(), 1)?;
     ensure_eq!(reparsed_rule.repeat(), RuleRepeat::Once)?;
     ensure_eq!(reparsed_rule.anchor(), RuleAnchor::Start)?;
-    ensure(reparsed_rule.lhs().eq_bytes(b"a"), "expected lhs")?;
+    ensure_matches(reparsed_rule.lhs().eq_bytes(b"a"), "expected lhs")?;
     ensure_eq!(
         reparsed_rule.canonical_source()?,
         b"(once)(start)a=(end)b".as_slice(),

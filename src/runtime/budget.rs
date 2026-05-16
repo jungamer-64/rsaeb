@@ -25,6 +25,11 @@ impl StepBudget {
         self.completed_steps
     }
 
+    pub(crate) const fn with_limit(mut self, max_steps: StepLimit) -> Self {
+        self.max_steps = max_steps;
+        self
+    }
+
     /// Checks whether another rewrite step can be attempted.
     ///
     /// # Errors

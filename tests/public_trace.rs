@@ -1,17 +1,19 @@
-pub mod support;
+//! Public trace API contract tests.
+
+mod support;
 
 use rsaeb::error::{
     FallibleTraceSnapshotRunError, RunError, TraceSnapshotError, TraceSnapshotRunError,
 };
 use rsaeb::limits::{
-    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit,
-    TraceSnapshotByteLimit, TraceSnapshotLimits,
+    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
+    DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit, TraceSnapshotByteLimit, TraceSnapshotLimits,
 };
 use rsaeb::trace::{
     BorrowedTraceEffect, BorrowedTraceEvent, TraceSnapshotEffect, TraceSnapshotEvent,
 };
-use rsaeb::{Program, RunLimits, RunOutcome, RunResult};
-use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program, runtime_input};
+use rsaeb::{Program, RunLimits, RunOutcome, RunResult, RuntimeInput};
+use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns the expected trace snapshot run error.
 ///
@@ -60,6 +62,10 @@ fn snapshot_event_bytes<'event>(event: &'event TraceSnapshotEvent<'_>) -> &'even
             TraceSnapshotEffect::Return { output } => output.as_bytes(),
         },
     }
+}
+
+fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
+    RuntimeInput::validate(bytes, DEFAULT_MAX_INPUT_LEN)
 }
 
 /// # Errors
@@ -312,7 +318,12 @@ fn trace_final_event_matches_run_result() -> TestResult {
         RunOutcome::Return(output) => output.as_bytes(),
     };
     ensure_eq!(snapshot_event_bytes(last), result_bytes)?;
-    ensure_eq!(events.len(), result.steps().get() + 1)?;
+    let expected_event_count = result
+        .steps()
+        .get()
+        .checked_add(1)
+        .ok_or(TestFailure::message("trace event count overflow"))?;
+    ensure_eq!(events.len(), expected_event_count)?;
     ensure_matches(
         matches!(
             last,

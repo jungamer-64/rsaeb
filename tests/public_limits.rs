@@ -1,13 +1,15 @@
-pub mod support;
+//! Public limit model contract tests.
+
+mod support;
 
 use rsaeb::error::{LimitError, ParseErrorKind, ParseLimitError, RunError, StateLimitContext};
 use rsaeb::limits::{
-    CodeLineByteLimit, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_PARSE_LIMITS,
-    PayloadByteLimit, ReturnByteLimit, RuleLimit, RuntimeStateByteLimit, SourceByteLimit,
-    StepLimit,
+    CodeLineByteLimit, DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
+    DEFAULT_PARSE_LIMITS, PayloadByteLimit, ReturnByteLimit, RuleLimit, RuntimeStateByteLimit,
+    SourceByteLimit, StepLimit,
 };
-use rsaeb::{Program, ProgramSource, RunLimits};
-use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program, runtime_input};
+use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
+use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns the expected runtime error.
 ///
@@ -47,6 +49,10 @@ fn expect_state_limit(error: RunError) -> Result<LimitError, TestFailure> {
             Err(TestFailure::message("expected state limit error"))
         }
     }
+}
+
+fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
+    RuntimeInput::validate(bytes, DEFAULT_MAX_INPUT_LEN)
 }
 
 /// # Errors

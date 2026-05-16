@@ -1,12 +1,18 @@
-pub mod support;
+//! Public stepwise execution contract tests.
 
+mod support;
+
+use rsaeb::error::{LimitError, RunError, StateLimitContext};
 use rsaeb::execution::{
     AppliedExecution, ExecutionStepError, ExecutionTransition, ReturnedExecution, RunningExecution,
     StableExecution,
 };
-use rsaeb::limits::{DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit};
-use rsaeb::{RunLimits, RunOutcome, RunResult};
-use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program, runtime_input};
+use rsaeb::limits::{
+    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit,
+    RuntimeStateByteLimit, StepLimit,
+};
+use rsaeb::{RunLimits, RunOutcome, RunResult, RuntimeInput};
+use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns stable output bytes when they match `expected`.
 ///
@@ -116,6 +122,24 @@ fn expect_step_transition<'program>(
         Ok(transition) => Ok(transition),
         Err(error) => Err(TestFailure::from(error.into_error())),
     }
+}
+
+/// Returns the expected step error.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if stepping succeeds.
+fn expect_step_error<'program>(
+    result: Result<ExecutionTransition<'program>, ExecutionStepError<'program>>,
+) -> Result<ExecutionStepError<'program>, TestFailure> {
+    match result {
+        Ok(_) => Err(TestFailure::message("expected step error")),
+        Err(error) => Ok(error),
+    }
+}
+
+fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
+    RuntimeInput::validate(bytes, DEFAULT_MAX_INPUT_LEN)
 }
 
 /// # Errors
@@ -305,5 +329,83 @@ fn execution_reuses_runtime_input_without_session_leakage() -> TestResult {
     ensure_matches(
         input.byte_count().get() == 2,
         "expected reusable input size",
+    )
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if a preserved step-error execution cannot retry with
+/// relaxed replacement limits.
+#[test]
+fn execution_step_error_can_retry_with_relaxed_limits() -> TestResult {
+    let program = parse_program("a=(return)ok")?;
+    let input = runtime_input(b"a")?;
+    let limits = RunLimits::new(
+        StepLimit::new(1),
+        DEFAULT_MAX_STATE_LEN,
+        ReturnByteLimit::new(1),
+    );
+    let execution = program.start_execution(&input, limits)?;
+
+    let error = expect_step_error(execution.step())?;
+    let execution = error
+        .into_execution()
+        .with_limits(limits.with_return_byte_limit(ReturnByteLimit::new(2)))?;
+
+    match expect_step_transition(execution.step())? {
+        ExecutionTransition::Returned(returned) => {
+            ensure_eq!(returned.output().to_vec()?.as_slice(), b"ok".as_slice())
+        }
+        ExecutionTransition::Applied(_) | ExecutionTransition::Stable(_) => {
+            Err(TestFailure::message("expected returned execution"))
+        }
+    }
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if replacement limits accept already-invalid running
+/// execution state.
+#[test]
+fn execution_rejects_replacement_limits_that_do_not_fit_current_progress() -> TestResult {
+    let program = parse_program("a=b\nb=c")?;
+    let input = runtime_input(b"a")?;
+    let limits = RunLimits::new(
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let execution = program.start_execution(&input, limits)?;
+
+    let running = match expect_step_transition(execution.step())? {
+        ExecutionTransition::Applied(applied) => applied.into_running(),
+        ExecutionTransition::Stable(_) | ExecutionTransition::Returned(_) => {
+            return Err(TestFailure::message("expected applied execution"));
+        }
+    };
+    ensure_matches(
+        matches!(
+            running.with_limits(limits.with_step_limit(StepLimit::new(0))),
+            Err(RunError::Limit(LimitError::Step {
+                completed_steps,
+                ..
+            })) if completed_steps.get() == 1
+        ),
+        "expected completed-step replacement limit error",
+    )?;
+
+    let execution = program.start_execution(&input, limits)?;
+    ensure_matches(
+        matches!(
+            execution.with_limits(
+                limits.with_state_byte_limit(RuntimeStateByteLimit::new(0))
+            ),
+            Err(RunError::Limit(LimitError::State {
+                context: StateLimitContext::CurrentState,
+                attempted_len,
+                ..
+            })) if attempted_len.get() == 1
+        ),
+        "expected current-state replacement limit error",
     )
 }

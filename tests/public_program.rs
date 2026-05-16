@@ -1,11 +1,13 @@
-pub mod support;
+//! Public `Program` contract tests.
+
+mod support;
 
 use rsaeb::limits::{
-    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, DEFAULT_PARSE_LIMITS,
-    StepLimit,
+    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
+    DEFAULT_PARSE_LIMITS, StepLimit,
 };
-use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RunResult};
-use support::{TestFailure, TestResult, ensure_eq, parse_program, runtime_input};
+use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RunResult, RuntimeInput};
+use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns stable output bytes when they match `expected`.
 ///
@@ -40,6 +42,10 @@ fn expect_return_bytes<'result>(
     }
 }
 
+fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
+    RuntimeInput::validate(bytes, DEFAULT_MAX_INPUT_LEN)
+}
+
 /// # Errors
 ///
 /// Returns `TestFailure` if public typed boundaries cannot parse or run simple
@@ -56,7 +62,7 @@ fn program_parse_accepts_text_and_byte_sources() -> TestResult {
     let input = runtime_input(b"a")?;
     let result = program.run(&input, limits)?;
     expect_stable_bytes(&result, b"b")?;
-    ensure_eq!(result.steps().get(), 1)?;
+    ensure_matches(result.steps().get() == 1, "expected one rewrite step")?;
 
     let program = Program::parse(ProgramSource::from_bytes(b"a=b#\xff"), DEFAULT_PARSE_LIMITS)?;
     let input = runtime_input(b"a")?;

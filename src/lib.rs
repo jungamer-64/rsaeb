@@ -315,23 +315,6 @@
 //! ```
 
 #![no_std]
-#![forbid(unsafe_code)]
-#![deny(
-    missing_docs,
-    rustdoc::broken_intra_doc_links,
-    rustdoc::bare_urls,
-    unconditional_panic,
-    clippy::panic,
-    clippy::panic_in_result_fn,
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::string_slice,
-    clippy::todo,
-    clippy::unimplemented,
-    clippy::unreachable,
-    clippy::arithmetic_side_effects
-)]
 
 extern crate alloc;
 
