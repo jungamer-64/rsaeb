@@ -39,13 +39,13 @@ jobs:
         run: cargo fmt -- --check
 
       - name: Check lints
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Test all targets
-        run: cargo test --locked --all-targets --all-features
+        run: cargo test --all-targets --all-features
 
       - name: Test crate documentation
-        run: cargo test --doc --locked --all-features
+        run: cargo test --doc --all-features
 
       - name: Test README examples
         run: |
@@ -57,13 +57,13 @@ jobs:
           rustdoc --edition=2024 --test README.md -L dependency=target/debug/deps --extern "rsaeb=${latest_rlib}"
 
       - name: Build rustdoc
-        run: RUSTDOCFLAGS="-D warnings" cargo doc --locked --all-features --no-deps
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
 
       - name: List package contents
-        run: cargo package --list --locked
+        run: cargo package --list
 
       - name: Verify package
-        run: cargo package --locked
+        run: cargo package
 
   msrv:
     name: MSRV
@@ -81,7 +81,7 @@ jobs:
           cargo +1.90.0 --version
 
       - name: Test all targets
-        run: cargo +1.90.0 test --locked --all-targets --all-features
+        run: cargo +1.90.0 test --all-targets --all-features
 
       - name: Verify package
-        run: cargo +1.90.0 package --locked
+        run: cargo +1.90.0 package
