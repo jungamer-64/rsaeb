@@ -1,7 +1,26 @@
-//! Source input and source-position value types.
+//! Program-source boundary and source-position value types.
 //!
-//! Program source is kept separate from runtime input, and parser diagnostics
-//! report typed line and column positions from this module.
+//! A [`ProgramSource`] only labels bytes as source input; it does not validate
+//! A=B syntax. Validation belongs to [`Program::parse`](crate::Program::parse),
+//! which can then report parse failures with [`SourceLineNumber`],
+//! [`SourceColumn`], and [`SourcePosition`].
+//!
+//! Source is intentionally separate from [`RuntimeInput`](crate::RuntimeInput).
+//! Comments may contain arbitrary bytes, while executable source code is
+//! validated by the parser and runtime input is validated by the runtime-input
+//! boundary.
+//!
+//! ```
+//! use rsaeb::{Program, ProgramSource};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let source = ProgramSource::from_bytes(b"a=b # arbitrary comment bytes: \xff");
+//! let program = Program::parse(source)?;
+//!
+//! assert_eq!(program.rule_count().get(), 1);
+//! # Ok(())
+//! # }
+//! ```
 
 /// Borrowed A=B program source at the parser boundary.
 ///
@@ -14,13 +33,21 @@ pub struct ProgramSource<'source> {
 }
 
 impl<'source> ProgramSource<'source> {
-    /// Labels raw source bytes as parser input.
+    /// Labels raw bytes as parser input.
+    ///
+    /// This constructor accepts any byte slice. Executable code bytes are
+    /// checked later by [`Program::parse`](crate::Program::parse); bytes after a
+    /// line-comment marker remain part of the source byte stream but are not
+    /// executable code.
     #[must_use]
     pub const fn from_bytes(bytes: &'source [u8]) -> Self {
         Self { bytes }
     }
 
-    /// Labels a UTF-8 source string as parser input.
+    /// Labels a UTF-8 string as parser input.
+    ///
+    /// This is the ergonomic constructor for ordinary source literals. It is
+    /// equivalent to [`ProgramSource::from_bytes`] on `source.as_bytes()`.
     #[must_use]
     pub const fn from_str(source: &'source str) -> Self {
         Self {
@@ -28,20 +55,20 @@ impl<'source> ProgramSource<'source> {
         }
     }
 
-    /// Borrow the source bytes.
+    /// Borrows the original source bytes.
     #[must_use]
     pub const fn as_bytes(self) -> &'source [u8] {
         self.bytes
     }
 
-    /// Whether the source contains no bytes.
+    /// Returns whether the source contains no bytes.
     #[must_use]
     pub const fn is_empty(self) -> bool {
         self.bytes.is_empty()
     }
 }
 
-/// One-based source line number.
+/// One-based source line number in parsed source diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceLineNumber {
     one_based: usize,
@@ -69,7 +96,7 @@ impl SourceLineNumber {
     }
 }
 
-/// One-based source column.
+/// One-based source column in parsed source diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceColumn {
     one_based: usize,
@@ -93,7 +120,7 @@ impl SourceColumn {
     }
 }
 
-/// One-based source position.
+/// One-based source position in parsed source diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourcePosition {
     line: SourceLineNumber,

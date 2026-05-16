@@ -1,8 +1,42 @@
-//! Structured error types for parsing, running, and tracing A=B programs.
+//! Structured error types for parsing, input validation, running, and tracing.
 //!
 //! The interpreter reports errors as structured data first. Human-readable text
-//! is kept in `fmt`, so parser/runtime code constructs typed reasons instead of
-//! scattering presentation strings across the core.
+//! is kept in formatting implementations, so parser and runtime code construct
+//! typed reasons instead of scattering presentation strings across the core.
+//!
+//! The main domains are:
+//!
+//! - [`ParseError`] for source syntax and parser allocation failures.
+//! - [`RuntimeInputError`] for raw input bytes rejected before execution.
+//! - [`RunError`] for execution-time allocation, state-size, and budget
+//!   failures.
+//! - [`TraceSnapshotError`] and the traced run wrappers for trace
+//!   materialization or user callback failures.
+//! - [`AebError`] for callers that want a parse/input/run umbrella while still
+//!   preserving the structured inner error.
+//!
+//! ```
+//! use rsaeb::error::{AebError, RuntimeInputError};
+//! use rsaeb::limits::RuntimeInputByteLimit;
+//! use rsaeb::RuntimeInput;
+//!
+//! fn validate(bytes: &[u8]) -> Result<RuntimeInput, AebError> {
+//!     RuntimeInput::validate(bytes, RuntimeInputByteLimit::new(8)).map_err(AebError::from)
+//! }
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let Err(error) = validate(&[b'a', 0xff]) else {
+//!     return Err("expected invalid input".into());
+//! };
+//!
+//! assert!(matches!(
+//!     error,
+//!     AebError::Input(RuntimeInputError::NonAscii { column, byte })
+//!         if column.get() == 2 && byte.get() == 0xff
+//! ));
+//! # Ok(())
+//! # }
+//! ```
 
 mod fmt;
 mod parse;
@@ -26,6 +60,11 @@ pub use traced::{
 };
 
 /// Top-level source parsing, input validation, and runtime execution error.
+///
+/// This wrapper is useful at host boundaries that perform parse, input
+/// validation, and execution in one operation. It does not erase the underlying
+/// domain: callers can still match the inner [`ParseError`],
+/// [`RuntimeInputError`], or [`RunError`] variant.
 #[derive(Debug, PartialEq, Eq)]
 pub enum AebError {
     /// Source program parse error.

@@ -5,6 +5,10 @@ use crate::bytes::{NonAsciiCodeByte, NonPrintableCodeByte, ReservedSyntaxByte};
 use crate::source::{SourceLineNumber, SourcePosition};
 
 /// Source program parse error.
+///
+/// Parse errors always carry a typed source location and a structured reason.
+/// The parser accepts arbitrary bytes after a line-comment marker, but
+/// executable code before the comment marker must fit the supported A=B syntax.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {
     location: ParseErrorLocation,
@@ -64,6 +68,9 @@ impl Error for ParseError {
 }
 
 /// Source location carried by a parse error.
+///
+/// Some failures apply to the whole executable line, while byte-specific
+/// failures point at a one-based source position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseErrorLocation {
     /// The whole source line is the relevant location.
@@ -73,6 +80,9 @@ pub enum ParseErrorLocation {
 }
 
 /// Structured parse error reason.
+///
+/// These variants describe parser-domain failures only. Runtime input and
+/// runtime execution errors are reported through separate types.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseErrorKind {
     /// A fallible allocation failed while parsing source.
@@ -111,6 +121,9 @@ pub enum ParseErrorKind {
 }
 
 /// Program payload context used by structured parse errors.
+///
+/// Payload context identifies which side/action was being parsed when reserved
+/// syntax appeared as data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PayloadKind {
     /// Ordinary left-side match data.

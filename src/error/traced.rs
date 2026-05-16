@@ -6,7 +6,10 @@ use crate::program::TraceSnapshotByteLimit;
 
 use super::RunError;
 
-/// Error returned by fallible tracing APIs.
+/// Error returned by fallible borrowed tracing APIs.
+///
+/// Borrowed tracing itself does not materialize snapshots, so the only domains
+/// are runtime execution and the user-provided trace sink.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TracedRunError<E> {
     /// Runtime execution failed.
@@ -34,6 +37,9 @@ impl<E> From<RunError> for TracedRunError<E> {
 }
 
 /// Error while materializing an owned trace snapshot from a borrowed trace event.
+///
+/// Snapshot limits are evaluated per event. A failing event is not silently
+/// truncated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TraceSnapshotError {
     /// Snapshot bytes exceeded the caller-provided snapshot byte limit.
@@ -63,6 +69,9 @@ impl From<AllocationError> for TraceSnapshotError {
 }
 
 /// Error returned by infallible trace-snapshot APIs.
+///
+/// The trace callback cannot fail in this API, so failures are either ordinary
+/// runtime failures or snapshot materialization failures.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TraceSnapshotRunError {
     /// Runtime execution failed.
@@ -93,6 +102,9 @@ impl From<TraceSnapshotError> for TraceSnapshotRunError {
 }
 
 /// Error returned by fallible trace-snapshot APIs.
+///
+/// This keeps runtime execution, snapshot materialization, and caller callback
+/// failures in separate variants.
 #[derive(Debug, PartialEq, Eq)]
 pub enum FallibleTraceSnapshotRunError<E> {
     /// Runtime execution failed.

@@ -1,7 +1,31 @@
 //! Borrowed inspection views for parsed rules and payloads.
 //!
-//! These types describe parsed program structure without exposing the internal
-//! rule table or runtime execution state.
+//! Inspection exposes the parsed program structure without exposing the
+//! internal rule table or storing a second copy of source text. Rule and payload
+//! views borrow from [`Program`](crate::Program), so they are cheap to copy and
+//! cannot outlive the parsed program they describe.
+//!
+//! ```
+//! use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
+//! use rsaeb::{Program, ProgramSource};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let program = Program::parse(ProgramSource::from_str(
+//!     "(once)(start)a=(return)done",
+//! ))?;
+//! let rule = program.rules().next().ok_or("missing rule")?;
+//!
+//! assert_eq!(rule.position().number().get(), 1);
+//! assert_eq!(rule.repeat(), RuleRepeat::Once);
+//! assert_eq!(rule.anchor(), RuleAnchor::Start);
+//! assert!(rule.lhs().eq_bytes(b"a"));
+//! assert!(matches!(
+//!     rule.action(),
+//!     RuleActionView::Return(output) if output.eq_bytes(b"done")
+//! ));
+//! # Ok(())
+//! # }
+//! ```
 
 use alloc::vec::Vec;
 use core::fmt;
@@ -12,6 +36,9 @@ use crate::rule::Rule;
 use crate::source::SourceLineNumber;
 
 /// Number of parsed rules.
+///
+/// This count is produced by a parsed program and keeps rule counts distinct
+/// from byte counts and step counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleCount {
     value: usize,
@@ -51,6 +78,10 @@ impl RuleNumber {
 }
 
 /// Program-local position of a parsed rule in execution order.
+///
+/// Rule positions are assigned after parsing removes blank/comment-only lines.
+/// Use [`RuleView::line_number`] when diagnostics need the original source
+/// line instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RulePosition {
     number: RuleNumber,
@@ -70,6 +101,10 @@ impl RulePosition {
 }
 
 /// Rule repeat policy.
+///
+/// Repeat policy is per runtime invocation. A `(once)` rule can be used again
+/// by a later call to [`Program::run`](crate::Program::run) or
+/// [`Program::start_execution`](crate::Program::start_execution).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleRepeat {
     /// The rule may apply every time it matches.
@@ -79,6 +114,9 @@ pub enum RuleRepeat {
 }
 
 /// Rule match anchor.
+///
+/// Anchors constrain where the left-side payload may match in the current
+/// runtime state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleAnchor {
     /// Search for the left-side payload anywhere in the runtime state.
@@ -161,6 +199,10 @@ impl fmt::Debug for PayloadView<'_> {
 }
 
 /// Read-only view of a parsed rule action.
+///
+/// Each variant carries the right-side payload in the domain implied by the
+/// parsed action token. There is no boolean flag that can confuse ordinary
+/// replacement, movement, and return behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleActionView<'program> {
     /// Replace the matched bytes with the payload.

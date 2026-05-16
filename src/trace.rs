@@ -1,7 +1,48 @@
 //! Borrowed and snapshot trace event types.
 //!
-//! Borrowed tracing observes runtime state without allocating per event.
-//! Snapshot tracing materializes bounded owned events at the trace boundary.
+//! Borrowed tracing observes runtime state during the callback without
+//! allocating per event. Snapshot tracing materializes bounded owned bytes at
+//! the trace boundary. Both surfaces describe the same event stream: the
+//! initial state followed by one event for each committed rewrite step.
+//!
+//! Use borrowed events when a sink can decide immediately, and snapshot events
+//! when a sink must retain state/output bytes after the callback returns.
+//!
+//! ```
+//! use rsaeb::limits::{
+//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
+//!     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit, TraceSnapshotLimits,
+//! };
+//! use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
+//! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
+//! let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
+//! let run_limits = RunLimits::new(
+//!     StepLimit::new(10),
+//!     DEFAULT_MAX_STATE_LEN,
+//!     DEFAULT_MAX_RETURN_LEN,
+//! );
+//! let trace_limits = TraceSnapshotLimits::new(run_limits, DEFAULT_MAX_TRACE_SNAPSHOT_LEN);
+//! let mut retained = Vec::new();
+//!
+//! program.run_with_trace_snapshots(&input, trace_limits, |event| match event {
+//!     TraceSnapshotEvent::Initial { state } => retained.push(state.into_vec()),
+//!     TraceSnapshotEvent::Step {
+//!         effect: TraceSnapshotEffect::Continue { state },
+//!         ..
+//!     } => retained.push(state.into_vec()),
+//!     TraceSnapshotEvent::Step {
+//!         effect: TraceSnapshotEffect::Return { output },
+//!         ..
+//!     } => retained.push(output.into_vec()),
+//! })?;
+//!
+//! assert_eq!(retained, [b"a".to_vec(), b"b".to_vec(), b"ok".to_vec()]);
+//! # Ok(())
+//! # }
+//! ```
 
 use alloc::vec::Vec;
 
@@ -15,7 +56,9 @@ use crate::program::{ReturnOutput, RuntimeStateSnapshot, StepCount, TraceSnapsho
 ///
 /// This lets trace sinks inspect state without forcing the runtime to allocate a
 /// `Vec<u8>` for every event. Internally the runtime state is not stored as raw
-/// `u8`, so public byte access is an iterator/materialization boundary.
+/// `u8`, so public byte access is an iterator/materialization boundary. The
+/// view is valid only while the runtime state it borrows is held by the current
+/// execution or trace callback.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeStateView<'run> {
     bytes: &'run [RuntimeByte],
@@ -33,6 +76,9 @@ impl<'run> RuntimeStateView<'run> {
     }
 
     /// Runtime state bytes as a materializing iterator.
+    ///
+    /// Iteration converts the internal runtime byte domain back into public raw
+    /// bytes without allocating.
     pub fn bytes(self) -> impl Iterator<Item = u8> + 'run {
         self.bytes.iter().copied().map(RuntimeByte::materialize)
     }
@@ -78,6 +124,9 @@ impl core::fmt::Debug for RuntimeStateView<'_> {
 }
 
 /// Owned trace effect emitted by trace snapshot APIs.
+///
+/// Continuation steps materialize the post-step runtime state. Return steps
+/// materialize the final `(return)` output instead of a state.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TraceSnapshotEffect {
     /// The step produced the next runtime state and execution may continue.
@@ -93,6 +142,9 @@ pub enum TraceSnapshotEffect {
 }
 
 /// Borrowed trace effect emitted by borrowed tracing APIs.
+///
+/// Borrowed effects avoid allocation by borrowing the post-step state or parsed
+/// return payload for the duration of the callback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BorrowedTraceEffect<'program, 'run> {
     /// The step produced the next runtime state and execution may continue.

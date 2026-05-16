@@ -23,7 +23,8 @@ pub use result::{ReturnOutput, RunOutcome, RunResult, RuntimeStateSnapshot};
 /// Parsed A=B rewrite program.
 ///
 /// A parsed program is immutable and reusable. Per-run `(once)` state lives in
-/// the runtime invocation, not in this value.
+/// the runtime invocation, not in this value, so repeated runs with the same
+/// [`Program`] start from fresh rule availability.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Program {
     rule_set: RuleSet,
@@ -36,6 +37,9 @@ impl Program {
 
     /// Parses typed program source into a reusable program value.
     ///
+    /// [`ProgramSource`] marks the source boundary; this method performs the
+    /// actual A=B syntax validation and builds the immutable rule table.
+    ///
     /// # Errors
     ///
     /// Returns `ParseError` when executable code is not ASCII printable syntax,
@@ -47,18 +51,28 @@ impl Program {
     }
 
     /// Returns the number of executable rules in the parsed program.
+    ///
+    /// Blank lines and comment-only lines are not executable rules and are not
+    /// counted.
     #[must_use]
     pub fn rule_count(&self) -> RuleCount {
         self.rule_set.rule_count()
     }
 
     /// Returns the number of parsed `(once)` rules.
+    ///
+    /// This count describes parsed rule metadata only. It is not consumed or
+    /// mutated by running the program.
     #[must_use]
     pub fn once_rule_count(&self) -> RuleCount {
         self.rule_set.once_rule_count()
     }
 
     /// Iterates over structured parsed-rule views in execution order.
+    ///
+    /// The views borrow from this program. Canonical source can be materialized
+    /// from a [`RuleView`] when needed, but source text is not stored as a
+    /// second truth beside the parsed rule fields.
     pub fn rules(&self) -> impl Iterator<Item = RuleView<'_>> + '_ {
         self.rule_set.as_slice().iter().map(Rule::view)
     }
@@ -90,6 +104,9 @@ impl Program {
     }
 
     /// Runs this program with already-validated runtime input.
+    ///
+    /// This is the run-to-completion API. Use [`Program::start_execution`] when
+    /// the host needs to observe or pause after each committed rule.
     ///
     /// # Errors
     ///

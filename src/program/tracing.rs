@@ -18,11 +18,12 @@ enum SnapshotTraceCallbackError<E> {
 }
 
 impl Program {
-    /// Runs this program and emits trace-snapshot, infallible events.
+    /// Runs this program and emits infallible owned trace snapshot events.
     ///
-    /// This convenience API materializes `Vec<u8>` snapshots. Use
-    /// `run_with_borrowed_trace` when the trace sink only needs to inspect each
-    /// event during the callback.
+    /// This convenience API materializes bounded `Vec<u8>` snapshots for the
+    /// initial state and every committed step. Use
+    /// [`Program::run_with_borrowed_trace`] when the trace sink only needs to
+    /// inspect each event during the callback.
     ///
     /// # Errors
     ///
@@ -53,7 +54,11 @@ impl Program {
         }
     }
 
-    /// Runs this program and emits trace-snapshot, fallible events.
+    /// Runs this program and emits fallible owned trace snapshot events.
+    ///
+    /// This is the snapshot API for sinks that can fail, such as serializers or
+    /// host-side buffers with their own limits. Snapshot materialization errors
+    /// and sink errors are reported as separate variants.
     ///
     /// # Errors
     ///
@@ -90,7 +95,7 @@ impl Program {
         }
     }
 
-    /// Runs this program and emits borrowed, infallible trace events.
+    /// Runs this program and emits infallible borrowed trace events.
     ///
     /// Borrowed trace events allocate nothing. They are valid only for the
     /// callback invocation, so a sink that wants to retain bytes must copy them
@@ -118,7 +123,11 @@ impl Program {
         }
     }
 
-    /// Runs this program and emits borrowed, fallible trace events.
+    /// Runs this program and emits fallible borrowed trace events.
+    ///
+    /// The callback borrows event bytes only for the duration of each call. A
+    /// sink that wants to keep bytes must copy them explicitly or use
+    /// [`Program::try_run_with_trace_snapshots`].
     ///
     /// # Errors
     ///

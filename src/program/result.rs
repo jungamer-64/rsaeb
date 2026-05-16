@@ -5,6 +5,9 @@ use crate::bytes::{ReturnOutputByteCount, RuntimeStateByteCount};
 use super::limits::StepCount;
 
 /// Structured result category for one completed run.
+///
+/// Stable completion and `(return)` completion are distinct outcomes rather
+/// than a byte buffer plus a boolean flag.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RunOutcome {
     /// No rule matched the final runtime state.
@@ -14,6 +17,9 @@ pub enum RunOutcome {
 }
 
 /// Materialized final runtime state for a run that ended without `(return)`.
+///
+/// This value owns public raw bytes. It is produced only after runtime-state
+/// bytes have been materialized successfully.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RuntimeStateSnapshot {
     bytes: Vec<u8>,
@@ -50,6 +56,8 @@ impl RuntimeStateSnapshot {
 }
 
 /// Materialized final output from a matched `(return)` rule.
+///
+/// This value owns public raw bytes from the return payload.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ReturnOutput {
     bytes: Vec<u8>,
@@ -86,6 +94,9 @@ impl ReturnOutput {
 }
 
 /// Result of one program execution.
+///
+/// The result records the number of committed rewrite steps and the terminal
+/// outcome reached by the run.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RunResult {
     steps: StepCount,

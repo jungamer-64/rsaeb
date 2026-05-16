@@ -1,24 +1,42 @@
 //! Byte-oriented interpreter for A=B ordered rewrite programs.
 //!
-//! This crate-level documentation is the docs.rs API guide. It shows the
-//! primary execution, stepping, inspection, tracing, limit, and error surfaces.
-//! The crate README carries the longer language reference and project overview.
+//! This page is the docs.rs API guide. The README carries the longer language
+//! reference; this page focuses on the public Rust surface and the typed
+//! boundaries a host program should use.
 //!
 //! `rsaeb` is a `no_std + alloc` library crate. It parses compact A=B source
 //! into an immutable [`Program`] and runs that program against typed
-//! [`RuntimeInput`] validated before execution. Files, stdout, stderr,
-//! arguments, environment access, and lossy display formatting are outside the
-//! interpreter core.
+//! [`RuntimeInput`] validated before execution. The interpreter core does not
+//! read files, use process arguments, access environment variables, write
+//! stdout/stderr, or perform lossy byte-to-text display conversion.
 //!
-//! # Core boundary
+//! # API map
 //!
-//! Program source and runtime input enter through separate typed boundaries:
+//! Use these public entry points according to the boundary being crossed:
 //!
-//! - [`ProgramSource`] labels bytes as A=B source before [`Program::parse`];
-//! - [`RuntimeInput`] owns already-validated ASCII input bytes;
-//! - [`RunLimits`] bounds each runtime invocation;
-//! - trace snapshots use [`limits::TraceSnapshotByteLimit`] separately from
-//!   runtime execution limits.
+//! - [`ProgramSource`] labels bytes or strings as A=B source before parsing.
+//! - [`Program::parse`] validates source syntax and returns a reusable
+//!   [`Program`].
+//! - [`RuntimeInput::validate`] validates raw input bytes into the runtime input
+//!   byte domain.
+//! - [`RunLimits`] and [`limits::TraceSnapshotLimits`] keep runtime execution
+//!   limits separate from trace snapshot materialization limits.
+//! - [`Program::run`] runs to completion, while [`Program::start_execution`]
+//!   returns a typestate execution that can pause after each applied rule.
+//! - [`Program::run_with_borrowed_trace`] observes borrowed trace events without
+//!   per-event allocation; [`Program::run_with_trace_snapshots`] materializes
+//!   bounded owned trace events.
+//! - [`inspect`] exposes borrowed structured rule views, and [`error`] exposes
+//!   structured parse, input, runtime, and trace errors.
+//!
+//! # Typed boundaries
+//!
+//! Program source and runtime input are different byte domains. Program payload
+//! bytes are printable executable syntax bytes accepted by the parser. Runtime
+//! input accepts any ASCII byte, including whitespace, control bytes, and bytes
+//! that are reserved syntax in program source. Construct both explicitly before
+//! execution so parsing, input validation, and runtime failures remain
+//! distinguishable in the type system.
 //!
 //! # Basic execution
 //!
@@ -219,6 +237,47 @@
 //! # }
 //! ```
 //!
+//! Snapshot tracing materializes owned event bytes under an explicit snapshot
+//! byte budget, which lets the caller retain events after each callback returns:
+//!
+//! ```
+//! use rsaeb::limits::{
+//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
+//!     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit, TraceSnapshotLimits,
+//! };
+//! use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
+//! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let program = Program::parse(ProgramSource::from_str("a=b\nb=(return)ok"))?;
+//! let run_limits = RunLimits::new(
+//!     StepLimit::new(10),
+//!     DEFAULT_MAX_STATE_LEN,
+//!     DEFAULT_MAX_RETURN_LEN,
+//! );
+//! let trace_limits = TraceSnapshotLimits::new(run_limits, DEFAULT_MAX_TRACE_SNAPSHOT_LEN);
+//! let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
+//! let mut states = Vec::new();
+//! let mut returns = Vec::new();
+//!
+//! program.run_with_trace_snapshots(&input, trace_limits, |event| match event {
+//!     TraceSnapshotEvent::Initial { state } => states.push(state.into_vec()),
+//!     TraceSnapshotEvent::Step {
+//!         effect: TraceSnapshotEffect::Continue { state },
+//!         ..
+//!     } => states.push(state.into_vec()),
+//!     TraceSnapshotEvent::Step {
+//!         effect: TraceSnapshotEffect::Return { output },
+//!         ..
+//!     } => returns.push(output.into_vec()),
+//! })?;
+//!
+//! assert_eq!(states, [b"a".to_vec(), b"b".to_vec()]);
+//! assert_eq!(returns, [b"ok".to_vec()]);
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Error model
 //!
 //! Source parsing, runtime input validation, runtime execution, trace snapshot
@@ -229,6 +288,29 @@
 //! [`error::FallibleTraceSnapshotRunError`], and [`error::TracedRunError`].
 //! [`error::AebError`] is available as a parse/input/run umbrella for callers
 //! that want one top-level error type.
+//!
+//! ```
+//! use rsaeb::error::{AebError, RuntimeInputError};
+//! use rsaeb::limits::RuntimeInputByteLimit;
+//! use rsaeb::RuntimeInput;
+//!
+//! fn validate_host_input(bytes: &[u8]) -> Result<RuntimeInput, AebError> {
+//!     RuntimeInput::validate(bytes, RuntimeInputByteLimit::new(4)).map_err(AebError::from)
+//! }
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let Err(error) = validate_host_input(&[0xff]) else {
+//!     return Err("expected non-ASCII input to fail".into());
+//! };
+//!
+//! assert!(matches!(
+//!     error,
+//!     AebError::Input(RuntimeInputError::NonAscii { column, byte })
+//!         if column.get() == 1 && byte.get() == 0xff
+//! ));
+//! # Ok(())
+//! # }
+//! ```
 
 #![no_std]
 #![forbid(unsafe_code)]

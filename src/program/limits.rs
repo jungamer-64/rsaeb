@@ -15,6 +15,9 @@ pub const DEFAULT_MAX_TRACE_SNAPSHOT_LEN: TraceSnapshotByteLimit =
     TraceSnapshotByteLimit::new(DEFAULT_BYTE_BUDGET);
 
 /// Maximum number of rewrite steps allowed before the next matching rule fails.
+///
+/// A limit of `0` allows parsing and input materialization, but the first
+/// matching rule fails with a step-limit error instead of committing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StepLimit {
     value: usize,
@@ -35,6 +38,9 @@ impl StepLimit {
 }
 
 /// Maximum runtime state length in bytes.
+///
+/// This applies both to the materialized initial input state and to every state
+/// that would be produced by a rewrite.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuntimeStateByteLimit {
     value: usize,
@@ -55,6 +61,10 @@ impl RuntimeStateByteLimit {
 }
 
 /// Maximum runtime input length accepted before owned byte classification.
+///
+/// This limit belongs to [`RuntimeInput::validate`](crate::RuntimeInput::validate),
+/// not to [`Program::run`](crate::Program::run). Runtime state limits are
+/// checked separately when execution materializes the validated input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuntimeInputByteLimit {
     value: usize,
@@ -75,6 +85,9 @@ impl RuntimeInputByteLimit {
 }
 
 /// Maximum `(return)` output length in bytes.
+///
+/// This applies only to output produced by a matched `(return)` rule. Stable
+/// final states are governed by [`RuntimeStateByteLimit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ReturnByteLimit {
     value: usize,
@@ -95,6 +108,9 @@ impl ReturnByteLimit {
 }
 
 /// Maximum state/output bytes materialized for one trace snapshot event.
+///
+/// This limit is checked per event when converting borrowed trace events into
+/// snapshot events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TraceSnapshotByteLimit {
     value: usize,
@@ -115,6 +131,9 @@ impl TraceSnapshotByteLimit {
 }
 
 /// Number of completed rewrite steps.
+///
+/// Counts report committed steps only. Failed step attempts do not increment
+/// this value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StepCount {
     value: usize,
@@ -140,7 +159,8 @@ impl StepCount {
 /// The interpreter checks these limits before allocating oversized runtime
 /// states or return outputs. Step limits alone are not enough for a rewriting
 /// system because a tiny number of steps can still expand into a very large
-/// state.
+/// state. Runtime input length is validated before execution with
+/// [`RuntimeInputByteLimit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunLimits {
     steps: StepLimit,
@@ -182,6 +202,8 @@ impl RunLimits {
     }
 
     /// Returns limits with a different step budget.
+    ///
+    /// The other runtime budgets are preserved.
     #[must_use]
     pub const fn with_step_limit(mut self, max_steps: StepLimit) -> Self {
         self.steps = max_steps;
@@ -189,6 +211,8 @@ impl RunLimits {
     }
 
     /// Returns limits with a different runtime-state budget.
+    ///
+    /// The step and return-output budgets are preserved.
     #[must_use]
     pub const fn with_state_byte_limit(mut self, max_state_len: RuntimeStateByteLimit) -> Self {
         self.state_len = max_state_len;
@@ -196,6 +220,8 @@ impl RunLimits {
     }
 
     /// Returns limits with a different return-output budget.
+    ///
+    /// The step and runtime-state budgets are preserved.
     #[must_use]
     pub const fn with_return_byte_limit(mut self, max_return_len: ReturnByteLimit) -> Self {
         self.return_len = max_return_len;

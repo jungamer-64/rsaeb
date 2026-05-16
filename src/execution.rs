@@ -1,8 +1,15 @@
 //! Public stepwise execution typestates.
 //!
-//! These types represent the observable execution lifecycle. The mutable
-//! runtime engine remains in `runtime`; this module owns the public states that
-//! callers can hold between applied rewrite steps.
+//! [`Program::start_execution`](crate::Program::start_execution) returns a
+//! [`RunningExecution`]. Calling [`RunningExecution::step`] consumes that value
+//! and returns an [`ExecutionTransition`], so callers must handle the next
+//! state explicitly: continue with [`AppliedExecution::into_running`], finish a
+//! [`StableExecution`], or finish a [`ReturnedExecution`].
+//!
+//! This shape keeps terminal executions separate from the only state that can
+//! still step. Runtime internals stay private; public values expose borrowed
+//! state and rule views that are valid for observation without making the
+//! mutable runtime engine part of the API.
 
 use crate::error::{RunError, TracedRunError};
 use crate::program::{Program, RunLimits, RunResult, StepCount};
@@ -20,7 +27,8 @@ use crate::{inspect::PayloadView, inspect::RuleView};
 ///
 /// This type represents the only state with a `step` method. Stable and
 /// returned executions are represented by separate terminal types, so callers
-/// cannot step after completion.
+/// cannot step after completion. A running execution owns per-run `(once)`
+/// state and the current runtime state.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RunningExecution<'program> {
     pub(crate) core: ExecutionCore<'program>,
@@ -36,6 +44,10 @@ pub(crate) struct ExecutionCore<'program> {
 }
 
 /// Result of advancing a running execution once.
+///
+/// The transition is exhaustive over the public execution lifecycle: one rule
+/// committed and execution can continue, no rule matched, or a `(return)` rule
+/// produced final output.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ExecutionTransition<'program> {
     /// One ordinary rewrite rule was applied and execution can continue.
@@ -47,6 +59,9 @@ pub enum ExecutionTransition<'program> {
 }
 
 /// One committed non-terminal rule application.
+///
+/// This value lets a caller inspect the applied rule and post-step state before
+/// deciding whether to continue execution.
 #[derive(Debug, PartialEq, Eq)]
 pub struct AppliedExecution<'program> {
     step: StepCount,
@@ -55,6 +70,9 @@ pub struct AppliedExecution<'program> {
 }
 
 /// Terminal execution state reached by no matching rule.
+///
+/// Stable executions still own the final runtime state until the caller either
+/// borrows it or materializes it with [`StableExecution::into_result`].
 #[derive(Debug, PartialEq, Eq)]
 pub struct StableExecution<'program> {
     steps: StepCount,
@@ -62,6 +80,9 @@ pub struct StableExecution<'program> {
 }
 
 /// Terminal execution state reached by `(return)`.
+///
+/// The output is a borrowed parsed payload until the caller materializes the
+/// terminal [`RunResult`] through [`ReturnedExecution::into_result`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReturnedExecution<'program> {
     step: StepCount,
@@ -70,6 +91,10 @@ pub struct ReturnedExecution<'program> {
 }
 
 /// Runtime failure that preserves the uncommitted running execution.
+///
+/// Step failures happen before the candidate rewrite is committed. The failed
+/// [`RunningExecution`] is therefore returned by value so hosts can inspect,
+/// retry with different limits, or discard it explicitly.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ExecutionStepError<'program> {
     error: RunError,

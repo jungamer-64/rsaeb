@@ -10,7 +10,9 @@ use crate::program::{RunLimits, RuntimeInputByteLimit};
 ///
 /// Runtime input is a separate byte domain from program source. It may contain
 /// ASCII whitespace, control bytes, and reserved syntax bytes, but it cannot
-/// contain non-ASCII bytes.
+/// contain non-ASCII bytes. Validation also owns the input bytes so a
+/// [`RuntimeInput`] can be reused across runs without revalidating raw host
+/// input.
 #[derive(PartialEq, Eq)]
 pub struct RuntimeInput {
     bytes: Vec<RuntimeByte>,
@@ -35,6 +37,10 @@ impl fmt::Debug for RuntimeInputBytesDebug<'_> {
 
 impl RuntimeInput {
     /// Validates raw bytes as runtime input.
+    ///
+    /// Runtime input accepts all ASCII bytes, including bytes that would be
+    /// reserved syntax in program source. Non-ASCII bytes are rejected with a
+    /// structured input column before execution starts.
     ///
     /// # Errors
     ///
@@ -66,6 +72,9 @@ impl RuntimeInput {
     }
 
     /// Runtime input bytes as a materializing iterator.
+    ///
+    /// Iteration converts the owned runtime byte domain back into public raw
+    /// bytes without allocating.
     pub fn bytes(&self) -> impl Iterator<Item = u8> + '_ {
         self.bytes.iter().copied().map(RuntimeByte::materialize)
     }
@@ -94,7 +103,7 @@ impl RuntimeInput {
         RuntimeInputByteCount::new(self.bytes.len())
     }
 
-    /// Whether this runtime input contains no bytes.
+    /// Returns whether this runtime input contains no bytes.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.bytes.is_empty()

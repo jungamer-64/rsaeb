@@ -10,6 +10,10 @@ use crate::program::{
 };
 
 /// Runtime execution error.
+///
+/// This error is returned after parsing and runtime input validation have
+/// already succeeded. It covers allocation failures inside execution,
+/// unrepresentable rewrite sizes, and configured runtime budget failures.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RunError {
     /// A fallible allocation failed during runtime execution.
@@ -49,6 +53,11 @@ impl From<LimitError> for RunError {
 }
 
 /// Runtime input boundary error.
+///
+/// This error is produced before execution starts, while raw host bytes are
+/// being classified as [`RuntimeInput`](crate::RuntimeInput). It is intentionally
+/// separate from [`RunError`] so callers can report invalid input without
+/// treating it as a runtime failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeInputError {
     /// Runtime input contained a non-ASCII byte.
@@ -107,6 +116,9 @@ impl From<AllocationError> for RuntimeInputError {
 }
 
 /// One-based runtime input column.
+///
+/// Columns count raw input bytes starting at one. They are reported only by the
+/// runtime-input boundary, not by source parsing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InputColumn {
     one_based: usize,
@@ -126,6 +138,9 @@ impl InputColumn {
 }
 
 /// Runtime state-size failure caused by arithmetic overflow.
+///
+/// This is distinct from a configured byte limit. It means the interpreter
+/// could not represent the length of the state that a rewrite would produce.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateSizeError {
     state: RuntimeStateByteCount,
@@ -177,6 +192,10 @@ pub enum StateLimitContext {
 }
 
 /// Configured runtime budget failure.
+///
+/// Limits are checked before committing the operation that would exceed them,
+/// so errors report the attempted length or completed step count at the
+/// rejection point.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LimitError {
     /// Runtime state would exceed the configured state length limit.
