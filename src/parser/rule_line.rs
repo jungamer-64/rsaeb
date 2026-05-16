@@ -83,6 +83,133 @@ struct RuleSideSlices<'code> {
     right: &'code [CompactByte],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CompactLineIndex {
+    zero_based: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuleSeparator {
+    equals: CompactLineIndex,
+    right_start: CompactLineIndex,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuleSides {
+    separator: RuleSeparator,
+}
+
+impl CompactLineIndex {
+    const fn from_zero_based(zero_based: usize) -> Self {
+        Self { zero_based }
+    }
+
+    fn checked_next(self, line_number: SourceLineNumber) -> Result<Self, ParseError> {
+        let zero_based = self.zero_based.checked_add(1).ok_or_else(|| {
+            parse_allocation_error(
+                line_number,
+                AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
+            )
+        })?;
+        Ok(Self { zero_based })
+    }
+
+    const fn get(self) -> usize {
+        self.zero_based
+    }
+}
+
+impl RuleSeparator {
+    /// Finds the single rule separator in a compact source line.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if the line has no `=`, more than one `=`, or the
+    /// right-side start index cannot be represented.
+    fn find(line_number: SourceLineNumber, bytes: &[CompactByte]) -> Result<Self, ParseError> {
+        let mut found = None;
+
+        for (index, byte) in bytes.iter().copied().enumerate() {
+            if byte.as_u8() != b'=' {
+                continue;
+            }
+
+            let equals = CompactLineIndex::from_zero_based(index);
+            let right_start = equals.checked_next(line_number)?;
+            if found
+                .replace(Self {
+                    equals,
+                    right_start,
+                })
+                .is_some()
+            {
+                return Err(ParseError::at_position(
+                    SourcePosition::new(line_number, byte.source_column()),
+                    ParseErrorKind::MultipleEquals,
+                ));
+            }
+        }
+
+        found.ok_or_else(|| ParseError::at_line(line_number, ParseErrorKind::MissingEquals))
+    }
+
+    const fn equals(self) -> CompactLineIndex {
+        self.equals
+    }
+
+    const fn right_start(self) -> CompactLineIndex {
+        self.right_start
+    }
+}
+
+impl RuleSides {
+    /// Creates rule-side witnesses and validates them against the compact line.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if the separator indexes do not describe valid
+    /// side slices for this compact line.
+    fn new(
+        line_number: SourceLineNumber,
+        bytes: &[CompactByte],
+        separator: RuleSeparator,
+    ) -> Result<Self, ParseError> {
+        let sides = Self { separator };
+        sides.slices(line_number, bytes)?;
+        Ok(sides)
+    }
+
+    /// Borrows the proven left and right slices from compact line bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if the stored separator no longer fits the compact
+    /// line. Normal construction prevents this; the error keeps the invariant
+    /// checked without panicking.
+    fn slices<'code>(
+        self,
+        line_number: SourceLineNumber,
+        bytes: &'code [CompactByte],
+    ) -> Result<RuleSideSlices<'code>, ParseError> {
+        let left = bytes.get(..self.separator.equals().get()).ok_or_else(|| {
+            parse_allocation_error(
+                line_number,
+                AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
+            )
+        })?;
+        let right = bytes
+            .get(self.separator.right_start().get()..)
+            .ok_or_else(|| {
+                parse_allocation_error(
+                    line_number,
+                    AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
+                )
+            })?;
+
+        Ok(RuleSideSlices { left, right })
+    }
+}
+
 #[derive(Clone, Copy)]
 struct LeftSyntax<'code> {
     line_number: SourceLineNumber,
