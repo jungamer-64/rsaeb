@@ -33,7 +33,10 @@ struct RuntimeInputBytesDebug<'input>(&'input RuntimeInput);
 
 impl fmt::Debug for RuntimeInputBytesDebug<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_list().entries(self.0.bytes()).finish()
+        formatter
+            .debug_list()
+            .entries(self.0.materialized_bytes())
+            .finish()
     }
 }
 
@@ -73,27 +76,18 @@ impl RuntimeInput {
         Ok(Self { bytes })
     }
 
-    /// Runtime input bytes as a materializing iterator.
-    ///
-    /// Iteration converts the owned runtime byte domain back into public raw
-    /// bytes without allocating.
-    pub fn bytes(&self) -> impl Iterator<Item = u8> + '_ {
+    pub(crate) fn materialized_bytes(&self) -> impl Iterator<Item = u8> + '_ {
         self.bytes.iter().copied().map(RuntimeByte::materialize)
     }
 
-    /// Materializes this runtime input as raw bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AllocationError` if the output buffer cannot be allocated.
-    pub fn to_vec(&self) -> Result<Vec<u8>, AllocationError> {
+    pub(crate) fn materialize_for_view(&self) -> Result<Vec<u8>, AllocationError> {
         let mut output = Vec::new();
         try_reserve_total_exact(
             &mut output,
             self.bytes.len(),
             AllocationContext::RuntimeInputView,
         )?;
-        for byte in self.bytes() {
+        for byte in self.materialized_bytes() {
             try_push(&mut output, byte, AllocationContext::RuntimeInputView)?;
         }
         Ok(output)

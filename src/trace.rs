@@ -76,11 +76,7 @@ impl<'run> RuntimeStateView<'run> {
         self.bytes.is_empty()
     }
 
-    /// Runtime state bytes as a materializing iterator.
-    ///
-    /// Iteration converts the internal runtime byte domain back into public raw
-    /// bytes without allocating.
-    pub fn bytes(self) -> impl Iterator<Item = u8> + 'run {
+    pub(crate) fn materialized_bytes(self) -> impl Iterator<Item = u8> + 'run {
         self.bytes.iter().copied().map(RuntimeByte::materialize)
     }
 
@@ -88,16 +84,6 @@ impl<'run> RuntimeStateView<'run> {
     #[must_use]
     pub const fn byte_count(self) -> RuntimeStateByteCount {
         RuntimeStateByteCount::new(self.bytes.len())
-    }
-
-    /// Materializes this runtime-state view as owned bytes with explicit
-    /// fallible allocation.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AllocationError` if the output buffer cannot be allocated.
-    pub fn to_vec(self) -> Result<Vec<u8>, AllocationError> {
-        self.to_vec_with_context(AllocationContext::RuntimeStateView)
     }
 
     /// Materializes this runtime-state view at the given allocation site.
@@ -111,7 +97,7 @@ impl<'run> RuntimeStateView<'run> {
     ) -> Result<Vec<u8>, AllocationError> {
         let mut output = Vec::new();
         try_reserve_total_exact(&mut output, self.bytes.len(), context)?;
-        for byte in self.bytes() {
+        for byte in self.materialized_bytes() {
             try_push(&mut output, byte, context)?;
         }
         Ok(output)
@@ -120,7 +106,9 @@ impl<'run> RuntimeStateView<'run> {
 
 impl core::fmt::Debug for RuntimeStateView<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_list().entries((*self).bytes()).finish()
+        f.debug_list()
+            .entries((*self).materialized_bytes())
+            .finish()
     }
 }
 

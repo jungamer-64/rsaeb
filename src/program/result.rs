@@ -30,15 +30,11 @@ impl RuntimeStateSnapshot {
         Self { bytes }
     }
 
-    /// Borrow the materialized runtime-state bytes.
-    #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
+    pub(crate) fn as_slice(&self) -> &[u8] {
         &self.bytes
     }
 
-    /// Consumes the snapshot and returns the materialized bytes.
-    #[must_use]
-    pub fn into_vec(self) -> Vec<u8> {
+    pub(crate) fn into_raw_vec(self) -> Vec<u8> {
         self.bytes
     }
 
@@ -68,15 +64,11 @@ impl ReturnOutput {
         Self { bytes }
     }
 
-    /// Borrow the materialized `(return)` output bytes.
-    #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
+    pub(crate) fn as_slice(&self) -> &[u8] {
         &self.bytes
     }
 
-    /// Consumes the return output and returns the materialized bytes.
-    #[must_use]
-    pub fn into_vec(self) -> Vec<u8> {
+    pub(crate) fn into_raw_vec(self) -> Vec<u8> {
         self.bytes
     }
 

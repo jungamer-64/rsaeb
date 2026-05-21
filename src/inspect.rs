@@ -220,29 +220,12 @@ impl<'program> PayloadView<'program> {
         self.byte_count().is_zero()
     }
 
-    /// Payload bytes as a materializing iterator.
-    ///
-    /// This intentionally does not expose a borrowed `&[u8]`: the parsed payload
-    /// is stored as `ProgramByte`, not as untyped bytes. Consumers that need
-    /// ownership should call `to_vec` instead of relying on hidden allocation.
-    pub fn bytes(self) -> impl Iterator<Item = u8> + 'program {
+    pub(crate) fn materialized_bytes(self) -> impl Iterator<Item = u8> + 'program {
         self.payload.bytes()
     }
 
-    /// Returns whether this payload has exactly the expected bytes.
-    #[must_use]
-    pub fn eq_bytes(self, expected: &[u8]) -> bool {
+    pub(crate) fn eq_materialized_bytes(self, expected: &[u8]) -> bool {
         self.payload.eq_bytes(expected)
-    }
-
-    /// Materializes this payload as owned bytes with explicit fallible
-    /// allocation.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AllocationError` if the output buffer cannot be allocated.
-    pub fn to_vec(self) -> Result<Vec<u8>, AllocationError> {
-        self.to_vec_with_context(AllocationContext::PayloadView)
     }
 
     /// Materializes this payload view as owned bytes for the given allocation site.
@@ -260,7 +243,9 @@ impl<'program> PayloadView<'program> {
 
 impl fmt::Debug for PayloadView<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list().entries((*self).bytes()).finish()
+        f.debug_list()
+            .entries((*self).materialized_bytes())
+            .finish()
     }
 }
 
@@ -360,17 +345,7 @@ impl<'program> RuleView<'program> {
         self.rule.action().view()
     }
 
-    /// Generates canonical executable source for diagnostics/display.
-    ///
-    /// Whitespace and comments are not preserved by design. The canonical text
-    /// is derived from the typed rule fields every time, so there is no stored
-    /// textual metadata that can drift from the executable rule.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AllocationError` if the canonical byte buffer cannot be
-    /// allocated or if its computed length overflows `usize`.
-    pub fn canonical_source(self) -> Result<Vec<u8>, AllocationError> {
+    pub(crate) fn materialize_canonical_source(self) -> Result<Vec<u8>, AllocationError> {
         crate::rule::canonical_source(self.rule)
     }
 }
