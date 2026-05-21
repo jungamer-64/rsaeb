@@ -9,6 +9,7 @@ use crate::inspect::{RuleCount, RulePositions, RuleView};
 use crate::parser::parse_rules_impl;
 use crate::rule::Rule;
 use crate::runtime::RuntimeInput;
+use crate::runtime::session::RuntimeSession;
 use crate::source::ProgramSource;
 
 pub(crate) use rule_set::RuleSet;
@@ -135,6 +136,6 @@ impl Program {
     /// allocation fails, state-size arithmetic overflows, or a configured
     /// `RunLimits` budget would be exceeded.
     pub fn run(&self, input: &RuntimeInput, limits: RunLimits) -> Result<RunResult, RunError> {
-        RunSession::new(self, input, limits)?.finish()
+        RuntimeSession::new(self, input, limits)?.finish()
     }
 }

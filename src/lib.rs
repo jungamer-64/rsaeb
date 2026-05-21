@@ -22,7 +22,7 @@
 //!   byte domain.
 //! - [`RunLimits`] and [`limits::TraceSnapshotLimits`] keep runtime execution
 //!   limits separate from trace snapshot materialization limits.
-//! - [`Program::run`] runs to completion, while [`Program::start_execution`]
+//! - [`Program::run`] runs to completion, while [`Program::start_run`]
 //!   returns a typestate execution that can pause after each applied rule.
 //! - [`Program::run_with_borrowed_trace`] observes borrowed trace events without
 //!   per-event allocation; [`Program::run_with_trace_snapshots`] materializes
@@ -97,11 +97,11 @@
 //!
 //! # Stepwise execution
 //!
-//! Use [`Program::start_execution`] when a host wants to wait after each
+//! Use [`Program::start_run`] when a host wants to wait after each
 //! applied rule:
 //!
 //! ```
-//! use rsaeb::execution::ExecutionTransition;
+//! use rsaeb::execution::StepTransition;
 //! use rsaeb::limits::{
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 //! };
@@ -111,37 +111,37 @@
 //! let program = Program::parse(ProgramSource::from_text("a=b\nb=c"), DEFAULT_PARSE_LIMITS)?;
 //! let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
 //! let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
-//! let execution = program.start_execution(
+//! let execution = program.start_run(
 //!     &input,
 //!     limits,
 //! )?;
 //!
 //! let execution = match execution.step().map_err(|step| step.into_error())? {
-//!     ExecutionTransition::Applied(applied) => {
+//!     StepTransition::Applied(applied) => {
 //!         assert!(applied.state().bytes().eq(b"b".iter().copied()));
-//!         applied.into_running()
+//!         applied.into_session()
 //!     }
-//!     ExecutionTransition::Stable(_) | ExecutionTransition::Returned(_) => {
+//!     StepTransition::Stable(_) | StepTransition::Returned(_) => {
 //!         return Err("expected first applied step".into());
 //!     }
 //! };
 //!
 //! let execution = match execution.step().map_err(|step| step.into_error())? {
-//!     ExecutionTransition::Applied(applied) => {
+//!     StepTransition::Applied(applied) => {
 //!         assert!(applied.state().bytes().eq(b"c".iter().copied()));
-//!         applied.into_running()
+//!         applied.into_session()
 //!     }
-//!     ExecutionTransition::Stable(_) | ExecutionTransition::Returned(_) => {
+//!     StepTransition::Stable(_) | StepTransition::Returned(_) => {
 //!         return Err("expected second applied step".into());
 //!     }
 //! };
 //!
 //! match execution.step().map_err(|step| step.into_error())? {
-//!     ExecutionTransition::Stable(stable) => {
+//!     StepTransition::Stable(stable) => {
 //!         assert_eq!(stable.steps().get(), 2);
 //!         assert!(stable.state().bytes().eq(b"c".iter().copied()));
 //!     }
-//!     ExecutionTransition::Applied(_) | ExecutionTransition::Returned(_) => {
+//!     StepTransition::Applied(_) | StepTransition::Returned(_) => {
 //!         return Err("expected stable completion".into());
 //!     }
 //! }

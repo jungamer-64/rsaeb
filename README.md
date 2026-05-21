@@ -55,7 +55,7 @@ The primary execution path is:
 1. Construct `ProgramSource` with `from_text` or `from_bytes`.
 2. Parse it with `Program::parse`.
 3. Validate bytes with `RuntimeInput::validate`.
-4. Run with `Program::run` or step with `Program::start_execution`.
+4. Run with `Program::run` or step with `Program::start_run`.
 
 The crate intentionally contains no filesystem, process, stdout/stderr,
 argument parsing, environment access, or lossy display boundary. Hosts should
@@ -64,15 +64,15 @@ perform I/O outside the interpreter and pass already-loaded bytes to
 
 ### Stepwise Execution
 
-Use `Program::start_execution` when a host needs control after each applied
+Use `Program::start_run` when a host needs control after each applied
 rule instead of running to completion in one call. The public typestate API
-lives under `rsaeb::execution`: only `RunningExecution` can step, while
-`AppliedExecution`, `StableExecution`, and `ReturnedExecution` represent
+lives under `rsaeb::execution`: only `RunSession` can step, while
+`AppliedStep`, `StableRun`, and `ReturnedRun` represent
 post-step states. `(return)` is terminal, not an ordinary continuation step.
 Running, applied, and stable executions expose borrowed `RuntimeStateView`
-values for observation. A failed step returns `ExecutionStepError`, preserving
-the uncommitted `RunningExecution` so a host can inspect it, replace limits with
-`RunningExecution::with_limits`, or discard it explicitly.
+values for observation. A failed step returns `RunStepError`, preserving
+the uncommitted `RunSession` so a host can inspect it, replace limits with
+`RunSession::with_limits`, or discard it explicitly.
 
 The docs.rs crate page contains a complete doctested stepwise example.
 
@@ -465,9 +465,9 @@ Secondary domains live under explicit namespaces:
   `RuntimeStateByteLimit`, `ReturnByteLimit`, `TraceSnapshotByteLimit`,
   `TraceSnapshotLimits`, parser/runtime byte-count value types, `StepCount`,
   and default budget constants
-- `rsaeb::execution`: `RunningExecution`, `ExecutionTransition`,
-  `AppliedExecution`, `StableExecution`, `ReturnedExecution`,
-  and `ExecutionStepError`
+- `rsaeb::execution`: `RunSession`, `StepTransition`,
+  `AppliedStep`, `StableRun`, `ReturnedRun`,
+  and `RunStepError`
 - `rsaeb::inspect`: `RuleView`, `RuleActionView`, `PayloadView`, rule
   position/count types, `RuleRepeat`, and `RuleAnchor`
 - `rsaeb::trace`: borrowed trace events/effects, snapshot trace events/effects,

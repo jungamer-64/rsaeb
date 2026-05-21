@@ -10,7 +10,6 @@ use super::matcher::MatchedRule;
 use super::once::OnceStateSet;
 use super::rewrite::{RewritePlacement, RewriteRequest, RewriteScratch};
 use super::state::{MatchedStateSpan, State};
-use crate::execution::ExecutionCore;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StepApplication<'program> {
@@ -25,19 +24,15 @@ pub(crate) struct AppliedRule<'program> {
     pub(crate) effect: StepApplication<'program>,
 }
 
-impl ExecutionCore<'_> {
-    /// Materializes a return payload as public return output.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` if return-output allocation fails.
-    pub(crate) fn materialize_return_output(
-        output: PayloadView<'_>,
-    ) -> Result<ReturnOutput, RunError> {
-        Ok(ReturnOutput::from_vec(
-            output.to_vec_with_context(AllocationContext::ReturnOutput)?,
-        ))
-    }
+/// Materializes a return payload as public return output.
+///
+/// # Errors
+///
+/// Returns `RunError` if return-output allocation fails.
+pub(crate) fn materialize_return_output(output: PayloadView<'_>) -> Result<ReturnOutput, RunError> {
+    Ok(ReturnOutput::from_vec(
+        output.to_vec_with_context(AllocationContext::ReturnOutput)?,
+    ))
 }
 
 /// Applies one matched rule and commits its once-rule state on success.

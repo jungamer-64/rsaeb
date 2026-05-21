@@ -4,8 +4,7 @@ mod support;
 
 use rsaeb::error::{LimitError, RunError, StateLimitContext};
 use rsaeb::execution::{
-    AppliedExecution, ExecutionStepError, ExecutionTransition, ReturnedExecution, RunningExecution,
-    StableExecution,
+    AppliedStep, ReturnedRun, RunSession, RunStepError, StableRun, StepTransition,
 };
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit,
@@ -54,7 +53,7 @@ enum StepSignature {
 /// # Errors
 ///
 /// Returns `TestFailure` if canonical rule source materialization fails.
-fn applied_signature(applied: &AppliedExecution<'_>) -> Result<StepSignature, TestFailure> {
+fn applied_signature(applied: &AppliedStep<'_>) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Applied {
         step: applied.step().get(),
         rule: applied.rule().canonical_source()?,
@@ -62,7 +61,7 @@ fn applied_signature(applied: &AppliedExecution<'_>) -> Result<StepSignature, Te
     })
 }
 
-fn stable_signature(stable: &StableExecution<'_>) -> StepSignature {
+fn stable_signature(stable: &StableRun<'_>) -> StepSignature {
     StepSignature::Stable {
         steps: stable.steps().get(),
         state: runtime_view_bytes(stable.state()),
@@ -75,7 +74,7 @@ fn stable_signature(stable: &StableExecution<'_>) -> StepSignature {
 ///
 /// Returns `TestFailure` if canonical rule source or return output
 /// materialization fails.
-fn returned_signature(returned: &ReturnedExecution<'_>) -> Result<StepSignature, TestFailure> {
+fn returned_signature(returned: &ReturnedRun<'_>) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Return {
         step: returned.step().get(),
         rule: returned.rule().canonical_source()?,
@@ -89,20 +88,20 @@ fn returned_signature(returned: &ReturnedExecution<'_>) -> Result<StepSignature,
 ///
 /// Returns `TestFailure` if a step fails or transition materialization fails.
 fn finish_step_signatures(
-    mut execution: RunningExecution<'_>,
+    mut execution: RunSession<'_>,
 ) -> Result<Vec<StepSignature>, TestFailure> {
     let mut signatures = Vec::new();
     loop {
         match expect_step_transition(execution.step())? {
-            ExecutionTransition::Applied(applied) => {
+            StepTransition::Applied(applied) => {
                 signatures.push(applied_signature(&applied)?);
-                execution = applied.into_running();
+                execution = applied.into_session();
             }
-            ExecutionTransition::Stable(stable) => {
+            StepTransition::Stable(stable) => {
                 signatures.push(stable_signature(&stable));
                 return Ok(signatures);
             }
-            ExecutionTransition::Returned(returned) => {
+            StepTransition::Returned(returned) => {
                 signatures.push(returned_signature(&returned)?);
                 return Ok(signatures);
             }
@@ -116,8 +115,8 @@ fn finish_step_signatures(
 ///
 /// Returns `TestFailure` if stepping fails.
 fn expect_step_transition<'program>(
-    result: Result<ExecutionTransition<'program>, ExecutionStepError<'program>>,
-) -> Result<ExecutionTransition<'program>, TestFailure> {
+    result: Result<StepTransition<'program>, RunStepError<'program>>,
+) -> Result<StepTransition<'program>, TestFailure> {
     match result {
         Ok(transition) => Ok(transition),
         Err(error) => Err(TestFailure::from(error.into_error())),
@@ -130,8 +129,8 @@ fn expect_step_transition<'program>(
 ///
 /// Returns `TestFailure` if stepping succeeds.
 fn expect_step_error<'program>(
-    result: Result<ExecutionTransition<'program>, ExecutionStepError<'program>>,
-) -> Result<ExecutionStepError<'program>, TestFailure> {
+    result: Result<StepTransition<'program>, RunStepError<'program>>,
+) -> Result<RunStepError<'program>, TestFailure> {
     match result {
         Ok(_) => Err(TestFailure::message("expected step error")),
         Err(error) => Ok(error),
@@ -192,11 +191,11 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
     );
     let program = parse_program("a=b\nb=c")?;
     let input = runtime_input(b"a")?;
-    let execution = program.start_execution(&input, limits)?;
+    let execution = program.start_run(&input, limits)?;
     ensure_eq!(execution.completed_steps().get(), 0)?;
 
     let execution = match expect_step_transition(execution.step())? {
-        ExecutionTransition::Applied(applied) => {
+        StepTransition::Applied(applied) => {
             ensure_eq!(applied.step().get(), 1)?;
             ensure_eq!(
                 applied.rule().canonical_source()?.as_slice(),
@@ -207,15 +206,15 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
                 b"b".as_slice()
             )?;
             ensure_eq!(applied.state().byte_count().get(), 1)?;
-            applied.into_running()
+            applied.into_session()
         }
-        ExecutionTransition::Stable(_) | ExecutionTransition::Returned(_) => {
+        StepTransition::Stable(_) | StepTransition::Returned(_) => {
             return Err(TestFailure::message("expected first applied step"));
         }
     };
 
     let execution = match expect_step_transition(execution.step())? {
-        ExecutionTransition::Applied(applied) => {
+        StepTransition::Applied(applied) => {
             ensure_eq!(applied.step().get(), 2)?;
             ensure_eq!(
                 applied.rule().canonical_source()?.as_slice(),
@@ -225,22 +224,22 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
                 runtime_view_bytes(applied.state()).as_slice(),
                 b"c".as_slice()
             )?;
-            applied.into_running()
+            applied.into_session()
         }
-        ExecutionTransition::Stable(_) | ExecutionTransition::Returned(_) => {
+        StepTransition::Stable(_) | StepTransition::Returned(_) => {
             return Err(TestFailure::message("expected second applied step"));
         }
     };
 
     match expect_step_transition(execution.step())? {
-        ExecutionTransition::Stable(stable) => {
+        StepTransition::Stable(stable) => {
             ensure_eq!(stable.steps().get(), 2)?;
             ensure_eq!(
                 runtime_view_bytes(stable.state()).as_slice(),
                 b"c".as_slice()
             )?;
         }
-        ExecutionTransition::Applied(_) | ExecutionTransition::Returned(_) => {
+        StepTransition::Applied(_) | StepTransition::Returned(_) => {
             return Err(TestFailure::message("expected stable completion"));
         }
     }
@@ -260,7 +259,7 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
     );
     let program = parse_program("a=b")?;
     let input = runtime_input(b"a")?;
-    let execution = program.start_execution(&input, limits)?;
+    let execution = program.start_run(&input, limits)?;
 
     ensure_eq!(
         runtime_view_bytes(execution.state()).as_slice(),
@@ -268,14 +267,14 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
     )?;
 
     let execution = match expect_step_transition(execution.step())? {
-        ExecutionTransition::Applied(applied) => {
+        StepTransition::Applied(applied) => {
             ensure_eq!(
                 runtime_view_bytes(applied.state()).as_slice(),
                 b"b".as_slice()
             )?;
-            applied.into_running()
+            applied.into_session()
         }
-        ExecutionTransition::Stable(_) | ExecutionTransition::Returned(_) => {
+        StepTransition::Stable(_) | StepTransition::Returned(_) => {
             return Err(TestFailure::message("expected applied step"));
         }
     };
@@ -300,8 +299,8 @@ fn execution_reuses_runtime_input_without_session_leakage() -> TestResult {
     let program = parse_program("(once)a=b\na=c")?;
     let input = runtime_input(b"aa")?;
 
-    let first = program.start_execution(&input, limits)?;
-    let second = program.start_execution(&input, limits)?;
+    let first = program.start_run(&input, limits)?;
+    let second = program.start_run(&input, limits)?;
 
     ensure_eq!(
         finish_step_signatures(first)?,
@@ -324,7 +323,7 @@ fn execution_reuses_runtime_input_without_session_leakage() -> TestResult {
     )?;
     ensure_eq!(
         finish_step_signatures(second)?,
-        finish_step_signatures(program.start_execution(&input, limits)?)?,
+        finish_step_signatures(program.start_run(&input, limits)?)?,
     )?;
     ensure_matches(
         input.byte_count().get() == 2,
@@ -345,18 +344,18 @@ fn execution_step_error_can_retry_with_relaxed_limits() -> TestResult {
         DEFAULT_MAX_STATE_LEN,
         ReturnByteLimit::new(1),
     );
-    let execution = program.start_execution(&input, limits)?;
+    let execution = program.start_run(&input, limits)?;
 
     let error = expect_step_error(execution.step())?;
     let execution = error
-        .into_execution()
+        .into_session()
         .with_limits(limits.with_return_byte_limit(ReturnByteLimit::new(2)))?;
 
     match expect_step_transition(execution.step())? {
-        ExecutionTransition::Returned(returned) => {
+        StepTransition::Returned(returned) => {
             ensure_eq!(returned.output().to_vec()?.as_slice(), b"ok".as_slice())
         }
-        ExecutionTransition::Applied(_) | ExecutionTransition::Stable(_) => {
+        StepTransition::Applied(_) | StepTransition::Stable(_) => {
             Err(TestFailure::message("expected returned execution"))
         }
     }
@@ -375,11 +374,11 @@ fn execution_rejects_replacement_limits_that_do_not_fit_current_progress() -> Te
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
-    let execution = program.start_execution(&input, limits)?;
+    let execution = program.start_run(&input, limits)?;
 
     let running = match expect_step_transition(execution.step())? {
-        ExecutionTransition::Applied(applied) => applied.into_running(),
-        ExecutionTransition::Stable(_) | ExecutionTransition::Returned(_) => {
+        StepTransition::Applied(applied) => applied.into_session(),
+        StepTransition::Stable(_) | StepTransition::Returned(_) => {
             return Err(TestFailure::message("expected applied execution"));
         }
     };
@@ -394,7 +393,7 @@ fn execution_rejects_replacement_limits_that_do_not_fit_current_progress() -> Te
         "expected completed-step replacement limit error",
     )?;
 
-    let execution = program.start_execution(&input, limits)?;
+    let execution = program.start_run(&input, limits)?;
     ensure_matches(
         matches!(
             execution.with_limits(

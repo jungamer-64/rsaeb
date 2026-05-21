@@ -147,7 +147,7 @@ impl Iterator for RulePositions {
 ///
 /// Repeat policy is per runtime invocation. A `(once)` rule can be used again
 /// by a later call to [`Program::run`](crate::Program::run) or
-/// [`Program::start_execution`](crate::Program::start_execution).
+/// [`Program::start_run`](crate::Program::start_run).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleRepeat {
     /// The rule may apply every time it matches.
