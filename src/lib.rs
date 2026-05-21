@@ -285,9 +285,11 @@
 //! Source parsing, runtime input validation, runtime execution, trace snapshot
 //! materialization, and user trace-sink failures are reported with structured
 //! error types such as [`error::ParseError`], [`error::RuntimeInputError`],
-//! [`error::RunError`],
+//! [`error::RunError`], [`error::AllocationError`],
 //! [`error::TraceSnapshotError`], [`error::TraceSnapshotRunError`],
 //! [`error::FallibleTraceSnapshotRunError`], and [`error::TracedRunError`].
+//! Allocation reservation failures include a typed
+//! [`error::RequestedCapacity`] instead of only a formatted string.
 //! [`error::AebError`] is available as a parse/input/run umbrella for callers
 //! that want one top-level error type.
 //!

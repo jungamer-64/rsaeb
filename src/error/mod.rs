@@ -10,6 +10,11 @@
 //! - [`RuntimeInputError`] for raw input bytes rejected before execution.
 //! - [`RunError`] for execution-time allocation, state-size, and budget
 //!   failures.
+//! - [`AllocationError`] for explicit allocation boundaries such as view
+//!   materialization, canonical source construction, final output conversion,
+//!   and trace snapshots. [`AllocationContext`] names the failing boundary, and
+//!   [`RequestedCapacity`] carries the requested vector capacity for reservation
+//!   failures.
 //! - [`TraceSnapshotError`] and the traced run wrappers for trace
 //!   materialization or user callback failures.
 //! - [`AebError`] for callers that want a parse/input/run umbrella while still

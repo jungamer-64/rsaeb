@@ -432,6 +432,12 @@ errors, runtime execution errors, allocation errors, configured limit errors,
 and trace materialization errors have separate structured types under
 `rsaeb::error`.
 
+Allocation failures preserve the allocation boundary as `AllocationContext`.
+Reservation failures also report a typed `RequestedCapacity`, so hosts can
+distinguish failures while validating input, materializing input or state views,
+building canonical rule source, producing final output, or retaining trace
+snapshots without parsing display strings.
+
 State length arithmetic overflow is separate from allocation failure and is
 reported as `RunError::StateSize`. Configured byte budgets and step budgets are
 reported as `RunError::Limit(LimitError::...)`. Trace snapshot byte limits are
