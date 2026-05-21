@@ -3,8 +3,10 @@ use core::fmt;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeInputByteCount, RuntimeStateByteCount};
-use crate::error::{LimitError, RunError, RuntimeInputError, StateLimitContext};
-use crate::program::{RunLimits, RuntimeInputByteLimit};
+use crate::error::{RunError, RuntimeInputError};
+use crate::program::RuntimeInputByteLimit;
+
+use super::budget::RuntimeBudgetState;
 
 /// Runtime input after ASCII validation and byte-domain classification.
 ///
@@ -127,17 +129,14 @@ impl InitialStateBytes {
     ///
     /// Returns `RunError` if the input exceeds runtime state limits or the
     /// initial state buffer cannot be allocated.
-    pub(crate) fn materialize(input: &RuntimeInput, limits: RunLimits) -> Result<Self, RunError> {
+    pub(crate) fn materialize(
+        input: &RuntimeInput,
+        budget: RuntimeBudgetState,
+    ) -> Result<Self, RunError> {
         let byte_count = input.byte_count();
+        let state_len = RuntimeStateByteCount::new(byte_count.get());
 
-        if byte_count.get() > limits.state_byte_limit().get() {
-            return Err(LimitError::state(
-                StateLimitContext::Input,
-                limits.state_byte_limit(),
-                RuntimeStateByteCount::new(byte_count.get()),
-            )
-            .into());
-        }
+        budget.ensure_initial_state_len(state_len)?;
 
         let mut bytes = Vec::new();
         try_reserve_total_exact(

@@ -103,10 +103,10 @@ fn payload_exposes_validated_bytes_without_leaking_the_internal_domain_type() ->
         .map_err(TestFailure::from)?;
 
     ensure(payload.eq_bytes(b"ab"), "expected payload bytes")?;
-    ensure_eq!(
-        payload.first_byte().map(program::ProgramByte::get),
-        Some(b'a')
-    )?;
+    let PayloadNeedle::NonEmpty(needle) = payload.needle() else {
+        return Err(TestFailure::message("expected non-empty payload needle"));
+    };
+    ensure_eq!(needle.first_byte().get(), b'a')?;
     Ok(())
 }
 

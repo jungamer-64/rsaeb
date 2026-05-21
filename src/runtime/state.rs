@@ -1,11 +1,15 @@
 use alloc::vec::Vec;
 
+use super::budget::RuntimeBudgetState;
 use super::input::InitialStateBytes;
 use super::rewrite::{RewritePlacement, RewriteRequest, RewriteScratch};
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
-use crate::bytes::{Payload, PayloadByteCount, RuntimeByte, RuntimeStateByteCount};
-use crate::error::{LimitError, RunError, StateLimitContext, StateSizeError};
-use crate::program::{RunLimits, RuntimeStateSnapshot};
+use crate::bytes::{
+    NonEmptyPayloadNeedle, Payload, PayloadByteCount, PayloadNeedle, RuntimeByte,
+    RuntimeStateByteCount,
+};
+use crate::error::{RunError, StateSizeError};
+use crate::program::RuntimeStateSnapshot;
 use crate::trace::RuntimeStateView;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -37,44 +41,56 @@ impl State {
     }
 
     pub(crate) fn starts_with_payload(&self, payload: &Payload) -> Option<MatchedStateSpan> {
-        self.matches_payload_at(StateIndex::new(0), payload)
+        match payload.needle() {
+            PayloadNeedle::Empty(needle) => {
+                MatchedStateSpan::at_start(needle.byte_count(), self.byte_count())
+            }
+            PayloadNeedle::NonEmpty(needle) => self.matches_payload_at(StateIndex::start(), needle),
+        }
     }
 
     pub(crate) fn ends_with_payload(&self, payload: &Payload) -> Option<MatchedStateSpan> {
-        let start = self.len().checked_sub(payload.len())?;
-        self.matches_payload_at(StateIndex::new(start), payload)
+        match payload.needle() {
+            PayloadNeedle::Empty(needle) => {
+                MatchedStateSpan::at_end(needle.byte_count(), self.byte_count())
+            }
+            PayloadNeedle::NonEmpty(needle) => {
+                let start = self.len().checked_sub(needle.len())?;
+                self.matches_payload_at(StateIndex::from_zero_based(start), needle)
+            }
+        }
     }
 
     pub(crate) fn find_payload(&self, payload: &Payload) -> Option<MatchedStateSpan> {
-        if payload.is_empty() {
-            return MatchedStateSpan::checked(
-                StateIndex::new(0),
-                payload.byte_count(),
-                self.byte_count(),
-            );
+        match payload.needle() {
+            PayloadNeedle::Empty(needle) => {
+                MatchedStateSpan::at_start(needle.byte_count(), self.byte_count())
+            }
+            PayloadNeedle::NonEmpty(needle) => {
+                let last_start = self.len().checked_sub(needle.len())?;
+
+                (0..=last_start)
+                    .filter(|&position| {
+                        self.bytes
+                            .get(position)
+                            .copied()
+                            .and_then(RuntimeByte::program_byte)
+                            == Some(needle.first_byte())
+                    })
+                    .find_map(|position| {
+                        self.matches_payload_at(StateIndex::from_zero_based(position), needle)
+                    })
+            }
         }
-
-        let first = payload.first_byte()?;
-        let last_start = self.len().checked_sub(payload.len())?;
-
-        (0..=last_start)
-            .filter(|&position| {
-                self.bytes
-                    .get(position)
-                    .copied()
-                    .and_then(RuntimeByte::program_byte)
-                    == Some(first)
-            })
-            .find_map(|position| self.matches_payload_at(StateIndex::new(position), payload))
     }
 
     fn matches_payload_at(
         &self,
         position: StateIndex,
-        payload: &Payload,
+        needle: NonEmptyPayloadNeedle<'_>,
     ) -> Option<MatchedStateSpan> {
         let state_match =
-            MatchedStateSpan::checked(position, payload.byte_count(), self.byte_count())?;
+            MatchedStateSpan::at_position(position, needle.byte_count(), self.byte_count())?;
         let window = self
             .bytes
             .get(state_match.start.get()..state_match.end.get())?;
@@ -82,7 +98,7 @@ impl State {
         window
             .iter()
             .copied()
-            .zip(payload.program_bytes().iter().copied())
+            .zip(needle.program_bytes().iter().copied())
             .all(|(actual, expected)| actual.program_byte() == Some(expected))
             .then_some(state_match)
     }
@@ -97,9 +113,9 @@ impl State {
         &self,
         request: RewriteRequest<'_>,
         output: &mut RewriteScratch,
-        limits: RunLimits,
+        budget: RuntimeBudgetState,
     ) -> Result<(), RunError> {
-        self.prepare_replacement_buffer(request, output, limits)?;
+        self.prepare_replacement_buffer(request, output, budget)?;
         match request.placement() {
             RewritePlacement::Replace => {
                 self.push_prefix(output, request.state_match())?;
@@ -152,18 +168,11 @@ impl State {
         &self,
         request: RewriteRequest<'_>,
         output: &mut RewriteScratch,
-        limits: RunLimits,
+        budget: RuntimeBudgetState,
     ) -> Result<(), RunError> {
         let capacity = self.replaced_byte_count(request)?;
 
-        if capacity.get() > limits.state_byte_limit().get() {
-            return Err(LimitError::state(
-                StateLimitContext::Rewrite,
-                limits.state_byte_limit(),
-                capacity,
-            )
-            .into());
-        }
+        budget.ensure_rewrite_state_len(capacity)?;
 
         output.clear_and_reserve(capacity.get())?;
         Ok(())
@@ -228,7 +237,11 @@ pub(crate) struct StateIndex {
 }
 
 impl StateIndex {
-    pub(crate) const fn new(zero_based: usize) -> Self {
+    const fn start() -> Self {
+        Self { zero_based: 0 }
+    }
+
+    const fn from_zero_based(zero_based: usize) -> Self {
         Self { zero_based }
     }
 
@@ -245,7 +258,22 @@ pub(crate) struct MatchedStateSpan {
 }
 
 impl MatchedStateSpan {
-    pub(crate) fn checked(
+    pub(crate) fn at_start(
+        matched_len: PayloadByteCount,
+        state_len: RuntimeStateByteCount,
+    ) -> Option<Self> {
+        Self::at_position(StateIndex::start(), matched_len, state_len)
+    }
+
+    pub(crate) fn at_end(
+        matched_len: PayloadByteCount,
+        state_len: RuntimeStateByteCount,
+    ) -> Option<Self> {
+        let start = state_len.get().checked_sub(matched_len.get())?;
+        Self::at_position(StateIndex::from_zero_based(start), matched_len, state_len)
+    }
+
+    fn at_position(
         start: StateIndex,
         matched_len: PayloadByteCount,
         state_len: RuntimeStateByteCount,
@@ -253,7 +281,7 @@ impl MatchedStateSpan {
         let end = start.get().checked_add(matched_len.get())?;
         (start.get() <= state_len.get() && end <= state_len.get()).then_some(Self {
             start,
-            end: StateIndex::new(end),
+            end: StateIndex::from_zero_based(end),
             matched_len,
         })
     }

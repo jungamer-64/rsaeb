@@ -76,6 +76,12 @@ impl RequestedCapacity {
     }
 }
 
+impl core::fmt::Display for RequestedCapacity {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.value.fmt(formatter)
+    }
+}
+
 impl AllocationError {
     pub(crate) const fn capacity_overflow(context: AllocationContext) -> Self {
         Self {
@@ -177,15 +183,13 @@ mod tests {
         ensure_eq!(
             error.kind(),
             AllocationErrorKind::ReservationFailed {
-                requested_capacity: 123,
+                requested_capacity: RequestedCapacity::new(123),
             },
         )?;
-        ensure_eq!(error.requested_capacity(), Some(123))?;
 
         let error = AllocationError::capacity_overflow(AllocationContext::CanonicalSource);
         ensure_eq!(error.context(), AllocationContext::CanonicalSource)?;
         ensure_eq!(error.kind(), AllocationErrorKind::CapacityOverflow)?;
-        ensure_eq!(error.requested_capacity(), None)?;
 
         let error =
             AllocationError::reservation_failed(AllocationContext::RuntimeInputValidation, 4);

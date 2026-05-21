@@ -469,11 +469,12 @@ Secondary domains live under explicit namespaces:
   `AppliedStep`, `StableRun`, `ReturnedRun`,
   and `RunStepError`
 - `rsaeb::inspect`: `RuleView`, `RuleActionView`, `PayloadView`, rule
-  position/count types, `RuleRepeat`, and `RuleAnchor`
+  position/count types, `OnceRuleCount`, `RuleRepeat`, and `RuleAnchor`
 - `rsaeb::trace`: borrowed trace events/effects, snapshot trace events/effects,
   and `RuntimeStateView`
 - `rsaeb::error`: parse, input, runtime, allocation, limit, and trace error
-  types, including rejected-byte diagnostic value types
+  types, including rejected-byte diagnostic value types and
+  `RequestedCapacity`
 - `rsaeb::source`: source-position value types used by parser diagnostics
 
 ## Development Checks

@@ -1,3 +1,4 @@
+use super::budget::RuntimeBudgetState;
 use super::input::{InitialStateBytes, RuntimeInput};
 use super::state::State;
 use crate::RunLimits;
@@ -314,11 +315,11 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
     let input = runtime_input(b"a=()# ")?;
     let state = State::from_input(InitialStateBytes::materialize(
         &input,
-        RunLimits::new(
+        RuntimeBudgetState::new(RunLimits::new(
             StepLimit::new(10_000),
             DEFAULT_MAX_STATE_LEN,
             DEFAULT_MAX_RETURN_LEN,
-        ),
+        )),
     )?);
 
     ensure_eq!(expect_payload_byte(&payload, 0)?, b'a')?;

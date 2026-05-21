@@ -74,16 +74,18 @@ impl Payload {
         PayloadByteCount::new(self.bytes.len())
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
-    }
-
-    pub(crate) fn first_byte(&self) -> Option<ProgramByte> {
-        self.bytes.first().copied()
-    }
-
     pub(crate) fn program_bytes(&self) -> &[ProgramByte] {
         &self.bytes
+    }
+
+    pub(crate) fn needle(&self) -> PayloadNeedle<'_> {
+        match self.bytes.split_first() {
+            Some((&first, _)) => PayloadNeedle::NonEmpty(NonEmptyPayloadNeedle {
+                payload: self,
+                first,
+            }),
+            None => PayloadNeedle::Empty(EmptyPayloadNeedle { payload: self }),
+        }
     }
 
     pub(crate) fn bytes(&self) -> impl Iterator<Item = u8> + '_ {
@@ -129,5 +131,46 @@ impl Payload {
         try_reserve_total_exact(&mut output, self.len(), context)?;
         self.push_bytes_to(&mut output, context)?;
         Ok(output)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PayloadNeedle<'payload> {
+    Empty(EmptyPayloadNeedle<'payload>),
+    NonEmpty(NonEmptyPayloadNeedle<'payload>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EmptyPayloadNeedle<'payload> {
+    payload: &'payload Payload,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NonEmptyPayloadNeedle<'payload> {
+    payload: &'payload Payload,
+    first: ProgramByte,
+}
+
+impl EmptyPayloadNeedle<'_> {
+    pub(crate) fn byte_count(self) -> PayloadByteCount {
+        self.payload.byte_count()
+    }
+}
+
+impl<'payload> NonEmptyPayloadNeedle<'payload> {
+    pub(crate) fn len(self) -> usize {
+        self.payload.len()
+    }
+
+    pub(crate) fn byte_count(self) -> PayloadByteCount {
+        self.payload.byte_count()
+    }
+
+    pub(crate) const fn first_byte(self) -> ProgramByte {
+        self.first
+    }
+
+    pub(crate) fn program_bytes(self) -> &'payload [ProgramByte] {
+        self.payload.program_bytes()
     }
 }

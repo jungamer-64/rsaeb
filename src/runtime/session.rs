@@ -11,13 +11,13 @@
 //! state and rule views that are valid for observation without making the
 //! mutable runtime engine part of the API.
 
-use crate::error::{LimitError, RunError, StateLimitContext, TracedRunError};
+use crate::error::{RunError, TracedRunError};
 use crate::program::{Program, RunLimits, RunResult, StepCount};
 use crate::rule::Rule;
 use crate::runtime::action::{
-    AppliedRule, StepApplication, apply_matched_rule, materialize_return_output,
+    AppliedRule, AppliedRuleEffect, apply_matched_rule, materialize_return_output,
 };
-use crate::runtime::budget::StepBudget;
+use crate::runtime::budget::RuntimeBudgetState;
 use crate::runtime::input::{InitialStateBytes, RuntimeInput};
 use crate::runtime::matcher::{RuleSearch, find_next_match};
 use crate::runtime::once::OnceStateSet;
@@ -40,10 +40,9 @@ pub(crate) struct RuntimeSession<'program> {
 pub(crate) struct RuntimeCore<'program> {
     pub(crate) state: State,
     pub(crate) scratch: RewriteScratch,
-    pub(crate) step_budget: StepBudget,
+    pub(crate) budget: RuntimeBudgetState,
     pub(crate) rules: &'program [Rule],
     pub(crate) once_states: OnceStateSet,
-    pub(crate) limits: RunLimits,
 }
 
 /// Result of advancing a running execution once.
@@ -175,21 +174,21 @@ impl<'program> RuntimeCore<'program> {
         input: &RuntimeInput,
         limits: RunLimits,
     ) -> Result<Self, RunError> {
-        let input = InitialStateBytes::materialize(input, limits)?;
+        let budget = RuntimeBudgetState::new(limits);
+        let input = InitialStateBytes::materialize(input, budget)?;
         let state = State::from_input(input);
         let once_states = OnceStateSet::new(program.once_slot_count())?;
         Ok(Self {
             state,
             scratch: RewriteScratch::new(),
-            step_budget: StepBudget::new(limits.step_limit()),
+            budget,
             rules: program.rule_slice(),
             once_states,
-            limits,
         })
     }
 
     pub(crate) const fn completed_steps(&self) -> StepCount {
-        self.step_budget.completed_steps()
+        self.budget.completed_steps()
     }
 
     pub(crate) fn state(&self) -> RuntimeStateView<'_> {
@@ -242,24 +241,9 @@ impl<'program> RuntimeSession<'program> {
     /// Returns `RunError` if the already-completed step count or the current
     /// runtime state does not fit the replacement limits.
     pub(crate) fn with_limits(mut self, limits: RunLimits) -> Result<Self, RunError> {
-        let completed_steps = self.core.step_budget.completed_steps();
         let state_len = self.core.state.byte_count();
 
-        if completed_steps.get() > limits.step_limit().get() {
-            return Err(LimitError::step(limits.step_limit(), completed_steps, state_len).into());
-        }
-
-        if state_len.get() > limits.state_byte_limit().get() {
-            return Err(LimitError::state(
-                StateLimitContext::CurrentState,
-                limits.state_byte_limit(),
-                state_len,
-            )
-            .into());
-        }
-
-        self.core.limits = limits;
-        self.core.step_budget = self.core.step_budget.with_limit(limits.step_limit());
+        self.core.budget = self.core.budget.with_limits(limits, state_len)?;
         Ok(self)
     }
 
@@ -282,16 +266,15 @@ impl<'program> RuntimeSession<'program> {
             let RuntimeCore {
                 state,
                 scratch,
-                step_budget,
+                budget,
                 rules,
                 once_states,
-                limits,
             } = &mut self.core;
 
             let matched = match find_next_match(rules, once_states, state) {
                 RuleSearch::Matched(matched) => matched,
                 RuleSearch::Stable => {
-                    let steps = step_budget.completed_steps();
+                    let steps = budget.completed_steps();
                     return Ok(RuntimeStep::Stable(RuntimeStableRun {
                         steps,
                         core: self.core,
@@ -299,7 +282,7 @@ impl<'program> RuntimeSession<'program> {
                 }
             };
 
-            apply_matched_rule(state, scratch, step_budget, once_states, *limits, matched)
+            apply_matched_rule(state, scratch, budget, once_states, matched)
         };
 
         let applied = match applied {
@@ -337,12 +320,12 @@ impl<'program> RuntimeSession<'program> {
 impl<'program> AppliedRule<'program> {
     fn into_transition(self, session: RuntimeSession<'program>) -> RuntimeStep<'program> {
         match self.effect {
-            StepApplication::Continue => RuntimeStep::Applied(RuntimeAppliedStep {
+            AppliedRuleEffect::Continue => RuntimeStep::Applied(RuntimeAppliedStep {
                 step: self.step,
                 rule: self.rule,
                 session,
             }),
-            StepApplication::Return(output) => RuntimeStep::Returned(RuntimeReturnedRun {
+            AppliedRuleEffect::Return(output) => RuntimeStep::Returned(RuntimeReturnedRun {
                 step: self.step,
                 rule: self.rule,
                 output,

@@ -20,6 +20,22 @@ impl Action {
         }
     }
 
+    pub(crate) const fn canonical_right_side(&self) -> CanonicalRightSide<'_> {
+        match self {
+            Self::Replace(payload) => CanonicalRightSide::Replace(payload),
+            Self::MoveStart(payload) => CanonicalRightSide::MoveStart(payload),
+            Self::MoveEnd(payload) => CanonicalRightSide::MoveEnd(payload),
+            Self::Return(payload) => CanonicalRightSide::Return(payload),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CanonicalRightSide<'rule> {
+    Replace(&'rule Payload),
+    MoveStart(&'rule Payload),
+    MoveEnd(&'rule Payload),
+    Return(&'rule Payload),
 }
 
 #[derive(Debug, PartialEq, Eq)]

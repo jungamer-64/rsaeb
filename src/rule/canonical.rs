@@ -5,7 +5,7 @@ use crate::bytes::Payload;
 use crate::inspect::{RuleAnchor, RuleRepeat};
 use crate::syntax::SyntaxToken;
 
-use super::model::Rule;
+use super::model::{CanonicalRightSide, Rule};
 
 /// Materializes this rule's canonical source form.
 ///
@@ -34,11 +34,23 @@ pub(crate) fn canonical_source(rule: &Rule) -> Result<Vec<u8>, AllocationError> 
     push_payload(&mut output, rule.lhs())?;
     try_push(&mut output, b'=', AllocationContext::CanonicalSource)?;
 
-    let (action_token, payload) = rule.action().canonical_parts();
-    if let Some(token) = action_token {
-        push_token(&mut output, token)?;
+    match rule.action().canonical_right_side() {
+        CanonicalRightSide::Replace(payload) => {
+            push_payload(&mut output, payload)?;
+        }
+        CanonicalRightSide::MoveStart(payload) => {
+            push_token(&mut output, SyntaxToken::Start)?;
+            push_payload(&mut output, payload)?;
+        }
+        CanonicalRightSide::MoveEnd(payload) => {
+            push_token(&mut output, SyntaxToken::End)?;
+            push_payload(&mut output, payload)?;
+        }
+        CanonicalRightSide::Return(payload) => {
+            push_token(&mut output, SyntaxToken::Return)?;
+            push_payload(&mut output, payload)?;
+        }
     }
-    push_payload(&mut output, payload)?;
 
     Ok(output)
 }
@@ -49,7 +61,6 @@ pub(crate) fn canonical_source(rule: &Rule) -> Result<Vec<u8>, AllocationError> 
 ///
 /// Returns `AllocationError` if canonical source length arithmetic overflows.
 fn canonical_source_len(rule: &Rule) -> Result<usize, AllocationError> {
-    let (action_token, payload) = rule.action().canonical_parts();
     let mut len = rule.lhs().len();
 
     if rule.repeat() == RuleRepeat::Once {
@@ -64,11 +75,32 @@ fn canonical_source_len(rule: &Rule) -> Result<usize, AllocationError> {
         RuleAnchor::End => SyntaxToken::End.len(),
     };
 
+    let right_side_len = match rule.action().canonical_right_side() {
+        CanonicalRightSide::Replace(payload) => payload.len(),
+        CanonicalRightSide::MoveStart(payload) => SyntaxToken::Start
+            .len()
+            .checked_add(payload.len())
+            .ok_or_else(|| {
+                AllocationError::capacity_overflow(AllocationContext::CanonicalSource)
+            })?,
+        CanonicalRightSide::MoveEnd(payload) => SyntaxToken::End
+            .len()
+            .checked_add(payload.len())
+            .ok_or_else(|| {
+            AllocationError::capacity_overflow(AllocationContext::CanonicalSource)
+        })?,
+        CanonicalRightSide::Return(payload) => SyntaxToken::Return
+            .len()
+            .checked_add(payload.len())
+            .ok_or_else(|| {
+                AllocationError::capacity_overflow(AllocationContext::CanonicalSource)
+            })?,
+    };
+
     len = len
         .checked_add(anchor_len)
         .and_then(|len| len.checked_add(1))
-        .and_then(|len| len.checked_add(action_token.map_or(0, SyntaxToken::len)))
-        .and_then(|len| len.checked_add(payload.len()))
+        .and_then(|len| len.checked_add(right_side_len))
         .ok_or_else(|| AllocationError::capacity_overflow(AllocationContext::CanonicalSource))?;
 
     Ok(len)

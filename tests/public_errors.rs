@@ -19,6 +19,11 @@ fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFail
     }
 }
 
+/// Validates test bytes as runtime input.
+///
+/// # Errors
+///
+/// Returns `RuntimeInputError` if the bytes are not valid runtime input.
 fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
     RuntimeInput::validate(bytes, DEFAULT_MAX_INPUT_LEN)
 }

@@ -2,6 +2,7 @@
 
 mod support;
 
+use rsaeb::inspect::OnceRuleCount;
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
     DEFAULT_PARSE_LIMITS, StepLimit,
@@ -42,6 +43,11 @@ fn expect_return_bytes<'result>(
     }
 }
 
+/// Validates test bytes as runtime input.
+///
+/// # Errors
+///
+/// Returns `RuntimeInputError` if the bytes are not valid runtime input.
 fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
     RuntimeInput::validate(bytes, DEFAULT_MAX_INPUT_LEN)
 }
@@ -134,5 +140,6 @@ fn program_values_are_reusable_across_runs() -> TestResult {
     expect_stable_bytes(&first, b"bc")?;
     expect_stable_bytes(&second, b"bc")?;
     ensure_eq!(program.rule_count().get(), 2)?;
-    ensure_eq!(program.once_rule_count().get(), 1)
+    let once_rules: OnceRuleCount = program.once_rule_count();
+    ensure_eq!(once_rules.get(), 1)
 }
