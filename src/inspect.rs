@@ -59,6 +59,29 @@ impl RuleCount {
     }
 }
 
+/// Number of parsed `(once)` rules.
+///
+/// This count is produced by the parser's once-slot assignment and remains
+/// distinct from the total executable rule count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct OnceRuleCount {
+    value: usize,
+}
+
+impl OnceRuleCount {
+    /// Creates a parsed `(once)` rule count from a primitive count.
+    #[must_use]
+    pub(crate) const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    /// Parsed `(once)` rule count as a primitive value.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+}
+
 /// One-based rule number for public diagnostics and display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleNumber {

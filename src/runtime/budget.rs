@@ -3,7 +3,7 @@ use crate::error::LimitError;
 use crate::program::{StepCount, StepLimit};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct StepBudget {
+pub(crate) struct RuntimeBudgetState {
     max_steps: StepLimit,
     completed_steps: StepCount,
 }
@@ -13,7 +13,7 @@ pub(crate) struct StepPermit {
     next_step: StepCount,
 }
 
-impl StepBudget {
+impl RuntimeBudgetState {
     pub(crate) const fn new(max_steps: StepLimit) -> Self {
         Self {
             max_steps,

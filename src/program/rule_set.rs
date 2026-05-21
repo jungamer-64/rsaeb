@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push};
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
-use crate::inspect::{RuleCount, RulePosition, RuleRepeat};
+use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePosition, RuleRepeat};
 use crate::rule::{OnceRuleCount, ParsedRule, Rule, RuleRepeatState};
 
 use super::RuleLimit;
@@ -87,8 +87,8 @@ impl RuleSet {
         RuleCount::new(self.rules.len())
     }
 
-    pub(crate) fn once_rule_count(&self) -> RuleCount {
-        RuleCount::new(self.once_rule_count.get())
+    pub(crate) fn once_rule_count(&self) -> PublicOnceRuleCount {
+        PublicOnceRuleCount::new(self.once_rule_count.get())
     }
 
     pub(crate) const fn once_slot_count(&self) -> OnceRuleCount {

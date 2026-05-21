@@ -1,7 +1,6 @@
 use crate::bytes::Payload;
 use crate::inspect::{PayloadView, RuleActionView, RuleAnchor, RuleRepeat};
 use crate::source::SourceLineNumber;
-use crate::syntax::SyntaxToken;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Action {
@@ -21,14 +20,6 @@ impl Action {
         }
     }
 
-    pub(crate) fn canonical_parts(&self) -> (Option<SyntaxToken>, &Payload) {
-        match self {
-            Self::Replace(payload) => (None, payload),
-            Self::MoveStart(payload) => (Some(SyntaxToken::Start), payload),
-            Self::MoveEnd(payload) => (Some(SyntaxToken::End), payload),
-            Self::Return(payload) => (Some(SyntaxToken::Return), payload),
-        }
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

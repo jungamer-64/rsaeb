@@ -54,8 +54,26 @@ pub enum AllocationErrorKind {
     /// Reserving the requested capacity failed.
     ReservationFailed {
         /// Vector capacity requested at the failing site.
-        requested_capacity: usize,
+        requested_capacity: RequestedCapacity,
     },
+}
+
+/// Vector capacity requested at a fallible allocation boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RequestedCapacity {
+    value: usize,
+}
+
+impl RequestedCapacity {
+    pub(crate) const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    /// Requested capacity as a primitive value.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
 }
 
 impl AllocationError {
@@ -72,7 +90,9 @@ impl AllocationError {
     ) -> Self {
         Self {
             context,
-            kind: AllocationErrorKind::ReservationFailed { requested_capacity },
+            kind: AllocationErrorKind::ReservationFailed {
+                requested_capacity: RequestedCapacity::new(requested_capacity),
+            },
         }
     }
 
@@ -86,17 +106,6 @@ impl AllocationError {
     #[must_use]
     pub const fn kind(&self) -> AllocationErrorKind {
         self.kind
-    }
-
-    /// Requested vector capacity, when allocation reached the allocator.
-    #[must_use]
-    pub const fn requested_capacity(&self) -> Option<usize> {
-        match self.kind {
-            AllocationErrorKind::CapacityOverflow => None,
-            AllocationErrorKind::ReservationFailed { requested_capacity } => {
-                Some(requested_capacity)
-            }
-        }
     }
 }
 

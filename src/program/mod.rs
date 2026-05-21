@@ -5,7 +5,7 @@ mod tracing;
 
 use crate::error::{ParseError, RunError};
 use crate::execution::RunSession;
-use crate::inspect::{RuleCount, RulePositions, RuleView};
+use crate::inspect::{OnceRuleCount, RuleCount, RulePositions, RuleView};
 use crate::parser::parse_rules_impl;
 use crate::rule::Rule;
 use crate::runtime::RuntimeInput;
@@ -78,7 +78,7 @@ impl Program {
     /// This count describes parsed rule metadata only. It is not consumed or
     /// mutated by running the program.
     #[must_use]
-    pub fn once_rule_count(&self) -> RuleCount {
+    pub fn once_rule_count(&self) -> OnceRuleCount {
         self.rule_set.once_rule_count()
     }
 
