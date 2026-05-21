@@ -4,7 +4,7 @@ use crate::error::{
     FallibleTraceSnapshotRunError, RunError, TraceSnapshotError, TraceSnapshotRunError,
     TracedRunError,
 };
-use crate::execution::RunningExecution;
+use crate::execution::RunSession;
 use crate::runtime::RuntimeInput;
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
@@ -143,7 +143,7 @@ impl Program {
     where
         F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
     {
-        RunningExecution::new(self, input, limits)
+        RunSession::new(self, input, limits)
             .map_err(TracedRunError::Run)?
             .run_with_borrowed_trace(trace)
     }

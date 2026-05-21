@@ -1,10 +1,10 @@
 //! Public stepwise execution typestates.
 //!
-//! [`Program::start_execution`](crate::Program::start_execution) returns a
-//! [`RunningExecution`]. Calling [`RunningExecution::step`] consumes that value
-//! and returns an [`ExecutionTransition`], so callers must handle the next
-//! state explicitly: continue with [`AppliedExecution::into_running`], finish a
-//! [`StableExecution`], or finish a [`ReturnedExecution`].
+//! [`Program::start_run`](crate::Program::start_run) returns a
+//! [`RunSession`]. Calling [`RunSession::step`] consumes that value and returns
+//! a [`StepTransition`], so callers must handle the next state explicitly:
+//! continue with [`AppliedStep::into_session`], finish a [`StableRun`], or
+//! finish a [`ReturnedRun`].
 //!
 //! This shape keeps terminal executions separate from the only state that can
 //! still step. Runtime internals stay private; public values expose borrowed
@@ -30,7 +30,7 @@ use crate::{inspect::PayloadView, inspect::RuleView};
 /// returned executions are represented by separate terminal types, so callers
 /// cannot step after completion. A running execution owns per-run `(once)`
 /// state and the current runtime state.
-pub struct RunningExecution<'program> {
+pub struct RunSession<'program> {
     pub(crate) core: ExecutionCore<'program>,
 }
 
@@ -49,30 +49,30 @@ pub(crate) struct ExecutionCore<'program> {
 /// The transition is exhaustive over the public execution lifecycle: one rule
 /// committed and execution can continue, no rule matched, or a `(return)` rule
 /// produced final output.
-pub enum ExecutionTransition<'program> {
+pub enum StepTransition<'program> {
     /// One ordinary rewrite rule was applied and execution can continue.
-    Applied(AppliedExecution<'program>),
+    Applied(AppliedStep<'program>),
     /// No rule matched the final runtime state.
-    Stable(StableExecution<'program>),
+    Stable(StableRun<'program>),
     /// A matched rule executed `(return)`.
-    Returned(ReturnedExecution<'program>),
+    Returned(ReturnedRun<'program>),
 }
 
 /// One committed non-terminal rule application.
 ///
 /// This value lets a caller inspect the applied rule and post-step state before
 /// deciding whether to continue execution.
-pub struct AppliedExecution<'program> {
+pub struct AppliedStep<'program> {
     step: StepCount,
     rule: RuleView<'program>,
-    execution: RunningExecution<'program>,
+    session: RunSession<'program>,
 }
 
 /// Terminal execution state reached by no matching rule.
 ///
 /// Stable executions still own the final runtime state until the caller either
-/// borrows it or materializes it with [`StableExecution::into_result`].
-pub struct StableExecution<'program> {
+/// borrows it or materializes it with [`StableRun::into_result`].
+pub struct StableRun<'program> {
     steps: StepCount,
     core: ExecutionCore<'program>,
 }
@@ -80,9 +80,9 @@ pub struct StableExecution<'program> {
 /// Terminal execution state reached by `(return)`.
 ///
 /// The output is a borrowed parsed payload until the caller materializes the
-/// terminal [`RunResult`] through [`ReturnedExecution::into_result`].
+/// terminal [`RunResult`] through [`ReturnedRun::into_result`].
 #[derive(Clone, Copy)]
-pub struct ReturnedExecution<'program> {
+pub struct ReturnedRun<'program> {
     step: StepCount,
     rule: RuleView<'program>,
     output: PayloadView<'program>,
@@ -91,25 +91,25 @@ pub struct ReturnedExecution<'program> {
 /// Runtime failure that preserves the uncommitted running execution.
 ///
 /// Step failures happen before the candidate rewrite is committed. The failed
-/// [`RunningExecution`] is therefore returned by value so hosts can inspect,
-/// update the limits with [`RunningExecution::with_limits`], or discard it
+/// [`RunSession`] is therefore returned by value so hosts can inspect,
+/// update the limits with [`RunSession::with_limits`], or discard it
 /// explicitly.
-pub struct ExecutionStepError<'program> {
+pub struct RunStepError<'program> {
     error: RunError,
-    execution: RunningExecution<'program>,
+    session: RunSession<'program>,
 }
 
-impl core::fmt::Debug for RunningExecution<'_> {
+impl core::fmt::Debug for RunSession<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("RunningExecution")
+            .debug_struct("RunSession")
             .field("completed_steps", &self.completed_steps())
             .field("state", &self.state())
             .finish()
     }
 }
 
-impl core::fmt::Debug for ExecutionTransition<'_> {
+impl core::fmt::Debug for StepTransition<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Applied(applied) => formatter.debug_tuple("Applied").field(applied).finish(),
@@ -119,10 +119,10 @@ impl core::fmt::Debug for ExecutionTransition<'_> {
     }
 }
 
-impl core::fmt::Debug for AppliedExecution<'_> {
+impl core::fmt::Debug for AppliedStep<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("AppliedExecution")
+            .debug_struct("AppliedStep")
             .field("step", &self.step())
             .field("rule", &self.rule())
             .field("state", &self.state())
@@ -130,20 +130,20 @@ impl core::fmt::Debug for AppliedExecution<'_> {
     }
 }
 
-impl core::fmt::Debug for StableExecution<'_> {
+impl core::fmt::Debug for StableRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("StableExecution")
+            .debug_struct("StableRun")
             .field("steps", &self.steps())
             .field("state", &self.state())
             .finish()
     }
 }
 
-impl core::fmt::Debug for ReturnedExecution<'_> {
+impl core::fmt::Debug for ReturnedRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("ReturnedExecution")
+            .debug_struct("ReturnedRun")
             .field("step", &self.step())
             .field("rule", &self.rule())
             .field("output", &self.output())
@@ -151,12 +151,12 @@ impl core::fmt::Debug for ReturnedExecution<'_> {
     }
 }
 
-impl core::fmt::Debug for ExecutionStepError<'_> {
+impl core::fmt::Debug for RunStepError<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("ExecutionStepError")
+            .debug_struct("RunStepError")
             .field("error", &self.error())
-            .field("execution", &self.execution())
+            .field("session", &self.session())
             .finish()
     }
 }
@@ -204,7 +204,7 @@ impl<'program> ExecutionCore<'program> {
     }
 }
 
-impl<'program> RunningExecution<'program> {
+impl<'program> RunSession<'program> {
     /// Starts a new running execution for a parsed program and validated input.
     ///
     /// # Errors
@@ -264,18 +264,18 @@ impl<'program> RunningExecution<'program> {
     /// Advances this execution by exactly one matching rule when possible.
     ///
     /// Consuming `self` makes terminal states explicit. Call
-    /// [`AppliedExecution::into_running`] to continue after an applied rule.
+    /// [`AppliedStep::into_session`] to continue after an applied rule.
     ///
     /// # Errors
     ///
-    /// Returns `ExecutionStepError` if the matching rule cannot commit because
+    /// Returns `RunStepError` if the matching rule cannot commit because
     /// runtime limits or allocation fail. The error preserves the uncommitted
-    /// execution.
+    /// session.
     #[expect(
         clippy::result_large_err,
-        reason = "ExecutionStepError preserves the uncommitted execution by value without allocating on the error path"
+        reason = "RunStepError preserves the uncommitted run session by value without allocating on the error path"
     )]
-    pub fn step(mut self) -> Result<ExecutionTransition<'program>, ExecutionStepError<'program>> {
+    pub fn step(mut self) -> Result<StepTransition<'program>, RunStepError<'program>> {
         let applied = {
             let ExecutionCore {
                 state,
@@ -290,7 +290,7 @@ impl<'program> RunningExecution<'program> {
                 RuleSearch::Matched(matched) => matched,
                 RuleSearch::Stable => {
                     let steps = step_budget.completed_steps();
-                    return Ok(ExecutionTransition::Stable(StableExecution {
+                    return Ok(StepTransition::Stable(StableRun {
                         steps,
                         core: self.core,
                     }));
@@ -302,7 +302,7 @@ impl<'program> RunningExecution<'program> {
 
         let applied = match applied {
             Ok(applied) => applied,
-            Err(error) => return Err(ExecutionStepError::new(error, self)),
+            Err(error) => return Err(RunStepError::new(error, self)),
         };
 
         Ok(applied.into_transition(self))
@@ -317,13 +317,13 @@ impl<'program> RunningExecution<'program> {
     pub fn finish(mut self) -> Result<RunResult, RunError> {
         loop {
             match self.step() {
-                Ok(ExecutionTransition::Applied(applied)) => {
-                    self = applied.into_running();
+                Ok(StepTransition::Applied(applied)) => {
+                    self = applied.into_session();
                 }
-                Ok(ExecutionTransition::Stable(stable)) => {
+                Ok(StepTransition::Stable(stable)) => {
                     return stable.into_result();
                 }
-                Ok(ExecutionTransition::Returned(returned)) => {
+                Ok(StepTransition::Returned(returned)) => {
                     return returned.into_result();
                 }
                 Err(error) => return Err(error.into_error()),
@@ -335,15 +335,15 @@ impl<'program> RunningExecution<'program> {
 impl<'program> AppliedRule<'program> {
     fn into_transition(
         self,
-        execution: RunningExecution<'program>,
-    ) -> ExecutionTransition<'program> {
+        session: RunSession<'program>,
+    ) -> StepTransition<'program> {
         match self.effect {
-            StepApplication::Continue => ExecutionTransition::Applied(AppliedExecution {
+            StepApplication::Continue => StepTransition::Applied(AppliedStep {
                 step: self.step,
                 rule: self.rule,
-                execution,
+                session,
             }),
-            StepApplication::Return(output) => ExecutionTransition::Returned(ReturnedExecution {
+            StepApplication::Return(output) => StepTransition::Returned(ReturnedRun {
                 step: self.step,
                 rule: self.rule,
                 output,
@@ -352,7 +352,7 @@ impl<'program> AppliedRule<'program> {
     }
 }
 
-impl<'program> AppliedExecution<'program> {
+impl<'program> AppliedStep<'program> {
     /// One-based applied step count.
     #[must_use]
     pub const fn step(&self) -> StepCount {
@@ -368,17 +368,17 @@ impl<'program> AppliedExecution<'program> {
     /// Runtime state after the applied rewrite step.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
-        self.execution.state()
+        self.session.state()
     }
 
     /// Continue running after observing this applied step.
     #[must_use]
-    pub fn into_running(self) -> RunningExecution<'program> {
-        self.execution
+    pub fn into_session(self) -> RunSession<'program> {
+        self.session
     }
 }
 
-impl StableExecution<'_> {
+impl StableRun<'_> {
     /// Number of rewrite steps applied before reaching the stable state.
     #[must_use]
     pub const fn steps(&self) -> StepCount {
@@ -401,7 +401,7 @@ impl StableExecution<'_> {
     }
 }
 
-impl<'program> ReturnedExecution<'program> {
+impl<'program> ReturnedRun<'program> {
     /// One-based applied step count for the return rule.
     #[must_use]
     pub const fn step(&self) -> StepCount {
@@ -433,9 +433,9 @@ impl<'program> ReturnedExecution<'program> {
     }
 }
 
-impl<'program> ExecutionStepError<'program> {
-    fn new(error: RunError, execution: RunningExecution<'program>) -> Self {
-        Self { error, execution }
+impl<'program> RunStepError<'program> {
+    fn new(error: RunError, session: RunSession<'program>) -> Self {
+        Self { error, session }
     }
 
     /// Runtime error that prevented the step from committing.
@@ -444,16 +444,16 @@ impl<'program> ExecutionStepError<'program> {
         &self.error
     }
 
-    /// Borrow the uncommitted execution.
+    /// Borrow the uncommitted run session.
     #[must_use]
-    pub const fn execution(&self) -> &RunningExecution<'program> {
-        &self.execution
+    pub const fn session(&self) -> &RunSession<'program> {
+        &self.session
     }
 
-    /// Recover the uncommitted execution.
+    /// Recover the uncommitted run session.
     #[must_use]
-    pub fn into_execution(self) -> RunningExecution<'program> {
-        self.execution
+    pub fn into_session(self) -> RunSession<'program> {
+        self.session
     }
 
     /// Discard the uncommitted execution and return the runtime error.
@@ -463,19 +463,19 @@ impl<'program> ExecutionStepError<'program> {
     }
 }
 
-impl core::fmt::Display for ExecutionStepError<'_> {
+impl core::fmt::Display for RunStepError<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.error.fmt(formatter)
     }
 }
 
-impl core::error::Error for ExecutionStepError<'_> {
+impl core::error::Error for RunStepError<'_> {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         Some(&self.error)
     }
 }
 
-impl<'program> RunningExecution<'program> {
+impl<'program> RunSession<'program> {
     /// Runs to completion while emitting borrowed trace events.
     ///
     /// # Errors
@@ -496,7 +496,7 @@ impl<'program> RunningExecution<'program> {
 
         loop {
             match self.step() {
-                Ok(ExecutionTransition::Applied(applied)) => {
+                Ok(StepTransition::Applied(applied)) => {
                     Self::emit_step_trace(
                         &mut trace,
                         applied.step(),
@@ -505,12 +505,12 @@ impl<'program> RunningExecution<'program> {
                             state: applied.state(),
                         },
                     )?;
-                    self = applied.into_running();
+                    self = applied.into_session();
                 }
-                Ok(ExecutionTransition::Stable(stable)) => {
+                Ok(StepTransition::Stable(stable)) => {
                     return stable.into_result().map_err(TracedRunError::Run);
                 }
-                Ok(ExecutionTransition::Returned(returned)) => {
+                Ok(StepTransition::Returned(returned)) => {
                     Self::emit_step_trace(
                         &mut trace,
                         returned.step(),

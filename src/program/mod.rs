@@ -4,7 +4,7 @@ mod rule_set;
 mod tracing;
 
 use crate::error::{ParseError, RunError};
-use crate::execution::RunningExecution;
+use crate::execution::RunSession;
 use crate::inspect::{RuleCount, RulePositions, RuleView};
 use crate::parser::parse_rules_impl;
 use crate::rule::Rule;
@@ -102,31 +102,31 @@ impl Program {
         self.rule_set.once_slot_count()
     }
 
-    /// Starts a stateful execution session for this program.
+    /// Starts a stateful run session for this program.
     ///
     /// The input must already be validated as [`RuntimeInput`]. This function
     /// materializes it into the mutable runtime-state byte domain under
     /// `limits`.
     ///
-    /// The returned [`RunningExecution`] can be advanced one matching rule at a
-    /// time. Use [`Program::run`] when the caller wants to run to completion in
-    /// one call.
+    /// The returned [`RunSession`] can be advanced one matching rule at a time.
+    /// Use [`Program::run`] when the caller wants to run to completion in one
+    /// call.
     ///
     /// # Errors
     ///
     /// Returns `RunError` when the validated input exceeds this run's state
     /// limit or when allocating per-run execution state fails.
-    pub fn start_execution(
+    pub fn start_run(
         &self,
         input: &RuntimeInput,
         limits: RunLimits,
-    ) -> Result<RunningExecution<'_>, RunError> {
-        RunningExecution::new(self, input, limits)
+    ) -> Result<RunSession<'_>, RunError> {
+        RunSession::new(self, input, limits)
     }
 
     /// Runs this program with already-validated runtime input.
     ///
-    /// This is the run-to-completion API. Use [`Program::start_execution`] when
+    /// This is the run-to-completion API. Use [`Program::start_run`] when
     /// the host needs to observe or pause after each committed rule.
     ///
     /// # Errors
@@ -135,6 +135,6 @@ impl Program {
     /// allocation fails, state-size arithmetic overflows, or a configured
     /// `RunLimits` budget would be exceeded.
     pub fn run(&self, input: &RuntimeInput, limits: RunLimits) -> Result<RunResult, RunError> {
-        RunningExecution::new(self, input, limits)?.finish()
+        RunSession::new(self, input, limits)?.finish()
     }
 }
