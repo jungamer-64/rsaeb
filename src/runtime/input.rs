@@ -20,6 +20,16 @@ pub struct RuntimeInput {
     bytes: Vec<RuntimeByte>,
 }
 
+/// Materialized runtime input bytes.
+///
+/// This value is an explicit view/materialization boundary. `RuntimeInput`
+/// itself stays in the validated runtime byte domain; callers that need raw
+/// host bytes must ask for this domain-named value.
+#[derive(Debug, PartialEq, Eq)]
+pub struct RuntimeInputBytes {
+    bytes: Vec<u8>,
+}
+
 impl fmt::Debug for RuntimeInput {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -80,6 +90,17 @@ impl RuntimeInput {
         self.bytes.iter().copied().map(RuntimeByte::materialize)
     }
 
+    /// Materializes validated runtime input into public host bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the output buffer cannot be allocated.
+    pub fn materialize(&self) -> Result<RuntimeInputBytes, AllocationError> {
+        Ok(RuntimeInputBytes {
+            bytes: self.materialize_for_view()?,
+        })
+    }
+
     pub(crate) fn materialize_for_view(&self) -> Result<Vec<u8>, AllocationError> {
         let mut output = Vec::new();
         try_reserve_total_exact(
@@ -107,6 +128,32 @@ impl RuntimeInput {
 
     pub(crate) fn runtime_bytes(&self) -> impl Iterator<Item = RuntimeByte> + '_ {
         self.bytes.iter().copied()
+    }
+}
+
+impl RuntimeInputBytes {
+    /// Borrow the materialized runtime input bytes.
+    #[must_use]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Consumes this value and returns the materialized host bytes.
+    #[must_use]
+    pub fn into_raw_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    /// Materialized runtime input length in bytes.
+    #[must_use]
+    pub fn byte_count(&self) -> RuntimeInputByteCount {
+        RuntimeInputByteCount::new(self.bytes.len())
+    }
+
+    /// Returns whether this materialized runtime input contains no bytes.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
     }
 }
 

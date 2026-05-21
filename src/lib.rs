@@ -57,7 +57,7 @@
 //!
 //! assert!(matches!(
 //!     result.outcome(),
-//!     RunOutcome::Stable(output) if output.as_bytes() == b"b"
+//!     RunOutcome::Stable(output) if output.as_slice() == b"b"
 //! ));
 //! # Ok(())
 //! # }
@@ -85,11 +85,11 @@
 //!
 //! assert!(matches!(
 //!     first.outcome(),
-//!     RunOutcome::Stable(output) if output.as_bytes() == b"bc"
+//!     RunOutcome::Stable(output) if output.as_slice() == b"bc"
 //! ));
 //! assert!(matches!(
 //!     second.outcome(),
-//!     RunOutcome::Stable(output) if output.as_bytes() == b"bc"
+//!     RunOutcome::Stable(output) if output.as_slice() == b"bc"
 //! ));
 //! # Ok(())
 //! # }
@@ -118,7 +118,7 @@
 //!
 //! let execution = match execution.step().map_err(|step| step.into_error())? {
 //!     StepTransition::Applied(applied) => {
-//!         assert!(applied.state().bytes().eq(b"b".iter().copied()));
+//!         assert_eq!(applied.state().materialize()?.as_slice(), b"b");
 //!         applied.into_session()
 //!     }
 //!     StepTransition::Stable(_) | StepTransition::Returned(_) => {
@@ -128,7 +128,7 @@
 //!
 //! let execution = match execution.step().map_err(|step| step.into_error())? {
 //!     StepTransition::Applied(applied) => {
-//!         assert!(applied.state().bytes().eq(b"c".iter().copied()));
+//!         assert_eq!(applied.state().materialize()?.as_slice(), b"c");
 //!         applied.into_session()
 //!     }
 //!     StepTransition::Stable(_) | StepTransition::Returned(_) => {
@@ -139,7 +139,7 @@
 //! match execution.step().map_err(|step| step.into_error())? {
 //!     StepTransition::Stable(stable) => {
 //!         assert_eq!(stable.steps().get(), 2);
-//!         assert!(stable.state().bytes().eq(b"c".iter().copied()));
+//!         assert_eq!(stable.state().materialize()?.as_slice(), b"c");
 //!     }
 //!     StepTransition::Applied(_) | StepTransition::Returned(_) => {
 //!         return Err("expected stable completion".into());
@@ -195,12 +195,19 @@
 //!
 //! assert_eq!(rule.repeat(), RuleRepeat::Once);
 //! assert_eq!(rule.anchor(), RuleAnchor::Start);
-//! assert!(rule.lhs().eq_bytes(b"a"));
-//! assert!(matches!(
-//!     rule.action(),
-//!     RuleActionView::MoveEnd(payload) if payload.eq_bytes(b"b")
-//! ));
-//! assert_eq!(rule.canonical_source()?, b"(once)(start)a=(end)b");
+//! assert_eq!(rule.lhs().materialize()?.as_slice(), b"a");
+//! match rule.action() {
+//!     RuleActionView::MoveEnd(payload) => {
+//!         assert_eq!(payload.materialize()?.as_slice(), b"b");
+//!     }
+//!     RuleActionView::Replace(_) | RuleActionView::MoveStart(_) | RuleActionView::Return(_) => {
+//!         return Err("expected move-end action".into());
+//!     }
+//! }
+//! assert_eq!(
+//!     rule.canonical_source()?.as_slice(),
+//!     b"(once)(start)a=(end)b",
+//! );
 //! # Ok(())
 //! # }
 //! ```
@@ -263,15 +270,15 @@
 //! let mut returns = Vec::new();
 //!
 //! program.run_with_trace_snapshots(&input, trace_limits, |event| match event {
-//!     TraceSnapshotEvent::Initial { state } => states.push(state.into_vec()),
+//!     TraceSnapshotEvent::Initial { state } => states.push(state.into_raw_bytes()),
 //!     TraceSnapshotEvent::Step {
 //!         effect: TraceSnapshotEffect::Continue { state },
 //!         ..
-//!     } => states.push(state.into_vec()),
+//!     } => states.push(state.into_raw_bytes()),
 //!     TraceSnapshotEvent::Step {
 //!         effect: TraceSnapshotEffect::Return { output },
 //!         ..
-//!     } => returns.push(output.into_vec()),
+//!     } => returns.push(output.into_raw_bytes()),
 //! })?;
 //!
 //! assert_eq!(states, [b"a".to_vec(), b"b".to_vec()]);
@@ -343,5 +350,5 @@ pub mod trace;
 pub use program::{
     ParseLimits, Program, ReturnOutput, RunLimits, RunOutcome, RunResult, RuntimeStateSnapshot,
 };
-pub use runtime::RuntimeInput;
+pub use runtime::{RuntimeInput, RuntimeInputBytes};
 pub use source::ProgramSource;

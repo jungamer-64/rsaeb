@@ -37,15 +37,15 @@ fn compacting_source_whitespace_and_comments_preserves_rule_domain() -> TestResu
 
     ensure_eq!(program.rule_count(), RuleCount::new(3))?;
     ensure_eq!(
-        expect_rule(&program, 0)?.canonical_source()?,
+        expect_rule(&program, 0)?.canonical_source()?.as_slice(),
         b"ab=bb".as_slice(),
     )?;
     ensure_eq!(
-        expect_rule(&program, 1)?.canonical_source()?,
+        expect_rule(&program, 1)?.canonical_source()?.as_slice(),
         b"a=b".as_slice(),
     )?;
     ensure_eq!(
-        expect_rule(&program, 2)?.canonical_source()?,
+        expect_rule(&program, 2)?.canonical_source()?.as_slice(),
         b"(once)(start)x=(end)y".as_slice(),
     )?;
     Ok(())
@@ -69,7 +69,7 @@ fn comments_may_contain_non_utf8_bytes_because_source_is_byte_oriented() -> Test
     let rule = expect_rule(&program, 0)?;
 
     ensure_eq!(program.rule_count(), RuleCount::new(1))?;
-    ensure_eq!(rule.canonical_source()?, b"a=b".as_slice())
+    ensure_eq!(rule.canonical_source()?.as_slice(), b"a=b".as_slice())
 }
 
 /// # Errors
@@ -241,16 +241,17 @@ fn spaced_source_and_compact_source_parse_to_the_same_rule_view() -> TestResult 
     ensure_eq!(spaced.rule_count(), RuleCount::new(1))?;
     ensure_eq!(spaced_rule.repeat(), RuleRepeat::Once)?;
     ensure_eq!(spaced_rule.anchor(), RuleAnchor::Start)?;
-    ensure(spaced_rule.lhs().eq_bytes(b"a"), "expected lhs")?;
-    ensure_matches(
-        matches!(
-            spaced_rule.action(),
-            RuleActionView::MoveEnd(payload) if payload.eq_bytes(b"b")
-        ),
-        "expected move-end action",
-    )?;
+    ensure_eq!(spaced_rule.lhs().materialize()?.as_slice(), b"a".as_slice())?;
+    match spaced_rule.action() {
+        RuleActionView::MoveEnd(payload) => {
+            ensure_eq!(payload.materialize()?.as_slice(), b"b".as_slice())?;
+        }
+        RuleActionView::Replace(_) | RuleActionView::MoveStart(_) | RuleActionView::Return(_) => {
+            return Err(TestFailure::message("expected move-end action"));
+        }
+    }
     ensure_eq!(
-        compact_rule.canonical_source()?,
-        spaced_rule.canonical_source()?
+        compact_rule.canonical_source()?.as_slice(),
+        spaced_rule.canonical_source()?.as_slice(),
     )
 }

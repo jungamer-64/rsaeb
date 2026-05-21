@@ -1,9 +1,11 @@
+use alloc::vec::Vec;
+
 use super::*;
 use crate::error::{ParseError, ParseErrorKind, PayloadKind};
 use crate::source::SourceLineNumber;
 use crate::test_support::{
-    TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_error_position,
-    source_column, source_line_number,
+    TestFailure, TestResult, ensure_eq, ensure_matches, expect_error_position, source_column,
+    source_line_number,
 };
 
 /// Parses payload bytes and returns the expected parse error.
@@ -102,7 +104,7 @@ fn payload_exposes_validated_bytes_without_leaking_the_internal_domain_type() ->
     let payload = Payload::parse(&compact, source_line_number(1)?, PayloadKind::LeftSideData)
         .map_err(TestFailure::from)?;
 
-    ensure(payload.eq_bytes(b"ab"), "expected payload bytes")?;
+    ensure_eq!(payload.bytes().collect::<Vec<_>>(), b"ab".to_vec())?;
     let PayloadNeedle::NonEmpty(needle) = payload.needle() else {
         return Err(TestFailure::message("expected non-empty payload needle"));
     };

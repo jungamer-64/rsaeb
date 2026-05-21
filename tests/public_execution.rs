@@ -20,14 +20,14 @@ use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program}
 /// Returns `TestFailure` if the run result is not stable or stable bytes differ.
 fn expect_stable_bytes(result: &RunResult, expected: &[u8]) -> TestResult {
     match result.outcome() {
-        RunOutcome::Stable(output) if output.as_bytes() == expected => Ok(()),
+        RunOutcome::Stable(output) if output.as_slice() == expected => Ok(()),
         RunOutcome::Stable(_) => Err(TestFailure::message("stable output bytes differed")),
         RunOutcome::Return(_) => Err(TestFailure::message("expected stable outcome")),
     }
 }
 
-fn runtime_view_bytes(state: rsaeb::trace::RuntimeStateView<'_>) -> Vec<u8> {
-    state.bytes().collect()
+fn runtime_view_bytes(state: rsaeb::trace::RuntimeStateView<'_>) -> Result<Vec<u8>, TestFailure> {
+    Ok(state.materialize()?.into_raw_bytes())
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -56,16 +56,16 @@ enum StepSignature {
 fn applied_signature(applied: &AppliedStep<'_>) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Applied {
         step: applied.step().get(),
-        rule: applied.rule().canonical_source()?,
-        state: runtime_view_bytes(applied.state()),
+        rule: applied.rule().canonical_source()?.into_raw_bytes(),
+        state: runtime_view_bytes(applied.state())?,
     })
 }
 
-fn stable_signature(stable: &StableRun<'_>) -> StepSignature {
-    StepSignature::Stable {
+fn stable_signature(stable: &StableRun<'_>) -> Result<StepSignature, TestFailure> {
+    Ok(StepSignature::Stable {
         steps: stable.steps().get(),
-        state: runtime_view_bytes(stable.state()),
-    }
+        state: runtime_view_bytes(stable.state())?,
+    })
 }
 
 /// Builds a comparable signature for a returned step.
@@ -77,8 +77,8 @@ fn stable_signature(stable: &StableRun<'_>) -> StepSignature {
 fn returned_signature(returned: &ReturnedRun<'_>) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Return {
         step: returned.step().get(),
-        rule: returned.rule().canonical_source()?,
-        output: returned.output().to_vec()?,
+        rule: returned.rule().canonical_source()?.into_raw_bytes(),
+        output: returned.output().materialize()?.into_raw_bytes(),
     })
 }
 
@@ -98,7 +98,7 @@ fn finish_step_signatures(
                 execution = applied.into_session();
             }
             StepTransition::Stable(stable) => {
-                signatures.push(stable_signature(&stable));
+                signatures.push(stable_signature(&stable)?);
                 return Ok(signatures);
             }
             StepTransition::Returned(returned) => {
@@ -207,7 +207,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
                 b"a=b".as_slice()
             )?;
             ensure_eq!(
-                runtime_view_bytes(applied.state()).as_slice(),
+                runtime_view_bytes(applied.state())?.as_slice(),
                 b"b".as_slice()
             )?;
             ensure_eq!(applied.state().byte_count().get(), 1)?;
@@ -226,7 +226,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
                 b"b=c".as_slice()
             )?;
             ensure_eq!(
-                runtime_view_bytes(applied.state()).as_slice(),
+                runtime_view_bytes(applied.state())?.as_slice(),
                 b"c".as_slice()
             )?;
             applied.into_session()
@@ -240,7 +240,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
         StepTransition::Stable(stable) => {
             ensure_eq!(stable.steps().get(), 2)?;
             ensure_eq!(
-                runtime_view_bytes(stable.state()).as_slice(),
+                runtime_view_bytes(stable.state())?.as_slice(),
                 b"c".as_slice()
             )?;
         }
@@ -267,14 +267,14 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
     let execution = program.start_run(&input, limits)?;
 
     ensure_eq!(
-        runtime_view_bytes(execution.state()).as_slice(),
+        runtime_view_bytes(execution.state())?.as_slice(),
         b"a".as_slice(),
     )?;
 
     let execution = match expect_step_transition(execution.step())? {
         StepTransition::Applied(applied) => {
             ensure_eq!(
-                runtime_view_bytes(applied.state()).as_slice(),
+                runtime_view_bytes(applied.state())?.as_slice(),
                 b"b".as_slice()
             )?;
             applied.into_session()
@@ -285,7 +285,7 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
     };
 
     ensure_eq!(
-        runtime_view_bytes(execution.state()).as_slice(),
+        runtime_view_bytes(execution.state())?.as_slice(),
         b"b".as_slice(),
     )
 }
@@ -358,7 +358,10 @@ fn execution_step_error_can_retry_with_relaxed_limits() -> TestResult {
 
     match expect_step_transition(execution.step())? {
         StepTransition::Returned(returned) => {
-            ensure_eq!(returned.output().to_vec()?.as_slice(), b"ok".as_slice())
+            ensure_eq!(
+                returned.output().materialize()?.as_slice(),
+                b"ok".as_slice(),
+            )
         }
         StepTransition::Applied(_) | StepTransition::Stable(_) => {
             Err(TestFailure::message("expected returned execution"))

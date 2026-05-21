@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::ops::Range;
 
 use super::budget::RuntimeBudgetState;
 use super::input::InitialStateBytes;
@@ -55,8 +56,8 @@ impl State {
                 MatchedStateSpan::at_end(needle.byte_count(), self.byte_count())
             }
             PayloadNeedle::NonEmpty(needle) => {
-                let start = self.len().checked_sub(needle.len())?;
-                self.matches_payload_at(StateIndex::from_zero_based(start), needle)
+                let start = StateIndex::ending_match_start(self.byte_count(), needle.byte_count())?;
+                self.matches_payload_at(start, needle)
             }
         }
     }
@@ -67,9 +68,10 @@ impl State {
                 MatchedStateSpan::at_start(needle.byte_count(), self.byte_count())
             }
             PayloadNeedle::NonEmpty(needle) => {
-                let last_start = self.len().checked_sub(needle.len())?;
+                let last_start =
+                    StateIndex::ending_match_start(self.byte_count(), needle.byte_count())?;
 
-                (0..=last_start)
+                (0..=last_start.get())
                     .filter(|&position| {
                         self.bytes
                             .get(position)
@@ -91,9 +93,7 @@ impl State {
     ) -> Option<MatchedStateSpan> {
         let state_match =
             MatchedStateSpan::at_position(position, needle.byte_count(), self.byte_count())?;
-        let window = self
-            .bytes
-            .get(state_match.start.get()..state_match.end.get())?;
+        let window = state_match.matched_slice(&self.bytes)?;
 
         window
             .iter()
@@ -188,7 +188,7 @@ impl State {
         output: &mut RewriteScratch,
         state_match: MatchedStateSpan,
     ) -> Result<(), AllocationError> {
-        output.push_existing(self.bytes.iter().copied().take(state_match.start.get()))
+        output.push_existing(state_match.prefix_bytes(&self.bytes))
     }
 
     /// Copies bytes after the matched span into scratch storage.
@@ -201,7 +201,7 @@ impl State {
         output: &mut RewriteScratch,
         state_match: MatchedStateSpan,
     ) -> Result<(), AllocationError> {
-        output.push_existing(self.bytes.iter().copied().skip(state_match.end.get()))
+        output.push_existing(state_match.suffix_bytes(&self.bytes))
     }
 
     /// Materializes runtime state bytes at the requested allocation site.
@@ -245,15 +245,57 @@ impl StateIndex {
         Self { zero_based }
     }
 
+    fn ending_match_start(
+        state_len: RuntimeStateByteCount,
+        matched_len: PayloadByteCount,
+    ) -> Option<Self> {
+        let start = state_len.get().checked_sub(matched_len.get())?;
+        Some(Self::from_zero_based(start))
+    }
+
+    fn checked_add_count(self, count: PayloadByteCount) -> Option<Self> {
+        let zero_based = self.zero_based.checked_add(count.get())?;
+        Some(Self { zero_based })
+    }
+
     const fn get(self) -> usize {
         self.zero_based
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct MatchedStateSpan {
+struct StateSpanRange {
     start: StateIndex,
     end: StateIndex,
+}
+
+impl StateSpanRange {
+    fn at_position(
+        start: StateIndex,
+        matched_len: PayloadByteCount,
+        state_len: RuntimeStateByteCount,
+    ) -> Option<Self> {
+        let end = start.checked_add_count(matched_len)?;
+        (start.get() <= state_len.get() && end.get() <= state_len.get())
+            .then_some(Self { start, end })
+    }
+
+    fn as_range(self) -> Range<usize> {
+        self.start.get()..self.end.get()
+    }
+
+    const fn prefix_end(self) -> usize {
+        self.start.get()
+    }
+
+    const fn suffix_start(self) -> usize {
+        self.end.get()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MatchedStateSpan {
+    range: StateSpanRange,
     matched_len: PayloadByteCount,
 }
 
@@ -278,15 +320,29 @@ impl MatchedStateSpan {
         matched_len: PayloadByteCount,
         state_len: RuntimeStateByteCount,
     ) -> Option<Self> {
-        let end = start.get().checked_add(matched_len.get())?;
-        (start.get() <= state_len.get() && end <= state_len.get()).then_some(Self {
-            start,
-            end: StateIndex::from_zero_based(end),
-            matched_len,
-        })
+        let range = StateSpanRange::at_position(start, matched_len, state_len)?;
+        Some(Self { range, matched_len })
     }
 
     pub(crate) const fn matched_len(self) -> PayloadByteCount {
         self.matched_len
+    }
+
+    fn matched_slice(self, bytes: &[RuntimeByte]) -> Option<&[RuntimeByte]> {
+        bytes.get(self.range.as_range())
+    }
+
+    fn prefix_bytes<'state>(
+        self,
+        bytes: &'state [RuntimeByte],
+    ) -> impl Iterator<Item = RuntimeByte> + 'state {
+        bytes.iter().copied().take(self.range.prefix_end())
+    }
+
+    fn suffix_bytes<'state>(
+        self,
+        bytes: &'state [RuntimeByte],
+    ) -> impl Iterator<Item = RuntimeByte> + 'state {
+        bytes.iter().copied().skip(self.range.suffix_start())
     }
 }

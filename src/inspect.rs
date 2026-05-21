@@ -19,11 +19,15 @@
 //! assert_eq!(rule.position().number().get(), 1);
 //! assert_eq!(rule.repeat(), RuleRepeat::Once);
 //! assert_eq!(rule.anchor(), RuleAnchor::Start);
-//! assert!(rule.lhs().eq_bytes(b"a"));
-//! assert!(matches!(
-//!     rule.action(),
-//!     RuleActionView::Return(output) if output.eq_bytes(b"done")
-//! ));
+//! assert_eq!(rule.lhs().materialize()?.as_slice(), b"a");
+//! match rule.action() {
+//!     RuleActionView::Return(output) => {
+//!         assert_eq!(output.materialize()?.as_slice(), b"done");
+//!     }
+//!     RuleActionView::Replace(_) | RuleActionView::MoveStart(_) | RuleActionView::MoveEnd(_) => {
+//!         return Err("expected return action".into());
+//!     }
+//! }
 //! # Ok(())
 //! # }
 //! ```
@@ -33,6 +37,7 @@ use core::fmt;
 
 use crate::allocation::{AllocationContext, AllocationError};
 use crate::bytes::{Payload, PayloadByteCount};
+use crate::program::SourceByteCount;
 use crate::rule::Rule;
 use crate::source::SourceLineNumber;
 
@@ -203,6 +208,25 @@ pub struct PayloadView<'program> {
     payload: &'program Payload,
 }
 
+/// Materialized parsed payload bytes.
+///
+/// This value is produced at an explicit inspection boundary. It is distinct
+/// from runtime input/state bytes because parser payload bytes are executable
+/// program data.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PayloadBytes {
+    bytes: Vec<u8>,
+}
+
+/// Materialized canonical source for one parsed rule.
+///
+/// The source is generated from typed rule fields and does not preserve
+/// whitespace or comments from the original program source.
+#[derive(Debug, PartialEq, Eq)]
+pub struct CanonicalRuleSource {
+    bytes: Vec<u8>,
+}
+
 impl<'program> PayloadView<'program> {
     pub(crate) fn new(payload: &'program Payload) -> Self {
         Self { payload }
@@ -224,10 +248,6 @@ impl<'program> PayloadView<'program> {
         self.payload.bytes()
     }
 
-    pub(crate) fn eq_materialized_bytes(self, expected: &[u8]) -> bool {
-        self.payload.eq_bytes(expected)
-    }
-
     /// Materializes this payload view as owned bytes for the given allocation site.
     ///
     /// # Errors
@@ -238,6 +258,69 @@ impl<'program> PayloadView<'program> {
         context: AllocationContext,
     ) -> Result<Vec<u8>, AllocationError> {
         self.payload.to_vec_with_context(context)
+    }
+
+    /// Materializes this payload view into typed owned payload bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the output buffer cannot be allocated.
+    pub fn materialize(self) -> Result<PayloadBytes, AllocationError> {
+        Ok(PayloadBytes {
+            bytes: self.to_vec_with_context(AllocationContext::PayloadView)?,
+        })
+    }
+}
+
+impl PayloadBytes {
+    /// Borrow the materialized payload bytes.
+    #[must_use]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Consumes this value and returns the materialized host bytes.
+    #[must_use]
+    pub fn into_raw_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    /// Materialized payload length in bytes.
+    #[must_use]
+    pub fn byte_count(&self) -> PayloadByteCount {
+        PayloadByteCount::new(self.bytes.len())
+    }
+
+    /// Returns whether this materialized payload contains no bytes.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
+impl CanonicalRuleSource {
+    /// Borrow the generated canonical source bytes.
+    #[must_use]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Consumes this value and returns the generated source bytes.
+    #[must_use]
+    pub fn into_raw_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    /// Generated canonical source length in bytes.
+    #[must_use]
+    pub fn byte_count(&self) -> SourceByteCount {
+        SourceByteCount::new(self.bytes.len())
+    }
+
+    /// Returns whether the generated canonical source contains no bytes.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
     }
 }
 
@@ -345,7 +428,19 @@ impl<'program> RuleView<'program> {
         self.rule.action().view()
     }
 
-    pub(crate) fn materialize_canonical_source(self) -> Result<Vec<u8>, AllocationError> {
-        crate::rule::canonical_source(self.rule)
+    /// Generates canonical executable source for diagnostics/display.
+    ///
+    /// Whitespace and comments are not preserved by design. The canonical text
+    /// is derived from the typed rule fields every time, so there is no stored
+    /// textual metadata that can drift from the executable rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the canonical byte buffer cannot be
+    /// allocated or if its computed length overflows.
+    pub fn canonical_source(self) -> Result<CanonicalRuleSource, AllocationError> {
+        Ok(CanonicalRuleSource {
+            bytes: crate::rule::canonical_source(self.rule)?,
+        })
     }
 }

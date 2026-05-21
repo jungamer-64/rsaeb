@@ -29,15 +29,15 @@
 //! let mut retained = Vec::new();
 //!
 //! program.run_with_trace_snapshots(&input, trace_limits, |event| match event {
-//!     TraceSnapshotEvent::Initial { state } => retained.push(state.into_vec()),
+//!     TraceSnapshotEvent::Initial { state } => retained.push(state.into_raw_bytes()),
 //!     TraceSnapshotEvent::Step {
 //!         effect: TraceSnapshotEffect::Continue { state },
 //!         ..
-//!     } => retained.push(state.into_vec()),
+//!     } => retained.push(state.into_raw_bytes()),
 //!     TraceSnapshotEvent::Step {
 //!         effect: TraceSnapshotEffect::Return { output },
 //!         ..
-//!     } => retained.push(output.into_vec()),
+//!     } => retained.push(output.into_raw_bytes()),
 //! })?;
 //!
 //! assert_eq!(retained, [b"a".to_vec(), b"b".to_vec(), b"ok".to_vec()]);
@@ -101,6 +101,17 @@ impl<'run> RuntimeStateView<'run> {
             try_push(&mut output, byte, context)?;
         }
         Ok(output)
+    }
+
+    /// Materializes this borrowed runtime state into a typed owned snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the output buffer cannot be allocated.
+    pub fn materialize(self) -> Result<RuntimeStateSnapshot, AllocationError> {
+        Ok(RuntimeStateSnapshot::from_vec(self.to_vec_with_context(
+            AllocationContext::RuntimeStateView,
+        )?))
     }
 }
 

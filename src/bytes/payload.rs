@@ -92,14 +92,6 @@ impl Payload {
         self.bytes.iter().copied().map(ProgramByte::get)
     }
 
-    pub(crate) fn eq_bytes(&self, expected: &[u8]) -> bool {
-        self.len() == expected.len()
-            && self
-                .bytes()
-                .zip(expected.iter().copied())
-                .all(|(actual, expected)| actual == expected)
-    }
-
     /// Appends materialized payload bytes to `output`.
     ///
     /// # Errors
@@ -158,10 +150,6 @@ impl EmptyPayloadNeedle<'_> {
 }
 
 impl<'payload> NonEmptyPayloadNeedle<'payload> {
-    pub(crate) fn len(self) -> usize {
-        self.payload.len()
-    }
-
     pub(crate) fn byte_count(self) -> PayloadByteCount {
         self.payload.byte_count()
     }

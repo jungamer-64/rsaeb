@@ -20,31 +20,37 @@ fn inspect_rule_views_expose_structured_public_data() -> TestResult {
     let second = rules
         .next()
         .ok_or(TestFailure::message("expected second parsed rule"))?;
+    ensure_matches(rules.next().is_none(), "expected no extra rules")?;
 
     ensure_eq!(inspected.rule_count().get(), 2)?;
     ensure_eq!(first.line_number().get(), 1)?;
     ensure_eq!(first.repeat(), RuleRepeat::Always)?;
     ensure_eq!(first.anchor(), RuleAnchor::Anywhere)?;
-    ensure_matches(first.lhs().eq_bytes(b"a"), "expected first lhs")?;
-    ensure_matches(
-        matches!(
-            first.action(),
-            RuleActionView::Replace(payload) if payload.eq_bytes(b"b")
-        ),
-        "expected replace action",
-    )?;
-    ensure_eq!(first.canonical_source()?, b"a=b".as_slice())?;
+    ensure_eq!(first.lhs().materialize()?.as_slice(), b"a".as_slice())?;
+    match first.action() {
+        RuleActionView::Replace(payload) => {
+            ensure_eq!(payload.materialize()?.as_slice(), b"b".as_slice())?;
+        }
+        RuleActionView::MoveStart(_) | RuleActionView::MoveEnd(_) | RuleActionView::Return(_) => {
+            return Err(TestFailure::message("expected replace action"));
+        }
+    }
+    ensure_eq!(first.canonical_source()?.as_slice(), b"a=b".as_slice())?;
 
     ensure_eq!(second.line_number().get(), 2)?;
     ensure_eq!(second.anchor(), RuleAnchor::Start)?;
-    ensure_matches(
-        matches!(
-            second.action(),
-            RuleActionView::MoveEnd(payload) if payload.eq_bytes(b"d")
-        ),
-        "expected move-end action",
-    )?;
-    ensure_eq!(second.canonical_source()?, b"(start)c=(end)d".as_slice())
+    match second.action() {
+        RuleActionView::MoveEnd(payload) => {
+            ensure_eq!(payload.materialize()?.as_slice(), b"d".as_slice())?;
+        }
+        RuleActionView::Replace(_) | RuleActionView::MoveStart(_) | RuleActionView::Return(_) => {
+            return Err(TestFailure::message("expected move-end action"));
+        }
+    }
+    ensure_eq!(
+        second.canonical_source()?.as_slice(),
+        b"(start)c=(end)d".as_slice(),
+    )
 }
 
 /// # Errors
@@ -74,9 +80,12 @@ fn inspect_canonical_source_reparses_to_same_public_rule_view() -> TestResult {
     ensure_eq!(once_rules.get(), 1)?;
     ensure_eq!(reparsed_rule.repeat(), RuleRepeat::Once)?;
     ensure_eq!(reparsed_rule.anchor(), RuleAnchor::Start)?;
-    ensure_matches(reparsed_rule.lhs().eq_bytes(b"a"), "expected lhs")?;
     ensure_eq!(
-        reparsed_rule.canonical_source()?,
+        reparsed_rule.lhs().materialize()?.as_slice(),
+        b"a".as_slice(),
+    )?;
+    ensure_eq!(
+        reparsed_rule.canonical_source()?.as_slice(),
         b"(once)(start)a=(end)b".as_slice(),
     )
 }

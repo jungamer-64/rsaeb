@@ -19,7 +19,7 @@ use std::vec::Vec;
 use super::session::{RuntimeSession, RuntimeStep, RuntimeStepError};
 
 fn runtime_view_bytes(view: RuntimeStateView<'_>) -> Vec<u8> {
-    view.bytes().collect()
+    view.materialized_bytes().collect()
 }
 
 /// Returns the materialized runtime byte at `index`.
@@ -30,7 +30,7 @@ fn runtime_view_bytes(view: RuntimeStateView<'_>) -> Vec<u8> {
 fn expect_runtime_byte(state: &State, index: usize) -> Result<u8, TestFailure> {
     state
         .view()
-        .bytes()
+        .materialized_bytes()
         .nth(index)
         .ok_or(TestFailure::message("expected runtime byte"))
 }
@@ -340,7 +340,7 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
     ensure_matches(
         matches!(
             result.outcome(),
-            crate::RunOutcome::Stable(output) if output.as_bytes() == b"b=()# "
+            crate::RunOutcome::Stable(output) if output.as_slice() == b"b=()# "
         ),
         "expected rewrite to leave runtime-only input bytes materialized but unmatched",
     )

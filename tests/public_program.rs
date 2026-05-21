@@ -20,7 +20,7 @@ fn expect_stable_bytes<'result>(
     expected: &[u8],
 ) -> Result<&'result [u8], TestFailure> {
     match result.outcome() {
-        RunOutcome::Stable(output) if output.as_bytes() == expected => Ok(output.as_bytes()),
+        RunOutcome::Stable(output) if output.as_slice() == expected => Ok(output.as_slice()),
         RunOutcome::Stable(_) => Err(TestFailure::message("stable output bytes differed")),
         RunOutcome::Return(_) => Err(TestFailure::message("expected stable outcome")),
     }
@@ -37,7 +37,7 @@ fn expect_return_bytes<'result>(
     expected: &[u8],
 ) -> Result<&'result [u8], TestFailure> {
     match result.outcome() {
-        RunOutcome::Return(output) if output.as_bytes() == expected => Ok(output.as_bytes()),
+        RunOutcome::Return(output) if output.as_slice() == expected => Ok(output.as_slice()),
         RunOutcome::Return(_) => Err(TestFailure::message("return output bytes differed")),
         RunOutcome::Stable(_) => Err(TestFailure::message("expected return outcome")),
     }

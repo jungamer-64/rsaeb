@@ -10,4 +10,4 @@ pub(crate) mod state;
 #[cfg(test)]
 mod tests;
 
-pub use input::RuntimeInput;
+pub use input::{RuntimeInput, RuntimeInputBytes};

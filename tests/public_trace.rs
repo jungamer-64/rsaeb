@@ -4,6 +4,7 @@ mod support;
 
 use rsaeb::error::{
     FallibleTraceSnapshotRunError, RunError, TraceSnapshotError, TraceSnapshotRunError,
+    TracedRunError,
 };
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
@@ -56,11 +57,18 @@ fn trace_snapshot_example(
 
 fn snapshot_event_bytes<'event>(event: &'event TraceSnapshotEvent<'_>) -> &'event [u8] {
     match event {
-        TraceSnapshotEvent::Initial { state } => state.as_bytes(),
+        TraceSnapshotEvent::Initial { state } => state.as_slice(),
         TraceSnapshotEvent::Step { effect, .. } => match effect {
-            TraceSnapshotEffect::Continue { state } => state.as_bytes(),
-            TraceSnapshotEffect::Return { output } => output.as_bytes(),
+            TraceSnapshotEffect::Continue { state } => state.as_slice(),
+            TraceSnapshotEffect::Return { output } => output.as_slice(),
         },
+    }
+}
+
+fn traced_test_failure(error: TracedRunError<TestFailure>) -> TestFailure {
+    match error {
+        TracedRunError::Run(error) => TestFailure::from(error),
+        TracedRunError::Trace(error) => error,
     }
 }
 
@@ -87,23 +95,26 @@ fn trace_borrowed_events_are_emitted_without_snapshots() -> TestResult {
         DEFAULT_MAX_RETURN_LEN,
     );
 
-    let result = program.run_with_borrowed_trace(&runtime_input(b"a")?, limits, |event| {
-        let bytes = match event {
-            BorrowedTraceEvent::Initial { state }
-            | BorrowedTraceEvent::Step {
-                effect: BorrowedTraceEffect::Continue { state },
-                ..
-            } => state.bytes().collect::<Vec<_>>(),
-            BorrowedTraceEvent::Step {
-                effect: BorrowedTraceEffect::Return { output },
-                ..
-            } => output.bytes().collect::<Vec<_>>(),
-        };
-        seen.push((event.byte_count().get(), bytes));
-    })?;
+    let result = program
+        .try_run_with_borrowed_trace(&runtime_input(b"a")?, limits, |event| {
+            let bytes = match event {
+                BorrowedTraceEvent::Initial { state }
+                | BorrowedTraceEvent::Step {
+                    effect: BorrowedTraceEffect::Continue { state },
+                    ..
+                } => state.materialize()?.into_raw_bytes(),
+                BorrowedTraceEvent::Step {
+                    effect: BorrowedTraceEffect::Return { output },
+                    ..
+                } => output.materialize()?.into_raw_bytes(),
+            };
+            seen.push((event.byte_count().get(), bytes));
+            Ok(())
+        })
+        .map_err(traced_test_failure)?;
 
     ensure_matches(
-        matches!(result.outcome(), RunOutcome::Return(output) if output.as_bytes() == b"ok"),
+        matches!(result.outcome(), RunOutcome::Return(output) if output.as_slice() == b"ok"),
         "expected return output",
     )?;
     ensure_eq!(
@@ -122,7 +133,7 @@ fn trace_snapshot_events_carry_bytes_and_structured_effects() -> TestResult {
     let (result, events) = trace_snapshot_example(&program)?;
 
     ensure_matches(
-        matches!(result.outcome(), RunOutcome::Return(output) if output.as_bytes() == b"ok"),
+        matches!(result.outcome(), RunOutcome::Return(output) if output.as_slice() == b"ok"),
         "expected return output",
     )?;
     ensure_eq!(events.len(), 3)?;
@@ -180,8 +191,8 @@ fn trace_snapshot_continue_step_carries_rule_view() -> TestResult {
             effect: TraceSnapshotEffect::Continue { state },
             ..
         } => {
-            ensure_eq!(state.as_bytes(), b"b".as_slice())?;
-            ensure_eq!(rule.canonical_source()?, b"a=b".as_slice())?;
+            ensure_eq!(state.as_slice(), b"b".as_slice())?;
+            ensure_eq!(rule.canonical_source()?.as_slice(), b"a=b".as_slice())?;
             Ok(())
         }
         TraceSnapshotEvent::Initial { .. } | TraceSnapshotEvent::Step { .. } => {
@@ -319,8 +330,8 @@ fn trace_final_event_matches_run_result() -> TestResult {
         .last()
         .ok_or(TestFailure::message("expected final trace event"))?;
     let result_bytes = match result.outcome() {
-        RunOutcome::Stable(output) => output.as_bytes(),
-        RunOutcome::Return(output) => output.as_bytes(),
+        RunOutcome::Stable(output) => output.as_slice(),
+        RunOutcome::Return(output) => output.as_slice(),
     };
     ensure_eq!(snapshot_event_bytes(last), result_bytes)?;
     let expected_event_count = result

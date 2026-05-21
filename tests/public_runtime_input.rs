@@ -16,7 +16,7 @@ use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program}
 /// Returns `TestFailure` if the run result is not stable or stable bytes differ.
 fn expect_stable_bytes(result: &rsaeb::RunResult, expected: &[u8]) -> TestResult {
     match result.outcome() {
-        rsaeb::RunOutcome::Stable(output) if output.as_bytes() == expected => Ok(()),
+        rsaeb::RunOutcome::Stable(output) if output.as_slice() == expected => Ok(()),
         rsaeb::RunOutcome::Stable(_) => Err(TestFailure::message("stable output bytes differed")),
         rsaeb::RunOutcome::Return(_) => Err(TestFailure::message("expected stable outcome")),
     }
@@ -30,7 +30,7 @@ fn expect_stable_bytes(result: &rsaeb::RunResult, expected: &[u8]) -> TestResult
 fn runtime_input_owns_public_bytes_for_reuse() -> TestResult {
     let input = RuntimeInput::validate(b"a=()# ", DEFAULT_MAX_INPUT_LEN)?;
 
-    ensure_eq!(input.to_vec()?.as_slice(), b"a=()# ".as_slice())?;
+    ensure_eq!(input.materialize()?.as_slice(), b"a=()# ".as_slice())?;
     ensure_eq!(input.byte_count().get(), 6)?;
     ensure_matches(!input.is_empty(), "expected non-empty owned input")?;
 

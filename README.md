@@ -35,7 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     assert!(matches!(
         result.outcome(),
-        RunOutcome::Stable(output) if output.as_bytes() == b"b"
+        RunOutcome::Stable(output) if output.as_slice() == b"b"
     ));
 
     Ok(())
@@ -393,13 +393,14 @@ directly matched, created, or deleted by program payloads.
 
 Runtime state stays in the typed byte domain during execution. Public
 observation crosses an explicit materialization boundary: `RuntimeStateView`
-iterates or copies state bytes on demand, stable run results use
-`RuntimeStateSnapshot`, `(return)` outputs use `ReturnOutput`, and snapshot
-tracing materializes owned event bytes under `TraceSnapshotLimits`. During
-execution, the active state and the rewrite scratch buffer are distinct typed
-buffers, and the runtime swaps them only after a successful continuation step.
-`(once)` rules carry private slots assigned during parsing; only a committed
-application can consume that slot.
+materializes to `RuntimeStateSnapshot`, stable run results use
+`RuntimeStateSnapshot`, `(return)` outputs use `ReturnOutput`, parsed payload
+inspection materializes to `PayloadBytes`, and snapshot tracing materializes
+owned event bytes under `TraceSnapshotLimits`. During execution, the active
+state and the rewrite scratch buffer are distinct typed buffers, and the
+runtime swaps them only after a successful continuation step. `(once)` rules
+carry private slots assigned during parsing; only a committed application can
+consume that slot.
 
 ## `no_std + alloc` Boundary
 
@@ -462,6 +463,7 @@ the primary execution path:
 - `RunOutcome`
 - `RuntimeStateSnapshot`
 - `ReturnOutput`
+- `RuntimeInputBytes`
 - `RuntimeInput::validate(bytes, limit)`
 
 Secondary domains live under explicit namespaces:
@@ -474,8 +476,9 @@ Secondary domains live under explicit namespaces:
 - `rsaeb::execution`: `RunSession`, `StepTransition`,
   `AppliedStep`, `StableRun`, `ReturnedRun`,
   and `RunStepError`
-- `rsaeb::inspect`: `RuleView`, `RuleActionView`, `PayloadView`, rule
-  position/count types, `OnceRuleCount`, `RuleRepeat`, and `RuleAnchor`
+- `rsaeb::inspect`: `RuleView`, `RuleActionView`, `PayloadView`,
+  `PayloadBytes`, `CanonicalRuleSource`, rule position/count types,
+  `OnceRuleCount`, `RuleRepeat`, and `RuleAnchor`
 - `rsaeb::trace`: borrowed trace events/effects, snapshot trace events/effects,
   and `RuntimeStateView`
 - `rsaeb::error`: parse, input, runtime, allocation, limit, and trace error
