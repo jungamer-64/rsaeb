@@ -1,6 +1,8 @@
 use alloc::vec::Vec;
 
-use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
+use crate::allocation::{
+    AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
+};
 use crate::bytes::{CompactByte, NonAsciiCodeByte, NonPrintableCodeByte};
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
 use crate::program::{CodeLineByteCount, CodeLineByteLimit};
@@ -93,8 +95,8 @@ impl CodeLine<'_> {
     /// Returns `ParseError` when compacting sees non-printable executable code
     /// bytes, allocation fails, or source positions cannot be represented.
     pub(super) fn into_compact_line(self) -> Result<CompactCodeLine, ParseError> {
-        let compact_len = self.compact_len()?;
-        let bytes = self.compact_bytes(compact_len)?;
+        let compact_byte_count = self.compact_byte_count()?;
+        let bytes = self.compact_bytes(compact_byte_count)?;
 
         Ok(CompactCodeLine {
             line_number: self.line_number,
@@ -108,8 +110,8 @@ impl CodeLine<'_> {
     ///
     /// Returns `ParseError` when a non-printable byte is found or the compact
     /// length cannot be represented.
-    fn compact_len(&self) -> Result<usize, ParseError> {
-        let mut compact_len = 0usize;
+    fn compact_byte_count(&self) -> Result<CompactCodeByteCount, ParseError> {
+        let mut byte_count = CompactCodeByteCount::ZERO;
         for (zero_based_column, byte) in self.bytes.iter().copied().enumerate() {
             if byte.is_ascii_whitespace() {
                 continue;
@@ -125,15 +127,10 @@ impl CodeLine<'_> {
                 ));
             }
 
-            compact_len = compact_len.checked_add(1).ok_or_else(|| {
-                parse_allocation_error(
-                    self.line_number,
-                    AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
-                )
-            })?;
+            byte_count = byte_count.checked_next(self.line_number)?;
         }
 
-        Ok(compact_len)
+        Ok(byte_count)
     }
 
     /// Builds compact source bytes with original source columns attached.
@@ -142,10 +139,17 @@ impl CodeLine<'_> {
     ///
     /// Returns `ParseError` if allocation fails or a source column cannot be
     /// represented.
-    fn compact_bytes(&self, compact_len: usize) -> Result<Vec<CompactByte>, ParseError> {
+    fn compact_bytes(
+        &self,
+        compact_byte_count: CompactCodeByteCount,
+    ) -> Result<Vec<CompactByte>, ParseError> {
         let mut bytes = Vec::new();
-        try_reserve_total_exact(&mut bytes, compact_len, AllocationContext::ProgramCodeLine)
-            .map_err(|error| parse_allocation_error(self.line_number, error))?;
+        try_reserve_total_exact(
+            &mut bytes,
+            RequestedCapacity::new(compact_byte_count.get()),
+            AllocationContext::ProgramCodeLine,
+        )
+        .map_err(|error| parse_allocation_error(self.line_number, error))?;
 
         for (zero_based_column, byte) in self.bytes.iter().copied().enumerate() {
             if byte.is_ascii_whitespace() {
@@ -161,6 +165,34 @@ impl CodeLine<'_> {
         }
 
         Ok(bytes)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CompactCodeByteCount {
+    value: usize,
+}
+
+impl CompactCodeByteCount {
+    const ZERO: Self = Self { value: 0 };
+
+    /// Returns this count after accepting one more compact code byte.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if the compact byte count cannot be represented.
+    fn checked_next(self, line_number: SourceLineNumber) -> Result<Self, ParseError> {
+        let value = self.value.checked_add(1).ok_or_else(|| {
+            parse_allocation_error(
+                line_number,
+                AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
+            )
+        })?;
+        Ok(Self { value })
+    }
+
+    const fn get(self) -> usize {
+        self.value
     }
 }
 

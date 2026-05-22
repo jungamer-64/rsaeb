@@ -26,7 +26,15 @@ pub struct RuntimeStateSnapshot {
 }
 
 impl RuntimeStateSnapshot {
-    pub(crate) fn from_vec(bytes: Vec<u8>) -> Self {
+    pub(crate) fn from_execution_state(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    pub(crate) fn from_runtime_state_view(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    pub(crate) fn from_trace_snapshot(bytes: Vec<u8>) -> Self {
         Self { bytes }
     }
 
@@ -64,7 +72,11 @@ pub struct ReturnOutput {
 }
 
 impl ReturnOutput {
-    pub(crate) fn from_vec(bytes: Vec<u8>) -> Self {
+    pub(crate) fn from_return_payload(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    pub(crate) fn from_trace_snapshot(bytes: Vec<u8>) -> Self {
         Self { bytes }
     }
 

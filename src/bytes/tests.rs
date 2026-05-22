@@ -8,6 +8,16 @@ use crate::test_support::{
     source_line_number,
 };
 
+/// Returns one classified runtime byte after crossing the validation boundary.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the byte is rejected by runtime input validation.
+fn validated_runtime_byte(byte: u8) -> Result<RuntimeByte, TestFailure> {
+    RuntimeByte::validate_input_boundary(byte, 0).map_err(TestFailure::from)?;
+    Ok(RuntimeByte::from_validated_input(byte))
+}
+
 /// Parses payload bytes and returns the expected parse error.
 ///
 /// # Errors
@@ -118,7 +128,7 @@ fn payload_exposes_validated_bytes_without_leaking_the_internal_domain_type() ->
 /// materialization drifts from the ASCII domain split.
 #[test]
 fn runtime_input_classifies_program_constructible_and_opaque_ascii_separately() -> TestResult {
-    let parsed = RuntimeByte::validate_input(b'a', 0).map_err(TestFailure::from)?;
+    let parsed = validated_runtime_byte(b'a')?;
     ensure_matches(
         matches!(parsed, RuntimeByte::ProgramConstructible(byte) if byte.get() == b'a'),
         "expected program-constructible input byte",
@@ -126,7 +136,7 @@ fn runtime_input_classifies_program_constructible_and_opaque_ascii_separately() 
     ensure_eq!(parsed.materialize(), b'a')?;
 
     for byte in [0x00, b' ', b'=', b'#', b'(', b')'] {
-        let parsed = RuntimeByte::validate_input(byte, 0).map_err(TestFailure::from)?;
+        let parsed = validated_runtime_byte(byte)?;
         ensure_eq!(parsed.materialize(), byte)?;
         ensure_matches(
             matches!(parsed, RuntimeByte::Opaque(_)),
@@ -143,7 +153,7 @@ fn runtime_input_classifies_program_constructible_and_opaque_ascii_separately() 
 /// executable program bytes.
 #[test]
 fn runtime_input_validation_has_no_reconstruction_invariant() -> TestResult {
-    let parsed = RuntimeByte::validate_input(b'a', 0).map_err(TestFailure::from)?;
+    let parsed = validated_runtime_byte(b'a')?;
     ensure_matches(
         matches!(parsed, RuntimeByte::ProgramConstructible(byte) if byte.get() == b'a'),
         "expected ASCII runtime input to validate normally",

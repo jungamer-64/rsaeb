@@ -43,6 +43,10 @@ mod runtime_ascii {
             }
         }
 
+        pub(crate) const fn from_validated(byte: u8) -> Self {
+            Self(byte)
+        }
+
         pub(crate) const fn get(self) -> u8 {
             self.0
         }
@@ -75,20 +79,21 @@ pub(crate) enum RuntimeByte {
 }
 
 impl RuntimeByte {
-    /// Validates and classifies one raw runtime input byte.
+    /// Validates one raw runtime input byte without constructing runtime state.
     ///
     /// # Errors
     ///
     /// Returns `RuntimeInputError` when ASCII validation fails or the input
     /// column cannot be represented.
-    pub(crate) fn validate_input(
+    pub(crate) fn validate_input_boundary(
         byte: u8,
         zero_based_column: usize,
-    ) -> Result<Self, RuntimeInputError> {
-        Ok(Self::from_ascii(AsciiByte::validate(
-            byte,
-            zero_based_column,
-        )?))
+    ) -> Result<(), RuntimeInputError> {
+        AsciiByte::validate(byte, zero_based_column).map(|_| ())
+    }
+
+    pub(crate) fn from_validated_input(byte: u8) -> Self {
+        Self::from_ascii(AsciiByte::from_validated(byte))
     }
 
     pub(crate) const fn from_program(byte: ProgramByte) -> Self {

@@ -1,7 +1,9 @@
 use alloc::vec::Vec;
 
-use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
-use crate::bytes::{Payload, RuntimeByte};
+use crate::allocation::{
+    AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
+};
+use crate::bytes::{Payload, RuntimeByte, RuntimeStateByteCount};
 
 use super::state::MatchedStateSpan;
 
@@ -99,11 +101,14 @@ impl RewriteScratch {
     ///
     /// Returns `AllocationError` if the rewrite scratch buffer cannot reserve
     /// the requested capacity.
-    pub(crate) fn clear_and_reserve(&mut self, capacity: usize) -> Result<(), AllocationError> {
+    pub(crate) fn clear_and_reserve(
+        &mut self,
+        capacity: RuntimeStateByteCount,
+    ) -> Result<(), AllocationError> {
         self.bytes.clear();
         try_reserve_total_exact(
             &mut self.bytes,
-            capacity,
+            RequestedCapacity::new(capacity.get()),
             AllocationContext::RuntimeRewriteState,
         )
     }

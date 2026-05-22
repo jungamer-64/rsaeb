@@ -46,7 +46,7 @@ impl RuleSyntaxLine {
     /// Returns `ParseError` if either rule side contains invalid modifier,
     /// action, or payload syntax.
     pub(super) fn parse(&self, payload_limit: PayloadByteLimit) -> Result<ParsedRule, ParseError> {
-        let (left, right) = self.syntax_parts()?;
+        let (left, right) = self.syntax_parts();
         let head = left.parse(payload_limit)?;
         let body = right.parse(payload_limit)?;
 
@@ -55,15 +55,9 @@ impl RuleSyntaxLine {
 
     /// Borrows the compact line as left and right syntax slices.
     ///
-    /// # Errors
-    ///
-    /// Returns `ParseError` if the stored side ranges no longer describe valid
-    /// slices of this compact line. Construction validates that invariant, so
-    /// this error path is an invariant guard rather than ordinary syntax
-    /// rejection.
-    fn syntax_parts(&self) -> Result<(LeftSyntax<'_>, RightSyntax<'_>), ParseError> {
-        let slices = self.sides.slices(self.line_number, &self.bytes)?;
-        Ok((
+    fn syntax_parts(&self) -> (LeftSyntax<'_>, RightSyntax<'_>) {
+        let slices = self.sides.slices(&self.bytes);
+        (
             LeftSyntax {
                 line_number: self.line_number,
                 bytes: slices.left,
@@ -72,7 +66,7 @@ impl RuleSyntaxLine {
                 line_number: self.line_number,
                 bytes: slices.right,
             },
-        ))
+        )
     }
 }
 
@@ -137,8 +131,8 @@ impl<'code> CompactSyntax<'code> {
         self.bytes
     }
 
-    const fn len(self) -> usize {
-        self.bytes.len()
+    const fn byte_count(self) -> PayloadByteCount {
+        PayloadByteCount::new(self.bytes.len())
     }
 
     /// Returns the source column of the first compact byte.
@@ -246,42 +240,31 @@ impl RuleSides {
         bytes: &[CompactByte],
         separator: RuleSeparator,
     ) -> Result<Self, ParseError> {
-        let sides = Self { separator };
-        sides.slices(line_number, bytes)?;
-        Ok(sides)
-    }
-
-    /// Borrows the proven left and right slices from compact line bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError` if the stored separator no longer fits the compact
-    /// line. Normal construction prevents this; the error keeps the invariant
-    /// checked without panicking.
-    fn slices(
-        self,
-        line_number: SourceLineNumber,
-        bytes: &[CompactByte],
-    ) -> Result<RuleSideSlices<'_>, ParseError> {
-        let left = bytes.get(..self.separator.equals().get()).ok_or_else(|| {
+        bytes.get(..separator.equals().get()).ok_or_else(|| {
             parse_allocation_error(
                 line_number,
                 AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
             )
         })?;
-        let right = bytes
-            .get(self.separator.right_start().get()..)
-            .ok_or_else(|| {
-                parse_allocation_error(
-                    line_number,
-                    AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
-                )
-            })?;
+        bytes.get(separator.right_start().get()..).ok_or_else(|| {
+            parse_allocation_error(
+                line_number,
+                AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
+            )
+        })?;
+        let sides = Self { separator };
+        Ok(sides)
+    }
 
-        Ok(RuleSideSlices {
+    /// Borrows the proven left and right slices from compact line bytes.
+    fn slices(self, bytes: &[CompactByte]) -> RuleSideSlices<'_> {
+        let (left, _) = bytes.split_at(self.separator.equals().get());
+        let (_, right) = bytes.split_at(self.separator.right_start().get());
+
+        RuleSideSlices {
             left: CompactSyntax::new(left),
             right: CompactSyntax::new(right),
-        })
+        }
     }
 }
 
@@ -385,7 +368,7 @@ impl LeftPayloadSyntax<'_> {
     /// Returns `ParseError` if the left-side payload contains invalid
     /// executable payload bytes or allocation fails.
     fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleHead, ParseError> {
-        ensure_payload_within_limit(self.line_number, self.bytes.len(), payload_limit)?;
+        ensure_payload_within_limit(self.line_number, self.bytes.byte_count(), payload_limit)?;
         let payload = Payload::parse(
             self.bytes.as_slice(),
             self.line_number,
@@ -489,7 +472,7 @@ impl RightPayloadSyntax<'_> {
             reject_nested_rhs_action(self.bytes, self.line_number)?;
         }
 
-        ensure_payload_within_limit(self.line_number, self.bytes.len(), payload_limit)?;
+        ensure_payload_within_limit(self.line_number, self.bytes.byte_count(), payload_limit)?;
         let payload = Payload::parse(
             self.bytes.as_slice(),
             self.line_number,
@@ -506,10 +489,9 @@ impl RightPayloadSyntax<'_> {
 /// Returns `ParseError` if the payload length exceeds `limit`.
 fn ensure_payload_within_limit(
     line_number: SourceLineNumber,
-    len: usize,
+    attempted_len: PayloadByteCount,
     limit: PayloadByteLimit,
 ) -> Result<(), ParseError> {
-    let attempted_len = PayloadByteCount::new(len);
     if attempted_len.get() <= limit.get() {
         return Ok(());
     }

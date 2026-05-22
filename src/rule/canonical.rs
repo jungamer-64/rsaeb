@@ -1,6 +1,8 @@
 use alloc::vec::Vec;
 
-use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
+use crate::allocation::{
+    AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
+};
 use crate::bytes::Payload;
 use crate::syntax::SyntaxToken;
 
@@ -16,7 +18,7 @@ pub(crate) fn canonical_source(rule: &Rule) -> Result<Vec<u8>, AllocationError> 
     let mut output = Vec::new();
     try_reserve_total_exact(
         &mut output,
-        canonical_source_len(rule)?,
+        RequestedCapacity::new(canonical_source_len(rule)?),
         AllocationContext::CanonicalSource,
     )?;
 

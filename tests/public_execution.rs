@@ -2,7 +2,7 @@
 
 mod support;
 
-use rsaeb::error::{LimitError, RunError, StateLimitContext};
+use rsaeb::error::{LimitError, StateLimitContext};
 use rsaeb::execution::{
     AppliedStep, ReturnedRun, RunSession, RunStepError, StableRun, StepTransition,
 };
@@ -357,9 +357,13 @@ fn execution_step_error_can_retry_with_relaxed_limits() -> TestResult {
     let execution = program.start_run(input, limits)?;
 
     let error = expect_step_error(execution.step())?;
+    ensure_eq!(
+        runtime_view_bytes(error.state())?.as_slice(),
+        b"a".as_slice(),
+    )?;
     let execution = error
-        .into_session()
-        .with_limits(limits.with_return_byte_limit(ReturnByteLimit::new(2)))?;
+        .retry_with_limits(limits.with_return_byte_limit(ReturnByteLimit::new(2)))
+        .map_err(|error| TestFailure::from(error.into_error()))?;
 
     match expect_step_transition(execution.step())? {
         StepTransition::Returned(returned) => {
@@ -376,14 +380,14 @@ fn execution_step_error_can_retry_with_relaxed_limits() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if replacement limits accept already-invalid running
-/// execution state.
+/// Returns `TestFailure` if error-owned recovery accepts limits that do not
+/// fit the preserved uncommitted execution state.
 #[test]
 fn execution_rejects_replacement_limits_that_do_not_fit_current_progress() -> TestResult {
     let program = parse_program("a=b\nb=c")?;
     let input = runtime_input(b"a")?;
     let limits = RunLimits::new(
-        StepLimit::new(10),
+        StepLimit::new(1),
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
@@ -395,28 +399,42 @@ fn execution_rejects_replacement_limits_that_do_not_fit_current_progress() -> Te
             return Err(TestFailure::message("expected applied execution"));
         }
     };
+    let error = expect_step_error(running.step())?;
+    ensure_eq!(error.completed_steps().get(), 1)?;
+    let retry_error = match error.retry_with_limits(limits.with_step_limit(StepLimit::new(0))) {
+        Ok(_) => return Err(TestFailure::message("expected retry limit error")),
+        Err(error) => error.into_error(),
+    };
     ensure_matches(
         matches!(
-            running.with_limits(limits.with_step_limit(StepLimit::new(0))),
-            Err(RunError::Limit(LimitError::Step {
+            retry_error,
+            rsaeb::error::RunError::Limit(LimitError::Step {
                 completed_steps,
                 ..
-            })) if completed_steps.get() == 1
+            }) if completed_steps.get() == 1
         ),
         "expected completed-step replacement limit error",
     )?;
 
-    let execution = program.start_run(runtime_input(b"a")?, limits)?;
+    let execution = program.start_run(
+        runtime_input(b"a")?,
+        limits.with_step_limit(StepLimit::new(0)),
+    )?;
+    let error = expect_step_error(execution.step())?;
+    let retry_error = match error
+        .retry_with_limits(limits.with_state_byte_limit(RuntimeStateByteLimit::new(0)))
+    {
+        Ok(_) => return Err(TestFailure::message("expected retry state limit error")),
+        Err(error) => error.into_error(),
+    };
     ensure_matches(
         matches!(
-            execution.with_limits(
-                limits.with_state_byte_limit(RuntimeStateByteLimit::new(0))
-            ),
-            Err(RunError::Limit(LimitError::State {
+            retry_error,
+            rsaeb::error::RunError::Limit(LimitError::State {
                 context: StateLimitContext::CurrentState,
                 attempted_len,
                 ..
-            })) if attempted_len.get() == 1
+            }) if attempted_len.get() == 1
         ),
         "expected current-state replacement limit error",
     )

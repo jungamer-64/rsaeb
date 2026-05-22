@@ -47,7 +47,9 @@
 
 use alloc::vec::Vec;
 
-use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
+use crate::allocation::{
+    AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
+};
 use crate::bytes::{
     ReturnOutputByteCount, RuntimeByte, RuntimeStateByteCount, TraceSnapshotByteCount,
 };
@@ -98,7 +100,11 @@ impl<'run> RuntimeStateView<'run> {
         context: AllocationContext,
     ) -> Result<Vec<u8>, AllocationError> {
         let mut output = Vec::new();
-        try_reserve_total_exact(&mut output, self.bytes.len(), context)?;
+        try_reserve_total_exact(
+            &mut output,
+            RequestedCapacity::new(self.bytes.len()),
+            context,
+        )?;
         for byte in self.materialized_bytes() {
             try_push(&mut output, byte, context)?;
         }
@@ -111,9 +117,9 @@ impl<'run> RuntimeStateView<'run> {
     ///
     /// Returns `AllocationError` if the output buffer cannot be allocated.
     pub fn materialize(self) -> Result<RuntimeStateSnapshot, AllocationError> {
-        Ok(RuntimeStateSnapshot::from_vec(self.to_vec_with_context(
-            AllocationContext::RuntimeStateView,
-        )?))
+        Ok(RuntimeStateSnapshot::from_runtime_state_view(
+            self.to_vec_with_context(AllocationContext::RuntimeStateView)?,
+        ))
     }
 }
 
@@ -197,12 +203,12 @@ impl BorrowedTraceEffect<'_, '_> {
         ensure_trace_len(self.byte_count(), limit)?;
         match self {
             Self::Continue { state } => Ok(TraceSnapshotEffect::Continue {
-                state: RuntimeStateSnapshot::from_vec(
+                state: RuntimeStateSnapshot::from_trace_snapshot(
                     state.to_vec_with_context(AllocationContext::TraceSnapshot)?,
                 ),
             }),
             Self::Return { output } => Ok(TraceSnapshotEffect::Return {
-                output: ReturnOutput::from_vec(
+                output: ReturnOutput::from_trace_snapshot(
                     output.to_vec_with_context(AllocationContext::TraceSnapshot)?,
                 ),
             }),
@@ -296,7 +302,7 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
                     limit,
                 )?;
                 Ok(TraceSnapshotEvent::Initial {
-                    state: RuntimeStateSnapshot::from_vec(
+                    state: RuntimeStateSnapshot::from_trace_snapshot(
                         state.to_vec_with_context(AllocationContext::TraceSnapshot)?,
                     ),
                 })

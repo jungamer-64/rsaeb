@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::allocation::{AllocationContext, try_push, try_reserve_total_exact};
+use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeInputByteCount, RuntimeStateByteCount};
 use crate::error::{RunError, RuntimeInputError};
 use crate::program::RuntimeInputByteLimit;
@@ -35,6 +35,43 @@ impl<'input> RuntimeInputSource<'input> {
     #[must_use]
     pub const fn is_empty(self) -> bool {
         self.bytes.is_empty()
+    }
+}
+
+struct ValidatedRuntimeInputSource<'input> {
+    source: RuntimeInputSource<'input>,
+    byte_count: RuntimeInputByteCount,
+}
+
+impl<'input> ValidatedRuntimeInputSource<'input> {
+    /// Validates raw host bytes before owned runtime-input allocation starts.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RuntimeInputError` if the input exceeds `limit`, if any input
+    /// byte is non-ASCII, or if its one-based column cannot be represented.
+    fn new(
+        source: RuntimeInputSource<'input>,
+        limit: RuntimeInputByteLimit,
+    ) -> Result<Self, RuntimeInputError> {
+        let byte_count = RuntimeInputByteCount::new(source.as_bytes().len());
+        if byte_count.get() > limit.get() {
+            return Err(RuntimeInputError::limit(limit, byte_count));
+        }
+
+        for (zero_based_column, byte) in source.as_bytes().iter().copied().enumerate() {
+            RuntimeByte::validate_input_boundary(byte, zero_based_column)?;
+        }
+
+        Ok(Self { source, byte_count })
+    }
+
+    const fn bytes(&self) -> &'input [u8] {
+        self.source.as_bytes()
+    }
+
+    const fn byte_count(&self) -> RuntimeInputByteCount {
+        self.byte_count
     }
 }
 
@@ -86,23 +123,19 @@ impl RuntimeInput {
         input: RuntimeInputSource<'_>,
         limit: RuntimeInputByteLimit,
     ) -> Result<Self, RuntimeInputError> {
-        let input = input.as_bytes();
-        let byte_count = RuntimeInputByteCount::new(input.len());
-        if byte_count.get() > limit.get() {
-            return Err(RuntimeInputError::limit(limit, byte_count));
-        }
+        let input = ValidatedRuntimeInputSource::new(input, limit)?;
 
         let mut bytes = Vec::new();
         try_reserve_total_exact(
             &mut bytes,
-            input.len(),
+            RequestedCapacity::new(input.byte_count().get()),
             AllocationContext::RuntimeInputValidation,
         )?;
 
-        for (zero_based_column, byte) in input.iter().copied().enumerate() {
+        for byte in input.bytes().iter().copied() {
             try_push(
                 &mut bytes,
-                RuntimeByte::validate_input(byte, zero_based_column)?,
+                RuntimeByte::from_validated_input(byte),
                 AllocationContext::RuntimeInputValidation,
             )?;
         }

@@ -1,6 +1,8 @@
 use alloc::vec::Vec;
 
-use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
+use crate::allocation::{
+    AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
+};
 use crate::error::{ParseError, ParseErrorKind, PayloadKind};
 use crate::source::SourceLineNumber;
 
@@ -53,8 +55,12 @@ impl Payload {
         }
 
         let mut bytes = Vec::new();
-        try_reserve_total_exact(&mut bytes, input.len(), AllocationContext::ProgramPayload)
-            .map_err(|error| ParseError::at_line(line_number, ParseErrorKind::Allocation(error)))?;
+        try_reserve_total_exact(
+            &mut bytes,
+            RequestedCapacity::new(input.len()),
+            AllocationContext::ProgramPayload,
+        )
+        .map_err(|error| ParseError::at_line(line_number, ParseErrorKind::Allocation(error)))?;
 
         for byte in input.iter().copied() {
             let parsed = ProgramByte::parse(byte, line_number, payload_kind)?;
@@ -120,7 +126,7 @@ impl Payload {
         context: AllocationContext,
     ) -> Result<Vec<u8>, AllocationError> {
         let mut output = Vec::new();
-        try_reserve_total_exact(&mut output, self.len(), context)?;
+        try_reserve_total_exact(&mut output, RequestedCapacity::new(self.len()), context)?;
         self.push_bytes_to(&mut output, context)?;
         Ok(output)
     }

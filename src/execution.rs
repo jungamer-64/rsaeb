@@ -93,8 +93,8 @@ pub struct ReturnedRun<'program> {
 /// Runtime failure that preserves the uncommitted run session.
 ///
 /// Step failures happen before the candidate rewrite is committed. The failed
-/// [`RunSession`] is preserved by value so hosts can inspect or discard the
-/// uncommitted execution explicitly.
+/// session stays owned by this error, so recovery can only happen through
+/// explicit error-owned methods.
 pub struct RunStepError<'program> {
     error: RunError,
     session: RunSession<'program>,
@@ -157,7 +157,8 @@ impl core::fmt::Debug for RunStepError<'_> {
         formatter
             .debug_struct("RunStepError")
             .field("error", &self.error())
-            .field("session", &self.session())
+            .field("completed_steps", &self.completed_steps())
+            .field("state", &self.state())
             .finish()
     }
 }
@@ -193,6 +194,18 @@ impl<'program> RunCore<'program> {
 
     fn state(&self) -> RuntimeStateView<'_> {
         self.state.view()
+    }
+
+    /// Replaces runtime limits while preserving the uncommitted core.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if completed steps or the current runtime state do
+    /// not fit the replacement limits.
+    fn replace_limits(&mut self, limits: RunLimits) -> Result<(), RunError> {
+        let state_len = self.state.byte_count();
+        self.budget = self.budget.with_limits(limits, state_len)?;
+        Ok(())
     }
 
     /// Materializes a stable terminal result.
@@ -232,6 +245,23 @@ impl<'program> RunSession<'program> {
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
         self.core.state()
+    }
+
+    /// Replaces limits on an error-owned run session.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunStepError` if completed steps or the current runtime state
+    /// do not fit the replacement limits.
+    #[expect(
+        clippy::result_large_err,
+        reason = "RunStepError preserves the uncommitted run session by value without allocating on the error path"
+    )]
+    fn retry_with_limits(mut self, limits: RunLimits) -> Result<Self, RunStepError<'program>> {
+        match self.core.replace_limits(limits) {
+            Ok(()) => Ok(self),
+            Err(error) => Err(RunStepError::new(error, self)),
+        }
     }
 
     /// Advances this run by exactly one matching rule when possible.
@@ -478,6 +508,36 @@ impl<'program> RunStepError<'program> {
     #[must_use]
     pub const fn error(&self) -> &RunError {
         &self.error
+    }
+
+    /// Number of rewrite steps that completed before the failed step attempt.
+    #[must_use]
+    pub const fn completed_steps(&self) -> StepCount {
+        self.session.completed_steps()
+    }
+
+    /// Borrow the uncommitted runtime state preserved by this error.
+    #[must_use]
+    pub fn state(&self) -> RuntimeStateView<'_> {
+        self.session.state()
+    }
+
+    /// Recover the uncommitted run with replacement runtime limits.
+    ///
+    /// This is the only public path that can resume a failed step. It consumes
+    /// the error value, validates the replacement limits against the preserved
+    /// state, and returns a runnable session only if those limits fit.
+    ///
+    /// # Errors
+    ///
+    /// Returns another `RunStepError` if the replacement limits do not fit the
+    /// uncommitted session's completed step count or current state.
+    #[expect(
+        clippy::result_large_err,
+        reason = "RunStepError preserves the uncommitted run session by value without allocating on the error path"
+    )]
+    pub fn retry_with_limits(self, limits: RunLimits) -> Result<RunSession<'program>, Self> {
+        self.session.retry_with_limits(limits)
     }
 
     /// Discard the uncommitted run session and return the runtime error.

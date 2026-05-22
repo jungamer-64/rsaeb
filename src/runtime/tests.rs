@@ -96,15 +96,12 @@ fn expect_step_transition<'program>(
 fn once_rule_failure_does_not_consume_before_step_commit() -> TestResult {
     let program = parse_program("(once)a=(return)ok")?;
     let input = runtime_input(b"a")?;
-    let runtime = RunSession::new(
-        &program,
-        input,
-        RunLimits::new(
-            StepLimit::new(1),
-            DEFAULT_MAX_STATE_LEN,
-            ReturnByteLimit::new(1),
-        ),
-    )?;
+    let limits = RunLimits::new(
+        StepLimit::new(1),
+        DEFAULT_MAX_STATE_LEN,
+        ReturnByteLimit::new(1),
+    );
+    let runtime = RunSession::new(&program, input, limits)?;
     let error = expect_step_error(runtime.step())?;
     ensure_eq!(
         error.error(),
@@ -114,7 +111,9 @@ fn once_rule_failure_does_not_consume_before_step_commit() -> TestResult {
         }),
     )?;
 
-    let runtime = error.into_session();
+    let runtime = error
+        .retry_with_limits(limits)
+        .map_err(|error| TestFailure::from(error.into_error()))?;
     let repeated_error = expect_step_error(runtime.step())?;
     ensure_eq!(
         repeated_error.into_error(),
@@ -184,13 +183,19 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
         ),
     )?;
     let error = expect_step_error(would_match.step())?;
-    ensure_eq!(error.session().completed_steps(), StepCount::ZERO)?;
+    ensure_eq!(error.completed_steps(), StepCount::ZERO)?;
     ensure_eq!(
-        runtime_view_bytes(error.session().state()).as_slice(),
+        runtime_view_bytes(error.state()).as_slice(),
         b"a".as_slice(),
     )?;
 
-    let runtime = error.into_session();
+    let runtime = error
+        .retry_with_limits(RunLimits::new(
+            StepLimit::new(0),
+            DEFAULT_MAX_STATE_LEN,
+            DEFAULT_MAX_RETURN_LEN,
+        ))
+        .map_err(|error| TestFailure::from(error.into_error()))?;
     let repeated_error = expect_step_limit(expect_step_error(runtime.step())?.into_error())?;
     ensure_eq!(
         repeated_error,
@@ -224,12 +229,14 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
             attempted_len: RuntimeStateByteCount::new(3),
         }),
     )?;
-    ensure_eq!(state_error.session().completed_steps(), StepCount::ZERO)?;
+    ensure_eq!(state_error.completed_steps(), StepCount::ZERO)?;
     ensure_eq!(
-        runtime_view_bytes(state_error.session().state()).as_slice(),
+        runtime_view_bytes(state_error.state()).as_slice(),
         b"aa".as_slice(),
     )?;
-    let runtime = state_error.into_session();
+    let runtime = state_error
+        .retry_with_limits(state_limits)
+        .map_err(|error| TestFailure::from(error.into_error()))?;
     let state_error = expect_step_error(runtime.step())?;
     ensure_eq!(
         state_error.into_error(),
@@ -256,12 +263,14 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
             attempted_len: ReturnOutputByteCount::new(2),
         }),
     )?;
-    ensure_eq!(return_error.session().completed_steps(), StepCount::ZERO)?;
+    ensure_eq!(return_error.completed_steps(), StepCount::ZERO)?;
     ensure_eq!(
-        runtime_view_bytes(return_error.session().state()).as_slice(),
+        runtime_view_bytes(return_error.state()).as_slice(),
         b"a".as_slice(),
     )?;
-    let runtime = return_error.into_session();
+    let runtime = return_error
+        .retry_with_limits(return_limits)
+        .map_err(|error| TestFailure::from(error.into_error()))?;
     let return_error = expect_step_error(runtime.step())?;
     ensure_eq!(
         return_error.into_error(),

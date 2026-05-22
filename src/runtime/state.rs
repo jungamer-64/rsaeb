@@ -1,10 +1,9 @@
-use alloc::vec::Vec;
-use core::ops::Range;
-
 use super::budget::RuntimeBudgetState;
 use super::input::InitialStateBytes;
 use super::rewrite::{PreparedRewrite, RewriteRequest, RewriteScratch};
-use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
+use crate::allocation::{
+    AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
+};
 use crate::bytes::{
     NonEmptyPayloadNeedle, Payload, PayloadByteCount, PayloadNeedle, RuntimeByte,
     RuntimeStateByteCount,
@@ -12,6 +11,7 @@ use crate::bytes::{
 use crate::error::{RunError, StateSizeError};
 use crate::program::RuntimeStateSnapshot;
 use crate::trace::RuntimeStateView;
+use alloc::vec::Vec;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct State {
@@ -76,17 +76,15 @@ impl State {
                 let last_start =
                     StateIndex::ending_match_start(self.byte_count(), needle.byte_count())?;
 
-                (0..=last_start.get())
+                StateSearchRange::from_start_to(last_start)
                     .filter(|&position| {
                         self.bytes
-                            .get(position)
+                            .get(position.get())
                             .copied()
                             .and_then(RuntimeByte::program_byte)
                             == Some(needle.first_byte())
                     })
-                    .find_map(|position| {
-                        self.matches_payload_at(StateIndex::from_zero_based(position), needle)
-                    })
+                    .find_map(|position| self.matches_payload_at(position, needle))
             }
         }
     }
@@ -98,11 +96,8 @@ impl State {
     ) -> Option<MatchedStateSpan> {
         let state_match =
             MatchedStateSpan::at_position(position, needle.byte_count(), self.byte_count())?;
-        let window = state_match.matched_slice(&self.bytes)?;
-
-        window
-            .iter()
-            .copied()
+        state_match
+            .matched_bytes(&self.bytes)
             .zip(needle.program_bytes().iter().copied())
             .all(|(actual, expected)| actual.program_byte() == Some(expected))
             .then_some(state_match)
@@ -179,7 +174,7 @@ impl State {
 
         budget.ensure_rewrite_state_len(capacity)?;
 
-        output.clear_and_reserve(capacity.get())?;
+        output.clear_and_reserve(capacity)?;
         Ok(())
     }
 
@@ -216,7 +211,7 @@ impl State {
     /// Returns `AllocationError` if the output buffer cannot be allocated.
     fn materialize(&self, context: AllocationContext) -> Result<Vec<u8>, AllocationError> {
         let mut output = Vec::new();
-        try_reserve_total_exact(&mut output, self.len(), context)?;
+        try_reserve_total_exact(&mut output, RequestedCapacity::new(self.len()), context)?;
         for byte in self.bytes.iter().copied() {
             try_push(&mut output, byte.materialize(), context)?;
         }
@@ -232,7 +227,7 @@ impl State {
         let bytes = self
             .materialize(AllocationContext::FinalOutput)
             .map_err(RunError::from)?;
-        Ok(RuntimeStateSnapshot::from_vec(bytes))
+        Ok(RuntimeStateSnapshot::from_execution_state(bytes))
     }
 }
 
@@ -263,8 +258,49 @@ impl StateIndex {
         Some(Self { zero_based })
     }
 
+    fn checked_next(self) -> Option<Self> {
+        let zero_based = self.zero_based.checked_add(1)?;
+        Some(Self { zero_based })
+    }
+
     const fn get(self) -> usize {
         self.zero_based
+    }
+}
+
+struct StateSearchRange {
+    next: StateIndex,
+    end: StateIndex,
+    finished: bool,
+}
+
+impl StateSearchRange {
+    const fn from_start_to(end: StateIndex) -> Self {
+        Self {
+            next: StateIndex::start(),
+            end,
+            finished: false,
+        }
+    }
+}
+
+impl Iterator for StateSearchRange {
+    type Item = StateIndex;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+
+        let current = self.next;
+        if current == self.end {
+            self.finished = true;
+        } else if let Some(next) = self.next.checked_next() {
+            self.next = next;
+        } else {
+            self.finished = true;
+        }
+        Some(current)
     }
 }
 
@@ -283,10 +319,6 @@ impl StateSpanRange {
         let end = start.checked_add_count(matched_len)?;
         (start.get() <= state_len.get() && end.get() <= state_len.get())
             .then_some(Self { start, end })
-    }
-
-    fn as_range(self) -> Range<usize> {
-        self.start.get()..self.end.get()
     }
 
     const fn prefix_end(self) -> usize {
@@ -333,8 +365,12 @@ impl MatchedStateSpan {
         self.matched_len
     }
 
-    fn matched_slice(self, bytes: &[RuntimeByte]) -> Option<&[RuntimeByte]> {
-        bytes.get(self.range.as_range())
+    fn matched_bytes(self, bytes: &[RuntimeByte]) -> impl Iterator<Item = RuntimeByte> + '_ {
+        bytes
+            .iter()
+            .copied()
+            .skip(self.range.prefix_end())
+            .take(self.matched_len.get())
     }
 
     fn prefix_bytes(self, bytes: &[RuntimeByte]) -> impl Iterator<Item = RuntimeByte> + '_ {

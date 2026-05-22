@@ -35,7 +35,7 @@ enum PreparedAction<'program> {
 ///
 /// Returns `RunError` if return-output allocation fails.
 pub(crate) fn materialize_return_output(output: PayloadView<'_>) -> Result<ReturnOutput, RunError> {
-    Ok(ReturnOutput::from_vec(
+    Ok(ReturnOutput::from_return_payload(
         output.to_vec_with_context(AllocationContext::ReturnOutput)?,
     ))
 }

@@ -88,13 +88,11 @@ impl AllocationError {
 
     pub(crate) const fn reservation_failed(
         context: AllocationContext,
-        requested_capacity: usize,
+        requested_capacity: RequestedCapacity,
     ) -> Self {
         Self {
             context,
-            kind: AllocationErrorKind::ReservationFailed {
-                requested_capacity: RequestedCapacity::new(requested_capacity),
-            },
+            kind: AllocationErrorKind::ReservationFailed { requested_capacity },
         }
     }
 
@@ -121,14 +119,15 @@ impl Error for AllocationError {}
 /// or if the allocator rejects the reservation.
 pub(crate) fn try_reserve_total_exact<T>(
     vec: &mut Vec<T>,
-    total_capacity: usize,
+    total_capacity: RequestedCapacity,
     context: AllocationContext,
 ) -> Result<(), AllocationError> {
-    if vec.capacity() >= total_capacity {
+    if vec.capacity() >= total_capacity.get() {
         return Ok(());
     }
 
     let additional = total_capacity
+        .get()
         .checked_sub(vec.len())
         .ok_or_else(|| AllocationError::capacity_overflow(context))?;
 
@@ -153,8 +152,10 @@ pub(crate) fn try_push<T>(
             .checked_add(1)
             .ok_or_else(|| AllocationError::capacity_overflow(context))?;
         let doubled_capacity = vec.capacity().checked_mul(2).unwrap_or(minimum_capacity);
-        let requested_capacity =
-            core::cmp::max(minimum_capacity, core::cmp::max(4, doubled_capacity));
+        let requested_capacity = RequestedCapacity::new(core::cmp::max(
+            minimum_capacity,
+            core::cmp::max(4, doubled_capacity),
+        ));
         try_reserve_total_exact(vec, requested_capacity, context)?;
     }
 
@@ -174,7 +175,10 @@ mod tests {
     /// expected public value.
     #[test]
     fn allocation_contexts_are_publicly_inspectable() -> TestResult {
-        let error = AllocationError::reservation_failed(AllocationContext::TraceSnapshot, 123);
+        let error = AllocationError::reservation_failed(
+            AllocationContext::TraceSnapshot,
+            RequestedCapacity::new(123),
+        );
         ensure_eq!(error.context(), AllocationContext::TraceSnapshot)?;
         ensure_eq!(
             error.kind(),
@@ -187,8 +191,10 @@ mod tests {
         ensure_eq!(error.context(), AllocationContext::CanonicalSource)?;
         ensure_eq!(error.kind(), AllocationErrorKind::CapacityOverflow)?;
 
-        let error =
-            AllocationError::reservation_failed(AllocationContext::RuntimeInputValidation, 4);
+        let error = AllocationError::reservation_failed(
+            AllocationContext::RuntimeInputValidation,
+            RequestedCapacity::new(4),
+        );
         ensure_eq!(error.context(), AllocationContext::RuntimeInputValidation)?;
 
         Ok(())
@@ -200,22 +206,30 @@ mod tests {
     /// the expected domain wording.
     #[test]
     fn allocation_display_names_the_failed_context_and_capacity() -> TestResult {
-        let error = AllocationError::reservation_failed(AllocationContext::TraceSnapshot, 123);
+        let error = AllocationError::reservation_failed(
+            AllocationContext::TraceSnapshot,
+            RequestedCapacity::new(123),
+        );
 
         ensure_eq!(
             error.to_string(),
-            "allocation reservation failure while building trace snapshot; requested capacity: 123",
+            "allocation reservation failure while building trace snapshot; requested capacity: 123"
         )?;
 
-        let error = AllocationError::reservation_failed(AllocationContext::RuntimeStateView, 456);
+        let error = AllocationError::reservation_failed(
+            AllocationContext::RuntimeStateView,
+            RequestedCapacity::new(456),
+        );
 
         ensure_eq!(
             error.to_string(),
             "allocation reservation failure while building runtime state view; requested capacity: 456",
         )?;
 
-        let error =
-            AllocationError::reservation_failed(AllocationContext::RuntimeInputValidation, 789);
+        let error = AllocationError::reservation_failed(
+            AllocationContext::RuntimeInputValidation,
+            RequestedCapacity::new(789),
+        );
 
         ensure_eq!(
             error.to_string(),

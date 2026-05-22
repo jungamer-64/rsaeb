@@ -1,6 +1,8 @@
 use alloc::vec::Vec;
 
-use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
+use crate::allocation::{
+    AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
+};
 use crate::rule::{OnceRuleCount, OnceRuleSlot, Rule, RuleRepeatState};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -55,7 +57,7 @@ impl OnceStateSet {
         let mut states = Vec::new();
         try_reserve_total_exact(
             &mut states,
-            once_rule_count.get(),
+            RequestedCapacity::new(once_rule_count.get()),
             AllocationContext::RuntimeOnceRuleState,
         )?;
 
@@ -70,6 +72,25 @@ impl OnceStateSet {
         Ok(Self { states })
     }
 
+    pub(crate) fn rule_can_commit(&self, rule: &Rule) -> bool {
+        match rule.repeat_state() {
+            RuleRepeatState::Always => true,
+            RuleRepeatState::Once(slot) => self
+                .states
+                .get(slot.zero_based())
+                .is_some_and(|state| state.is_fresh()),
+        }
+    }
+
+    pub(crate) fn matched_commit_for_rule(&mut self, rule: &Rule) -> Option<MatchedRuleCommit<'_>> {
+        match rule.repeat_state() {
+            RuleRepeatState::Always => Some(MatchedRuleCommit::Always),
+            RuleRepeatState::Once(slot) => {
+                self.valid_once_commit(slot).map(MatchedRuleCommit::Once)
+            }
+        }
+    }
+
     fn valid_once_commit(&mut self, slot: OnceRuleSlot) -> Option<ValidOnceCommit<'_>> {
         self.states
             .get_mut(slot.zero_based())
@@ -79,7 +100,7 @@ impl OnceStateSet {
 }
 
 impl OnceRuleState {
-    const fn is_fresh(&self) -> bool {
+    const fn is_fresh(self) -> bool {
         matches!(self, Self::Fresh)
     }
 }

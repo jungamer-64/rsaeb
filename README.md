@@ -71,8 +71,9 @@ lives under `rsaeb::execution`: only `RunSession` can step, while
 post-step states. `(return)` is terminal, not an ordinary continuation step.
 Running, applied, and stable executions expose borrowed `RuntimeStateView`
 values for observation. A failed step returns `RunStepError`, preserving
-the uncommitted `RunSession` so a host can inspect it, replace limits with
-`RunSession::with_limits`, or discard it explicitly.
+the uncommitted execution so a host can inspect its state, retry with
+replacement limits through `RunStepError::retry_with_limits`, or discard it
+explicitly.
 
 The docs.rs crate page contains a complete doctested stepwise example.
 

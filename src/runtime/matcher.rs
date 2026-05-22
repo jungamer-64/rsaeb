@@ -1,4 +1,4 @@
-use super::once::{AvailableRuleCommit, MatchedRuleCommit, OnceStateSet};
+use super::once::{MatchedRuleCommit, OnceStateSet};
 use super::state::{MatchedStateSpan, State};
 use crate::inspect::{RulePosition, RulePositions};
 use crate::rule::{Rule, RuleAnchorSyntax};
@@ -21,7 +21,6 @@ pub(crate) struct MatchedRule<'program, 'once> {
 struct MatchedRuleCandidate<'program> {
     position: RulePosition,
     rule: &'program Rule,
-    commit: AvailableRuleCommit,
     state_match: MatchedStateSpan,
 }
 
@@ -34,7 +33,7 @@ pub(crate) fn find_next_match<'program, 'once>(
         return RuleSearch::Stable;
     };
 
-    let Some(commit) = once_states.commit_token(candidate.commit) else {
+    let Some(commit) = once_states.matched_commit_for_rule(candidate.rule) else {
         return RuleSearch::Stable;
     };
 
@@ -52,18 +51,17 @@ fn find_next_match_candidate<'program>(
     state: &State,
 ) -> Option<MatchedRuleCandidate<'program>> {
     for (rule, position) in rules.iter().zip(RulePositions::new()) {
-        let Some(available_commit) = once_states.available_commit_for_rule(rule) else {
-            continue;
-        };
-
         let Some(state_match) = find_match(state, rule) else {
             continue;
         };
 
+        if !once_states.rule_can_commit(rule) {
+            continue;
+        }
+
         return Some(MatchedRuleCandidate {
             position,
             rule,
-            commit: available_commit,
             state_match,
         });
     }
