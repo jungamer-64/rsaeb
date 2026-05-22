@@ -350,5 +350,5 @@ pub mod trace;
 pub use program::{
     ParseLimits, Program, ReturnOutput, RunLimits, RunOutcome, RunResult, RuntimeStateSnapshot,
 };
-pub use runtime::{RuntimeInput, RuntimeInputBytes};
+pub use runtime::{RuntimeInput, RuntimeInputBytes, RuntimeInputSource};
 pub use source::ProgramSource;

@@ -8,6 +8,36 @@ use crate::program::RuntimeInputByteLimit;
 
 use super::budget::RuntimeBudgetState;
 
+/// Borrowed runtime input source at the validation boundary.
+///
+/// Constructing this value labels host bytes as runtime input bytes. It does
+/// not validate ASCII or classify bytes into the runtime domain; that ownership
+/// belongs to [`RuntimeInput::validate`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeInputSource<'input> {
+    bytes: &'input [u8],
+}
+
+impl<'input> RuntimeInputSource<'input> {
+    /// Labels raw host bytes as runtime input.
+    #[must_use]
+    pub const fn from_bytes(bytes: &'input [u8]) -> Self {
+        Self { bytes }
+    }
+
+    /// Borrows the original host bytes.
+    #[must_use]
+    pub const fn as_bytes(self) -> &'input [u8] {
+        self.bytes
+    }
+
+    /// Returns whether the source contains no bytes.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
 /// Runtime input after ASCII validation and byte-domain classification.
 ///
 /// Runtime input is a separate byte domain from program source. It may contain
@@ -51,7 +81,7 @@ impl fmt::Debug for RuntimeInputBytesDebug<'_> {
 }
 
 impl RuntimeInput {
-    /// Validates raw bytes as runtime input.
+    /// Validates a runtime input source as owned runtime input.
     ///
     /// Runtime input accepts all ASCII bytes, including bytes that would be
     /// reserved syntax in program source. Non-ASCII bytes are rejected with a
@@ -62,7 +92,11 @@ impl RuntimeInput {
     /// Returns `RuntimeInputError` if the input exceeds `limits`, if any input
     /// byte is non-ASCII, if its one-based column cannot be represented, or if
     /// owned storage cannot be allocated.
-    pub fn validate(input: &[u8], limit: RuntimeInputByteLimit) -> Result<Self, RuntimeInputError> {
+    pub fn validate(
+        input: RuntimeInputSource<'_>,
+        limit: RuntimeInputByteLimit,
+    ) -> Result<Self, RuntimeInputError> {
+        let input = input.as_bytes();
         let byte_count = RuntimeInputByteCount::new(input.len());
         if byte_count.get() > limit.get() {
             return Err(RuntimeInputError::limit(limit, byte_count));
