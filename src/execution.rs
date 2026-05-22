@@ -1,24 +1,32 @@
 //! Public stepwise run typestates.
 //!
-//! [`Program::start_run`](crate::Program::start_run) returns a [`RunSession`].
-//! Calling [`RunSession::step`] consumes that value and returns a
-//! [`StepTransition`], so callers must handle the next state explicitly:
-//! continue with [`AppliedStep::into_session`], finish a [`StableRun`], or
-//! finish a [`ReturnedRun`].
+//! [`Program::start_run`](crate::Program::start_run) consumes validated
+//! [`RuntimeInput`] and returns a [`RunSession`]. Calling
+//! [`RunSession::step`] consumes that value and returns a [`StepTransition`],
+//! so callers must handle the next state explicitly: continue with
+//! [`AppliedStep::into_session`], finish a [`StableRun`], or finish a
+//! [`ReturnedRun`].
 //!
-//! The mutable runtime engine lives under the private runtime module. These
-//! public values are typed host-facing wrappers around that engine; they move
-//! the existing session state without allocating snapshots or heap indirection.
+//! The run session is the mutable runtime engine. It owns the current state,
+//! rewrite scratch, budgets, and per-run `(once)` state directly, so there is
+//! no second private typestate layer and no borrowed input copy behind the
+//! public API.
 
-use crate::error::RunError;
+use crate::error::{RunError, TracedRunError};
 use crate::inspect::{PayloadView, RuleView};
 use crate::program::{Program, RunLimits, RunResult, StepCount};
+use crate::rule::Rule;
 use crate::runtime::RuntimeInput;
-use crate::runtime::session::{
-    RuntimeAppliedStep, RuntimeReturnedRun, RuntimeSession, RuntimeStableRun, RuntimeStep,
-    RuntimeStepError,
+use crate::runtime::action::{
+    AppliedRule, AppliedRuleEffect, apply_matched_rule, materialize_return_output,
 };
-use crate::trace::RuntimeStateView;
+use crate::runtime::budget::RuntimeBudgetState;
+use crate::runtime::input::InitialStateBytes;
+use crate::runtime::matcher::{RuleSearch, find_next_match};
+use crate::runtime::once::OnceStateSet;
+use crate::runtime::rewrite::RewriteScratch;
+use crate::runtime::state::State;
+use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
 
 /// Stateful run session that can still apply rules.
 ///
@@ -26,7 +34,16 @@ use crate::trace::RuntimeStateView;
 /// returned runs are represented by separate terminal types, so callers cannot
 /// step after completion.
 pub struct RunSession<'program> {
-    pub(crate) session: RuntimeSession<'program>,
+    core: RunCore<'program>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct RunCore<'program> {
+    state: State,
+    scratch: RewriteScratch,
+    budget: RuntimeBudgetState,
+    rules: &'program [Rule],
+    once_states: OnceStateSet,
 }
 
 /// Result of advancing a run session once.
@@ -48,7 +65,9 @@ pub enum StepTransition<'program> {
 /// This value lets a caller inspect the applied rule and post-step state before
 /// deciding whether to continue the run.
 pub struct AppliedStep<'program> {
-    step: RuntimeAppliedStep<'program>,
+    step: StepCount,
+    rule: RuleView<'program>,
+    session: RunSession<'program>,
 }
 
 /// Terminal run state reached by no matching rule.
@@ -56,7 +75,8 @@ pub struct AppliedStep<'program> {
 /// Stable runs still own the final runtime state until the caller either
 /// borrows it or materializes it with [`StableRun::into_result`].
 pub struct StableRun<'program> {
-    run: RuntimeStableRun<'program>,
+    steps: StepCount,
+    core: RunCore<'program>,
 }
 
 /// Terminal run state reached by `(return)`.
@@ -65,7 +85,9 @@ pub struct StableRun<'program> {
 /// terminal [`RunResult`] through [`ReturnedRun::into_result`].
 #[derive(Clone, Copy)]
 pub struct ReturnedRun<'program> {
-    run: RuntimeReturnedRun<'program>,
+    step: StepCount,
+    rule: RuleView<'program>,
+    output: PayloadView<'program>,
 }
 
 /// Runtime failure that preserves the uncommitted run session.
@@ -140,33 +162,76 @@ impl core::fmt::Debug for RunStepError<'_> {
     }
 }
 
+impl<'program> RunCore<'program> {
+    /// Builds the mutable runtime core for one execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if input exceeds runtime state limits or per-run
+    /// rule state allocation fails.
+    fn new(
+        program: &'program Program,
+        input: RuntimeInput,
+        limits: RunLimits,
+    ) -> Result<Self, RunError> {
+        let budget = RuntimeBudgetState::new(limits);
+        let input = InitialStateBytes::from_runtime_input(input, budget)?;
+        let state = State::from_input(input);
+        let once_states = OnceStateSet::new(program.once_slot_count())?;
+        Ok(Self {
+            state,
+            scratch: RewriteScratch::new(),
+            budget,
+            rules: program.rule_slice(),
+            once_states,
+        })
+    }
+
+    const fn completed_steps(&self) -> StepCount {
+        self.budget.completed_steps()
+    }
+
+    fn state(&self) -> RuntimeStateView<'_> {
+        self.state.view()
+    }
+
+    /// Materializes a stable terminal result.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if final state materialization cannot allocate.
+    fn into_stable_result(self, steps: StepCount) -> Result<RunResult, RunError> {
+        Ok(RunResult::stable(self.state.into_snapshot()?, steps))
+    }
+}
+
 impl<'program> RunSession<'program> {
     /// Starts a new run session for a parsed program and validated input.
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if runtime input materialization fails, state limits
-    /// reject the input, or per-run rule state allocation fails.
+    /// Returns `RunError` if the consumed runtime input exceeds this run's
+    /// state limits or if allocating per-run rule state fails.
     pub(crate) fn new(
         program: &'program Program,
-        input: &RuntimeInput,
+        input: RuntimeInput,
         limits: RunLimits,
     ) -> Result<Self, RunError> {
         Ok(Self {
-            session: RuntimeSession::new(program, input, limits)?,
+            core: RunCore::new(program, input, limits)?,
         })
     }
 
     /// Number of rewrite steps that have already completed in this run.
     #[must_use]
     pub const fn completed_steps(&self) -> StepCount {
-        self.session.completed_steps()
+        self.core.completed_steps()
     }
 
     /// Borrow the current runtime state.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
-        self.session.state()
+        self.core.state()
     }
 
     /// Replaces runtime limits for this uncommitted run.
@@ -175,10 +240,11 @@ impl<'program> RunSession<'program> {
     ///
     /// Returns `RunError` if the already-completed step count or the current
     /// runtime state does not fit the replacement limits.
-    pub fn with_limits(self, limits: RunLimits) -> Result<Self, RunError> {
-        Ok(Self {
-            session: self.session.with_limits(limits)?,
-        })
+    pub fn with_limits(mut self, limits: RunLimits) -> Result<Self, RunError> {
+        let state_len = self.core.state.byte_count();
+
+        self.core.budget = self.core.budget.with_limits(limits, state_len)?;
+        Ok(self)
     }
 
     /// Advances this run by exactly one matching rule when possible.
@@ -195,13 +261,36 @@ impl<'program> RunSession<'program> {
         clippy::result_large_err,
         reason = "RunStepError preserves the uncommitted run session by value without allocating on the error path"
     )]
-    pub fn step(self) -> Result<StepTransition<'program>, RunStepError<'program>> {
-        match self.session.step() {
-            Ok(RuntimeStep::Applied(step)) => Ok(StepTransition::Applied(AppliedStep { step })),
-            Ok(RuntimeStep::Stable(run)) => Ok(StepTransition::Stable(StableRun { run })),
-            Ok(RuntimeStep::Returned(run)) => Ok(StepTransition::Returned(ReturnedRun { run })),
-            Err(error) => Err(RunStepError::from_runtime(error)),
-        }
+    pub fn step(mut self) -> Result<StepTransition<'program>, RunStepError<'program>> {
+        let applied = {
+            let RunCore {
+                state,
+                scratch,
+                budget,
+                rules,
+                once_states,
+            } = &mut self.core;
+
+            let matched = match find_next_match(rules, once_states, state) {
+                RuleSearch::Matched(matched) => matched,
+                RuleSearch::Stable => {
+                    let steps = budget.completed_steps();
+                    return Ok(StepTransition::Stable(StableRun {
+                        steps,
+                        core: self.core,
+                    }));
+                }
+            };
+
+            apply_matched_rule(state, scratch, budget, matched)
+        };
+
+        let applied = match applied {
+            Ok(applied) => applied,
+            Err(error) => return Err(RunStepError::new(error, self)),
+        };
+
+        Ok(applied.into_transition(self))
     }
 
     /// Runs this session to completion.
@@ -210,8 +299,105 @@ impl<'program> RunSession<'program> {
     ///
     /// Returns `RunError` when applying a later matching rule would exceed the
     /// configured limits, allocation fails, or state-size arithmetic overflows.
-    pub fn finish(self) -> Result<RunResult, RunError> {
-        self.session.finish()
+    pub fn finish(mut self) -> Result<RunResult, RunError> {
+        loop {
+            match self.step() {
+                Ok(StepTransition::Applied(applied)) => {
+                    self = applied.into_session();
+                }
+                Ok(StepTransition::Stable(stable)) => {
+                    return stable.into_result();
+                }
+                Ok(StepTransition::Returned(returned)) => {
+                    return returned.into_result();
+                }
+                Err(error) => return Err(error.into_error()),
+            }
+        }
+    }
+
+    /// Runs to completion while emitting borrowed trace events.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TracedRunError::Trace` if the trace sink fails. Returns
+    /// `TracedRunError::Run` if runtime execution fails.
+    pub(crate) fn run_with_borrowed_trace<F, E>(
+        mut self,
+        mut trace: F,
+    ) -> Result<RunResult, TracedRunError<E>>
+    where
+        F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
+    {
+        trace(BorrowedTraceEvent::Initial {
+            state: self.state(),
+        })
+        .map_err(TracedRunError::Trace)?;
+
+        loop {
+            match self.step() {
+                Ok(StepTransition::Applied(applied)) => {
+                    Self::emit_step_trace(
+                        &mut trace,
+                        applied.step(),
+                        applied.rule(),
+                        BorrowedTraceEffect::Continue {
+                            state: applied.state(),
+                        },
+                    )?;
+                    self = applied.into_session();
+                }
+                Ok(StepTransition::Stable(stable)) => {
+                    return stable.into_result().map_err(TracedRunError::Run);
+                }
+                Ok(StepTransition::Returned(returned)) => {
+                    Self::emit_step_trace(
+                        &mut trace,
+                        returned.step(),
+                        returned.rule(),
+                        BorrowedTraceEffect::Return {
+                            output: returned.output(),
+                        },
+                    )?;
+                    return returned.into_result().map_err(TracedRunError::Run);
+                }
+                Err(error) => return Err(TracedRunError::Run(error.into_error())),
+            }
+        }
+    }
+
+    /// Emits one borrowed step trace event.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TracedRunError::Trace` if the trace sink rejects the event.
+    fn emit_step_trace<F, E>(
+        trace: &mut F,
+        step: StepCount,
+        rule: RuleView<'program>,
+        effect: BorrowedTraceEffect<'program, '_>,
+    ) -> Result<(), TracedRunError<E>>
+    where
+        F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
+    {
+        trace(BorrowedTraceEvent::Step { step, rule, effect }).map_err(TracedRunError::Trace)
+    }
+}
+
+impl<'program> AppliedRule<'program> {
+    fn into_transition(self, session: RunSession<'program>) -> StepTransition<'program> {
+        match self.effect {
+            AppliedRuleEffect::Continue => StepTransition::Applied(AppliedStep {
+                step: self.step,
+                rule: self.rule,
+                session,
+            }),
+            AppliedRuleEffect::Return(output) => StepTransition::Returned(ReturnedRun {
+                step: self.step,
+                rule: self.rule,
+                output,
+            }),
+        }
     }
 }
 
@@ -219,27 +405,25 @@ impl<'program> AppliedStep<'program> {
     /// One-based applied step count.
     #[must_use]
     pub const fn step(&self) -> StepCount {
-        self.step.step()
+        self.step
     }
 
     /// Structured view of the applied rule.
     #[must_use]
     pub const fn rule(&self) -> RuleView<'program> {
-        self.step.rule()
+        self.rule
     }
 
     /// Runtime state after the applied rewrite step.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
-        self.step.state()
+        self.session.state()
     }
 
     /// Continue running after observing this applied step.
     #[must_use]
     pub fn into_session(self) -> RunSession<'program> {
-        RunSession {
-            session: self.step.into_session(),
-        }
+        self.session
     }
 }
 
@@ -247,13 +431,13 @@ impl StableRun<'_> {
     /// Number of rewrite steps applied before reaching the stable state.
     #[must_use]
     pub const fn steps(&self) -> StepCount {
-        self.run.steps()
+        self.steps
     }
 
     /// Borrowed final runtime state.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
-        self.run.state()
+        self.core.state()
     }
 
     /// Materializes this stable run as a run result.
@@ -262,7 +446,7 @@ impl StableRun<'_> {
     ///
     /// Returns `RunError` if final state materialization cannot allocate.
     pub fn into_result(self) -> Result<RunResult, RunError> {
-        self.run.into_result()
+        self.core.into_stable_result(self.steps)
     }
 }
 
@@ -270,19 +454,19 @@ impl<'program> ReturnedRun<'program> {
     /// One-based applied step count for the return rule.
     #[must_use]
     pub const fn step(&self) -> StepCount {
-        self.run.step()
+        self.step
     }
 
     /// Structured view of the return rule.
     #[must_use]
     pub const fn rule(&self) -> RuleView<'program> {
-        self.run.rule()
+        self.rule
     }
 
     /// Borrowed return payload from the parsed program.
     #[must_use]
     pub const fn output(&self) -> PayloadView<'program> {
-        self.run.output()
+        self.output
     }
 
     /// Materializes this returned run as a run result.
@@ -291,17 +475,16 @@ impl<'program> ReturnedRun<'program> {
     ///
     /// Returns `RunError` if return output materialization cannot allocate.
     pub fn into_result(self) -> Result<RunResult, RunError> {
-        self.run.into_result()
+        Ok(RunResult::from_return(
+            materialize_return_output(self.output)?,
+            self.step,
+        ))
     }
 }
 
 impl<'program> RunStepError<'program> {
-    fn from_runtime(error: RuntimeStepError<'program>) -> Self {
-        let (error, session) = error.into_parts();
-        Self {
-            error,
-            session: RunSession { session },
-        }
+    fn new(error: RunError, session: RunSession<'program>) -> Self {
+        Self { error, session }
     }
 
     /// Runtime error that prevented the step from committing.

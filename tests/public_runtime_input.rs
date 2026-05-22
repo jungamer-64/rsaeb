@@ -24,22 +24,21 @@ fn expect_stable_bytes(result: &rsaeb::RunResult, expected: &[u8]) -> TestResult
 
 /// # Errors
 ///
-/// Returns `TestFailure` if reusable runtime input revalidates or loses owned
-/// typed bytes.
+/// Returns `TestFailure` if runtime input loses owned typed bytes before it is
+/// consumed by execution.
 #[test]
-fn runtime_input_owns_public_bytes_for_reuse() -> TestResult {
+fn runtime_input_moves_owned_bytes_into_execution() -> TestResult {
     let input = RuntimeInput::validate(
         RuntimeInputSource::from_bytes(b"a=()# "),
         DEFAULT_MAX_INPUT_LEN,
     )?;
 
-    ensure_eq!(input.materialize()?.as_slice(), b"a=()# ".as_slice())?;
     ensure_eq!(input.byte_count().get(), 6)?;
     ensure_matches(!input.is_empty(), "expected non-empty owned input")?;
 
     let program = parse_program("a=b")?;
     let result = program.run(
-        &input,
+        input,
         RunLimits::new(
             DEFAULT_MAX_STEPS,
             DEFAULT_MAX_STATE_LEN,
@@ -58,7 +57,7 @@ fn runtime_input_validates_ascii_boundary() -> TestResult {
     let input: Vec<u8> = (0x00..=0x7f).collect();
     let program = parse_program("# no executable rules")?;
     let result = program.run(
-        &RuntimeInput::validate(
+        RuntimeInput::validate(
             RuntimeInputSource::from_bytes(&input),
             DEFAULT_MAX_INPUT_LEN,
         )?,

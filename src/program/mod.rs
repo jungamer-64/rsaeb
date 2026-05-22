@@ -9,7 +9,6 @@ use crate::inspect::{OnceRuleCount, RuleCount, RulePositions, RuleView};
 use crate::parser::parse_rules_impl;
 use crate::rule::Rule;
 use crate::runtime::RuntimeInput;
-use crate::runtime::session::RuntimeSession;
 use crate::source::ProgramSource;
 
 pub(crate) use rule_set::RuleSet;
@@ -106,8 +105,8 @@ impl Program {
     /// Starts a stateful run session for this program.
     ///
     /// The input must already be validated as [`RuntimeInput`]. This function
-    /// materializes it into the mutable runtime-state byte domain under
-    /// `limits`.
+    /// consumes it and moves its typed bytes into the mutable runtime-state
+    /// domain under `limits`.
     ///
     /// The returned [`RunSession`] can be advanced one matching rule at a time.
     /// Use [`Program::run`] when the caller wants to run to completion in one
@@ -119,7 +118,7 @@ impl Program {
     /// limit or when allocating per-run execution state fails.
     pub fn start_run(
         &self,
-        input: &RuntimeInput,
+        input: RuntimeInput,
         limits: RunLimits,
     ) -> Result<RunSession<'_>, RunError> {
         RunSession::new(self, input, limits)
@@ -135,7 +134,7 @@ impl Program {
     /// Returns `RunError` when the input exceeds this run's state limit,
     /// allocation fails, state-size arithmetic overflows, or a configured
     /// `RunLimits` budget would be exceeded.
-    pub fn run(&self, input: &RuntimeInput, limits: RunLimits) -> Result<RunResult, RunError> {
-        RuntimeSession::new(self, input, limits)?.finish()
+    pub fn run(&self, input: RuntimeInput, limits: RunLimits) -> Result<RunResult, RunError> {
+        RunSession::new(self, input, limits)?.finish()
     }
 }

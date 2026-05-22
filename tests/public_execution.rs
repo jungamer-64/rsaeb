@@ -169,27 +169,27 @@ fn execution_rewrite_semantics_follow_public_contract() -> TestResult {
     );
 
     let program = parse_program("aa=x\na=y")?;
-    let result = program.run(&runtime_input(b"aaaa")?, limits)?;
+    let result = program.run(runtime_input(b"aaaa")?, limits)?;
     expect_stable_bytes(&result, b"xx")?;
 
     let program = parse_program("(start)a=x")?;
-    let result = program.run(&runtime_input(b"aba")?, limits)?;
+    let result = program.run(runtime_input(b"aba")?, limits)?;
     expect_stable_bytes(&result, b"xba")?;
 
     let program = parse_program("(end)a=x")?;
-    let result = program.run(&runtime_input(b"aba")?, limits)?;
+    let result = program.run(runtime_input(b"aba")?, limits)?;
     expect_stable_bytes(&result, b"abx")?;
 
     let program = parse_program("(once)a=b\na=c")?;
-    let result = program.run(&runtime_input(b"aa")?, limits)?;
+    let result = program.run(runtime_input(b"aa")?, limits)?;
     expect_stable_bytes(&result, b"bc")?;
 
     let program = parse_program("ab=x")?;
-    let result = program.run(&runtime_input(b"a=b")?, limits)?;
+    let result = program.run(runtime_input(b"a=b")?, limits)?;
     expect_stable_bytes(&result, b"a=b")?;
 
     let program = parse_program("a= b")?;
-    let result = program.run(&runtime_input(b"a bc")?, limits)?;
+    let result = program.run(runtime_input(b"a bc")?, limits)?;
     expect_stable_bytes(&result, b"b bc")
 }
 
@@ -206,7 +206,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
     );
     let program = parse_program("a=b\nb=c")?;
     let input = runtime_input(b"a")?;
-    let execution = program.start_run(&input, limits)?;
+    let execution = program.start_run(input, limits)?;
     ensure_eq!(execution.completed_steps().get(), 0)?;
 
     let execution = match expect_step_transition(execution.step())? {
@@ -274,7 +274,7 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
     );
     let program = parse_program("a=b")?;
     let input = runtime_input(b"a")?;
-    let execution = program.start_run(&input, limits)?;
+    let execution = program.start_run(input, limits)?;
 
     ensure_eq!(
         runtime_view_bytes(execution.state())?.as_slice(),
@@ -302,20 +302,19 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if repeated stepwise executions with the same runtime
-/// input diverge.
+/// Returns `TestFailure` if repeated stepwise executions from separately
+/// validated equivalent input diverge.
 #[test]
-fn execution_reuses_runtime_input_without_session_leakage() -> TestResult {
+fn execution_consumes_runtime_input_without_session_leakage() -> TestResult {
     let limits = RunLimits::new(
         StepLimit::new(10),
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
     let program = parse_program("(once)a=b\na=c")?;
-    let input = runtime_input(b"aa")?;
 
-    let first = program.start_run(&input, limits)?;
-    let second = program.start_run(&input, limits)?;
+    let first = program.start_run(runtime_input(b"aa")?, limits)?;
+    let second = program.start_run(runtime_input(b"aa")?, limits)?;
 
     ensure_eq!(
         finish_step_signatures(first)?,
@@ -338,11 +337,7 @@ fn execution_reuses_runtime_input_without_session_leakage() -> TestResult {
     )?;
     ensure_eq!(
         finish_step_signatures(second)?,
-        finish_step_signatures(program.start_run(&input, limits)?)?,
-    )?;
-    ensure_matches(
-        input.byte_count().get() == 2,
-        "expected reusable input size",
+        finish_step_signatures(program.start_run(runtime_input(b"aa")?, limits)?)?,
     )
 }
 
@@ -359,7 +354,7 @@ fn execution_step_error_can_retry_with_relaxed_limits() -> TestResult {
         DEFAULT_MAX_STATE_LEN,
         ReturnByteLimit::new(1),
     );
-    let execution = program.start_run(&input, limits)?;
+    let execution = program.start_run(input, limits)?;
 
     let error = expect_step_error(execution.step())?;
     let execution = error
@@ -392,7 +387,7 @@ fn execution_rejects_replacement_limits_that_do_not_fit_current_progress() -> Te
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
-    let execution = program.start_run(&input, limits)?;
+    let execution = program.start_run(input, limits)?;
 
     let running = match expect_step_transition(execution.step())? {
         StepTransition::Applied(applied) => applied.into_session(),
@@ -411,7 +406,7 @@ fn execution_rejects_replacement_limits_that_do_not_fit_current_progress() -> Te
         "expected completed-step replacement limit error",
     )?;
 
-    let execution = program.start_run(&input, limits)?;
+    let execution = program.start_run(runtime_input(b"a")?, limits)?;
     ensure_matches(
         matches!(
             execution.with_limits(

@@ -109,7 +109,7 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
     )?;
 
     let return_error = parse_program("a=(return)ok")?.run(
-        &runtime_input(b"a")?,
+        runtime_input(b"a")?,
         rsaeb::RunLimits::new(
             rsaeb::limits::StepLimit::new(1),
             rsaeb::limits::DEFAULT_MAX_STATE_LEN,

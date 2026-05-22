@@ -4,8 +4,8 @@ use crate::error::{
     FallibleTraceSnapshotRunError, RunError, TraceSnapshotError, TraceSnapshotRunError,
     TracedRunError,
 };
+use crate::execution::RunSession;
 use crate::runtime::RuntimeInput;
-use crate::runtime::session::RuntimeSession;
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
 use super::Program;
@@ -32,7 +32,7 @@ impl Program {
     /// exceeds `limits.snapshot_byte_limit()` or allocation fails.
     pub fn run_with_trace_snapshots<'program, F>(
         &'program self,
-        input: &RuntimeInput,
+        input: RuntimeInput,
         limits: TraceSnapshotLimits,
         mut trace: F,
     ) -> Result<RunResult, TraceSnapshotRunError>
@@ -69,7 +69,7 @@ impl Program {
     /// callback returns an error.
     pub fn try_run_with_trace_snapshots<'program, F, E>(
         &'program self,
-        input: &RuntimeInput,
+        input: RuntimeInput,
         limits: TraceSnapshotLimits,
         mut trace: F,
     ) -> Result<RunResult, FallibleTraceSnapshotRunError<E>>
@@ -106,7 +106,7 @@ impl Program {
     /// Returns `RunError` for the same runtime failures as `Program::run`.
     pub fn run_with_borrowed_trace<'program, F>(
         &'program self,
-        input: &RuntimeInput,
+        input: RuntimeInput,
         limits: RunLimits,
         mut trace: F,
     ) -> Result<RunResult, RunError>
@@ -136,14 +136,14 @@ impl Program {
     /// error.
     pub fn try_run_with_borrowed_trace<'program, F, E>(
         &'program self,
-        input: &RuntimeInput,
+        input: RuntimeInput,
         limits: RunLimits,
         trace: F,
     ) -> Result<RunResult, TracedRunError<E>>
     where
         F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
     {
-        RuntimeSession::new(self, input, limits)
+        RunSession::new(self, input, limits)
             .map_err(TracedRunError::Run)?
             .run_with_borrowed_trace(trace)
     }

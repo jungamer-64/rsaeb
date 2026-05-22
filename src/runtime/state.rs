@@ -3,8 +3,7 @@ use core::ops::Range;
 
 use super::budget::RuntimeBudgetState;
 use super::input::InitialStateBytes;
-use super::rewrite::RewriteRequest;
-use super::rewrite::RewriteScratch;
+use super::rewrite::{PreparedRewrite, RewriteRequest, RewriteScratch};
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::{
     NonEmptyPayloadNeedle, Payload, PayloadByteCount, PayloadNeedle, RuntimeByte,
@@ -38,8 +37,13 @@ impl State {
         RuntimeStateView::new(&self.bytes)
     }
 
-    pub(crate) fn swap_with_scratch(&mut self, scratch: &mut RewriteScratch) {
-        scratch.swap_with_state_bytes(&mut self.bytes);
+    pub(crate) fn commit_rewrite(
+        &mut self,
+        rewrite: PreparedRewrite,
+        scratch: &mut RewriteScratch,
+    ) {
+        let previous_state = core::mem::replace(&mut self.bytes, rewrite.into_runtime_bytes());
+        scratch.store_previous_state(previous_state);
     }
 
     pub(crate) fn starts_with_payload(&self, payload: &Payload) -> Option<MatchedStateSpan> {
@@ -115,7 +119,7 @@ impl State {
         request: RewriteRequest<'_>,
         output: &mut RewriteScratch,
         budget: RuntimeBudgetState,
-    ) -> Result<(), RunError> {
+    ) -> Result<PreparedRewrite, RunError> {
         self.prepare_replacement_buffer(request, output, budget)?;
         match request {
             RewriteRequest::Replace(operands) => {
@@ -134,7 +138,7 @@ impl State {
                 output.push_payload(operands.rhs())?;
             }
         }
-        Ok(())
+        Ok(output.take_prepared())
     }
 
     /// Computes the rewritten state length for a rewrite request.

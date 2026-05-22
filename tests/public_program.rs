@@ -68,13 +68,13 @@ fn program_parse_accepts_text_and_byte_sources() -> TestResult {
 
     let program = parse_program("a=b")?;
     let input = runtime_input(b"a")?;
-    let result = program.run(&input, limits)?;
+    let result = program.run(input, limits)?;
     expect_stable_bytes(&result, b"b")?;
     ensure_matches(result.steps().get() == 1, "expected one rewrite step")?;
 
     let program = Program::parse(ProgramSource::from_bytes(b"a=b#\xff"), DEFAULT_PARSE_LIMITS)?;
     let input = runtime_input(b"a")?;
-    let result = program.run(&input, limits)?;
+    let result = program.run(input, limits)?;
     expect_stable_bytes(&result, b"b")?;
     Ok(())
 }
@@ -92,35 +92,35 @@ fn program_language_surface_handles_spacing_comments_and_actions() -> TestResult
     );
 
     let program = parse_program("a b=bb")?;
-    let result = program.run(&runtime_input(b"abc")?, limits)?;
+    let result = program.run(runtime_input(b"abc")?, limits)?;
     expect_stable_bytes(&result, b"bbc")?;
 
     let program = parse_program("a=b\r\nb=c\r\n")?;
-    let result = program.run(&runtime_input(b"a")?, limits)?;
+    let result = program.run(runtime_input(b"a")?, limits)?;
     expect_stable_bytes(&result, b"c")?;
 
     let program = parse_program("a\tb = c\tc")?;
-    let result = program.run(&runtime_input(b"ab")?, limits)?;
+    let result = program.run(runtime_input(b"ab")?, limits)?;
     expect_stable_bytes(&result, b"cc")?;
 
     let program = parse_program("a=b#ignored")?;
-    let result = program.run(&runtime_input(b"a")?, limits)?;
+    let result = program.run(runtime_input(b"a")?, limits)?;
     expect_stable_bytes(&result, b"b")?;
 
     let program = parse_program("#a=b")?;
-    let result = program.run(&runtime_input(b"a")?, limits)?;
+    let result = program.run(runtime_input(b"a")?, limits)?;
     expect_stable_bytes(&result, b"a")?;
 
     let program = parse_program("a=(start)x")?;
-    let result = program.run(&runtime_input(b"ba")?, limits)?;
+    let result = program.run(runtime_input(b"ba")?, limits)?;
     expect_stable_bytes(&result, b"xb")?;
 
     let program = parse_program("a=(end)x")?;
-    let result = program.run(&runtime_input(b"ba")?, limits)?;
+    let result = program.run(runtime_input(b"ba")?, limits)?;
     expect_stable_bytes(&result, b"bx")?;
 
     let program = parse_program("a=(return)ok")?;
-    let result = program.run(&runtime_input(b"a")?, limits)?;
+    let result = program.run(runtime_input(b"a")?, limits)?;
     expect_return_bytes(&result, b"ok")?;
     Ok(())
 }
@@ -136,8 +136,8 @@ fn program_values_are_reusable_across_runs() -> TestResult {
         DEFAULT_MAX_RETURN_LEN,
     );
     let program = parse_program("(once)a=b\na=c")?;
-    let first = program.run(&runtime_input(b"aa")?, limits)?;
-    let second = program.run(&runtime_input(b"aa")?, limits)?;
+    let first = program.run(runtime_input(b"aa")?, limits)?;
+    let second = program.run(runtime_input(b"aa")?, limits)?;
 
     expect_stable_bytes(&first, b"bc")?;
     expect_stable_bytes(&second, b"bc")?;

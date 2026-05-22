@@ -18,10 +18,6 @@ pub enum AllocationContext {
     CanonicalSource,
     /// Classifying raw runtime input into owned typed input bytes.
     RuntimeInputValidation,
-    /// Materializing validated runtime input as public raw bytes.
-    RuntimeInputView,
-    /// Materializing validated runtime input into mutable runtime state.
-    InitialRuntimeState,
     /// Storing `(once)` execution state.
     RuntimeOnceRuleState,
     /// Building the next runtime state after a rewrite.
@@ -195,11 +191,6 @@ mod tests {
             AllocationError::reservation_failed(AllocationContext::RuntimeInputValidation, 4);
         ensure_eq!(error.context(), AllocationContext::RuntimeInputValidation)?;
 
-        let error = AllocationError::reservation_failed(AllocationContext::RuntimeInputView, 4);
-        ensure_eq!(error.context(), AllocationContext::RuntimeInputView)?;
-
-        let error = AllocationError::reservation_failed(AllocationContext::InitialRuntimeState, 4);
-        ensure_eq!(error.context(), AllocationContext::InitialRuntimeState)?;
         Ok(())
     }
 
@@ -229,21 +220,6 @@ mod tests {
         ensure_eq!(
             error.to_string(),
             "allocation reservation failure while building runtime input validation; requested capacity: 789",
-        )?;
-
-        let error = AllocationError::reservation_failed(AllocationContext::RuntimeInputView, 789);
-
-        ensure_eq!(
-            error.to_string(),
-            "allocation reservation failure while building runtime input view; requested capacity: 789",
-        )?;
-
-        let error =
-            AllocationError::reservation_failed(AllocationContext::InitialRuntimeState, 789);
-
-        ensure_eq!(
-            error.to_string(),
-            "allocation reservation failure while building initial runtime state; requested capacity: 789",
         )?;
 
         let error = AllocationError::capacity_overflow(AllocationContext::CanonicalSource);

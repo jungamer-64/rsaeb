@@ -7,7 +7,7 @@ use crate::rule::Action;
 
 use super::budget::RuntimeBudgetState;
 use super::matcher::MatchedRule;
-use super::rewrite::{RewriteRequest, RewriteScratch};
+use super::rewrite::{PreparedRewrite, RewriteRequest, RewriteScratch};
 use super::state::{MatchedStateSpan, State};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,22 +27,6 @@ pub(crate) struct AppliedRule<'program> {
 enum PreparedAction<'program> {
     Rewrite(PreparedRewrite),
     Return(PayloadView<'program>),
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct PreparedRewrite {
-    ready: (),
-}
-
-impl PreparedRewrite {
-    const fn new() -> Self {
-        Self { ready: () }
-    }
-
-    fn commit(self, state: &mut State, scratch: &mut RewriteScratch) {
-        let Self { ready: () } = self;
-        state.swap_with_scratch(scratch);
-    }
 }
 
 /// Materializes a return payload as public return output.
@@ -82,7 +66,7 @@ pub(crate) fn apply_matched_rule<'program>(
 
     match prepared {
         PreparedAction::Rewrite(rewrite) => {
-            rewrite.commit(state, scratch);
+            state.commit_rewrite(rewrite, scratch);
             Ok(AppliedRule {
                 step,
                 rule: RuleView::new(matched.position, matched.rule),
@@ -112,20 +96,22 @@ fn prepare_action<'program>(
 ) -> Result<PreparedAction<'program>, RunError> {
     match action {
         Action::Replace(rhs) => {
-            state.rewrite_into(RewriteRequest::replace(state_match, rhs), scratch, budget)?;
-            Ok(PreparedAction::Rewrite(PreparedRewrite::new()))
+            let rewrite =
+                state.rewrite_into(RewriteRequest::replace(state_match, rhs), scratch, budget)?;
+            Ok(PreparedAction::Rewrite(rewrite))
         }
         Action::MoveStart(rhs) => {
-            state.rewrite_into(
+            let rewrite = state.rewrite_into(
                 RewriteRequest::move_start(state_match, rhs),
                 scratch,
                 budget,
             )?;
-            Ok(PreparedAction::Rewrite(PreparedRewrite::new()))
+            Ok(PreparedAction::Rewrite(rewrite))
         }
         Action::MoveEnd(rhs) => {
-            state.rewrite_into(RewriteRequest::move_end(state_match, rhs), scratch, budget)?;
-            Ok(PreparedAction::Rewrite(PreparedRewrite::new()))
+            let rewrite =
+                state.rewrite_into(RewriteRequest::move_end(state_match, rhs), scratch, budget)?;
+            Ok(PreparedAction::Rewrite(rewrite))
         }
         Action::Return(output) => {
             let output_len = ReturnOutputByteCount::from_payload_count(output.byte_count());

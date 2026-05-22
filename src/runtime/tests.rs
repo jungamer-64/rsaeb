@@ -4,6 +4,7 @@ use super::state::State;
 use crate::RunLimits;
 use crate::bytes::{CompactByte, Payload};
 use crate::error::{LimitError, PayloadKind, RunError, RuntimeInputError, StateLimitContext};
+use crate::execution::{RunSession, RunStepError, StepTransition};
 use crate::limits::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit, ReturnOutputByteCount,
     RuntimeInputByteCount, RuntimeInputByteLimit, RuntimeStateByteCount, RuntimeStateByteLimit,
@@ -15,8 +16,6 @@ use crate::test_support::{
 };
 use crate::trace::RuntimeStateView;
 use std::vec::Vec;
-
-use super::session::{RuntimeSession, RuntimeStep, RuntimeStepError};
 
 fn runtime_view_bytes(view: RuntimeStateView<'_>) -> Vec<u8> {
     view.materialized_bytes().collect()
@@ -67,8 +66,8 @@ fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
 ///
 /// Returns `TestFailure` if stepping succeeds.
 fn expect_step_error<'program>(
-    result: Result<RuntimeStep<'program>, RuntimeStepError<'program>>,
-) -> Result<RuntimeStepError<'program>, TestFailure> {
+    result: Result<StepTransition<'program>, RunStepError<'program>>,
+) -> Result<RunStepError<'program>, TestFailure> {
     match result {
         Ok(_) => Err(TestFailure::message("expected step error")),
         Err(error) => Ok(error),
@@ -81,8 +80,8 @@ fn expect_step_error<'program>(
 ///
 /// Returns `TestFailure` if stepping fails.
 fn expect_step_transition<'program>(
-    result: Result<RuntimeStep<'program>, RuntimeStepError<'program>>,
-) -> Result<RuntimeStep<'program>, TestFailure> {
+    result: Result<StepTransition<'program>, RunStepError<'program>>,
+) -> Result<StepTransition<'program>, TestFailure> {
     match result {
         Ok(transition) => Ok(transition),
         Err(error) => Err(TestFailure::from(error.into_error())),
@@ -97,9 +96,9 @@ fn expect_step_transition<'program>(
 fn once_rule_failure_does_not_consume_before_step_commit() -> TestResult {
     let program = parse_program("(once)a=(return)ok")?;
     let input = runtime_input(b"a")?;
-    let runtime = RuntimeSession::new(
+    let runtime = RunSession::new(
         &program,
-        &input,
+        input,
         RunLimits::new(
             StepLimit::new(1),
             DEFAULT_MAX_STATE_LEN,
@@ -115,7 +114,7 @@ fn once_rule_failure_does_not_consume_before_step_commit() -> TestResult {
         }),
     )?;
 
-    let (_, runtime) = error.into_parts();
+    let runtime = error.into_session();
     let repeated_error = expect_step_error(runtime.step())?;
     ensure_eq!(
         repeated_error.into_error(),
@@ -134,9 +133,9 @@ fn once_rule_failure_does_not_consume_before_step_commit() -> TestResult {
 fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
     let program = parse_program("a=b")?;
     let no_match_input = runtime_input(b"x")?;
-    let no_match = RuntimeSession::new(
+    let no_match = RunSession::new(
         &program,
-        &no_match_input,
+        no_match_input,
         RunLimits::new(
             StepLimit::new(0),
             DEFAULT_MAX_STATE_LEN,
@@ -144,22 +143,22 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
         ),
     )?;
     match expect_step_transition(no_match.step())? {
-        RuntimeStep::Stable(stable) => {
+        StepTransition::Stable(stable) => {
             ensure_eq!(stable.steps().get(), 0)?;
             ensure_eq!(
                 runtime_view_bytes(stable.state()).as_slice(),
                 b"x".as_slice()
             )?;
         }
-        RuntimeStep::Applied(_) | RuntimeStep::Returned(_) => {
+        StepTransition::Applied(_) | StepTransition::Returned(_) => {
             return Err(TestFailure::message("expected stable completion"));
         }
     }
 
     let would_match_input = runtime_input(b"a")?;
-    let would_match = RuntimeSession::new(
+    let would_match = RunSession::new(
         &program,
-        &would_match_input,
+        would_match_input,
         RunLimits::new(
             StepLimit::new(0),
             DEFAULT_MAX_STATE_LEN,
@@ -175,9 +174,9 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
             state_len: RuntimeStateByteCount::new(1),
         },
     )?;
-    let would_match = RuntimeSession::new(
+    let would_match = RunSession::new(
         &program,
-        &would_match_input,
+        runtime_input(b"a")?,
         RunLimits::new(
             StepLimit::new(0),
             DEFAULT_MAX_STATE_LEN,
@@ -191,7 +190,7 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
         b"a".as_slice(),
     )?;
 
-    let (_, runtime) = error.into_parts();
+    let runtime = error.into_session();
     let repeated_error = expect_step_limit(expect_step_error(runtime.step())?.into_error())?;
     ensure_eq!(
         repeated_error,
@@ -215,7 +214,7 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     );
     let state_program = parse_program("=a")?;
     let state_input = runtime_input(b"aa")?;
-    let state_limited = RuntimeSession::new(&state_program, &state_input, state_limits)?;
+    let state_limited = RunSession::new(&state_program, state_input, state_limits)?;
     let state_error = expect_step_error(state_limited.step())?;
     ensure_eq!(
         state_error.error(),
@@ -230,7 +229,7 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
         runtime_view_bytes(state_error.session().state()).as_slice(),
         b"aa".as_slice(),
     )?;
-    let (_, runtime) = state_error.into_parts();
+    let runtime = state_error.into_session();
     let state_error = expect_step_error(runtime.step())?;
     ensure_eq!(
         state_error.into_error(),
@@ -248,7 +247,7 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     );
     let return_program = parse_program("a=(return)ok")?;
     let return_input = runtime_input(b"a")?;
-    let return_limited = RuntimeSession::new(&return_program, &return_input, return_limits)?;
+    let return_limited = RunSession::new(&return_program, return_input, return_limits)?;
     let return_error = expect_step_error(return_limited.step())?;
     ensure_eq!(
         return_error.error(),
@@ -262,7 +261,7 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
         runtime_view_bytes(return_error.session().state()).as_slice(),
         b"a".as_slice(),
     )?;
-    let (_, runtime) = return_error.into_parts();
+    let runtime = return_error.into_session();
     let return_error = expect_step_error(runtime.step())?;
     ensure_eq!(
         return_error.into_error(),
@@ -316,8 +315,8 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
     let compact = [CompactByte::new(b'a', source_column(1)?)];
     let payload = Payload::parse(&compact, source_line_number(1)?, PayloadKind::LeftSideData)?;
     let input = runtime_input(b"a=()# ")?;
-    let state = State::from_input(InitialStateBytes::materialize(
-        &input,
+    let state = State::from_input(InitialStateBytes::from_runtime_input(
+        input,
         RuntimeBudgetState::new(RunLimits::new(
             StepLimit::new(10_000),
             DEFAULT_MAX_STATE_LEN,
@@ -333,7 +332,7 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
 
     let program = parse_program("a=b")?;
     let result = program.run(
-        &input,
+        runtime_input(b"a=()# ")?,
         RunLimits::new(
             StepLimit::new(10_000),
             DEFAULT_MAX_STATE_LEN,

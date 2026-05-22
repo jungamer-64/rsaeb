@@ -16,8 +16,6 @@ impl fmt::Display for AllocationContext {
             Self::ProgramRuleTable => f.write_str("program rule table"),
             Self::CanonicalSource => f.write_str("canonical source bytes"),
             Self::RuntimeInputValidation => f.write_str("runtime input validation"),
-            Self::RuntimeInputView => f.write_str("runtime input view"),
-            Self::InitialRuntimeState => f.write_str("initial runtime state"),
             Self::RuntimeOnceRuleState => f.write_str("runtime once rule state"),
             Self::RuntimeRewriteState => f.write_str("runtime rewrite state"),
             Self::PayloadView => f.write_str("payload view"),

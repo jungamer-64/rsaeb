@@ -136,7 +136,7 @@ fn limits_parse_resource_errors_are_structured() -> TestResult {
 #[test]
 fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
     let step_limited = parse_program("a=b")?.run(
-        &runtime_input(b"a")?,
+        runtime_input(b"a")?,
         RunLimits::new(
             StepLimit::new(0),
             DEFAULT_MAX_STATE_LEN,
@@ -159,7 +159,7 @@ fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
     )?;
 
     let state_limited = parse_program("# no executable rules")?.run(
-        &runtime_input(b"aa")?,
+        runtime_input(b"aa")?,
         RunLimits::new(
             StepLimit::new(10),
             RuntimeStateByteLimit::new(1),
@@ -181,7 +181,7 @@ fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
     )?;
 
     let return_limited = parse_program("a=(return)ok")?.run(
-        &runtime_input(b"a")?,
+        runtime_input(b"a")?,
         RunLimits::new(
             StepLimit::new(1),
             RuntimeStateByteLimit::new(10),
@@ -208,7 +208,7 @@ fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
 #[test]
 fn limits_display_output_names_public_contexts() -> TestResult {
     let state_error = parse_program("# no executable rules")?.run(
-        &runtime_input(b"aa")?,
+        runtime_input(b"aa")?,
         RunLimits::new(
             StepLimit::new(10),
             RuntimeStateByteLimit::new(1),
@@ -222,7 +222,7 @@ fn limits_display_output_names_public_contexts() -> TestResult {
     )?;
 
     let step_error = parse_program("a=b")?.run(
-        &runtime_input(b"a")?,
+        runtime_input(b"a")?,
         RunLimits::new(
             StepLimit::new(0),
             DEFAULT_MAX_STATE_LEN,

@@ -31,7 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?;
     let limits = RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
     let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), DEFAULT_MAX_INPUT_LEN)?;
-    let result = program.run(&input, limits)?;
+    let result = program.run(input, limits)?;
 
     assert!(matches!(
         result.outcome(),
@@ -55,7 +55,7 @@ The primary execution path is:
 1. Construct `ProgramSource` with `from_text` or `from_bytes`.
 2. Parse it with `Program::parse`.
 3. Label host bytes with `RuntimeInputSource::from_bytes` and validate them with `RuntimeInput::validate`.
-4. Run with `Program::run` or step with `Program::start_run`.
+4. Consume `RuntimeInput` with `Program::run` or `Program::start_run`.
 
 The crate intentionally contains no filesystem, process, stdout/stderr,
 argument parsing, environment access, or lossy display boundary. Hosts should
@@ -95,7 +95,7 @@ use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput, RuntimeInputSource}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let limits = RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
     let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), DEFAULT_MAX_INPUT_LEN)?;
-    let result = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?.run(&input, limits);
+    let result = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?.run(input, limits);
 
     assert!(matches!(
         result,
@@ -382,6 +382,7 @@ raw line bytes
 runtime input bytes
   -> AsciiByte         # runtime input domain validation
   -> RuntimeByte       # private ProgramConstructible(ProgramByte) or Opaque(NonProgramAsciiByte)
+  -> RunSession        # consumes RuntimeInput and owns mutable execution state
 ```
 
 Program payloads are stored as `ProgramByte`, not raw `u8`. Runtime state is
@@ -391,7 +392,7 @@ bytes from input become opaque ASCII bytes. Ordinary rules match only editable
 bytes. Opaque input bytes are preserved by surrounding rewrites but cannot be
 directly matched, created, or deleted by program payloads.
 
-Runtime state stays in the typed byte domain during execution. Public
+Runtime input and runtime state stay in the typed byte domain during execution. Public
 observation crosses an explicit materialization boundary: `RuntimeStateView`
 materializes to `RuntimeStateSnapshot`, stable run results use
 `RuntimeStateSnapshot`, `(return)` outputs use `ReturnOutput`, parsed payload
@@ -405,7 +406,7 @@ consume that slot.
 ## `no_std + alloc` Boundary
 
 The library crate is `#![no_std]` and uses `alloc` only at owned-buffer
-boundaries such as parsed rules, runtime input state, per-run `(once)` state,
+boundaries such as parsed rules, runtime input validation, per-run `(once)` state,
 run results, canonical rule source, explicit view materialization, and trace
 snapshots. It requires an allocator, but not `std`.
 
@@ -435,7 +436,7 @@ and trace materialization errors have separate structured types under
 
 Allocation failures preserve the allocation boundary as `AllocationContext`.
 Reservation failures also report a typed `RequestedCapacity`, so hosts can
-distinguish failures while validating input, materializing input or state views,
+distinguish failures while validating input, materializing state views,
 building canonical rule source, producing final output, or retaining trace
 snapshots without parsing display strings.
 
@@ -464,7 +465,6 @@ the primary execution path:
 - `RunOutcome`
 - `RuntimeStateSnapshot`
 - `ReturnOutput`
-- `RuntimeInputBytes`
 - `RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), limit)`
 
 Secondary domains live under explicit namespaces:

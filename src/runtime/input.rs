@@ -42,9 +42,9 @@ impl<'input> RuntimeInputSource<'input> {
 ///
 /// Runtime input is a separate byte domain from program source. It may contain
 /// ASCII whitespace, control bytes, and reserved syntax bytes, but it cannot
-/// contain non-ASCII bytes. Validation also owns the input bytes so a
-/// [`RuntimeInput`] can be reused across runs without revalidating raw host
-/// input.
+/// contain non-ASCII bytes. Validation owns the input bytes until a run starts;
+/// execution consumes this value and moves the classified bytes directly into
+/// mutable runtime state.
 #[derive(PartialEq, Eq)]
 pub struct RuntimeInput {
     bytes: Vec<RuntimeByte>,
@@ -54,14 +54,14 @@ impl fmt::Debug for RuntimeInput {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RuntimeInput")
-            .field("bytes", &RuntimeInputBytesDebug(self))
+            .field("bytes", &RuntimeInputDebugBytes(self))
             .finish()
     }
 }
 
-struct RuntimeInputBytesDebug<'input>(&'input RuntimeInput);
+struct RuntimeInputDebugBytes<'input>(&'input RuntimeInput);
 
-impl fmt::Debug for RuntimeInputBytesDebug<'_> {
+impl fmt::Debug for RuntimeInputDebugBytes<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_list()
@@ -126,8 +126,8 @@ impl RuntimeInput {
         self.bytes.is_empty()
     }
 
-    pub(crate) fn runtime_bytes(&self) -> impl Iterator<Item = RuntimeByte> + '_ {
-        self.bytes.iter().copied()
+    pub(crate) fn into_runtime_bytes(self) -> Vec<RuntimeByte> {
+        self.bytes
     }
 }
 
@@ -138,33 +138,22 @@ pub(crate) struct InitialStateBytes {
 }
 
 impl InitialStateBytes {
-    /// Materializes validated runtime input into mutable execution state bytes.
+    /// Moves validated runtime input into mutable execution state bytes.
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if the input exceeds runtime state limits or the
-    /// initial state buffer cannot be allocated.
-    pub(crate) fn materialize(
-        input: &RuntimeInput,
+    /// Returns `RunError` if the input exceeds runtime state limits.
+    pub(crate) fn from_runtime_input(
+        input: RuntimeInput,
         budget: RuntimeBudgetState,
     ) -> Result<Self, RunError> {
         let byte_count = input.byte_count();
         let state_len = RuntimeStateByteCount::from_runtime_input_count(byte_count);
 
         budget.ensure_initial_state_len(state_len)?;
-
-        let mut bytes = Vec::new();
-        try_reserve_total_exact(
-            &mut bytes,
-            byte_count.get(),
-            AllocationContext::InitialRuntimeState,
-        )?;
-
-        for byte in input.runtime_bytes() {
-            try_push(&mut bytes, byte, AllocationContext::InitialRuntimeState)?;
-        }
-
-        Ok(Self { bytes })
+        Ok(Self {
+            bytes: input.into_runtime_bytes(),
+        })
     }
 
     pub(crate) fn into_runtime_bytes(self) -> Vec<RuntimeByte> {

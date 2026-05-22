@@ -67,13 +67,30 @@ pub(crate) struct RewriteScratch {
     bytes: Vec<RuntimeByte>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct PreparedRewrite {
+    bytes: Vec<RuntimeByte>,
+}
+
+impl PreparedRewrite {
+    pub(crate) fn into_runtime_bytes(self) -> Vec<RuntimeByte> {
+        self.bytes
+    }
+}
+
 impl RewriteScratch {
     pub(crate) fn new() -> Self {
         Self { bytes: Vec::new() }
     }
 
-    pub(crate) fn swap_with_state_bytes(&mut self, state_bytes: &mut Vec<RuntimeByte>) {
-        core::mem::swap(state_bytes, &mut self.bytes);
+    pub(crate) fn take_prepared(&mut self) -> PreparedRewrite {
+        PreparedRewrite {
+            bytes: core::mem::take(&mut self.bytes),
+        }
+    }
+
+    pub(crate) fn store_previous_state(&mut self, bytes: Vec<RuntimeByte>) {
+        self.bytes = bytes;
     }
 
     /// Clears scratch storage and reserves the requested rewrite capacity.
