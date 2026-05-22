@@ -50,12 +50,12 @@ use alloc::vec::Vec;
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
-use crate::bytes::{
-    ReturnOutputByteCount, RuntimeByte, RuntimeStateByteCount, TraceSnapshotByteCount,
-};
+use crate::bytes::{RuntimeByte, RuntimeStateByteCount, TraceSnapshotByteCount};
 use crate::error::TraceSnapshotError;
-use crate::inspect::{PayloadView, RuleView};
-use crate::program::{ReturnOutput, RuntimeStateSnapshot, StepCount, TraceSnapshotByteLimit};
+use crate::inspect::RuleView;
+use crate::program::{
+    ReturnOutput, ReturnOutputView, RuntimeStateSnapshot, StepCount, TraceSnapshotByteLimit,
+};
 
 /// Borrowed view of runtime-state bytes.
 ///
@@ -162,8 +162,8 @@ pub enum BorrowedTraceEffect<'program, 'run> {
     },
     /// The step executed `(return)` and produced final output bytes.
     Return {
-        /// Borrowed `(return)` payload bytes from the parsed program.
-        output: PayloadView<'program>,
+        /// Borrowed `(return)` output bytes from runtime execution.
+        output: ReturnOutputView<'program>,
     },
 }
 
@@ -175,9 +175,9 @@ impl BorrowedTraceEffect<'_, '_> {
             Self::Continue { state } => {
                 TraceSnapshotByteCount::from_runtime_state_count(state.byte_count())
             }
-            Self::Return { output } => TraceSnapshotByteCount::from_return_output_count(
-                ReturnOutputByteCount::from_payload_count(output.byte_count()),
-            ),
+            Self::Return { output } => {
+                TraceSnapshotByteCount::from_return_output_count(output.byte_count())
+            }
         }
     }
 

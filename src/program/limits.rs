@@ -217,33 +217,6 @@ impl ParseLimits {
         self.rules
     }
 
-    /// Returns limits with a different source byte budget.
-    #[must_use]
-    pub const fn with_source_byte_limit(mut self, max_source_len: SourceByteLimit) -> Self {
-        self.source_len = max_source_len;
-        self
-    }
-
-    /// Returns limits with a different code-line byte budget.
-    #[must_use]
-    pub const fn with_code_line_byte_limit(mut self, max_code_line_len: CodeLineByteLimit) -> Self {
-        self.code_line_len = max_code_line_len;
-        self
-    }
-
-    /// Returns limits with a different payload byte budget.
-    #[must_use]
-    pub const fn with_payload_byte_limit(mut self, max_payload_len: PayloadByteLimit) -> Self {
-        self.payload_len = max_payload_len;
-        self
-    }
-
-    /// Returns limits with a different parsed-rule budget.
-    #[must_use]
-    pub const fn with_rule_limit(mut self, max_rules: RuleLimit) -> Self {
-        self.rules = max_rules;
-        self
-    }
 }
 
 /// Maximum number of rewrite steps allowed before the next matching rule fails.
@@ -433,32 +406,6 @@ impl RunLimits {
         self.return_len
     }
 
-    /// Returns limits with a different step budget.
-    ///
-    /// The other runtime budgets are preserved.
-    #[must_use]
-    pub const fn with_step_limit(mut self, max_steps: StepLimit) -> Self {
-        self.steps = max_steps;
-        self
-    }
-
-    /// Returns limits with a different runtime-state budget.
-    ///
-    /// The step and return-output budgets are preserved.
-    #[must_use]
-    pub const fn with_state_byte_limit(mut self, max_state_len: RuntimeStateByteLimit) -> Self {
-        self.state_len = max_state_len;
-        self
-    }
-
-    /// Returns limits with a different return-output budget.
-    ///
-    /// The step and runtime-state budgets are preserved.
-    #[must_use]
-    pub const fn with_return_byte_limit(mut self, max_return_len: ReturnByteLimit) -> Self {
-        self.return_len = max_return_len;
-        self
-    }
 }
 
 /// Resource limits for one trace-snapshot runtime invocation.

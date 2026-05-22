@@ -189,8 +189,6 @@ pub enum StateLimitContext {
     Input,
     /// A rewrite would create a state larger than the configured state limit.
     Rewrite,
-    /// Existing runtime state is larger than a replacement state limit.
-    CurrentState,
 }
 
 /// Configured runtime budget failure.

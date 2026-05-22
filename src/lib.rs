@@ -352,7 +352,8 @@ mod syntax;
 pub mod trace;
 
 pub use program::{
-    ParseLimits, Program, ReturnOutput, RunLimits, RunOutcome, RunResult, RuntimeStateSnapshot,
+    ParseLimits, Program, ReturnOutput, ReturnOutputView, RunLimits, RunOutcome, RunResult,
+    RuntimeStateSnapshot,
 };
 pub use runtime::{RuntimeInput, RuntimeInputSource};
 pub use source::ProgramSource;

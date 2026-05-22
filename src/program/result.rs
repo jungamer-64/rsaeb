@@ -1,5 +1,7 @@
 use alloc::vec::Vec;
 
+use crate::allocation::{AllocationContext, AllocationError};
+use crate::bytes::Payload;
 use crate::bytes::{ReturnOutputByteCount, RuntimeStateByteCount};
 
 use super::limits::StepCount;
@@ -71,6 +73,15 @@ pub struct ReturnOutput {
     bytes: Vec<u8>,
 }
 
+/// Borrowed `(return)` output payload produced by runtime execution.
+///
+/// This view is distinct from parsed payload inspection. It exists only on
+/// runtime return paths and materializes into [`ReturnOutput`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ReturnOutputView<'program> {
+    payload: &'program Payload,
+}
+
 impl ReturnOutput {
     pub(crate) fn from_return_payload(bytes: Vec<u8>) -> Self {
         Self { bytes }
@@ -102,6 +113,51 @@ impl ReturnOutput {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.bytes.is_empty()
+    }
+}
+
+impl<'program> ReturnOutputView<'program> {
+    pub(crate) const fn new(payload: &'program Payload) -> Self {
+        Self { payload }
+    }
+
+    /// Return output length in bytes.
+    #[must_use]
+    pub fn byte_count(self) -> ReturnOutputByteCount {
+        ReturnOutputByteCount::from_payload_count(self.payload.byte_count())
+    }
+
+    /// Returns whether this borrowed return output contains no bytes.
+    #[must_use]
+    pub fn is_empty(self) -> bool {
+        self.byte_count().is_zero()
+    }
+
+    pub(crate) fn to_vec_with_context(
+        self,
+        context: AllocationContext,
+    ) -> Result<Vec<u8>, AllocationError> {
+        self.payload.to_vec_with_context(context)
+    }
+
+    /// Materializes this borrowed return output.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if return-output allocation fails.
+    pub fn materialize(self) -> Result<ReturnOutput, AllocationError> {
+        Ok(ReturnOutput::from_return_payload(
+            self.to_vec_with_context(AllocationContext::ReturnOutput)?,
+        ))
+    }
+}
+
+impl core::fmt::Debug for ReturnOutputView<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_list()
+            .entries(self.payload.bytes())
+            .finish()
     }
 }
 

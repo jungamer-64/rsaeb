@@ -3,9 +3,9 @@ use core::fmt;
 use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind};
 
 use super::{
-    AebError, FallibleTraceSnapshotRunError, InputColumn, LeftModifierKind, LimitError, ParseError,
-    ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind, RunError, RuntimeInputError,
-    StateLimitContext, StateSizeError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
+    InputColumn, LeftModifierKind, LimitError, ParseError, ParseErrorKind, ParseErrorLocation,
+    PayloadKind, RightActionKind, RunError, RuntimeInputError, StateLimitContext, StateSizeError,
+    TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -45,16 +45,6 @@ impl fmt::Display for AllocationError {
                     requested_capacity,
                 )
             }
-        }
-    }
-}
-
-impl fmt::Display for AebError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Parse(error) => error.fmt(f),
-            Self::Input(error) => error.fmt(f),
-            Self::Run(error) => error.fmt(f),
         }
     }
 }
@@ -217,16 +207,7 @@ impl fmt::Display for TraceSnapshotError {
     }
 }
 
-impl fmt::Display for TraceSnapshotRunError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Run(error) => error.fmt(f),
-            Self::Snapshot(error) => error.fmt(f),
-        }
-    }
-}
-
-impl<E> fmt::Display for FallibleTraceSnapshotRunError<E>
+impl<E> fmt::Display for TraceSnapshotRunError<E>
 where
     E: fmt::Display,
 {
@@ -285,7 +266,6 @@ impl fmt::Display for StateLimitContext {
         match self {
             Self::Input => f.write_str("runtime input"),
             Self::Rewrite => f.write_str("rewrite result"),
-            Self::CurrentState => f.write_str("current runtime state"),
         }
     }
 }

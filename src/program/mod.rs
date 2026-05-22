@@ -21,7 +21,7 @@ pub use limits::{
     RuntimeStateByteLimit, SourceByteCount, SourceByteLimit, StepCount, StepLimit,
     TraceSnapshotByteLimit, TraceSnapshotLimits,
 };
-pub use result::{ReturnOutput, RunOutcome, RunResult, RuntimeStateSnapshot};
+pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeStateSnapshot};
 
 /// Parsed A=B rewrite program.
 ///

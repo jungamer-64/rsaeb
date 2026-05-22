@@ -68,45 +68,12 @@ impl From<AllocationError> for TraceSnapshotError {
     }
 }
 
-/// Error returned by infallible trace-snapshot APIs.
+/// Error returned by trace-snapshot APIs.
 ///
-/// The trace callback cannot fail in this API, so failures are either ordinary
-/// runtime failures or snapshot materialization failures.
+/// Runtime execution, snapshot materialization, and caller callback failures
+/// remain separate domains.
 #[derive(Debug, PartialEq, Eq)]
-pub enum TraceSnapshotRunError {
-    /// Runtime execution failed.
-    Run(RunError),
-    /// Trace snapshot materialization failed.
-    Snapshot(TraceSnapshotError),
-}
-
-impl Error for TraceSnapshotRunError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Run(error) => Some(error),
-            Self::Snapshot(error) => Some(error),
-        }
-    }
-}
-
-impl From<RunError> for TraceSnapshotRunError {
-    fn from(value: RunError) -> Self {
-        Self::Run(value)
-    }
-}
-
-impl From<TraceSnapshotError> for TraceSnapshotRunError {
-    fn from(value: TraceSnapshotError) -> Self {
-        Self::Snapshot(value)
-    }
-}
-
-/// Error returned by fallible trace-snapshot APIs.
-///
-/// This keeps runtime execution, snapshot materialization, and caller callback
-/// failures in separate variants.
-#[derive(Debug, PartialEq, Eq)]
-pub enum FallibleTraceSnapshotRunError<E> {
+pub enum TraceSnapshotRunError<E> {
     /// Runtime execution failed.
     Run(RunError),
     /// Trace snapshot materialization failed.
@@ -115,7 +82,7 @@ pub enum FallibleTraceSnapshotRunError<E> {
     Trace(E),
 }
 
-impl<E> Error for FallibleTraceSnapshotRunError<E>
+impl<E> Error for TraceSnapshotRunError<E>
 where
     E: Error + 'static,
 {
@@ -128,13 +95,13 @@ where
     }
 }
 
-impl<E> From<RunError> for FallibleTraceSnapshotRunError<E> {
+impl<E> From<RunError> for TraceSnapshotRunError<E> {
     fn from(value: RunError) -> Self {
         Self::Run(value)
     }
 }
 
-impl<E> From<TraceSnapshotError> for FallibleTraceSnapshotRunError<E> {
+impl<E> From<TraceSnapshotError> for TraceSnapshotRunError<E> {
     fn from(value: TraceSnapshotError) -> Self {
         Self::Snapshot(value)
     }

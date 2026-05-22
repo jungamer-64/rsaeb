@@ -15,19 +15,19 @@
 //!   and trace snapshots. [`AllocationContext`] names the failing boundary, and
 //!   [`RequestedCapacity`] carries the requested vector capacity for reservation
 //!   failures.
-//! - [`TraceSnapshotError`] and the traced run wrappers for trace
-//!   materialization or user callback failures.
-//! - [`AebError`] for callers that want a parse/input/run umbrella while still
-//!   preserving the structured inner error.
+//! - [`TraceSnapshotError`] and traced run errors for trace materialization or
+//!   user callback failures.
 //!
 //! ```
-//! use rsaeb::error::{AebError, RuntimeInputError};
+//! use rsaeb::error::RuntimeInputError;
 //! use rsaeb::limits::RuntimeInputByteLimit;
 //! use rsaeb::{RuntimeInput, RuntimeInputSource};
 //!
-//! fn validate(bytes: &[u8]) -> Result<RuntimeInput, AebError> {
-//!     RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), RuntimeInputByteLimit::new(8))
-//!         .map_err(AebError::from)
+//! fn validate(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
+//!     RuntimeInput::validate(
+//!         RuntimeInputSource::from_bytes(bytes),
+//!         RuntimeInputByteLimit::new(8),
+//!     )
 //! }
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -37,7 +37,7 @@
 //!
 //! assert!(matches!(
 //!     error,
-//!     AebError::Input(RuntimeInputError::NonAscii { column, byte })
+//!     RuntimeInputError::NonAscii { column, byte }
 //!         if column.get() == 2 && byte.get() == 0xff
 //! ));
 //! # Ok(())
@@ -48,8 +48,6 @@ mod fmt;
 mod parse;
 mod run;
 mod traced;
-
-use core::error::Error;
 
 pub use crate::allocation::{
     AllocationContext, AllocationError, AllocationErrorKind, RequestedCapacity,
@@ -64,50 +62,4 @@ pub use parse::{
 pub use run::{
     InputColumn, LimitError, RunError, RuntimeInputError, StateLimitContext, StateSizeError,
 };
-pub use traced::{
-    FallibleTraceSnapshotRunError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
-};
-
-/// Top-level source parsing, input validation, and runtime execution error.
-///
-/// This wrapper is useful at host boundaries that perform parse, input
-/// validation, and execution in one operation. It does not erase the underlying
-/// domain: callers can still match the inner [`ParseError`],
-/// [`RuntimeInputError`], or [`RunError`] variant.
-#[derive(Debug, PartialEq, Eq)]
-pub enum AebError {
-    /// Source program parse error.
-    Parse(ParseError),
-    /// Runtime input validation error.
-    Input(RuntimeInputError),
-    /// Runtime execution error.
-    Run(RunError),
-}
-
-impl Error for AebError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Parse(error) => Some(error),
-            Self::Input(error) => Some(error),
-            Self::Run(error) => Some(error),
-        }
-    }
-}
-
-impl From<ParseError> for AebError {
-    fn from(value: ParseError) -> Self {
-        Self::Parse(value)
-    }
-}
-
-impl From<RuntimeInputError> for AebError {
-    fn from(value: RuntimeInputError) -> Self {
-        Self::Input(value)
-    }
-}
-
-impl From<RunError> for AebError {
-    fn from(value: RunError) -> Self {
-        Self::Run(value)
-    }
-}
+pub use traced::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};

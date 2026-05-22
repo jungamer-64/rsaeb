@@ -13,8 +13,8 @@
 //! public API.
 
 use crate::error::{RunError, TracedRunError};
-use crate::inspect::{PayloadView, RuleView};
-use crate::program::{Program, RunLimits, RunResult, StepCount};
+use crate::inspect::RuleView;
+use crate::program::{Program, ReturnOutputView, RunLimits, RunResult, StepCount};
 use crate::rule::Rule;
 use crate::runtime::RuntimeInput;
 use crate::runtime::action::{
@@ -49,8 +49,8 @@ struct RunCore<'program> {
 /// Result of advancing a run session once.
 ///
 /// The transition is exhaustive over the public run lifecycle: one rule
-/// committed and execution can continue, no rule matched, or a `(return)` rule
-/// produced final output.
+/// committed and execution can continue, no rule matched, a `(return)` rule
+/// produced final output, or a matching rule failed before commit.
 pub enum StepTransition<'program> {
     /// One ordinary rewrite rule was applied and execution can continue.
     Applied(AppliedStep<'program>),
@@ -58,6 +58,8 @@ pub enum StepTransition<'program> {
     Stable(StableRun<'program>),
     /// A matched rule executed `(return)`.
     Returned(ReturnedRun<'program>),
+    /// A matching rule failed before committing.
+    Failed(FailedRun<'program>),
 }
 
 /// One committed non-terminal rule application.
@@ -81,21 +83,20 @@ pub struct StableRun<'program> {
 
 /// Terminal run state reached by `(return)`.
 ///
-/// The output is a borrowed parsed payload until the caller materializes the
+/// The output is a borrowed return output until the caller materializes the
 /// terminal [`RunResult`] through [`ReturnedRun::into_result`].
 #[derive(Clone, Copy)]
 pub struct ReturnedRun<'program> {
     step: StepCount,
     rule: RuleView<'program>,
-    output: PayloadView<'program>,
+    output: ReturnOutputView<'program>,
 }
 
 /// Runtime failure that preserves the uncommitted run session.
 ///
 /// Step failures happen before the candidate rewrite is committed. The failed
-/// session stays owned by this error, so recovery can only happen through
-/// explicit error-owned methods.
-pub struct RunStepError<'program> {
+/// session stays owned by this terminal state until the caller discards it.
+pub struct FailedRun<'program> {
     error: RunError,
     session: RunSession<'program>,
 }
@@ -116,6 +117,7 @@ impl core::fmt::Debug for StepTransition<'_> {
             Self::Applied(applied) => formatter.debug_tuple("Applied").field(applied).finish(),
             Self::Stable(stable) => formatter.debug_tuple("Stable").field(stable).finish(),
             Self::Returned(returned) => formatter.debug_tuple("Returned").field(returned).finish(),
+            Self::Failed(failed) => formatter.debug_tuple("Failed").field(failed).finish(),
         }
     }
 }
@@ -152,10 +154,10 @@ impl core::fmt::Debug for ReturnedRun<'_> {
     }
 }
 
-impl core::fmt::Debug for RunStepError<'_> {
+impl core::fmt::Debug for FailedRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("RunStepError")
+            .debug_struct("FailedRun")
             .field("error", &self.error())
             .field("completed_steps", &self.completed_steps())
             .field("state", &self.state())
@@ -194,18 +196,6 @@ impl<'program> RunCore<'program> {
 
     fn state(&self) -> RuntimeStateView<'_> {
         self.state.view()
-    }
-
-    /// Replaces runtime limits while preserving the uncommitted core.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` if completed steps or the current runtime state do
-    /// not fit the replacement limits.
-    fn replace_limits(&mut self, limits: RunLimits) -> Result<(), RunError> {
-        let state_len = self.state.byte_count();
-        self.budget = self.budget.with_limits(limits, state_len)?;
-        Ok(())
     }
 
     /// Materializes a stable terminal result.
@@ -247,38 +237,12 @@ impl<'program> RunSession<'program> {
         self.core.state()
     }
 
-    /// Replaces limits on an error-owned run session.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunStepError` if completed steps or the current runtime state
-    /// do not fit the replacement limits.
-    #[expect(
-        clippy::result_large_err,
-        reason = "RunStepError preserves the uncommitted run session by value without allocating on the error path"
-    )]
-    fn retry_with_limits(mut self, limits: RunLimits) -> Result<Self, RunStepError<'program>> {
-        match self.core.replace_limits(limits) {
-            Ok(()) => Ok(self),
-            Err(error) => Err(RunStepError::new(error, self)),
-        }
-    }
-
     /// Advances this run by exactly one matching rule when possible.
     ///
     /// Consuming `self` makes terminal states explicit. Call
     /// [`AppliedStep::into_session`] to continue after an applied rule.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunStepError` if the matching rule cannot commit because
-    /// runtime limits or allocation fail. The error preserves the uncommitted
-    /// run session without allocating on the error path.
-    #[expect(
-        clippy::result_large_err,
-        reason = "RunStepError preserves the uncommitted run session by value without allocating on the error path"
-    )]
-    pub fn step(mut self) -> Result<StepTransition<'program>, RunStepError<'program>> {
+    #[must_use]
+    pub fn step(mut self) -> StepTransition<'program> {
         let applied = {
             let RunCore {
                 state,
@@ -292,10 +256,10 @@ impl<'program> RunSession<'program> {
                 RuleSearch::Matched(matched) => matched,
                 RuleSearch::Stable => {
                     let steps = budget.completed_steps();
-                    return Ok(StepTransition::Stable(StableRun {
+                    return StepTransition::Stable(StableRun {
                         steps,
                         core: self.core,
-                    }));
+                    });
                 }
             };
 
@@ -304,10 +268,10 @@ impl<'program> RunSession<'program> {
 
         let applied = match applied {
             Ok(applied) => applied,
-            Err(error) => return Err(RunStepError::new(error, self)),
+            Err(error) => return StepTransition::Failed(FailedRun::new(error, self)),
         };
 
-        Ok(applied.into_transition(self))
+        applied.into_transition(self)
     }
 
     /// Runs this session to completion.
@@ -319,16 +283,16 @@ impl<'program> RunSession<'program> {
     pub fn finish(mut self) -> Result<RunResult, RunError> {
         loop {
             match self.step() {
-                Ok(StepTransition::Applied(applied)) => {
+                StepTransition::Applied(applied) => {
                     self = applied.into_session();
                 }
-                Ok(StepTransition::Stable(stable)) => {
+                StepTransition::Stable(stable) => {
                     return stable.into_result();
                 }
-                Ok(StepTransition::Returned(returned)) => {
+                StepTransition::Returned(returned) => {
                     return returned.into_result();
                 }
-                Err(error) => return Err(error.into_error()),
+                StepTransition::Failed(failed) => return Err(failed.into_error()),
             }
         }
     }
@@ -353,7 +317,7 @@ impl<'program> RunSession<'program> {
 
         loop {
             match self.step() {
-                Ok(StepTransition::Applied(applied)) => {
+                StepTransition::Applied(applied) => {
                     Self::emit_step_trace(
                         &mut trace,
                         applied.step(),
@@ -364,10 +328,10 @@ impl<'program> RunSession<'program> {
                     )?;
                     self = applied.into_session();
                 }
-                Ok(StepTransition::Stable(stable)) => {
+                StepTransition::Stable(stable) => {
                     return stable.into_result().map_err(TracedRunError::Run);
                 }
-                Ok(StepTransition::Returned(returned)) => {
+                StepTransition::Returned(returned) => {
                     Self::emit_step_trace(
                         &mut trace,
                         returned.step(),
@@ -378,7 +342,9 @@ impl<'program> RunSession<'program> {
                     )?;
                     return returned.into_result().map_err(TracedRunError::Run);
                 }
-                Err(error) => return Err(TracedRunError::Run(error.into_error())),
+                StepTransition::Failed(failed) => {
+                    return Err(TracedRunError::Run(failed.into_error()));
+                }
             }
         }
     }
@@ -482,7 +448,7 @@ impl<'program> ReturnedRun<'program> {
 
     /// Borrowed return payload from the parsed program.
     #[must_use]
-    pub const fn output(&self) -> PayloadView<'program> {
+    pub const fn output(&self) -> ReturnOutputView<'program> {
         self.output
     }
 
@@ -499,7 +465,7 @@ impl<'program> ReturnedRun<'program> {
     }
 }
 
-impl<'program> RunStepError<'program> {
+impl<'program> FailedRun<'program> {
     fn new(error: RunError, session: RunSession<'program>) -> Self {
         Self { error, session }
     }
@@ -522,24 +488,6 @@ impl<'program> RunStepError<'program> {
         self.session.state()
     }
 
-    /// Recover the uncommitted run with replacement runtime limits.
-    ///
-    /// This is the only public path that can resume a failed step. It consumes
-    /// the error value, validates the replacement limits against the preserved
-    /// state, and returns a runnable session only if those limits fit.
-    ///
-    /// # Errors
-    ///
-    /// Returns another `RunStepError` if the replacement limits do not fit the
-    /// uncommitted session's completed step count or current state.
-    #[expect(
-        clippy::result_large_err,
-        reason = "RunStepError preserves the uncommitted run session by value without allocating on the error path"
-    )]
-    pub fn retry_with_limits(self, limits: RunLimits) -> Result<RunSession<'program>, Self> {
-        self.session.retry_with_limits(limits)
-    }
-
     /// Discard the uncommitted run session and return the runtime error.
     #[must_use]
     pub fn into_error(self) -> RunError {
@@ -547,13 +495,13 @@ impl<'program> RunStepError<'program> {
     }
 }
 
-impl core::fmt::Display for RunStepError<'_> {
+impl core::fmt::Display for FailedRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.error.fmt(formatter)
     }
 }
 
-impl core::error::Error for RunStepError<'_> {
+impl core::error::Error for FailedRun<'_> {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         Some(&self.error)
     }

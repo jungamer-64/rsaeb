@@ -25,36 +25,6 @@ impl RuntimeBudgetState {
         self.completed_steps
     }
 
-    /// Replaces the runtime limits for an uncommitted execution.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` if completed steps or the current runtime state do
-    /// not fit the replacement limits.
-    pub(crate) fn with_limits(
-        mut self,
-        limits: RunLimits,
-        current_state_len: RuntimeStateByteCount,
-    ) -> Result<Self, RunError> {
-        if self.completed_steps.get() > limits.step_limit().get() {
-            return Err(LimitError::step(
-                limits.step_limit(),
-                self.completed_steps,
-                current_state_len,
-            )
-            .into());
-        }
-
-        Self::ensure_state_len(
-            StateLimitContext::CurrentState,
-            limits.state_byte_limit(),
-            current_state_len,
-        )?;
-
-        self.limits = limits;
-        Ok(self)
-    }
-
     /// Checks initial input materialization against runtime state limits.
     ///
     /// # Errors

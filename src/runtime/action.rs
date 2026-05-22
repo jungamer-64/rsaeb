@@ -1,8 +1,7 @@
-use crate::allocation::AllocationContext;
 use crate::bytes::ReturnOutputByteCount;
 use crate::error::RunError;
-use crate::inspect::{PayloadView, RuleView};
-use crate::program::{ReturnOutput, StepCount};
+use crate::inspect::RuleView;
+use crate::program::{ReturnOutput, ReturnOutputView, StepCount};
 use crate::rule::Action;
 
 use super::budget::RuntimeBudgetState;
@@ -13,7 +12,7 @@ use super::state::{MatchedStateSpan, State};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AppliedRuleEffect<'program> {
     Continue,
-    Return(PayloadView<'program>),
+    Return(ReturnOutputView<'program>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,7 +25,7 @@ pub(crate) struct AppliedRule<'program> {
 #[derive(Debug, PartialEq, Eq)]
 enum PreparedAction<'program> {
     Rewrite(PreparedRewrite),
-    Return(PayloadView<'program>),
+    Return(ReturnOutputView<'program>),
 }
 
 /// Materializes a return payload as public return output.
@@ -34,10 +33,10 @@ enum PreparedAction<'program> {
 /// # Errors
 ///
 /// Returns `RunError` if return-output allocation fails.
-pub(crate) fn materialize_return_output(output: PayloadView<'_>) -> Result<ReturnOutput, RunError> {
-    Ok(ReturnOutput::from_return_payload(
-        output.to_vec_with_context(AllocationContext::ReturnOutput)?,
-    ))
+pub(crate) fn materialize_return_output(
+    output: ReturnOutputView<'_>,
+) -> Result<ReturnOutput, RunError> {
+    Ok(output.materialize()?)
 }
 
 /// Applies one matched rule and commits its once-rule state on success.
@@ -117,7 +116,7 @@ fn prepare_action<'program>(
             let output_len = ReturnOutputByteCount::from_payload_count(output.byte_count());
             budget.ensure_return_len(output_len)?;
 
-            Ok(PreparedAction::Return(PayloadView::new(output)))
+            Ok(PreparedAction::Return(ReturnOutputView::new(output)))
         }
     }
 }
