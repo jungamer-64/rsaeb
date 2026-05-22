@@ -104,12 +104,6 @@ fn runtime_input_reports_public_errors_and_debug_bytes() -> TestResult {
         "expected runtime input error",
     )?;
 
-    let error = rsaeb::error::AebError::from(error);
-    ensure_matches(
-        matches!(error, rsaeb::error::AebError::Input(_)),
-        "expected top-level input error",
-    )?;
-
     let Err(limit_error) = RuntimeInput::validate(
         RuntimeInputSource::from_bytes(b"aa"),
         RuntimeInputByteLimit::new(1),

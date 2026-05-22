@@ -4,7 +4,7 @@ use super::state::State;
 use crate::RunLimits;
 use crate::bytes::{CompactByte, Payload};
 use crate::error::{LimitError, PayloadKind, RunError, RuntimeInputError, StateLimitContext};
-use crate::execution::{RunSession, RunStepError, StepTransition};
+use crate::execution::{FailedRun, RunSession, StepTransition};
 use crate::limits::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit, ReturnOutputByteCount,
     RuntimeInputByteCount, RuntimeInputByteLimit, RuntimeStateByteCount, RuntimeStateByteLimit,
@@ -65,12 +65,12 @@ fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping succeeds.
-fn expect_step_error<'program>(
-    result: Result<StepTransition<'program>, RunStepError<'program>>,
-) -> Result<RunStepError<'program>, TestFailure> {
+fn expect_step_error(result: StepTransition<'_>) -> Result<FailedRun<'_>, TestFailure> {
     match result {
-        Ok(_) => Err(TestFailure::message("expected step error")),
-        Err(error) => Ok(error),
+        StepTransition::Failed(failed) => Ok(failed),
+        StepTransition::Applied(_) | StepTransition::Stable(_) | StepTransition::Returned(_) => {
+            Err(TestFailure::message("expected step error"))
+        }
     }
 }
 
@@ -79,21 +79,19 @@ fn expect_step_error<'program>(
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping fails.
-fn expect_step_transition<'program>(
-    result: Result<StepTransition<'program>, RunStepError<'program>>,
-) -> Result<StepTransition<'program>, TestFailure> {
+fn expect_step_transition(result: StepTransition<'_>) -> Result<StepTransition<'_>, TestFailure> {
     match result {
-        Ok(transition) => Ok(transition),
-        Err(error) => Err(TestFailure::from(error.into_error())),
+        StepTransition::Failed(failed) => Err(TestFailure::from(failed.into_error())),
+        transition => Ok(transition),
     }
 }
 
 /// # Errors
 ///
-/// Returns `TestFailure` if a failed once-rule commit attempt consumes rule
-/// availability.
+/// Returns `TestFailure` if a failed once-rule commit attempt mutates runtime
+/// state before the commit boundary.
 #[test]
-fn once_rule_failure_does_not_consume_before_step_commit() -> TestResult {
+fn once_rule_failure_preserves_state_before_step_commit() -> TestResult {
     let program = parse_program("(once)a=(return)ok")?;
     let input = runtime_input(b"a")?;
     let limits = RunLimits::new(
@@ -111,16 +109,10 @@ fn once_rule_failure_does_not_consume_before_step_commit() -> TestResult {
         }),
     )?;
 
-    let runtime = error
-        .retry_with_limits(limits)
-        .map_err(|error| TestFailure::from(error.into_error()))?;
-    let repeated_error = expect_step_error(runtime.step())?;
+    ensure_eq!(error.completed_steps(), StepCount::ZERO)?;
     ensure_eq!(
-        repeated_error.into_error(),
-        RunError::Limit(LimitError::Return {
-            limit: ReturnByteLimit::new(1),
-            attempted_len: ReturnOutputByteCount::new(2),
-        }),
+        runtime_view_bytes(error.state()).as_slice(),
+        b"a".as_slice()
     )
 }
 
@@ -149,7 +141,7 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
                 b"x".as_slice()
             )?;
         }
-        StepTransition::Applied(_) | StepTransition::Returned(_) => {
+        StepTransition::Applied(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
             return Err(TestFailure::message("expected stable completion"));
         }
     }
@@ -189,16 +181,8 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
         b"a".as_slice(),
     )?;
 
-    let runtime = error
-        .retry_with_limits(RunLimits::new(
-            StepLimit::new(0),
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        ))
-        .map_err(|error| TestFailure::from(error.into_error()))?;
-    let repeated_error = expect_step_limit(expect_step_error(runtime.step())?.into_error())?;
     ensure_eq!(
-        repeated_error,
+        expect_step_limit(error.into_error())?,
         LimitError::Step {
             max_steps: StepLimit::new(0),
             completed_steps: StepCount::ZERO,
@@ -234,10 +218,6 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
         runtime_view_bytes(state_error.state()).as_slice(),
         b"aa".as_slice(),
     )?;
-    let runtime = state_error
-        .retry_with_limits(state_limits)
-        .map_err(|error| TestFailure::from(error.into_error()))?;
-    let state_error = expect_step_error(runtime.step())?;
     ensure_eq!(
         state_error.into_error(),
         RunError::Limit(LimitError::State {
@@ -268,10 +248,6 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
         runtime_view_bytes(return_error.state()).as_slice(),
         b"a".as_slice(),
     )?;
-    let runtime = return_error
-        .retry_with_limits(return_limits)
-        .map_err(|error| TestFailure::from(error.into_error()))?;
-    let return_error = expect_step_error(runtime.step())?;
     ensure_eq!(
         return_error.into_error(),
         RunError::Limit(LimitError::Return {

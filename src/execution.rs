@@ -4,8 +4,8 @@
 //! [`RuntimeInput`] and returns a [`RunSession`]. Calling
 //! [`RunSession::step`] consumes that value and returns a [`StepTransition`],
 //! so callers must handle the next state explicitly: continue with
-//! [`AppliedStep::into_session`], finish a [`StableRun`], or finish a
-//! [`ReturnedRun`].
+//! [`AppliedStep::into_session`], finish a [`StableRun`], finish a
+//! [`ReturnedRun`], or inspect a [`FailedRun`].
 //!
 //! The run session is the mutable runtime engine. It owns the current state,
 //! rewrite scratch, budgets, and per-run `(once)` state directly, so there is
@@ -446,7 +446,7 @@ impl<'program> ReturnedRun<'program> {
         self.rule
     }
 
-    /// Borrowed return payload from the parsed program.
+    /// Borrowed return output from runtime execution.
     #[must_use]
     pub const fn output(&self) -> ReturnOutputView<'program> {
         self.output

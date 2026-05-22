@@ -2,13 +2,13 @@
 
 mod support;
 
-use rsaeb::error::{LimitError, StateLimitContext};
+use rsaeb::error::LimitError;
 use rsaeb::execution::{
-    AppliedStep, ReturnedRun, RunSession, RunStepError, StableRun, StepTransition,
+    AppliedStep, FailedRun, ReturnedRun, RunSession, StableRun, StepTransition,
 };
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit,
-    RuntimeStateByteLimit, StepLimit,
+    StepLimit,
 };
 use rsaeb::{RunLimits, RunOutcome, RunResult, RuntimeInput, RuntimeInputSource};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
@@ -115,6 +115,7 @@ fn finish_step_signatures(
                 signatures.push(returned_signature(&returned)?);
                 return Ok(signatures);
             }
+            StepTransition::Failed(failed) => return Err(TestFailure::from(failed.into_error())),
         }
     }
 }
@@ -124,26 +125,24 @@ fn finish_step_signatures(
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping fails.
-fn expect_step_transition<'program>(
-    result: Result<StepTransition<'program>, RunStepError<'program>>,
-) -> Result<StepTransition<'program>, TestFailure> {
+fn expect_step_transition(result: StepTransition<'_>) -> Result<StepTransition<'_>, TestFailure> {
     match result {
-        Ok(transition) => Ok(transition),
-        Err(error) => Err(TestFailure::from(error.into_error())),
+        StepTransition::Failed(failed) => Err(TestFailure::from(failed.into_error())),
+        transition => Ok(transition),
     }
 }
 
-/// Returns the expected step error.
+/// Returns the expected failed step transition.
 ///
 /// # Errors
 ///
-/// Returns `TestFailure` if stepping succeeds.
-fn expect_step_error<'program>(
-    result: Result<StepTransition<'program>, RunStepError<'program>>,
-) -> Result<RunStepError<'program>, TestFailure> {
+/// Returns `TestFailure` if stepping does not fail.
+fn expect_failed_transition(result: StepTransition<'_>) -> Result<FailedRun<'_>, TestFailure> {
     match result {
-        Ok(_) => Err(TestFailure::message("expected step error")),
-        Err(error) => Ok(error),
+        StepTransition::Failed(failed) => Ok(failed),
+        StepTransition::Applied(_) | StepTransition::Stable(_) | StepTransition::Returned(_) => {
+            Err(TestFailure::message("expected failed step"))
+        }
     }
 }
 
@@ -223,7 +222,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
             ensure_eq!(applied.state().byte_count().get(), 1)?;
             applied.into_session()
         }
-        StepTransition::Stable(_) | StepTransition::Returned(_) => {
+        StepTransition::Stable(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
             return Err(TestFailure::message("expected first applied step"));
         }
     };
@@ -241,7 +240,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
             )?;
             applied.into_session()
         }
-        StepTransition::Stable(_) | StepTransition::Returned(_) => {
+        StepTransition::Stable(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
             return Err(TestFailure::message("expected second applied step"));
         }
     };
@@ -254,7 +253,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
                 b"c".as_slice()
             )?;
         }
-        StepTransition::Applied(_) | StepTransition::Returned(_) => {
+        StepTransition::Applied(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
             return Err(TestFailure::message("expected stable completion"));
         }
     }
@@ -289,7 +288,7 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
             )?;
             applied.into_session()
         }
-        StepTransition::Stable(_) | StepTransition::Returned(_) => {
+        StepTransition::Stable(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
             return Err(TestFailure::message("expected applied step"));
         }
     };
@@ -343,99 +342,70 @@ fn execution_consumes_runtime_input_without_session_leakage() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if a preserved step-error execution cannot retry with
-/// relaxed replacement limits.
+/// Returns `TestFailure` if a failed step does not preserve the uncommitted
+/// state as a terminal transition.
 #[test]
-fn execution_step_error_can_retry_with_relaxed_limits() -> TestResult {
+fn execution_step_failure_is_terminal_transition() -> TestResult {
     let program = parse_program("a=(return)ok")?;
-    let input = runtime_input(b"a")?;
     let limits = RunLimits::new(
         StepLimit::new(1),
         DEFAULT_MAX_STATE_LEN,
         ReturnByteLimit::new(1),
     );
-    let execution = program.start_run(input, limits)?;
+    let execution = program.start_run(runtime_input(b"a")?, limits)?;
 
-    let error = expect_step_error(execution.step())?;
+    let failed = expect_failed_transition(execution.step())?;
+    ensure_eq!(failed.completed_steps().get(), 0)?;
     ensure_eq!(
-        runtime_view_bytes(error.state())?.as_slice(),
+        runtime_view_bytes(failed.state())?.as_slice(),
         b"a".as_slice(),
     )?;
-    let execution = error
-        .retry_with_limits(limits.with_return_byte_limit(ReturnByteLimit::new(2)))
-        .map_err(|error| TestFailure::from(error.into_error()))?;
-
-    match expect_step_transition(execution.step())? {
-        StepTransition::Returned(returned) => {
-            ensure_eq!(
-                returned.output().materialize()?.as_slice(),
-                b"ok".as_slice(),
-            )
-        }
-        StepTransition::Applied(_) | StepTransition::Stable(_) => {
-            Err(TestFailure::message("expected returned execution"))
-        }
-    }
+    ensure_matches(
+        matches!(
+            failed.error(),
+            rsaeb::error::RunError::Limit(LimitError::Return {
+                limit,
+                attempted_len,
+            }) if *limit == ReturnByteLimit::new(1) && attempted_len.get() == 2
+        ),
+        "expected return limit failure",
+    )
 }
 
 /// # Errors
 ///
-/// Returns `TestFailure` if error-owned recovery accepts limits that do not
-/// fit the preserved uncommitted execution state.
+/// Returns `TestFailure` if a failed later step loses completed progress or
+/// the current uncommitted state.
 #[test]
-fn execution_rejects_replacement_limits_that_do_not_fit_current_progress() -> TestResult {
+fn execution_step_failure_preserves_current_progress() -> TestResult {
     let program = parse_program("a=b\nb=c")?;
-    let input = runtime_input(b"a")?;
     let limits = RunLimits::new(
         StepLimit::new(1),
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
-    let execution = program.start_run(input, limits)?;
+    let execution = program.start_run(runtime_input(b"a")?, limits)?;
 
     let running = match expect_step_transition(execution.step())? {
         StepTransition::Applied(applied) => applied.into_session(),
-        StepTransition::Stable(_) | StepTransition::Returned(_) => {
+        StepTransition::Stable(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
             return Err(TestFailure::message("expected applied execution"));
         }
     };
-    let error = expect_step_error(running.step())?;
-    ensure_eq!(error.completed_steps().get(), 1)?;
-    let retry_error = match error.retry_with_limits(limits.with_step_limit(StepLimit::new(0))) {
-        Ok(_) => return Err(TestFailure::message("expected retry limit error")),
-        Err(error) => error.into_error(),
-    };
+    let failed = expect_failed_transition(running.step())?;
+    ensure_eq!(failed.completed_steps().get(), 1)?;
+    ensure_eq!(
+        runtime_view_bytes(failed.state())?.as_slice(),
+        b"b".as_slice(),
+    )?;
     ensure_matches(
         matches!(
-            retry_error,
+            failed.into_error(),
             rsaeb::error::RunError::Limit(LimitError::Step {
                 completed_steps,
                 ..
             }) if completed_steps.get() == 1
         ),
-        "expected completed-step replacement limit error",
-    )?;
-
-    let execution = program.start_run(
-        runtime_input(b"a")?,
-        limits.with_step_limit(StepLimit::new(0)),
-    )?;
-    let error = expect_step_error(execution.step())?;
-    let retry_error = match error
-        .retry_with_limits(limits.with_state_byte_limit(RuntimeStateByteLimit::new(0)))
-    {
-        Ok(_) => return Err(TestFailure::message("expected retry state limit error")),
-        Err(error) => error.into_error(),
-    };
-    ensure_matches(
-        matches!(
-            retry_error,
-            rsaeb::error::RunError::Limit(LimitError::State {
-                context: StateLimitContext::CurrentState,
-                attempted_len,
-                ..
-            }) if attempted_len.get() == 1
-        ),
-        "expected current-state replacement limit error",
+        "expected completed-step limit failure",
     )
 }

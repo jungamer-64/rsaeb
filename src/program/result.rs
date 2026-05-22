@@ -133,6 +133,11 @@ impl<'program> ReturnOutputView<'program> {
         self.byte_count().is_zero()
     }
 
+    /// Materializes this return output view at the requested allocation site.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the output buffer cannot be allocated.
     pub(crate) fn to_vec_with_context(
         self,
         context: AllocationContext,

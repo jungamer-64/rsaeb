@@ -119,32 +119,32 @@
 //!     limits,
 //! )?;
 //!
-//! let execution = match execution.step().map_err(|step| step.into_error())? {
+//! let execution = match execution.step() {
 //!     StepTransition::Applied(applied) => {
 //!         assert_eq!(applied.state().materialize()?.as_slice(), b"b");
 //!         applied.into_session()
 //!     }
-//!     StepTransition::Stable(_) | StepTransition::Returned(_) => {
+//!     StepTransition::Stable(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
 //!         return Err("expected first applied step".into());
 //!     }
 //! };
 //!
-//! let execution = match execution.step().map_err(|step| step.into_error())? {
+//! let execution = match execution.step() {
 //!     StepTransition::Applied(applied) => {
 //!         assert_eq!(applied.state().materialize()?.as_slice(), b"c");
 //!         applied.into_session()
 //!     }
-//!     StepTransition::Stable(_) | StepTransition::Returned(_) => {
+//!     StepTransition::Stable(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
 //!         return Err("expected second applied step".into());
 //!     }
 //! };
 //!
-//! match execution.step().map_err(|step| step.into_error())? {
+//! match execution.step() {
 //!     StepTransition::Stable(stable) => {
 //!         assert_eq!(stable.steps().get(), 2);
 //!         assert_eq!(stable.state().materialize()?.as_slice(), b"c");
 //!     }
-//!     StepTransition::Applied(_) | StepTransition::Returned(_) => {
+//!     StepTransition::Applied(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
 //!         return Err("expected stable completion".into());
 //!     }
 //! }
@@ -221,6 +221,7 @@
 //! top when a caller needs owned event bytes:
 //!
 //! ```
+//! use core::convert::Infallible;
 //! use rsaeb::limits::{
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 //! };
@@ -241,6 +242,7 @@
 //!         if let BorrowedTraceEvent::Step { rule, .. } = event {
 //!             let _line = rule.line_number();
 //!         }
+//!         Ok::<(), Infallible>(())
 //!     },
 //! )?;
 //!
@@ -272,16 +274,19 @@
 //! let mut states = Vec::new();
 //! let mut returns = Vec::new();
 //!
-//! program.run_with_trace_snapshots(input, trace_limits, |event| match event {
-//!     TraceSnapshotEvent::Initial { state } => states.push(state.into_raw_bytes()),
-//!     TraceSnapshotEvent::Step {
-//!         effect: TraceSnapshotEffect::Continue { state },
-//!         ..
-//!     } => states.push(state.into_raw_bytes()),
-//!     TraceSnapshotEvent::Step {
-//!         effect: TraceSnapshotEffect::Return { output },
-//!         ..
-//!     } => returns.push(output.into_raw_bytes()),
+//! program.run_with_trace_snapshots(input, trace_limits, |event| {
+//!     match event {
+//!         TraceSnapshotEvent::Initial { state } => states.push(state.into_raw_bytes()),
+//!         TraceSnapshotEvent::Step {
+//!             effect: TraceSnapshotEffect::Continue { state },
+//!             ..
+//!         } => states.push(state.into_raw_bytes()),
+//!         TraceSnapshotEvent::Step {
+//!             effect: TraceSnapshotEffect::Return { output },
+//!             ..
+//!         } => returns.push(output.into_raw_bytes()),
+//!     }
+//!     Ok::<(), core::convert::Infallible>(())
 //! })?;
 //!
 //! assert_eq!(states, [b"a".to_vec(), b"b".to_vec()]);
@@ -296,21 +301,18 @@
 //! materialization, and user trace-sink failures are reported with structured
 //! error types such as [`error::ParseError`], [`error::RuntimeInputError`],
 //! [`error::RunError`], [`error::AllocationError`],
-//! [`error::TraceSnapshotError`], [`error::TraceSnapshotRunError`],
-//! [`error::FallibleTraceSnapshotRunError`], and [`error::TracedRunError`].
+//! [`error::TraceSnapshotError`], [`error::TraceSnapshotRunError`], and
+//! [`error::TracedRunError`].
 //! Allocation reservation failures include a typed
 //! [`error::RequestedCapacity`] instead of only a formatted string.
-//! [`error::AebError`] is available as a parse/input/run umbrella for callers
-//! that want one top-level error type.
 //!
 //! ```
-//! use rsaeb::error::{AebError, RuntimeInputError};
+//! use rsaeb::error::RuntimeInputError;
 //! use rsaeb::limits::RuntimeInputByteLimit;
 //! use rsaeb::{RuntimeInput, RuntimeInputSource};
 //!
-//! fn validate_host_input(bytes: &[u8]) -> Result<RuntimeInput, AebError> {
+//! fn validate_host_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
 //!     RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), RuntimeInputByteLimit::new(4))
-//!         .map_err(AebError::from)
 //! }
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -320,7 +322,7 @@
 //!
 //! assert!(matches!(
 //!     error,
-//!     AebError::Input(RuntimeInputError::NonAscii { column, byte })
+//!     RuntimeInputError::NonAscii { column, byte }
 //!         if column.get() == 1 && byte.get() == 0xff
 //! ));
 //! # Ok(())

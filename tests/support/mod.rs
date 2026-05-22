@@ -1,8 +1,7 @@
 use std::string::{FromUtf8Error, String};
 
 use rsaeb::error::{
-    AebError, AllocationError, FallibleTraceSnapshotRunError, ParseError, RunError,
-    RuntimeInputError, TraceSnapshotRunError,
+    AllocationError, ParseError, RunError, RuntimeInputError, TraceSnapshotRunError,
 };
 use rsaeb::limits::DEFAULT_PARSE_LIMITS;
 use rsaeb::{Program, ProgramSource};
@@ -12,9 +11,7 @@ pub enum TestFailure {
     Parse(ParseError),
     Input(RuntimeInputError),
     Run(RunError),
-    TraceSnapshot(TraceSnapshotRunError),
-    FallibleTraceSnapshot(FallibleTraceSnapshotRunError<&'static str>),
-    Aeb(AebError),
+    TraceSnapshot(String),
     Utf8(FromUtf8Error),
     Allocation(AllocationError),
 }
@@ -35,11 +32,6 @@ impl core::fmt::Debug for TestFailure {
             Self::TraceSnapshot(error) => {
                 formatter.debug_tuple("TraceSnapshot").field(error).finish()
             }
-            Self::FallibleTraceSnapshot(error) => formatter
-                .debug_tuple("FallibleTraceSnapshot")
-                .field(error)
-                .finish(),
-            Self::Aeb(error) => formatter.debug_tuple("Aeb").field(error).finish(),
             Self::Utf8(error) => formatter.debug_tuple("Utf8").field(error).finish(),
             Self::Allocation(error) => formatter.debug_tuple("Allocation").field(error).finish(),
         }
@@ -64,21 +56,12 @@ impl From<RunError> for TestFailure {
     }
 }
 
-impl From<TraceSnapshotRunError> for TestFailure {
-    fn from(value: TraceSnapshotRunError) -> Self {
-        Self::TraceSnapshot(value)
-    }
-}
-
-impl From<FallibleTraceSnapshotRunError<&'static str>> for TestFailure {
-    fn from(value: FallibleTraceSnapshotRunError<&'static str>) -> Self {
-        Self::FallibleTraceSnapshot(value)
-    }
-}
-
-impl From<AebError> for TestFailure {
-    fn from(value: AebError) -> Self {
-        Self::Aeb(value)
+impl<E> From<TraceSnapshotRunError<E>> for TestFailure
+where
+    E: core::fmt::Debug,
+{
+    fn from(value: TraceSnapshotRunError<E>) -> Self {
+        Self::TraceSnapshot(std::format!("{value:?}"))
     }
 }
 

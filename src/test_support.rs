@@ -4,7 +4,7 @@ use std::string::{FromUtf8Error, String};
 
 use crate::Program;
 use crate::error::{
-    AebError, AllocationError, ParseError, ParseErrorLocation, RunError, RuntimeInputError,
+    AllocationError, ParseError, ParseErrorLocation, RunError, RuntimeInputError,
     TraceSnapshotRunError,
 };
 use crate::limits::DEFAULT_MAX_INPUT_LEN;
@@ -16,8 +16,7 @@ pub(crate) enum TestFailure {
     Parse(ParseError),
     Input(RuntimeInputError),
     Run(RunError),
-    TraceSnapshot(TraceSnapshotRunError),
-    Aeb(AebError),
+    TraceSnapshot(String),
     Utf8(FromUtf8Error),
     Allocation(AllocationError),
 }
@@ -38,7 +37,6 @@ impl core::fmt::Debug for TestFailure {
             Self::TraceSnapshot(error) => {
                 formatter.debug_tuple("TraceSnapshot").field(error).finish()
             }
-            Self::Aeb(error) => formatter.debug_tuple("Aeb").field(error).finish(),
             Self::Utf8(error) => formatter.debug_tuple("Utf8").field(error).finish(),
             Self::Allocation(error) => formatter.debug_tuple("Allocation").field(error).finish(),
         }
@@ -57,15 +55,12 @@ impl From<RunError> for TestFailure {
     }
 }
 
-impl From<TraceSnapshotRunError> for TestFailure {
-    fn from(value: TraceSnapshotRunError) -> Self {
-        Self::TraceSnapshot(value)
-    }
-}
-
-impl From<AebError> for TestFailure {
-    fn from(value: AebError) -> Self {
-        Self::Aeb(value)
+impl<E> From<TraceSnapshotRunError<E>> for TestFailure
+where
+    E: core::fmt::Debug,
+{
+    fn from(value: TraceSnapshotRunError<E>) -> Self {
+        Self::TraceSnapshot(std::format!("{value:?}"))
     }
 }
 

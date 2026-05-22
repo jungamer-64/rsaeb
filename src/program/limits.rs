@@ -216,7 +216,6 @@ impl ParseLimits {
     pub const fn rule_limit(self) -> RuleLimit {
         self.rules
     }
-
 }
 
 /// Maximum number of rewrite steps allowed before the next matching rule fails.
@@ -405,7 +404,6 @@ impl RunLimits {
     pub const fn return_byte_limit(self) -> ReturnByteLimit {
         self.return_len
     }
-
 }
 
 /// Resource limits for one trace-snapshot runtime invocation.

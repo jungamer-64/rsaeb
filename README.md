@@ -67,13 +67,12 @@ perform I/O outside the interpreter and pass already-loaded bytes to
 Use `Program::start_run` when a host needs control after each applied
 rule instead of running to completion in one call. The public typestate API
 lives under `rsaeb::execution`: only `RunSession` can step, while
-`AppliedStep`, `StableRun`, and `ReturnedRun` represent
+`AppliedStep`, `StableRun`, `ReturnedRun`, and `FailedRun` represent
 post-step states. `(return)` is terminal, not an ordinary continuation step.
 Running, applied, and stable executions expose borrowed `RuntimeStateView`
-values for observation. A failed step returns `RunStepError`, preserving
-the uncommitted execution so a host can inspect its state, retry with
-replacement limits through `RunStepError::retry_with_limits`, or discard it
-explicitly.
+values for observation. A failed step returns `StepTransition::Failed`, so a
+host can inspect the uncommitted state and then discard the failed run into its
+runtime error.
 
 The docs.rs crate page contains a complete doctested stepwise example.
 
@@ -124,11 +123,10 @@ Tracing has two layers:
   runtime state or return payload bytes only for the callback invocation.
 - Snapshot tracing materializes owned event bytes under `TraceSnapshotLimits`.
 
-Fallible borrowed sinks use `try_run_with_borrowed_trace`, which separates
-runtime errors from trace-sink errors with `TracedRunError`. Snapshot tracing
-adds one more failure domain: `run_with_trace_snapshots` returns
-`TraceSnapshotRunError`, and `try_run_with_trace_snapshots` returns
-`FallibleTraceSnapshotRunError`.
+Borrowed trace sinks use `run_with_borrowed_trace`, which separates runtime
+errors from trace-sink errors with `TracedRunError`. Snapshot tracing adds one
+more failure domain through `TraceSnapshotRunError`: runtime execution,
+snapshot materialization, and sink failures are distinct variants.
 
 Parsed rule views inside trace events borrow from the parsed `Program`, so
 retained trace events cannot outlive that program.
@@ -466,6 +464,7 @@ the primary execution path:
 - `RunOutcome`
 - `RuntimeStateSnapshot`
 - `ReturnOutput`
+- `ReturnOutputView`
 - `RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), limit)`
 
 Secondary domains live under explicit namespaces:
@@ -476,8 +475,7 @@ Secondary domains live under explicit namespaces:
   `TraceSnapshotLimits`, parser/runtime byte-count value types, `StepCount`,
   and default budget constants
 - `rsaeb::execution`: `RunSession`, `StepTransition`,
-  `AppliedStep`, `StableRun`, `ReturnedRun`,
-  and `RunStepError`
+  `AppliedStep`, `StableRun`, `ReturnedRun`, and `FailedRun`
 - `rsaeb::inspect`: `RuleView`, `RuleActionView`, `PayloadView`,
   `PayloadBytes`, `CanonicalRuleSource`, rule position/count types,
   `OnceRuleCount`, `RuleRepeat`, and `RuleAnchor`

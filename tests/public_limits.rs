@@ -5,8 +5,8 @@ mod support;
 use rsaeb::error::{LimitError, ParseErrorKind, ParseLimitError, RunError, StateLimitContext};
 use rsaeb::limits::{
     CodeLineByteLimit, DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
-    DEFAULT_PARSE_LIMITS, PayloadByteLimit, ReturnByteLimit, RuleLimit, RuntimeStateByteLimit,
-    SourceByteLimit, StepLimit,
+    DEFAULT_PARSE_LIMITS, ParseLimits, PayloadByteLimit, ReturnByteLimit, RuleLimit,
+    RuntimeStateByteLimit, SourceByteLimit, StepLimit,
 };
 use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput, RuntimeInputSource};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
@@ -66,7 +66,12 @@ fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInpu
 /// structured parse-limit errors.
 #[test]
 fn limits_parse_resource_errors_are_structured() -> TestResult {
-    let limits = DEFAULT_PARSE_LIMITS.with_source_byte_limit(SourceByteLimit::new(3));
+    let limits = ParseLimits::new(
+        SourceByteLimit::new(3),
+        DEFAULT_PARSE_LIMITS.code_line_byte_limit(),
+        DEFAULT_PARSE_LIMITS.payload_byte_limit(),
+        DEFAULT_PARSE_LIMITS.rule_limit(),
+    );
     let Err(error) = Program::parse(ProgramSource::from_text("a=b\n"), limits) else {
         return Err(TestFailure::message("expected source limit error"));
     };
@@ -81,7 +86,12 @@ fn limits_parse_resource_errors_are_structured() -> TestResult {
         _ => return Err(TestFailure::message("expected source limit error")),
     }
 
-    let limits = DEFAULT_PARSE_LIMITS.with_code_line_byte_limit(CodeLineByteLimit::new(3));
+    let limits = ParseLimits::new(
+        DEFAULT_PARSE_LIMITS.source_byte_limit(),
+        CodeLineByteLimit::new(3),
+        DEFAULT_PARSE_LIMITS.payload_byte_limit(),
+        DEFAULT_PARSE_LIMITS.rule_limit(),
+    );
     let Err(error) = Program::parse(ProgramSource::from_text("ab=c"), limits) else {
         return Err(TestFailure::message("expected code-line limit error"));
     };
@@ -96,7 +106,12 @@ fn limits_parse_resource_errors_are_structured() -> TestResult {
         _ => return Err(TestFailure::message("expected code-line limit error")),
     }
 
-    let limits = DEFAULT_PARSE_LIMITS.with_payload_byte_limit(PayloadByteLimit::new(1));
+    let limits = ParseLimits::new(
+        DEFAULT_PARSE_LIMITS.source_byte_limit(),
+        DEFAULT_PARSE_LIMITS.code_line_byte_limit(),
+        PayloadByteLimit::new(1),
+        DEFAULT_PARSE_LIMITS.rule_limit(),
+    );
     let Err(error) = Program::parse(ProgramSource::from_text("ab=c"), limits) else {
         return Err(TestFailure::message("expected payload limit error"));
     };
@@ -111,7 +126,12 @@ fn limits_parse_resource_errors_are_structured() -> TestResult {
         _ => return Err(TestFailure::message("expected payload limit error")),
     }
 
-    let limits = DEFAULT_PARSE_LIMITS.with_rule_limit(RuleLimit::new(1));
+    let limits = ParseLimits::new(
+        DEFAULT_PARSE_LIMITS.source_byte_limit(),
+        DEFAULT_PARSE_LIMITS.code_line_byte_limit(),
+        DEFAULT_PARSE_LIMITS.payload_byte_limit(),
+        RuleLimit::new(1),
+    );
     let Err(error) = Program::parse(ProgramSource::from_text("a=b\nb=c"), limits) else {
         return Err(TestFailure::message("expected rule limit error"));
     };

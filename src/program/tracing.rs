@@ -1,6 +1,4 @@
-use crate::error::{
-    TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
-};
+use crate::error::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
 use crate::execution::RunSession;
 use crate::runtime::RuntimeInput;
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};

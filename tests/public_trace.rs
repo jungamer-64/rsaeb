@@ -2,10 +2,7 @@
 
 mod support;
 
-use rsaeb::error::{
-    FallibleTraceSnapshotRunError, RunError, TraceSnapshotError, TraceSnapshotRunError,
-    TracedRunError,
-};
+use rsaeb::error::{RunError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit, TraceSnapshotByteLimit, TraceSnapshotLimits,
@@ -22,8 +19,8 @@ use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program}
 ///
 /// Returns `TestFailure` if the traced run succeeds.
 fn expect_trace_snapshot_error<T>(
-    result: Result<T, TraceSnapshotRunError>,
-) -> Result<TraceSnapshotRunError, TestFailure> {
+    result: Result<T, TraceSnapshotRunError<TestFailure>>,
+) -> Result<TraceSnapshotRunError<TestFailure>, TestFailure> {
     match result {
         Ok(_) => Err(TestFailure::message("expected trace snapshot error")),
         Err(error) => Ok(error),
@@ -50,6 +47,7 @@ fn trace_snapshot_example(
     );
     let result = program.run_with_trace_snapshots(runtime_input(b"a")?, limits, |event| {
         events.push(event);
+        Ok::<(), TestFailure>(())
     })?;
 
     Ok((result, events))
@@ -96,7 +94,7 @@ fn trace_borrowed_events_are_emitted_without_snapshots() -> TestResult {
     );
 
     let result = program
-        .try_run_with_borrowed_trace(runtime_input(b"a")?, limits, |event| {
+        .run_with_borrowed_trace(runtime_input(b"a")?, limits, |event| {
             let bytes = match event {
                 BorrowedTraceEvent::Initial { state }
                 | BorrowedTraceEvent::Step {
@@ -210,19 +208,22 @@ fn trace_borrowed_to_snapshot_uses_only_snapshot_limit() -> TestResult {
     let program = parse_program("a=b")?;
     let mut materialization = None;
 
-    program.run_with_borrowed_trace(
-        runtime_input(b"a")?,
-        RunLimits::new(
-            StepLimit::new(10),
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        ),
-        |event| {
-            if materialization.is_none() {
-                materialization = Some(event.to_snapshot(TraceSnapshotByteLimit::new(0)));
-            }
-        },
-    )?;
+    program
+        .run_with_borrowed_trace(
+            runtime_input(b"a")?,
+            RunLimits::new(
+                StepLimit::new(10),
+                DEFAULT_MAX_STATE_LEN,
+                DEFAULT_MAX_RETURN_LEN,
+            ),
+            |event| {
+                if materialization.is_none() {
+                    materialization = Some(event.to_snapshot(TraceSnapshotByteLimit::new(0)));
+                }
+                Ok::<(), TestFailure>(())
+            },
+        )
+        .map_err(traced_test_failure)?;
 
     ensure_matches(
         matches!(
@@ -253,7 +254,7 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
             ),
             TraceSnapshotByteLimit::new(10),
         ),
-        |_event| {},
+        |_event| Ok::<(), TestFailure>(()),
     );
     let runtime_error = expect_trace_snapshot_error(runtime_error)?;
     ensure_matches(
@@ -274,7 +275,7 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
             ),
             TraceSnapshotByteLimit::new(0),
         ),
-        |_event| {},
+        |_event| Ok::<(), TestFailure>(()),
     );
     ensure_matches(
         matches!(
@@ -287,7 +288,7 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
         "expected snapshot materialization limit",
     )?;
 
-    let sink_error = program.try_run_with_trace_snapshots(
+    let sink_error = program.run_with_trace_snapshots(
         runtime_input(b"a")?,
         TraceSnapshotLimits::new(
             RunLimits::new(
@@ -301,7 +302,7 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
     );
     ensure_eq!(
         sink_error,
-        Err(FallibleTraceSnapshotRunError::Trace("trace sink full")),
+        Err(TraceSnapshotRunError::Trace("trace sink full")),
     )
 }
 
@@ -324,6 +325,7 @@ fn trace_final_event_matches_run_result() -> TestResult {
 
     let result = program.run_with_trace_snapshots(runtime_input(b"a")?, limits, |event| {
         events.push(event);
+        Ok::<(), TestFailure>(())
     })?;
 
     let last = events

@@ -28,16 +28,19 @@
 //! let trace_limits = TraceSnapshotLimits::new(run_limits, DEFAULT_MAX_TRACE_SNAPSHOT_LEN);
 //! let mut retained = Vec::new();
 //!
-//! program.run_with_trace_snapshots(input, trace_limits, |event| match event {
-//!     TraceSnapshotEvent::Initial { state } => retained.push(state.into_raw_bytes()),
-//!     TraceSnapshotEvent::Step {
-//!         effect: TraceSnapshotEffect::Continue { state },
-//!         ..
-//!     } => retained.push(state.into_raw_bytes()),
-//!     TraceSnapshotEvent::Step {
-//!         effect: TraceSnapshotEffect::Return { output },
-//!         ..
-//!     } => retained.push(output.into_raw_bytes()),
+//! program.run_with_trace_snapshots(input, trace_limits, |event| {
+//!     match event {
+//!         TraceSnapshotEvent::Initial { state } => retained.push(state.into_raw_bytes()),
+//!         TraceSnapshotEvent::Step {
+//!             effect: TraceSnapshotEffect::Continue { state },
+//!             ..
+//!         } => retained.push(state.into_raw_bytes()),
+//!         TraceSnapshotEvent::Step {
+//!             effect: TraceSnapshotEffect::Return { output },
+//!             ..
+//!         } => retained.push(output.into_raw_bytes()),
+//!     }
+//!     Ok::<(), core::convert::Infallible>(())
 //! })?;
 //!
 //! assert_eq!(retained, [b"a".to_vec(), b"b".to_vec(), b"ok".to_vec()]);
