@@ -152,6 +152,10 @@
 //! # }
 //! ```
 //!
+//! A [`execution::StepTransition::Failed`] value is terminal. It exposes the
+//! uncommitted state for diagnostics, then lets callers discard the failed run
+//! into its [`error::RunError`]; it does not expose a retryable session.
+//!
 //! # Limits
 //!
 //! [`limits::RuntimeInputByteLimit`] bounds owned input classification before

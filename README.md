@@ -72,7 +72,7 @@ post-step states. `(return)` is terminal, not an ordinary continuation step.
 Running, applied, and stable executions expose borrowed `RuntimeStateView`
 values for observation. A failed step returns `StepTransition::Failed`, so a
 host can inspect the uncommitted state and then discard the failed run into its
-runtime error.
+runtime error. The failed state is not a retryable session.
 
 The docs.rs crate page contains a complete doctested stepwise example.
 

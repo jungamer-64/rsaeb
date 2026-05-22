@@ -5,7 +5,7 @@
 //! [`RunSession::step`] consumes that value and returns a [`StepTransition`],
 //! so callers must handle the next state explicitly: continue with
 //! [`AppliedStep::into_session`], finish a [`StableRun`], finish a
-//! [`ReturnedRun`], or inspect a [`FailedRun`].
+//! [`ReturnedRun`], or inspect and discard a [`FailedRun`].
 //!
 //! The run session is the mutable runtime engine. It owns the current state,
 //! rewrite scratch, budgets, and per-run `(once)` state directly, so there is
@@ -92,10 +92,11 @@ pub struct ReturnedRun<'program> {
     output: ReturnOutputView<'program>,
 }
 
-/// Runtime failure that preserves the uncommitted run session.
+/// Runtime failure that preserves the uncommitted state for inspection.
 ///
-/// Step failures happen before the candidate rewrite is committed. The failed
-/// session stays owned by this terminal state until the caller discards it.
+/// Step failures happen before the candidate rewrite is committed. This is a
+/// terminal public state: callers can inspect the uncommitted state, then
+/// discard the failed run into its runtime error.
 pub struct FailedRun<'program> {
     error: RunError,
     session: RunSession<'program>,
