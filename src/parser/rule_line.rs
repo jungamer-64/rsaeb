@@ -5,9 +5,8 @@ use crate::bytes::{CompactByte, Payload, PayloadByteCount};
 use crate::error::{
     LeftModifierKind, ParseError, ParseErrorKind, ParseLimitError, PayloadKind, RightActionKind,
 };
-use crate::inspect::{RuleAnchor, RuleRepeat};
 use crate::program::PayloadByteLimit;
-use crate::rule::{Action, ParsedRule, RuleBody, RuleHead};
+use crate::rule::{Action, ParsedRule, RuleAnchorSyntax, RuleBody, RuleHead, RuleRepeatSyntax};
 use crate::source::{SourceLineNumber, SourcePosition};
 use crate::syntax::SyntaxToken;
 
@@ -308,13 +307,13 @@ impl<'code> LeftSyntax<'code> {
             LeftAfterRepeat {
                 line_number: self.line_number,
                 bytes: rest,
-                repeat: RuleRepeat::Once,
+                repeat: RuleRepeatSyntax::Once,
             }
         } else {
             LeftAfterRepeat {
                 line_number: self.line_number,
                 bytes: self.bytes,
-                repeat: RuleRepeat::Always,
+                repeat: RuleRepeatSyntax::Always,
             }
         }
     }
@@ -324,7 +323,7 @@ impl<'code> LeftSyntax<'code> {
 struct LeftAfterRepeat<'code> {
     line_number: SourceLineNumber,
     bytes: CompactSyntax<'code>,
-    repeat: RuleRepeat,
+    repeat: RuleRepeatSyntax,
 }
 
 impl<'code> LeftAfterRepeat<'code> {
@@ -346,11 +345,11 @@ impl<'code> LeftAfterRepeat<'code> {
     /// boundary or source-column lookup overflows.
     fn into_payload_syntax(self) -> Result<LeftPayloadSyntax<'code>, ParseError> {
         let (anchor, bytes) = if let Some(rest) = self.bytes.strip_token(SyntaxToken::Start) {
-            (RuleAnchor::Start, rest)
+            (RuleAnchorSyntax::Start, rest)
         } else if let Some(rest) = self.bytes.strip_token(SyntaxToken::End) {
-            (RuleAnchor::End, rest)
+            (RuleAnchorSyntax::End, rest)
         } else {
-            (RuleAnchor::Anywhere, self.bytes)
+            (RuleAnchorSyntax::Anywhere, self.bytes)
         };
 
         if let Some(modifier) = left_modifier_kind(bytes) {
@@ -374,8 +373,8 @@ impl<'code> LeftAfterRepeat<'code> {
 struct LeftPayloadSyntax<'code> {
     line_number: SourceLineNumber,
     bytes: CompactSyntax<'code>,
-    repeat: RuleRepeat,
-    anchor: RuleAnchor,
+    repeat: RuleRepeatSyntax,
+    anchor: RuleAnchorSyntax,
 }
 
 impl LeftPayloadSyntax<'_> {

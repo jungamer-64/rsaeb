@@ -77,6 +77,12 @@ impl RuntimeStateByteCount {
         Self { value }
     }
 
+    /// Converts validated runtime-input length into initial runtime-state length.
+    #[must_use]
+    pub(crate) const fn from_runtime_input_count(count: RuntimeInputByteCount) -> Self {
+        Self { value: count.get() }
+    }
+
     /// Returns this byte count as a primitive length.
     #[must_use]
     pub const fn get(self) -> usize {
@@ -109,6 +115,12 @@ impl ReturnOutputByteCount {
         Self { value }
     }
 
+    /// Converts a parsed return payload length into return-output length.
+    #[must_use]
+    pub(crate) const fn from_payload_count(count: PayloadByteCount) -> Self {
+        Self { value: count.get() }
+    }
+
     /// Returns this byte count as a primitive length.
     #[must_use]
     pub const fn get(self) -> usize {
@@ -135,10 +147,16 @@ pub struct TraceSnapshotByteCount {
 }
 
 impl TraceSnapshotByteCount {
-    /// Creates a trace snapshot byte count from a primitive length.
+    /// Converts runtime-state length into a trace snapshot event length.
     #[must_use]
-    pub(crate) const fn new(value: usize) -> Self {
-        Self { value }
+    pub(crate) const fn from_runtime_state_count(count: RuntimeStateByteCount) -> Self {
+        Self { value: count.get() }
+    }
+
+    /// Converts return-output length into a trace snapshot event length.
+    #[must_use]
+    pub(crate) const fn from_return_output_count(count: ReturnOutputByteCount) -> Self {
+        Self { value: count.get() }
     }
 
     /// Returns this byte count as a primitive length.

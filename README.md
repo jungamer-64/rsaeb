@@ -25,12 +25,12 @@ explicit limits:
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
 };
-use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
+use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, RuntimeInputSource};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?;
     let limits = RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
+    let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), DEFAULT_MAX_INPUT_LEN)?;
     let result = program.run(&input, limits)?;
 
     assert!(matches!(
@@ -54,7 +54,7 @@ The primary execution path is:
 
 1. Construct `ProgramSource` with `from_text` or `from_bytes`.
 2. Parse it with `Program::parse`.
-3. Validate bytes with `RuntimeInput::validate`.
+3. Label host bytes with `RuntimeInputSource::from_bytes` and validate them with `RuntimeInput::validate`.
 4. Run with `Program::run` or step with `Program::start_run`.
 
 The crate intentionally contains no filesystem, process, stdout/stderr,
@@ -90,11 +90,11 @@ use rsaeb::error::{LimitError, RunError};
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 };
-use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
+use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput, RuntimeInputSource};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let limits = RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
+    let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), DEFAULT_MAX_INPUT_LEN)?;
     let result = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?.run(&input, limits);
 
     assert!(matches!(
@@ -447,7 +447,7 @@ materialization is outside runtime execution.
 
 Filesystem failures are not part of the library error model. External I/O must
 be handled before bytes enter `ProgramSource::from_bytes`,
-`ProgramSource::from_text`, or `RuntimeInput::validate`.
+`ProgramSource::from_text`, or `RuntimeInputSource::from_bytes`.
 
 ## Public API Overview
 
@@ -455,6 +455,7 @@ The generated rustdoc is the complete API reference. The crate root is kept to
 the primary execution path:
 
 - `ProgramSource`
+- `RuntimeInputSource`
 - `RuntimeInput`
 - `Program`
 - `ParseLimits`
@@ -464,7 +465,7 @@ the primary execution path:
 - `RuntimeStateSnapshot`
 - `ReturnOutput`
 - `RuntimeInputBytes`
-- `RuntimeInput::validate(bytes, limit)`
+- `RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), limit)`
 
 Secondary domains live under explicit namespaces:
 

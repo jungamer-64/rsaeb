@@ -2,9 +2,9 @@
 
 mod support;
 
-use rsaeb::RuntimeInput;
 use rsaeb::error::{ParseErrorKind, ParseErrorLocation, PayloadKind, RunError};
 use rsaeb::limits::DEFAULT_MAX_INPUT_LEN;
+use rsaeb::{RuntimeInput, RuntimeInputSource};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns the expected runtime error.
@@ -25,7 +25,7 @@ fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFail
 ///
 /// Returns `RuntimeInputError` if the bytes are not valid runtime input.
 fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
-    RuntimeInput::validate(bytes, DEFAULT_MAX_INPUT_LEN)
+    RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), DEFAULT_MAX_INPUT_LEN)
 }
 
 /// # Errors

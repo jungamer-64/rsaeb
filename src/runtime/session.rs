@@ -282,7 +282,7 @@ impl<'program> RuntimeSession<'program> {
                 }
             };
 
-            apply_matched_rule(state, scratch, budget, once_states, matched)
+            apply_matched_rule(state, scratch, budget, matched)
         };
 
         let applied = match applied {

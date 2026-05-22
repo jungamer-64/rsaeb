@@ -14,24 +14,39 @@ pub(crate) enum OnceRuleState {
     Consumed,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum MatchedRuleCommit {
+#[derive(Debug)]
+pub(crate) enum MatchedRuleCommit<'once> {
     Always,
-    Once(ValidOnceCommit),
+    Once(ValidOnceCommit<'once>),
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ValidOnceCommit {
-    slot: OnceRuleSlot,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AvailableRuleCommit {
+    Always,
+    Once(OnceRuleSlot),
 }
 
-impl ValidOnceCommit {
-    const fn new(slot: OnceRuleSlot) -> Self {
-        Self { slot }
+#[derive(Debug)]
+pub(crate) struct ValidOnceCommit<'once> {
+    state: &'once mut OnceRuleState,
+}
+
+impl<'once> ValidOnceCommit<'once> {
+    const fn new(state: &'once mut OnceRuleState) -> Self {
+        Self { state }
     }
 
-    const fn slot(&self) -> OnceRuleSlot {
-        self.slot
+    fn commit(self) {
+        *self.state = OnceRuleState::Consumed;
+    }
+}
+
+impl MatchedRuleCommit<'_> {
+    pub(crate) fn commit(self) {
+        match self {
+            Self::Always => {}
+            Self::Once(commit) => commit.commit(),
+        }
     }
 }
 
@@ -61,37 +76,39 @@ impl OnceStateSet {
         Ok(Self { states })
     }
 
-    pub(crate) fn commit_token_for_rule(&self, rule: &Rule) -> Option<MatchedRuleCommit> {
+    pub(crate) fn available_commit_for_rule(&self, rule: &Rule) -> Option<AvailableRuleCommit> {
         match rule.repeat_state() {
-            RuleRepeatState::Always => Some(MatchedRuleCommit::Always),
-            RuleRepeatState::Once(slot) => {
+            RuleRepeatState::Always => Some(AvailableRuleCommit::Always),
+            RuleRepeatState::Once(slot) => self
+                .states
+                .get(slot.zero_based())
+                .filter(|state| state.is_fresh())
+                .map(|_| AvailableRuleCommit::Once(slot)),
+        }
+    }
+
+    pub(crate) fn commit_token(
+        &mut self,
+        commit: AvailableRuleCommit,
+    ) -> Option<MatchedRuleCommit<'_>> {
+        match commit {
+            AvailableRuleCommit::Always => Some(MatchedRuleCommit::Always),
+            AvailableRuleCommit::Once(slot) => {
                 self.valid_once_commit(slot).map(MatchedRuleCommit::Once)
             }
         }
     }
 
-    pub(crate) fn commit(&mut self, token: MatchedRuleCommit) {
-        match token {
-            MatchedRuleCommit::Always => {}
-            MatchedRuleCommit::Once(commit) => {
-                if let Some(state) = self.states.get_mut(commit.slot().zero_based()) {
-                    *state = OnceRuleState::Consumed;
-                }
-            }
-        }
-    }
-
-    fn valid_once_commit(&self, slot: OnceRuleSlot) -> Option<ValidOnceCommit> {
+    fn valid_once_commit(&mut self, slot: OnceRuleSlot) -> Option<ValidOnceCommit<'_>> {
         self.states
-            .get(slot.zero_based())
-            .copied()
-            .is_some_and(OnceRuleState::is_fresh)
-            .then_some(ValidOnceCommit::new(slot))
+            .get_mut(slot.zero_based())
+            .filter(|state| state.is_fresh())
+            .map(ValidOnceCommit::new)
     }
 }
 
 impl OnceRuleState {
-    const fn is_fresh(self) -> bool {
+    const fn is_fresh(&self) -> bool {
         matches!(self, Self::Fresh)
     }
 }

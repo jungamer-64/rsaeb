@@ -2,10 +2,9 @@ use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::Payload;
-use crate::inspect::{RuleAnchor, RuleRepeat};
 use crate::syntax::SyntaxToken;
 
-use super::model::{CanonicalRightSide, Rule};
+use super::model::{CanonicalRightSide, Rule, RuleAnchorSyntax, RuleRepeatState};
 
 /// Materializes this rule's canonical source form.
 ///
@@ -21,14 +20,14 @@ pub(crate) fn canonical_source(rule: &Rule) -> Result<Vec<u8>, AllocationError> 
         AllocationContext::CanonicalSource,
     )?;
 
-    if rule.repeat() == RuleRepeat::Once {
+    if matches!(rule.repeat_state(), RuleRepeatState::Once(_)) {
         push_token(&mut output, SyntaxToken::Once)?;
     }
 
     match rule.anchor() {
-        RuleAnchor::Anywhere => {}
-        RuleAnchor::Start => push_token(&mut output, SyntaxToken::Start)?,
-        RuleAnchor::End => push_token(&mut output, SyntaxToken::End)?,
+        RuleAnchorSyntax::Anywhere => {}
+        RuleAnchorSyntax::Start => push_token(&mut output, SyntaxToken::Start)?,
+        RuleAnchorSyntax::End => push_token(&mut output, SyntaxToken::End)?,
     }
 
     push_payload(&mut output, rule.lhs())?;
@@ -63,16 +62,16 @@ pub(crate) fn canonical_source(rule: &Rule) -> Result<Vec<u8>, AllocationError> 
 fn canonical_source_len(rule: &Rule) -> Result<usize, AllocationError> {
     let mut len = rule.lhs().len();
 
-    if rule.repeat() == RuleRepeat::Once {
+    if matches!(rule.repeat_state(), RuleRepeatState::Once(_)) {
         len = len.checked_add(SyntaxToken::Once.len()).ok_or_else(|| {
             AllocationError::capacity_overflow(AllocationContext::CanonicalSource)
         })?;
     }
 
     let anchor_len = match rule.anchor() {
-        RuleAnchor::Anywhere => 0,
-        RuleAnchor::Start => SyntaxToken::Start.len(),
-        RuleAnchor::End => SyntaxToken::End.len(),
+        RuleAnchorSyntax::Anywhere => 0,
+        RuleAnchorSyntax::Start => SyntaxToken::Start.len(),
+        RuleAnchorSyntax::End => SyntaxToken::End.len(),
     };
 
     let right_side_len = match rule.action().canonical_right_side() {

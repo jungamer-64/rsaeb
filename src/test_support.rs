@@ -3,14 +3,13 @@
 use std::string::{FromUtf8Error, String};
 
 use crate::Program;
-use crate::RuntimeInput;
 use crate::error::{
     AebError, AllocationError, ParseError, ParseErrorLocation, RunError, RuntimeInputError,
     TraceSnapshotRunError,
 };
 use crate::limits::DEFAULT_MAX_INPUT_LEN;
 use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
-use crate::{ProgramSource, limits::DEFAULT_PARSE_LIMITS};
+use crate::{ProgramSource, RuntimeInput, RuntimeInputSource, limits::DEFAULT_PARSE_LIMITS};
 
 pub(crate) enum TestFailure {
     Message(String),
@@ -97,7 +96,7 @@ pub(crate) type TestResult = Result<(), TestFailure>;
 /// Returns `RuntimeInputError` if the test input violates runtime input
 /// validation or allocation constraints.
 pub(crate) fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
-    RuntimeInput::validate(bytes, DEFAULT_MAX_INPUT_LEN)
+    RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), DEFAULT_MAX_INPUT_LEN)
 }
 
 /// Parses source text with the default parser limits.

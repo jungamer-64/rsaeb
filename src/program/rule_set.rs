@@ -2,8 +2,8 @@ use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push};
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
-use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePosition, RuleRepeat};
-use crate::rule::{OnceRuleCount, ParsedRule, Rule, RuleRepeatState};
+use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePosition};
+use crate::rule::{OnceRuleCount, ParsedRule, Rule, RuleRepeatState, RuleRepeatSyntax};
 
 use super::RuleLimit;
 
@@ -58,19 +58,20 @@ impl RuleSet {
             ));
         }
 
-        let (repeat, next_once_rule_count) = if parsed.repeat() == RuleRepeat::Once {
-            let (slot, next_once_rule_count) =
-                self.once_rule_count.reserve_next_slot().ok_or_else(|| {
-                    ParseError::at_line(
-                        line_number,
-                        ParseErrorKind::Allocation(AllocationError::capacity_overflow(
-                            AllocationContext::ProgramRuleTable,
-                        )),
-                    )
-                })?;
-            (RuleRepeatState::Once(slot), Some(next_once_rule_count))
-        } else {
-            (RuleRepeatState::Always, None)
+        let (repeat, next_once_rule_count) = match parsed.repeat_syntax() {
+            RuleRepeatSyntax::Once => {
+                let (slot, next_once_rule_count) =
+                    self.once_rule_count.reserve_next_slot().ok_or_else(|| {
+                        ParseError::at_line(
+                            line_number,
+                            ParseErrorKind::Allocation(AllocationError::capacity_overflow(
+                                AllocationContext::ProgramRuleTable,
+                            )),
+                        )
+                    })?;
+                (RuleRepeatState::Once(slot), Some(next_once_rule_count))
+            }
+            RuleRepeatSyntax::Always => (RuleRepeatState::Always, None),
         };
 
         let rule = Rule::from_parsed(parsed, repeat);

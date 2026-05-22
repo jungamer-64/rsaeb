@@ -214,7 +214,7 @@ impl InitialStateBytes {
         budget: RuntimeBudgetState,
     ) -> Result<Self, RunError> {
         let byte_count = input.byte_count();
-        let state_len = RuntimeStateByteCount::new(byte_count.get());
+        let state_len = RuntimeStateByteCount::from_runtime_input_count(byte_count);
 
         budget.ensure_initial_state_len(state_len)?;
 

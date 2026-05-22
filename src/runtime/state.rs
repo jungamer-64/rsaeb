@@ -3,7 +3,8 @@ use core::ops::Range;
 
 use super::budget::RuntimeBudgetState;
 use super::input::InitialStateBytes;
-use super::rewrite::{RewritePlacement, RewriteRequest, RewriteScratch};
+use super::rewrite::RewriteRequest;
+use super::rewrite::RewriteScratch;
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
 use crate::bytes::{
     NonEmptyPayloadNeedle, Payload, PayloadByteCount, PayloadNeedle, RuntimeByte,
@@ -116,21 +117,21 @@ impl State {
         budget: RuntimeBudgetState,
     ) -> Result<(), RunError> {
         self.prepare_replacement_buffer(request, output, budget)?;
-        match request.placement() {
-            RewritePlacement::Replace => {
-                self.push_prefix(output, request.state_match())?;
-                output.push_payload(request.rhs())?;
-                self.push_suffix(output, request.state_match())?;
+        match request {
+            RewriteRequest::Replace(operands) => {
+                self.push_prefix(output, operands.state_match())?;
+                output.push_payload(operands.rhs())?;
+                self.push_suffix(output, operands.state_match())?;
             }
-            RewritePlacement::MoveStart => {
-                output.push_payload(request.rhs())?;
-                self.push_prefix(output, request.state_match())?;
-                self.push_suffix(output, request.state_match())?;
+            RewriteRequest::MoveStart(operands) => {
+                output.push_payload(operands.rhs())?;
+                self.push_prefix(output, operands.state_match())?;
+                self.push_suffix(output, operands.state_match())?;
             }
-            RewritePlacement::MoveEnd => {
-                self.push_prefix(output, request.state_match())?;
-                self.push_suffix(output, request.state_match())?;
-                output.push_payload(request.rhs())?;
+            RewriteRequest::MoveEnd(operands) => {
+                self.push_prefix(output, operands.state_match())?;
+                self.push_suffix(output, operands.state_match())?;
+                output.push_payload(operands.rhs())?;
             }
         }
         Ok(())

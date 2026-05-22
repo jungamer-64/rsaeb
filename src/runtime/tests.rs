@@ -1,5 +1,5 @@
 use super::budget::RuntimeBudgetState;
-use super::input::{InitialStateBytes, RuntimeInput};
+use super::input::{InitialStateBytes, RuntimeInput, RuntimeInputSource};
 use super::state::State;
 use crate::RunLimits;
 use crate::bytes::{CompactByte, Payload};
@@ -279,7 +279,10 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
 /// information.
 #[test]
 fn runtime_input_error_is_structured_at_the_runtime_boundary() -> TestResult {
-    let Err(error) = RuntimeInput::validate(b"abc", RuntimeInputByteLimit::new(2)) else {
+    let Err(error) = RuntimeInput::validate(
+        RuntimeInputSource::from_bytes(b"abc"),
+        RuntimeInputByteLimit::new(2),
+    ) else {
         return Err(TestFailure::message("expected input limit error"));
     };
 

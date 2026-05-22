@@ -13,7 +13,7 @@ use rsaeb::limits::{
 use rsaeb::trace::{
     BorrowedTraceEffect, BorrowedTraceEvent, TraceSnapshotEffect, TraceSnapshotEvent,
 };
-use rsaeb::{Program, RunLimits, RunOutcome, RunResult, RuntimeInput};
+use rsaeb::{Program, RunLimits, RunOutcome, RunResult, RuntimeInput, RuntimeInputSource};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns the expected trace snapshot run error.
@@ -78,7 +78,7 @@ fn traced_test_failure(error: TracedRunError<TestFailure>) -> TestFailure {
 ///
 /// Returns `RuntimeInputError` if the bytes are not valid runtime input.
 fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
-    RuntimeInput::validate(bytes, DEFAULT_MAX_INPUT_LEN)
+    RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), DEFAULT_MAX_INPUT_LEN)
 }
 
 /// # Errors

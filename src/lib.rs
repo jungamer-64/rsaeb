@@ -18,8 +18,9 @@
 //!   label host bytes or strings as A=B source before parsing.
 //! - [`Program::parse`] validates source syntax under [`ParseLimits`] and
 //!   returns a reusable [`Program`].
-//! - [`RuntimeInput::validate`] validates raw input bytes into the runtime input
-//!   byte domain.
+//! - [`RuntimeInputSource::from_bytes`] labels host input bytes, and
+//!   [`RuntimeInput::validate`] validates them into the runtime input byte
+//!   domain.
 //! - [`RunLimits`] and [`limits::TraceSnapshotLimits`] keep runtime execution
 //!   limits separate from trace snapshot materialization limits.
 //! - [`Program::run`] runs to completion, while [`Program::start_run`]
@@ -47,12 +48,12 @@
 //! use rsaeb::limits::{
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
 //! };
-//! use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput};
+//! use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, RuntimeInputSource};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?;
 //! let limits = RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-//! let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
+//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), DEFAULT_MAX_INPUT_LEN)?;
 //! let result = program.run(&input, limits)?;
 //!
 //! assert!(matches!(
@@ -72,13 +73,13 @@
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 //! };
 //! use rsaeb::{
-//!     Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput,
+//!     Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, RuntimeInputSource,
 //! };
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("(once)a=b\na=c"), DEFAULT_PARSE_LIMITS)?;
 //! let limits = RunLimits::new(StepLimit::new(10_000), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-//! let input = RuntimeInput::validate(b"aa", DEFAULT_MAX_INPUT_LEN)?;
+//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"aa"), DEFAULT_MAX_INPUT_LEN)?;
 //!
 //! let first = program.run(&input, limits)?;
 //! let second = program.run(&input, limits)?;
@@ -105,12 +106,12 @@
 //! use rsaeb::limits::{
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 //! };
-//! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
+//! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput, RuntimeInputSource};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("a=b\nb=c"), DEFAULT_PARSE_LIMITS)?;
 //! let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-//! let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
+//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), DEFAULT_MAX_INPUT_LEN)?;
 //! let execution = program.start_run(
 //!     &input,
 //!     limits,
@@ -163,11 +164,11 @@
 //! use rsaeb::limits::{
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 //! };
-//! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
+//! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput, RuntimeInputSource};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let limits = RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-//! let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
+//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), DEFAULT_MAX_INPUT_LEN)?;
 //! let result = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?.run(&input, limits);
 //!
 //! assert!(matches!(
@@ -222,13 +223,13 @@
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 //! };
 //! use rsaeb::trace::BorrowedTraceEvent;
-//! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
+//! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput, RuntimeInputSource};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("a=b\nb=(return)ok"), DEFAULT_PARSE_LIMITS)?;
 //! let mut byte_counts = Vec::new();
 //! let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-//! let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
+//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), DEFAULT_MAX_INPUT_LEN)?;
 //!
 //! program.run_with_borrowed_trace(
 //!     &input,
@@ -255,7 +256,7 @@
 //!     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit, TraceSnapshotLimits,
 //! };
 //! use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
-//! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
+//! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput, RuntimeInputSource};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("a=b\nb=(return)ok"), DEFAULT_PARSE_LIMITS)?;
@@ -265,7 +266,7 @@
 //!     DEFAULT_MAX_RETURN_LEN,
 //! );
 //! let trace_limits = TraceSnapshotLimits::new(run_limits, DEFAULT_MAX_TRACE_SNAPSHOT_LEN);
-//! let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
+//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), DEFAULT_MAX_INPUT_LEN)?;
 //! let mut states = Vec::new();
 //! let mut returns = Vec::new();
 //!
@@ -303,10 +304,11 @@
 //! ```
 //! use rsaeb::error::{AebError, RuntimeInputError};
 //! use rsaeb::limits::RuntimeInputByteLimit;
-//! use rsaeb::RuntimeInput;
+//! use rsaeb::{RuntimeInput, RuntimeInputSource};
 //!
 //! fn validate_host_input(bytes: &[u8]) -> Result<RuntimeInput, AebError> {
-//!     RuntimeInput::validate(bytes, RuntimeInputByteLimit::new(4)).map_err(AebError::from)
+//!     RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), RuntimeInputByteLimit::new(4))
+//!         .map_err(AebError::from)
 //! }
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {

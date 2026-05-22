@@ -40,13 +40,13 @@ pub(crate) enum CanonicalRightSide<'rule> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RuleHead {
-    repeat: RuleRepeat,
-    anchor: RuleAnchor,
+    repeat: RuleRepeatSyntax,
+    anchor: RuleAnchorSyntax,
     lhs: Payload,
 }
 
 impl RuleHead {
-    pub(crate) fn new(repeat: RuleRepeat, anchor: RuleAnchor, lhs: Payload) -> Self {
+    pub(crate) fn new(repeat: RuleRepeatSyntax, anchor: RuleAnchorSyntax, lhs: Payload) -> Self {
         Self {
             repeat,
             anchor,
@@ -90,8 +90,31 @@ impl ParsedRule {
         self.line_number
     }
 
-    pub(crate) const fn repeat(&self) -> RuleRepeat {
+    pub(crate) const fn repeat_syntax(&self) -> RuleRepeatSyntax {
         self.head.repeat
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuleRepeatSyntax {
+    Always,
+    Once,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuleAnchorSyntax {
+    Anywhere,
+    Start,
+    End,
+}
+
+impl RuleAnchorSyntax {
+    pub(crate) const fn public_anchor(self) -> RuleAnchor {
+        match self {
+            Self::Anywhere => RuleAnchor::Anywhere,
+            Self::Start => RuleAnchor::Start,
+            Self::End => RuleAnchor::End,
+        }
     }
 }
 
@@ -146,7 +169,7 @@ impl RuleRepeatState {
 pub(crate) struct Rule {
     line_number: SourceLineNumber,
     repeat: RuleRepeatState,
-    anchor: RuleAnchor,
+    anchor: RuleAnchorSyntax,
     lhs: Payload,
     action: Action,
 }
@@ -174,7 +197,7 @@ impl Rule {
         self.repeat
     }
 
-    pub(crate) const fn anchor(&self) -> RuleAnchor {
+    pub(crate) const fn anchor(&self) -> RuleAnchorSyntax {
         self.anchor
     }
 

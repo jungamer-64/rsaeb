@@ -23,10 +23,11 @@
 //! ```
 //! use rsaeb::error::{AebError, RuntimeInputError};
 //! use rsaeb::limits::RuntimeInputByteLimit;
-//! use rsaeb::RuntimeInput;
+//! use rsaeb::{RuntimeInput, RuntimeInputSource};
 //!
 //! fn validate(bytes: &[u8]) -> Result<RuntimeInput, AebError> {
-//!     RuntimeInput::validate(bytes, RuntimeInputByteLimit::new(8)).map_err(AebError::from)
+//!     RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), RuntimeInputByteLimit::new(8))
+//!         .map_err(AebError::from)
 //! }
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {

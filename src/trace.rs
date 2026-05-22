@@ -15,11 +15,11 @@
 //!     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit, TraceSnapshotLimits,
 //! };
 //! use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
-//! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput};
+//! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput, RuntimeInputSource};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("a=b\nb=(return)ok"), DEFAULT_PARSE_LIMITS)?;
-//! let input = RuntimeInput::validate(b"a", DEFAULT_MAX_INPUT_LEN)?;
+//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), DEFAULT_MAX_INPUT_LEN)?;
 //! let run_limits = RunLimits::new(
 //!     StepLimit::new(10),
 //!     DEFAULT_MAX_STATE_LEN,
@@ -48,7 +48,9 @@
 use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError, try_push, try_reserve_total_exact};
-use crate::bytes::{RuntimeByte, RuntimeStateByteCount, TraceSnapshotByteCount};
+use crate::bytes::{
+    ReturnOutputByteCount, RuntimeByte, RuntimeStateByteCount, TraceSnapshotByteCount,
+};
 use crate::error::TraceSnapshotError;
 use crate::inspect::{PayloadView, RuleView};
 use crate::program::{ReturnOutput, RuntimeStateSnapshot, StepCount, TraceSnapshotByteLimit};
@@ -164,8 +166,12 @@ impl BorrowedTraceEffect<'_, '_> {
     #[must_use]
     pub fn byte_count(self) -> TraceSnapshotByteCount {
         match self {
-            Self::Continue { state } => TraceSnapshotByteCount::new(state.byte_count().get()),
-            Self::Return { output } => TraceSnapshotByteCount::new(output.byte_count().get()),
+            Self::Continue { state } => {
+                TraceSnapshotByteCount::from_runtime_state_count(state.byte_count())
+            }
+            Self::Return { output } => TraceSnapshotByteCount::from_return_output_count(
+                ReturnOutputByteCount::from_payload_count(output.byte_count()),
+            ),
         }
     }
 
@@ -257,7 +263,9 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
     #[must_use]
     pub fn byte_count(self) -> TraceSnapshotByteCount {
         match self {
-            Self::Initial { state } => TraceSnapshotByteCount::new(state.byte_count().get()),
+            Self::Initial { state } => {
+                TraceSnapshotByteCount::from_runtime_state_count(state.byte_count())
+            }
             Self::Step { effect, .. } => effect.byte_count(),
         }
     }
@@ -283,7 +291,10 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
     ) -> Result<TraceSnapshotEvent<'program>, TraceSnapshotError> {
         match self {
             Self::Initial { state } => {
-                ensure_trace_len(TraceSnapshotByteCount::new(state.byte_count().get()), limit)?;
+                ensure_trace_len(
+                    TraceSnapshotByteCount::from_runtime_state_count(state.byte_count()),
+                    limit,
+                )?;
                 Ok(TraceSnapshotEvent::Initial {
                     state: RuntimeStateSnapshot::from_vec(
                         state.to_vec_with_context(AllocationContext::TraceSnapshot)?,

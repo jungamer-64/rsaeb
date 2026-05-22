@@ -6,30 +6,21 @@ use crate::bytes::{Payload, RuntimeByte};
 use super::state::MatchedStateSpan;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RewritePlacement {
-    Replace,
-    MoveStart,
-    MoveEnd,
+pub(crate) enum RewriteRequest<'rule> {
+    Replace(RewriteOperands<'rule>),
+    MoveStart(RewriteOperands<'rule>),
+    MoveEnd(RewriteOperands<'rule>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RewriteRequest<'rule> {
+pub(crate) struct RewriteOperands<'rule> {
     state_match: MatchedStateSpan,
     rhs: &'rule Payload,
-    placement: RewritePlacement,
 }
 
-impl<'rule> RewriteRequest<'rule> {
-    pub(crate) const fn new(
-        state_match: MatchedStateSpan,
-        rhs: &'rule Payload,
-        placement: RewritePlacement,
-    ) -> Self {
-        Self {
-            state_match,
-            rhs,
-            placement,
-        }
+impl<'rule> RewriteOperands<'rule> {
+    const fn new(state_match: MatchedStateSpan, rhs: &'rule Payload) -> Self {
+        Self { state_match, rhs }
     }
 
     pub(crate) const fn state_match(self) -> MatchedStateSpan {
@@ -39,9 +30,35 @@ impl<'rule> RewriteRequest<'rule> {
     pub(crate) const fn rhs(self) -> &'rule Payload {
         self.rhs
     }
+}
 
-    pub(crate) const fn placement(self) -> RewritePlacement {
-        self.placement
+impl<'rule> RewriteRequest<'rule> {
+    pub(crate) const fn replace(state_match: MatchedStateSpan, rhs: &'rule Payload) -> Self {
+        Self::Replace(RewriteOperands::new(state_match, rhs))
+    }
+
+    pub(crate) const fn move_start(state_match: MatchedStateSpan, rhs: &'rule Payload) -> Self {
+        Self::MoveStart(RewriteOperands::new(state_match, rhs))
+    }
+
+    pub(crate) const fn move_end(state_match: MatchedStateSpan, rhs: &'rule Payload) -> Self {
+        Self::MoveEnd(RewriteOperands::new(state_match, rhs))
+    }
+
+    pub(crate) const fn state_match(self) -> MatchedStateSpan {
+        self.operands().state_match()
+    }
+
+    pub(crate) const fn rhs(self) -> &'rule Payload {
+        self.operands().rhs()
+    }
+
+    pub(crate) const fn operands(self) -> RewriteOperands<'rule> {
+        match self {
+            Self::Replace(operands) | Self::MoveStart(operands) | Self::MoveEnd(operands) => {
+                operands
+            }
+        }
     }
 }
 

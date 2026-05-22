@@ -7,7 +7,9 @@ use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
     DEFAULT_PARSE_LIMITS, StepLimit,
 };
-use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RunResult, RuntimeInput};
+use rsaeb::{
+    Program, ProgramSource, RunLimits, RunOutcome, RunResult, RuntimeInput, RuntimeInputSource,
+};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns stable output bytes when they match `expected`.
@@ -49,7 +51,7 @@ fn expect_return_bytes<'result>(
 ///
 /// Returns `RuntimeInputError` if the bytes are not valid runtime input.
 fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
-    RuntimeInput::validate(bytes, DEFAULT_MAX_INPUT_LEN)
+    RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), DEFAULT_MAX_INPUT_LEN)
 }
 
 /// # Errors

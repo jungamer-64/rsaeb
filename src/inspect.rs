@@ -413,7 +413,7 @@ impl<'program> RuleView<'program> {
     /// Rule match anchor.
     #[must_use]
     pub fn anchor(self) -> RuleAnchor {
-        self.rule.anchor()
+        self.rule.anchor().public_anchor()
     }
 
     /// Left-side match payload.
