@@ -93,8 +93,8 @@ pub struct ReturnedRun<'program> {
 /// Runtime failure that preserves the uncommitted run session.
 ///
 /// Step failures happen before the candidate rewrite is committed. The failed
-/// [`RunSession`] is therefore returned by value so hosts can inspect, update
-/// limits with [`RunSession::with_limits`], or discard it explicitly.
+/// [`RunSession`] is preserved by value so hosts can inspect or discard the
+/// uncommitted execution explicitly.
 pub struct RunStepError<'program> {
     error: RunError,
     session: RunSession<'program>,
@@ -232,19 +232,6 @@ impl<'program> RunSession<'program> {
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
         self.core.state()
-    }
-
-    /// Replaces runtime limits for this uncommitted run.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` if the already-completed step count or the current
-    /// runtime state does not fit the replacement limits.
-    pub fn with_limits(mut self, limits: RunLimits) -> Result<Self, RunError> {
-        let state_len = self.core.state.byte_count();
-
-        self.core.budget = self.core.budget.with_limits(limits, state_len)?;
-        Ok(self)
     }
 
     /// Advances this run by exactly one matching rule when possible.
@@ -491,18 +478,6 @@ impl<'program> RunStepError<'program> {
     #[must_use]
     pub const fn error(&self) -> &RunError {
         &self.error
-    }
-
-    /// Borrow the uncommitted run session.
-    #[must_use]
-    pub const fn session(&self) -> &RunSession<'program> {
-        &self.session
-    }
-
-    /// Recover the uncommitted run session.
-    #[must_use]
-    pub fn into_session(self) -> RunSession<'program> {
-        self.session
     }
 
     /// Discard the uncommitted run session and return the runtime error.

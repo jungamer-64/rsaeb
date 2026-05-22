@@ -20,12 +20,6 @@ pub(crate) enum MatchedRuleCommit<'once> {
     Once(ValidOnceCommit<'once>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AvailableRuleCommit {
-    Always,
-    Once(OnceRuleSlot),
-}
-
 #[derive(Debug)]
 pub(crate) struct ValidOnceCommit<'once> {
     state: &'once mut OnceRuleState,
@@ -74,29 +68,6 @@ impl OnceStateSet {
         }
 
         Ok(Self { states })
-    }
-
-    pub(crate) fn available_commit_for_rule(&self, rule: &Rule) -> Option<AvailableRuleCommit> {
-        match rule.repeat_state() {
-            RuleRepeatState::Always => Some(AvailableRuleCommit::Always),
-            RuleRepeatState::Once(slot) => self
-                .states
-                .get(slot.zero_based())
-                .filter(|state| state.is_fresh())
-                .map(|_| AvailableRuleCommit::Once(slot)),
-        }
-    }
-
-    pub(crate) fn commit_token(
-        &mut self,
-        commit: AvailableRuleCommit,
-    ) -> Option<MatchedRuleCommit<'_>> {
-        match commit {
-            AvailableRuleCommit::Always => Some(MatchedRuleCommit::Always),
-            AvailableRuleCommit::Once(slot) => {
-                self.valid_once_commit(slot).map(MatchedRuleCommit::Once)
-            }
-        }
     }
 
     fn valid_once_commit(&mut self, slot: OnceRuleSlot) -> Option<ValidOnceCommit<'_>> {
