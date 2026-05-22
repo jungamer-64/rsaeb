@@ -142,6 +142,13 @@ impl<'code> CompactSyntax<'code> {
         self.bytes.len()
     }
 
+    /// Returns the source column of the first compact byte.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if this compact syntax slice is empty. Callers use
+    /// this only after detecting a token prefix, so an empty slice here
+    /// indicates an invariant failure at the syntax boundary.
     fn first_source_column(
         self,
         line_number: SourceLineNumber,

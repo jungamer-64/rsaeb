@@ -332,17 +332,11 @@ impl MatchedStateSpan {
         bytes.get(self.range.as_range())
     }
 
-    fn prefix_bytes<'state>(
-        self,
-        bytes: &'state [RuntimeByte],
-    ) -> impl Iterator<Item = RuntimeByte> + 'state {
+    fn prefix_bytes(self, bytes: &[RuntimeByte]) -> impl Iterator<Item = RuntimeByte> + '_ {
         bytes.iter().copied().take(self.range.prefix_end())
     }
 
-    fn suffix_bytes<'state>(
-        self,
-        bytes: &'state [RuntimeByte],
-    ) -> impl Iterator<Item = RuntimeByte> + 'state {
+    fn suffix_bytes(self, bytes: &[RuntimeByte]) -> impl Iterator<Item = RuntimeByte> + '_ {
         bytes.iter().copied().skip(self.range.suffix_start())
     }
 }

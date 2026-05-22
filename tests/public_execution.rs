@@ -26,6 +26,11 @@ fn expect_stable_bytes(result: &RunResult, expected: &[u8]) -> TestResult {
     }
 }
 
+/// Materializes a runtime state view into comparable bytes.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if runtime-state view materialization fails.
 fn runtime_view_bytes(state: rsaeb::trace::RuntimeStateView<'_>) -> Result<Vec<u8>, TestFailure> {
     Ok(state.materialize()?.into_raw_bytes())
 }
@@ -61,6 +66,11 @@ fn applied_signature(applied: &AppliedStep<'_>) -> Result<StepSignature, TestFai
     })
 }
 
+/// Builds a comparable signature for a stable terminal state.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if stable-state materialization fails.
 fn stable_signature(stable: &StableRun<'_>) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Stable {
         steps: stable.steps().get(),

@@ -101,6 +101,11 @@ impl RuntimeInput {
         })
     }
 
+    /// Materializes validated runtime input at the runtime-input view boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the view buffer cannot be allocated.
     pub(crate) fn materialize_for_view(&self) -> Result<Vec<u8>, AllocationError> {
         let mut output = Vec::new();
         try_reserve_total_exact(
