@@ -2,15 +2,15 @@
 
 mod support;
 
-use rsaeb::input::{RunInput, RuntimeInputSource};
+use rsaeb::input::RunSeed;
 use rsaeb::inspect::OnceRuleCount;
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
-    DEFAULT_PARSE_LIMITS, RunLimits, StepLimit,
+    DEFAULT_PARSE_LIMITS, StepLimit,
 };
 use rsaeb::program::{Program, RunOutcome, RunResult};
 use rsaeb::source::ProgramSource;
-use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
+use support::{TestFailure, TestResult, TestRunPolicy, ensure_eq, ensure_matches, parse_program};
 
 /// Returns stable output bytes when they match `expected`.
 ///
@@ -49,9 +49,9 @@ fn expect_return_bytes<'result>(
 ///
 /// # Errors
 ///
-/// Returns `RunInputError` if the bytes are not valid runtime input.
-fn runtime_input(bytes: &[u8], limits: RunLimits) -> Result<RunInput, rsaeb::error::RunInputError> {
-    RunInput::validate(RuntimeInputSource::from_bytes(bytes), limits)
+/// Returns `RuntimeInputError` if the bytes are not valid runtime input.
+fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFailure> {
+    support::run_seed(bytes, limits)
 }
 
 /// # Errors
@@ -60,7 +60,7 @@ fn runtime_input(bytes: &[u8], limits: RunLimits) -> Result<RunInput, rsaeb::err
 /// programs.
 #[test]
 fn program_parse_accepts_text_and_byte_sources() -> TestResult {
-    let limits = RunLimits::new(
+    let limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         DEFAULT_MAX_STEPS,
         DEFAULT_MAX_STATE_LEN,
@@ -86,7 +86,7 @@ fn program_parse_accepts_text_and_byte_sources() -> TestResult {
 /// drift from the expected contract.
 #[test]
 fn program_language_surface_handles_spacing_comments_and_actions() -> TestResult {
-    let limits = RunLimits::new(
+    let limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10_000),
         DEFAULT_MAX_STATE_LEN,
@@ -132,7 +132,7 @@ fn program_language_surface_handles_spacing_comments_and_actions() -> TestResult
 /// Returns `TestFailure` if parsed programs are not reusable.
 #[test]
 fn program_values_are_reusable_across_runs() -> TestResult {
-    let limits = RunLimits::new(
+    let limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10_000),
         DEFAULT_MAX_STATE_LEN,

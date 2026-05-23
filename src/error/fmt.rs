@@ -4,8 +4,9 @@ use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind}
 
 use super::{
     InputColumn, InternalInvariantError, LeftModifierKind, LimitError, ParseError, ParseErrorKind,
-    ParseErrorLocation, ParseInvariantError, PayloadKind, RightActionKind, RunError, RunInputError,
-    StateSizeError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
+    ParseErrorLocation, ParseInvariantError, PayloadKind, RightActionKind, RunAdmissionError,
+    RunError, RuntimeInputError, StateSizeError, TraceSnapshotError, TraceSnapshotRunError,
+    TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -254,7 +255,7 @@ where
     }
 }
 
-impl fmt::Display for RunInputError {
+impl fmt::Display for RuntimeInputError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NonAscii { column, byte } => write!(
@@ -272,16 +273,23 @@ impl fmt::Display for RunInputError {
                 attempted_len.get(),
                 limit.get()
             ),
-            Self::InitialStateLimit {
+            Self::Allocation(error) => error.fmt(f),
+        }
+    }
+}
+
+impl fmt::Display for RunAdmissionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InitialStateTooLarge {
                 limit,
                 attempted_len,
             } => write!(
                 f,
-                "input error: initial runtime state length {} exceeds the configured state limit {}",
+                "run admission error: initial runtime state length {} exceeds the configured state limit {}",
                 attempted_len.get(),
                 limit.get()
             ),
-            Self::Allocation(error) => error.fmt(f),
         }
     }
 }

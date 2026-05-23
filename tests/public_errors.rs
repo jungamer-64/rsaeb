@@ -3,9 +3,9 @@
 mod support;
 
 use rsaeb::error::{ParseErrorKind, ParseErrorLocation, PayloadKind, RunError};
-use rsaeb::input::{RunInput, RuntimeInputSource};
-use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, RunLimits};
-use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
+use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, RuntimeInputLimits};
+use support::{TestFailure, TestResult, TestRunPolicy, ensure_eq, ensure_matches, parse_program};
 
 /// Returns the expected runtime error.
 ///
@@ -23,9 +23,9 @@ fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFail
 ///
 /// # Errors
 ///
-/// Returns `RunInputError` if the bytes are not valid runtime input.
-fn runtime_input(bytes: &[u8], limits: RunLimits) -> Result<RunInput, rsaeb::error::RunInputError> {
-    RunInput::validate(RuntimeInputSource::from_bytes(bytes), limits)
+/// Returns `RuntimeInputError` if the bytes are not valid runtime input.
+fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFailure> {
+    support::run_seed(bytes, limits)
 }
 
 /// # Errors
@@ -100,13 +100,10 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
         "parse error at line 1, column 4: multiple '=' characters are not allowed",
     )?;
 
-    let input_limits = RunLimits::new(
-        DEFAULT_MAX_INPUT_LEN,
-        rsaeb::limits::StepLimit::new(1),
-        rsaeb::limits::DEFAULT_MAX_STATE_LEN,
-        rsaeb::limits::DEFAULT_MAX_RETURN_LEN,
-    );
-    let Err(input_error) = runtime_input(&[0xff], input_limits) else {
+    let Err(input_error) = RuntimeInput::validate(
+        RuntimeInputSource::from_bytes(&[0xff]),
+        RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN),
+    ) else {
         return Err(TestFailure::message("expected input error"));
     };
     ensure_eq!(
@@ -114,7 +111,7 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
         "input error: non-ASCII byte 0xff at column 1",
     )?;
 
-    let return_limits = RunLimits::new(
+    let return_limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         rsaeb::limits::StepLimit::new(1),
         rsaeb::limits::DEFAULT_MAX_STATE_LEN,

@@ -54,7 +54,7 @@ impl<'input> ValidatedRuntimeInputSource<'input> {
     ///
     /// # Errors
     ///
-    /// Returns `RunInputError` if the input exceeds `limit`, if any input
+    /// Returns `RuntimeInputError` if the input exceeds `limit`, if any input
     /// byte is non-ASCII, or if its one-based column cannot be represented.
     fn new(
         source: RuntimeInputSource<'input>,
@@ -62,7 +62,7 @@ impl<'input> ValidatedRuntimeInputSource<'input> {
     ) -> Result<Self, RuntimeInputError> {
         let byte_count = RuntimeInputByteCount::new(source.as_bytes().len());
         if byte_count.get() > limit.get() {
-            return Err(RunInputError::input_limit(limit, byte_count));
+            return Err(RuntimeInputError::input_limit(limit, byte_count));
         }
 
         for (zero_based_column, byte) in source.as_bytes().iter().copied().enumerate() {
@@ -128,9 +128,8 @@ impl RuntimeInput {
     ///
     /// # Errors
     ///
-    /// Returns `RunInputError` if the input exceeds `limits`, if any input byte
-    /// is non-ASCII, if its one-based column cannot be represented, if the
-    /// admitted input exceeds the initial runtime-state limit, or if owned
+    /// Returns `RuntimeInputError` if the input exceeds `limits`, if any input byte
+    /// is non-ASCII, if its one-based column cannot be represented, or if owned
     /// storage cannot be allocated.
     pub fn validate(
         input: RuntimeInputSource<'_>,
@@ -194,10 +193,7 @@ impl RunSeed {
     ///
     /// Returns `RunAdmissionError` if the validated input would exceed the
     /// initial runtime-state budget.
-    pub fn admit(
-        input: RuntimeInput,
-        limits: ExecutionLimits,
-    ) -> Result<Self, RunAdmissionError> {
+    pub fn admit(input: RuntimeInput, limits: ExecutionLimits) -> Result<Self, RunAdmissionError> {
         let initial_state_len = RuntimeStateByteCount::from_runtime_input_count(input.byte_count());
         if initial_state_len.get() > limits.state_byte_limit().get() {
             return Err(RunAdmissionError::initial_state_limit(

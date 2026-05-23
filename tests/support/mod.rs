@@ -1,14 +1,23 @@
 use std::string::{FromUtf8Error, String};
 
-use rsaeb::error::{AllocationError, ParseError, RunError, RunInputError, TraceSnapshotRunError};
-use rsaeb::limits::DEFAULT_PARSE_LIMITS;
+use rsaeb::error::{
+    AllocationError, ParseError, RunAdmissionError, RunError, RuntimeInputError,
+    TraceSnapshotRunError,
+};
+use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+use rsaeb::limits::{
+    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
+    DEFAULT_PARSE_LIMITS, ExecutionLimits, ReturnByteLimit, RuntimeInputByteLimit,
+    RuntimeInputLimits, RuntimeStateByteLimit, StepLimit,
+};
 use rsaeb::program::Program;
 use rsaeb::source::ProgramSource;
 
 pub enum TestFailure {
     Message(String),
     Parse(ParseError),
-    Input(RunInputError),
+    Input(RuntimeInputError),
+    Admission(RunAdmissionError),
     Run(RunError),
     TraceSnapshot(String),
     Utf8(FromUtf8Error),
@@ -27,6 +36,7 @@ impl core::fmt::Debug for TestFailure {
             Self::Message(message) => formatter.debug_tuple("Message").field(message).finish(),
             Self::Parse(error) => formatter.debug_tuple("Parse").field(error).finish(),
             Self::Input(error) => formatter.debug_tuple("Input").field(error).finish(),
+            Self::Admission(error) => formatter.debug_tuple("Admission").field(error).finish(),
             Self::Run(error) => formatter.debug_tuple("Run").field(error).finish(),
             Self::TraceSnapshot(error) => {
                 formatter.debug_tuple("TraceSnapshot").field(error).finish()
@@ -43,9 +53,15 @@ impl From<ParseError> for TestFailure {
     }
 }
 
-impl From<RunInputError> for TestFailure {
-    fn from(value: RunInputError) -> Self {
+impl From<RuntimeInputError> for TestFailure {
+    fn from(value: RuntimeInputError) -> Self {
         Self::Input(value)
+    }
+}
+
+impl From<RunAdmissionError> for TestFailure {
+    fn from(value: RunAdmissionError) -> Self {
+        Self::Admission(value)
     }
 }
 
@@ -77,6 +93,66 @@ impl From<AllocationError> for TestFailure {
 }
 
 pub type TestResult = Result<(), TestFailure>;
+
+// Shared integration-test helper; each public test target imports this module
+// but only some targets construct run seeds.
+#[allow(dead_code)]
+#[derive(Clone, Copy)]
+pub struct TestRunPolicy {
+    input: RuntimeInputLimits,
+    execution: ExecutionLimits,
+}
+
+// Shared integration-test helper; individual test binaries use different
+// constructor/accessor subsets.
+#[allow(dead_code)]
+impl TestRunPolicy {
+    #[must_use]
+    pub const fn new(
+        max_input_len: RuntimeInputByteLimit,
+        max_steps: StepLimit,
+        max_state_len: RuntimeStateByteLimit,
+        max_return_len: ReturnByteLimit,
+    ) -> Self {
+        Self {
+            input: RuntimeInputLimits::new(max_input_len),
+            execution: ExecutionLimits::new(max_steps, max_state_len, max_return_len),
+        }
+    }
+
+    #[must_use]
+    pub const fn default() -> Self {
+        Self::new(
+            DEFAULT_MAX_INPUT_LEN,
+            DEFAULT_MAX_STEPS,
+            DEFAULT_MAX_STATE_LEN,
+            DEFAULT_MAX_RETURN_LEN,
+        )
+    }
+
+    #[must_use]
+    pub const fn input(self) -> RuntimeInputLimits {
+        self.input
+    }
+
+    #[must_use]
+    pub const fn execution(self) -> ExecutionLimits {
+        self.execution
+    }
+}
+
+/// Validates and admits test input into a run seed.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if validation or run admission fails.
+// Shared integration-test helper; kept here so public tests do not add
+// production-only seed construction APIs.
+#[allow(dead_code)]
+pub fn run_seed(bytes: &[u8], policy: TestRunPolicy) -> Result<RunSeed, TestFailure> {
+    let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), policy.input())?;
+    Ok(RunSeed::admit(input, policy.execution())?)
+}
 
 /// Parses source text with the default parser limits.
 ///

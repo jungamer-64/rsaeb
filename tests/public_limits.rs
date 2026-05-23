@@ -2,16 +2,16 @@
 
 mod support;
 
-use rsaeb::error::{LimitError, ParseErrorKind, ParseLimitError, RunError, RunInputError};
-use rsaeb::input::{RunInput, RuntimeInputSource};
+use rsaeb::error::{LimitError, ParseErrorKind, ParseLimitError, RunAdmissionError, RunError};
+use rsaeb::input::RunSeed;
 use rsaeb::limits::{
     CodeLineByteLimit, DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
-    DEFAULT_PARSE_LIMITS, ParseLimits, PayloadByteLimit, ReturnByteLimit, RuleLimit, RunLimits,
+    DEFAULT_PARSE_LIMITS, ParseLimits, PayloadByteLimit, ReturnByteLimit, RuleLimit,
     RuntimeStateByteLimit, SourceByteLimit, StepLimit,
 };
 use rsaeb::program::Program;
 use rsaeb::source::ProgramSource;
-use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
+use support::{TestFailure, TestResult, TestRunPolicy, ensure_eq, ensure_matches, parse_program};
 
 /// Returns the expected runtime error.
 ///
@@ -59,9 +59,9 @@ fn expect_state_limit(error: RunError) -> Result<LimitError, TestFailure> {
 ///
 /// # Errors
 ///
-/// Returns `RunInputError` if the bytes are not valid runtime input.
-fn runtime_input(bytes: &[u8], limits: RunLimits) -> Result<RunInput, rsaeb::error::RunInputError> {
-    RunInput::validate(RuntimeInputSource::from_bytes(bytes), limits)
+/// Returns `RuntimeInputError` if the bytes are not valid runtime input.
+fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFailure> {
+    support::run_seed(bytes, limits)
 }
 
 /// # Errors
@@ -159,7 +159,7 @@ fn limits_parse_resource_errors_are_structured() -> TestResult {
 /// step, state, and return domains.
 #[test]
 fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
-    let step_limits = RunLimits::new(
+    let step_limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(0),
         DEFAULT_MAX_STATE_LEN,
@@ -181,7 +181,7 @@ fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
         "expected step limit details",
     )?;
 
-    let initial_state_limits = RunLimits::new(
+    let initial_state_limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10),
         RuntimeStateByteLimit::new(1),
@@ -195,16 +195,16 @@ fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
     ensure_matches(
         matches!(
             initial_state_limited,
-            RunInputError::InitialStateLimit {
+            TestFailure::Admission(RunAdmissionError::InitialStateTooLarge {
                 limit,
                 attempted_len,
-            } if limit == RuntimeStateByteLimit::new(1)
+            }) if limit == RuntimeStateByteLimit::new(1)
                 && attempted_len.get() == 2
         ),
-        "expected run input state admission limit",
+        "expected run admission state limit",
     )?;
 
-    let rewrite_limits = RunLimits::new(
+    let rewrite_limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(1),
         RuntimeStateByteLimit::new(2),
@@ -224,7 +224,7 @@ fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
         "expected rewrite state limit",
     )?;
 
-    let return_limits = RunLimits::new(
+    let return_limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(1),
         RuntimeStateByteLimit::new(10),
@@ -250,7 +250,7 @@ fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
 /// public domain details.
 #[test]
 fn limits_display_output_names_public_contexts() -> TestResult {
-    let input_limits = RunLimits::new(
+    let input_limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10),
         RuntimeStateByteLimit::new(1),
@@ -259,12 +259,12 @@ fn limits_display_output_names_public_contexts() -> TestResult {
     let Err(input_error) = runtime_input(b"aa", input_limits) else {
         return Err(TestFailure::message("expected input admission error"));
     };
-    ensure_eq!(
-        input_error.to_string(),
-        "input error: initial runtime state length 2 exceeds the configured state limit 1",
+    ensure_matches(
+        format!("{input_error:?}").contains("InitialStateTooLarge"),
+        "expected admission error details",
     )?;
 
-    let rewrite_limits = RunLimits::new(
+    let rewrite_limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(1),
         RuntimeStateByteLimit::new(2),
@@ -277,7 +277,7 @@ fn limits_display_output_names_public_contexts() -> TestResult {
         "rewrite state limit exceeded; attempted length: 3, limit: 2",
     )?;
 
-    let step_limits = RunLimits::new(
+    let step_limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(0),
         DEFAULT_MAX_STATE_LEN,

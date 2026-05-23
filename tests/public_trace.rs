@@ -3,16 +3,16 @@
 mod support;
 
 use rsaeb::error::{RunError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
-use rsaeb::input::{RunInput, RuntimeInputSource};
+use rsaeb::input::RunSeed;
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
-    DEFAULT_MAX_TRACE_SNAPSHOT_LEN, RunLimits, StepLimit, TraceSnapshotByteLimit,
+    DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit, TraceSnapshotByteLimit,
 };
 use rsaeb::program::{Program, RunOutcome, RunResult};
 use rsaeb::trace::{
     BorrowedTraceEffect, BorrowedTraceEvent, TraceSnapshotEffect, TraceSnapshotEvent,
 };
-use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
+use support::{TestFailure, TestResult, TestRunPolicy, ensure_eq, ensure_matches, parse_program};
 
 /// Returns the expected trace snapshot run error.
 ///
@@ -38,7 +38,7 @@ fn trace_snapshot_example(
     program: &Program,
 ) -> Result<(RunResult, Vec<TraceSnapshotEvent<'_>>), TestFailure> {
     let mut events = Vec::new();
-    let limits = RunLimits::new(
+    let limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10_000),
         DEFAULT_MAX_STATE_LEN,
@@ -77,9 +77,9 @@ fn traced_test_failure(error: TracedRunError<TestFailure>) -> TestFailure {
 ///
 /// # Errors
 ///
-/// Returns `RunInputError` if the bytes are not valid runtime input.
-fn runtime_input(bytes: &[u8], limits: RunLimits) -> Result<RunInput, rsaeb::error::RunInputError> {
-    RunInput::validate(RuntimeInputSource::from_bytes(bytes), limits)
+/// Returns `RuntimeInputError` if the bytes are not valid runtime input.
+fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFailure> {
+    support::run_seed(bytes, limits)
 }
 
 /// # Errors
@@ -90,7 +90,7 @@ fn runtime_input(bytes: &[u8], limits: RunLimits) -> Result<RunInput, rsaeb::err
 fn trace_borrowed_events_are_emitted_without_snapshots() -> TestResult {
     let program = parse_program("a=b\nb=(return)ok")?;
     let mut seen = Vec::new();
-    let limits = RunLimits::new(
+    let limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10_000),
         DEFAULT_MAX_STATE_LEN,
@@ -211,7 +211,7 @@ fn trace_snapshot_continue_step_carries_rule_view() -> TestResult {
 fn trace_borrowed_to_snapshot_uses_only_snapshot_limit() -> TestResult {
     let program = parse_program("a=b")?;
     let mut materialization = None;
-    let limits = RunLimits::new(
+    let limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10),
         DEFAULT_MAX_STATE_LEN,
@@ -246,7 +246,7 @@ fn trace_borrowed_to_snapshot_uses_only_snapshot_limit() -> TestResult {
 #[test]
 fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult {
     let program = parse_program("a=b")?;
-    let runtime_limits = RunLimits::new(
+    let runtime_limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(0),
         DEFAULT_MAX_STATE_LEN,
@@ -266,7 +266,7 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
         "expected runtime failure variant",
     )?;
 
-    let snapshot_limits = RunLimits::new(
+    let snapshot_limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10),
         DEFAULT_MAX_STATE_LEN,
@@ -288,7 +288,7 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
         "expected snapshot materialization limit",
     )?;
 
-    let sink_limits = RunLimits::new(
+    let sink_limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10),
         DEFAULT_MAX_STATE_LEN,
@@ -313,7 +313,7 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
 fn trace_final_event_matches_run_result() -> TestResult {
     let program = parse_program("a=b\nb=(return)c")?;
     let mut events = Vec::new();
-    let limits = RunLimits::new(
+    let limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10),
         DEFAULT_MAX_STATE_LEN,

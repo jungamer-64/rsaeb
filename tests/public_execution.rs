@@ -7,13 +7,13 @@ use rsaeb::execution::{
     AppliedStep, FailedRun, OwnedRunSession, OwnedStepTransition, ReturnedRun, RunSession,
     StableRun, StepTransition,
 };
-use rsaeb::input::{RunInput, RuntimeInputSource};
+use rsaeb::input::RunSeed;
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit,
-    RunLimits, StepLimit,
+    StepLimit,
 };
 use rsaeb::program::{RunOutcome, RunResult};
-use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
+use support::{TestFailure, TestResult, TestRunPolicy, ensure_eq, ensure_matches, parse_program};
 
 /// Returns stable output bytes when they match `expected`.
 ///
@@ -193,9 +193,9 @@ fn expect_failed_transition(result: StepTransition<'_>) -> Result<FailedRun<'_>,
 ///
 /// # Errors
 ///
-/// Returns `RunInputError` if the bytes are not valid runtime input.
-fn runtime_input(bytes: &[u8], limits: RunLimits) -> Result<RunInput, rsaeb::error::RunInputError> {
-    RunInput::validate(RuntimeInputSource::from_bytes(bytes), limits)
+/// Returns `RuntimeInputError` if the bytes are not valid runtime input.
+fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFailure> {
+    support::run_seed(bytes, limits)
 }
 
 /// # Errors
@@ -204,7 +204,7 @@ fn runtime_input(bytes: &[u8], limits: RunLimits) -> Result<RunInput, rsaeb::err
 /// byte preservation drift from the public contract.
 #[test]
 fn execution_rewrite_semantics_follow_public_contract() -> TestResult {
-    let limits = RunLimits::new(
+    let limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10_000),
         DEFAULT_MAX_STATE_LEN,
@@ -242,7 +242,7 @@ fn execution_rewrite_semantics_follow_public_contract() -> TestResult {
 /// or fails to pause after each applied rule.
 #[test]
 fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
-    let limits = RunLimits::new(
+    let limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10),
         DEFAULT_MAX_STATE_LEN,
@@ -311,7 +311,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
 /// current state bytes correctly.
 #[test]
 fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
-    let limits = RunLimits::new(
+    let limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10),
         DEFAULT_MAX_STATE_LEN,
@@ -351,7 +351,7 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
 /// validated equivalent input diverge.
 #[test]
 fn execution_consumes_runtime_input_without_session_leakage() -> TestResult {
-    let limits = RunLimits::new(
+    let limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10),
         DEFAULT_MAX_STATE_LEN,
@@ -394,7 +394,7 @@ fn execution_consumes_runtime_input_without_session_leakage() -> TestResult {
 #[test]
 fn execution_borrowed_and_owned_sessions_share_step_contract() -> TestResult {
     let source = "a=b\nb=(return)ok";
-    let limits = RunLimits::new(
+    let limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10),
         DEFAULT_MAX_STATE_LEN,
@@ -417,7 +417,7 @@ fn execution_borrowed_and_owned_sessions_share_step_contract() -> TestResult {
 #[test]
 fn execution_step_failure_is_terminal_transition() -> TestResult {
     let program = parse_program("a=(return)ok")?;
-    let limits = RunLimits::new(
+    let limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(1),
         DEFAULT_MAX_STATE_LEN,
@@ -450,7 +450,7 @@ fn execution_step_failure_is_terminal_transition() -> TestResult {
 #[test]
 fn execution_step_failure_preserves_current_progress() -> TestResult {
     let program = parse_program("a=b\nb=c")?;
-    let limits = RunLimits::new(
+    let limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(1),
         DEFAULT_MAX_STATE_LEN,

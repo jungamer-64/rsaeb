@@ -5,7 +5,7 @@
 //! which can then report parse failures with [`SourceLineNumber`],
 //! [`SourceColumn`], and [`SourcePosition`].
 //!
-//! Source is intentionally separate from [`crate::input::RunInput`].
+//! Source is intentionally separate from [`crate::input::RuntimeInput`].
 //! Comments may contain arbitrary bytes, while executable source code is
 //! validated by the parser and runtime input is validated by the runtime-input
 //! boundary.

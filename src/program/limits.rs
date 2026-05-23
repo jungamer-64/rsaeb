@@ -382,7 +382,6 @@ impl RuntimeInputLimits {
     pub const fn input_byte_limit(self) -> RuntimeInputByteLimit {
         self.input_len
     }
-
 }
 
 /// Resource limits for one execution invocation.

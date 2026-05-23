@@ -109,7 +109,6 @@ impl RuntimeInputError {
             attempted_len,
         }
     }
-
 }
 
 impl Error for RuntimeInputError {
@@ -135,7 +134,7 @@ impl From<AllocationError> for RuntimeInputError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunAdmissionError {
     /// Runtime input exceeded the initial runtime-state budget for this run.
-    InitialStateLimit {
+    InitialStateTooLarge {
         /// Configured maximum runtime state length.
         limit: RuntimeStateByteLimit,
         /// Runtime state length that would have been materialized.
@@ -148,7 +147,7 @@ impl RunAdmissionError {
         limit: RuntimeStateByteLimit,
         attempted_len: RuntimeStateByteCount,
     ) -> Self {
-        Self::InitialStateLimit {
+        Self::InitialStateTooLarge {
             limit,
             attempted_len,
         }
