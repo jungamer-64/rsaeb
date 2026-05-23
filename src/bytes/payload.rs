@@ -29,35 +29,35 @@ pub(crate) fn push_bytes(
     Ok(())
 }
 
-/// Internal payload.
+/// Executable payload bytes owned by a parsed rule.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Payload {
-    /// Stored bytes.
+    /// Program-domain bytes accepted by payload syntax validation.
     bytes: Vec<ProgramByte>,
 }
 
-/// Internal payload syntax.
+/// Borrowed compact syntax slice being validated as one payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PayloadSyntax<'code> {
-    /// Stored bytes.
+    /// Compact source bytes for the candidate payload.
     bytes: &'code [CompactByte],
-    /// Stored line number.
+    /// Source line used for parse diagnostics.
     line_number: SourceLineNumber,
-    /// Stored payload kind.
+    /// Payload position determining the parse error domain.
     payload_kind: PayloadKind,
 }
 
-/// Internal validated payload syntax.
+/// Payload syntax after every byte has been accepted as executable data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ValidatedPayloadSyntax<'code> {
-    /// Stored syntax.
+    /// Original syntax slice whose bytes passed validation.
     syntax: PayloadSyntax<'code>,
-    /// Stored byte count.
+    /// Typed payload length used to reserve storage after validation.
     byte_count: PayloadByteCount,
 }
 
 impl<'code> PayloadSyntax<'code> {
-    /// Constructs the value from validated parts.
+    /// Labels compact syntax bytes as the payload domain expected by the parser.
     pub(crate) const fn new(
         bytes: &'code [CompactByte],
         line_number: SourceLineNumber,
@@ -93,7 +93,7 @@ impl<'code> PayloadSyntax<'code> {
 }
 
 impl ValidatedPayloadSyntax<'_> {
-    /// Builds an owned executable payload from validated syntax.
+    /// Stores executable payload bytes after the full syntax pass.
     ///
     /// # Errors
     ///
@@ -133,12 +133,12 @@ impl Payload {
         PayloadByteCount::new(self.bytes.len())
     }
 
-    /// Runs the program bytes operation.
+    /// Borrows payload bytes in the executable program domain.
     pub(crate) fn program_bytes(&self) -> &[ProgramByte] {
         &self.bytes
     }
 
-    /// Runs the needle operation.
+    /// Splits the payload into matcher-friendly empty and non-empty forms.
     pub(crate) fn needle(&self) -> PayloadNeedle<'_> {
         match self.bytes.split_first() {
             Some((&first, _)) => PayloadNeedle::NonEmpty(NonEmptyPayloadNeedle {
@@ -149,7 +149,7 @@ impl Payload {
         }
     }
 
-    /// Returns the stored bytes.
+    /// Materializes payload bytes as caller-visible raw bytes.
     pub(crate) fn bytes(&self) -> impl Iterator<Item = u8> + '_ {
         self.bytes.iter().copied().map(ProgramByte::get)
     }
@@ -168,7 +168,7 @@ impl Payload {
         push_bytes(output, self.bytes(), context)
     }
 
-    /// Runs the runtime bytes operation.
+    /// Converts payload bytes into runtime-state bytes for rewrite output.
     pub(crate) fn runtime_bytes(&self) -> impl Iterator<Item = RuntimeByte> + '_ {
         self.bytes.iter().copied().map(RuntimeByte::from_program)
     }
@@ -189,28 +189,28 @@ impl Payload {
     }
 }
 
-/// Internal payload needle alternatives.
+/// Payload shape used by the matcher to avoid unchecked first-byte access.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PayloadNeedle<'payload> {
-    /// Empty case.
+    /// Empty payload that matches at every candidate position.
     Empty(EmptyPayloadNeedle<'payload>),
-    /// Non empty case.
+    /// Non-empty payload with its first byte separated for scanning.
     NonEmpty(NonEmptyPayloadNeedle<'payload>),
 }
 
-/// Internal empty payload needle.
+/// Matcher view for an empty payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct EmptyPayloadNeedle<'payload> {
-    /// Stored payload.
+    /// Payload whose length is known to be zero by this view.
     payload: &'payload Payload,
 }
 
-/// Internal non empty payload needle.
+/// Matcher view for a non-empty payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NonEmptyPayloadNeedle<'payload> {
-    /// Stored payload.
+    /// Payload whose first byte is available without indexing.
     payload: &'payload Payload,
-    /// Stored first.
+    /// First program byte used to start candidate matching.
     first: ProgramByte,
 }
 
@@ -227,12 +227,12 @@ impl<'payload> NonEmptyPayloadNeedle<'payload> {
         self.payload.byte_count()
     }
 
-    /// Runs the first byte operation.
+    /// First byte used by the matcher to find candidate positions.
     pub(crate) const fn first_byte(self) -> ProgramByte {
         self.first
     }
 
-    /// Runs the program bytes operation.
+    /// Full executable payload used after a first-byte candidate is found.
     pub(crate) fn program_bytes(self) -> &'payload [ProgramByte] {
         self.payload.program_bytes()
     }

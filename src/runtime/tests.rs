@@ -92,7 +92,7 @@ fn expect_step_transition(result: StepTransition<'_>) -> Result<StepTransition<'
     }
 }
 
-/// Builds internal runtime state from validated input under the supplied limits.
+/// Creates runtime state through the same checked input path as public runs.
 ///
 /// # Errors
 ///

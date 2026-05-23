@@ -14,15 +14,15 @@ use crate::rule::RewriteAction;
 use crate::trace::RuntimeStateView;
 use alloc::vec::Vec;
 
-/// Internal state.
+/// Mutable byte state owned by one runtime execution.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct State {
-    /// Stored bytes.
+    /// Current runtime-domain bytes.
     bytes: Vec<RuntimeByte>,
 }
 
 impl State {
-    /// Builds runtime state from validated initial input bytes.
+    /// Initializes runtime state with bytes admitted by `RunSeed`.
     pub(crate) fn from_input(input: InitialStateBytes) -> Self {
         Self {
             bytes: input.into_runtime_bytes(),
@@ -264,10 +264,10 @@ impl State {
     }
 }
 
-/// Internal state index.
+/// Zero-based index into runtime state bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StateIndex {
-    /// Stored zero based.
+    /// Zero-based state byte position.
     zero_based: usize,
 }
 

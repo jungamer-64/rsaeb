@@ -1,16 +1,16 @@
 use crate::source::SourceColumn;
 
-/// Internal compact byte.
+/// Executable source byte after whitespace removal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CompactByte {
-    /// Stored byte.
+    /// Compact executable byte.
     byte: u8,
-    /// Stored source column.
+    /// Original source column retained for diagnostics.
     source_column: SourceColumn,
 }
 
 impl CompactByte {
-    /// Constructs the value from validated parts.
+    /// Attaches the original source column to a compact executable byte.
     pub(crate) const fn new(byte: u8, source_column: SourceColumn) -> Self {
         Self {
             byte,
@@ -23,7 +23,7 @@ impl CompactByte {
         self.byte
     }
 
-    /// Runs the source column operation.
+    /// Original source column for parse errors involving this byte.
     pub(crate) const fn source_column(self) -> SourceColumn {
         self.source_column
     }

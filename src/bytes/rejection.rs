@@ -1,7 +1,7 @@
 /// Non-ASCII byte rejected from executable program code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NonAsciiCodeByte {
-    /// Stored byte.
+    /// Rejected executable-code byte.
     byte: u8,
 }
 
@@ -25,7 +25,7 @@ impl NonAsciiCodeByte {
 /// Non-printable ASCII byte rejected from executable program code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NonPrintableCodeByte {
-    /// Stored byte.
+    /// Rejected ASCII control or whitespace byte in compact code.
     byte: u8,
 }
 
@@ -46,10 +46,10 @@ impl NonPrintableCodeByte {
     }
 }
 
-/// Non-ASCII byte rejected from runtime input.
+/// Non-ASCII byte rejected by the runtime-input boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NonAsciiInputByte {
-    /// Stored byte.
+    /// Rejected runtime-input byte.
     byte: u8,
 }
 

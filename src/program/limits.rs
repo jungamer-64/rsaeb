@@ -36,7 +36,7 @@ pub const DEFAULT_PARSE_LIMITS: ParseLimits = ParseLimits::new(
 /// Source byte length measured before parsing starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceByteCount {
-    /// Stored value.
+    /// Source byte length before parsing.
     value: usize,
 }
 
@@ -63,7 +63,7 @@ impl fmt::Display for SourceByteCount {
 /// Executable code-line byte length after comment removal and before whitespace compaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CodeLineByteCount {
-    /// Stored value.
+    /// Executable code-line length before whitespace compaction.
     value: usize,
 }
 
@@ -90,7 +90,7 @@ impl fmt::Display for CodeLineByteCount {
 /// Maximum source length accepted by [`program::Program::parse`](crate::program::Program::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceByteLimit {
-    /// Stored value.
+    /// Maximum accepted source byte length.
     value: usize,
 }
 
@@ -111,7 +111,7 @@ impl SourceByteLimit {
 /// Maximum executable code-line length accepted by [`program::Program::parse`](crate::program::Program::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CodeLineByteLimit {
-    /// Stored value.
+    /// Maximum accepted executable code-line byte length.
     value: usize,
 }
 
@@ -132,7 +132,7 @@ impl CodeLineByteLimit {
 /// Maximum parsed payload length accepted by [`program::Program::parse`](crate::program::Program::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PayloadByteLimit {
-    /// Stored value.
+    /// Maximum accepted executable payload byte length.
     value: usize,
 }
 
@@ -153,7 +153,7 @@ impl PayloadByteLimit {
 /// Maximum executable rule count accepted by [`program::Program::parse`](crate::program::Program::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleLimit {
-    /// Stored value.
+    /// Maximum accepted executable rule count.
     value: usize,
 }
 
@@ -177,13 +177,13 @@ impl RuleLimit {
 /// allocations grow beyond the declared source, line, payload, or rule budgets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParseLimits {
-    /// Stored source len.
+    /// Source byte budget.
     source_len: SourceByteLimit,
-    /// Stored code line len.
+    /// Per-line executable byte budget.
     code_line_len: CodeLineByteLimit,
-    /// Stored payload len.
+    /// Per-payload executable byte budget.
     payload_len: PayloadByteLimit,
-    /// Stored rules.
+    /// Parsed rule-count budget.
     rules: RuleLimit,
 }
 
@@ -235,7 +235,7 @@ impl ParseLimits {
 /// matching rule fails with a step-limit error instead of committing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StepLimit {
-    /// Stored value.
+    /// Maximum number of committed rewrite steps.
     value: usize,
 }
 
@@ -259,7 +259,7 @@ impl StepLimit {
 /// that would be produced by a rewrite.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuntimeStateByteLimit {
-    /// Stored value.
+    /// Maximum runtime-state byte length.
     value: usize,
 }
 
@@ -284,7 +284,7 @@ impl RuntimeStateByteLimit {
 /// before owned input allocation starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuntimeInputByteLimit {
-    /// Stored value.
+    /// Maximum raw runtime-input byte length.
     value: usize,
 }
 
@@ -308,7 +308,7 @@ impl RuntimeInputByteLimit {
 /// final states are governed by [`RuntimeStateByteLimit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ReturnByteLimit {
-    /// Stored value.
+    /// Maximum materialized `(return)` output byte length.
     value: usize,
 }
 
@@ -332,7 +332,7 @@ impl ReturnByteLimit {
 /// snapshot events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TraceSnapshotByteLimit {
-    /// Stored value.
+    /// Maximum materialized bytes in one trace snapshot event.
     value: usize,
 }
 
@@ -356,7 +356,7 @@ impl TraceSnapshotByteLimit {
 /// this value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StepCount {
-    /// Stored value.
+    /// Committed rewrite steps.
     value: usize,
 }
 
@@ -384,7 +384,7 @@ impl StepCount {
 /// executed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeInputLimits {
-    /// Stored input len.
+    /// Raw input byte budget checked before owned classification.
     input_len: RuntimeInputByteLimit,
 }
 
@@ -412,11 +412,11 @@ impl RuntimeInputLimits {
 /// state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionLimits {
-    /// Stored steps.
+    /// Budget for committed rewrite steps.
     steps: StepLimit,
-    /// Stored state len.
+    /// Budget for initial and rewritten runtime states.
     state_len: RuntimeStateByteLimit,
-    /// Stored return len.
+    /// Budget for materialized `(return)` output.
     return_len: ReturnByteLimit,
 }
 

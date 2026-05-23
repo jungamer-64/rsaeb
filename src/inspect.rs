@@ -49,7 +49,7 @@ use crate::source::SourceLineNumber;
 /// from byte counts and step counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleCount {
-    /// Stored value.
+    /// Total executable rules in a parsed program.
     value: usize,
 }
 
@@ -73,7 +73,7 @@ impl RuleCount {
 /// distinct from the total executable rule count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct OnceRuleCount {
-    /// Stored value.
+    /// Parsed rules that require per-run once slots.
     value: usize,
 }
 
@@ -94,7 +94,7 @@ impl OnceRuleCount {
 /// One-based rule number for public diagnostics and display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleNumber {
-    /// Stored one based.
+    /// One-based value exposed to diagnostics and callers.
     one_based: usize,
 }
 
@@ -110,7 +110,7 @@ impl RuleNumber {
         Self { one_based: 1 }
     }
 
-    /// Runs the next operation.
+    /// Advances to the next display rule number.
     fn next(self) -> Option<Self> {
         let one_based = self.one_based.checked_add(1)?;
         Some(Self { one_based })
@@ -130,7 +130,7 @@ impl RuleNumber {
 /// line instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RulePosition {
-    /// Stored number.
+    /// One-based public number for this execution-order position.
     number: RuleNumber,
 }
 
@@ -141,7 +141,7 @@ impl RulePosition {
         Some(Self { number })
     }
 
-    /// Runs the zero based operation.
+    /// Converts this execution-order position to a table index.
     pub(crate) fn zero_based(self) -> usize {
         self.number.one_based.saturating_sub(1)
     }
@@ -153,7 +153,7 @@ impl RulePosition {
         }
     }
 
-    /// Runs the next operation.
+    /// Advances to the next execution-order position.
     fn next(self) -> Option<Self> {
         let number = self.number.next()?;
         Some(Self { number })
@@ -168,12 +168,12 @@ impl RulePosition {
 
 /// Internal rule positions.
 pub(crate) struct RulePositions {
-    /// Stored next.
+    /// Next execution-order position to yield.
     next: Option<RulePosition>,
 }
 
 impl RulePositions {
-    /// Constructs the value from validated parts.
+    /// Starts position assignment at the first parsed rule.
     pub(crate) const fn new() -> Self {
         Self {
             next: Some(RulePosition::first()),
@@ -225,18 +225,18 @@ pub enum RuleAnchor {
 /// inside this view because payload construction is owned by the parser.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PayloadView<'program> {
-    /// Stored payload.
+    /// Parsed payload borrowed from the program rule table.
     payload: &'program Payload,
 }
 
 /// Materialized parsed payload bytes.
 ///
 /// This value is produced at an explicit inspection boundary. It is distinct
-/// from runtime input/state bytes because parser payload bytes are executable
+/// unlike runtime input/state bytes because parser payload bytes are executable
 /// program data.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PayloadBytes {
-    /// Stored bytes.
+    /// Owned bytes tagged as parsed payload inspection output.
     bytes: MaterializedBytes<PayloadInspectionDomain>,
 }
 
@@ -246,12 +246,12 @@ pub struct PayloadBytes {
 /// whitespace or comments from the original program source.
 #[derive(Debug, PartialEq, Eq)]
 pub struct CanonicalRuleSource {
-    /// Stored bytes.
+    /// Owned bytes generated from structured rule fields.
     bytes: MaterializedBytes<CanonicalRuleSourceDomain>,
 }
 
 impl<'program> PayloadView<'program> {
-    /// Constructs the value from validated parts.
+    /// Borrows a parsed payload for public inspection.
     pub(crate) fn new(payload: &'program Payload) -> Self {
         Self { payload }
     }
@@ -383,9 +383,9 @@ pub enum RuleActionView<'program> {
 /// it is not stored as a second source of truth beside the parsed fields.
 #[derive(Clone, Copy)]
 pub struct RuleView<'program> {
-    /// Stored position.
+    /// Execution-order position assigned by the parsed program.
     position: RulePosition,
-    /// Stored rule.
+    /// Parsed rule borrowed from the program rule table.
     rule: &'program Rule,
 }
 
@@ -417,7 +417,7 @@ impl PartialEq for RuleView<'_> {
 impl Eq for RuleView<'_> {}
 
 impl<'program> RuleView<'program> {
-    /// Constructs the value from validated parts.
+    /// Pairs a parsed rule with its execution-order position.
     pub(crate) const fn new(position: RulePosition, rule: &'program Rule) -> Self {
         Self { position, rule }
     }

@@ -5,13 +5,13 @@
 //! [`RunSeed`]. Runtime budget and byte-count types live in
 //! [`limits`](crate::limits); runtime input lives in [`input`](crate::input).
 
-/// Internal parse-limit policy module.
+/// Parser limit value types and defaults.
 pub(crate) mod limits;
-/// Internal result module.
+/// Run result and output byte domains.
 mod result;
-/// Internal rule set module.
+/// Parsed rule table storage.
 mod rule_set;
-/// Internal tracing module.
+/// Program-level tracing entrypoints.
 mod tracing;
 
 use crate::error::{InternalInvariantError, ParseError, RunError};
@@ -33,7 +33,7 @@ pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeS
 /// the runtime invocation, not in this value, so repeated runs with the same
 /// [`Program`] start from fresh rule availability.
 pub struct Program {
-    /// Stored rule set.
+    /// Immutable rule table plus parsed `(once)` metadata.
     rule_set: RuleSet,
 }
 
@@ -48,7 +48,7 @@ impl core::fmt::Debug for Program {
 }
 
 impl Program {
-    /// Builds the value from rule set input.
+    /// Wraps a parser-built rule set as a reusable program.
     pub(crate) fn from_rule_set(rule_set: RuleSet) -> Self {
         Self { rule_set }
     }
@@ -100,7 +100,7 @@ impl Program {
             .map(|(rule, position)| RuleView::new(position, rule))
     }
 
-    /// Runs the rule slice operation.
+    /// Borrows the immutable rule table in execution order.
     pub(crate) fn rule_slice(&self) -> &[Rule] {
         self.rule_set.as_slice()
     }
@@ -145,14 +145,14 @@ impl Program {
         Ok(ReturnOutputView::new(output))
     }
 
-    /// Runs the once slot count operation.
+    /// Number of once slots required for each new run.
     pub(crate) const fn once_slot_count(&self) -> crate::rule::OnceRuleCount {
         self.rule_set.once_slot_count()
     }
 
     /// Starts a stateful run session for this program.
     ///
-    /// The seed must already be admitted from runtime input and execution limits. This function
+    /// The seed must already tie checked input to execution limits. This function
     /// consumes it and moves its typed bytes into the mutable runtime-state
     /// domain under the admitted execution limits.
     ///

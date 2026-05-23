@@ -10,23 +10,23 @@ use super::matcher::MatchedRuleApplication;
 use super::rewrite::RewriteScratch;
 use super::state::State;
 
-/// Internal applied rule effect alternatives.
+/// Terminal effect of a successfully committed rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AppliedRuleEffect {
-    /// Continue case.
+    /// Continue execution with the rewritten state.
     Continue,
-    /// Return case.
+    /// End execution through a `(return)` action.
     Return,
 }
 
-/// Internal applied rule.
+/// Committed rule application reported back to the session layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AppliedRule {
-    /// Stored step.
+    /// Step number assigned by the runtime budget.
     pub(crate) step: StepCount,
-    /// Stored rule.
+    /// Rule position committed by the matcher.
     pub(crate) rule: RulePosition,
-    /// Stored effect.
+    /// Whether the committed rule continues or returns.
     pub(crate) effect: AppliedRuleEffect,
 }
 

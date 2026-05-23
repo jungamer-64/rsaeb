@@ -1,13 +1,13 @@
-/// Internal syntax token alternatives.
+/// Reserved multi-byte syntax tokens recognized by parser phases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SyntaxToken {
-    /// Once case.
+    /// `(once)` left-side repeat modifier.
     Once,
-    /// Start case.
+    /// `(start)` anchor or right-side action token.
     Start,
-    /// End case.
+    /// `(end)` anchor or right-side action token.
     End,
-    /// Return case.
+    /// `(return)` right-side action token.
     Return,
 }
 

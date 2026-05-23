@@ -1,14 +1,14 @@
-/// Internal action module.
+/// Matched-rule application and step effects.
 pub(crate) mod action;
-/// Internal budget module.
+/// Runtime budget tracking and step permits.
 pub(crate) mod budget;
-/// Internal matcher module.
+/// Rule-table scanning and match witnesses.
 pub(crate) mod matcher;
-/// Internal once module.
+/// Per-run `(once)` rule state.
 pub(crate) mod once;
-/// Internal rewrite module.
+/// Rewrite scratch storage.
 pub(crate) mod rewrite;
-/// Internal state module.
+/// Mutable runtime state and matching logic.
 pub(crate) mod state;
 
 #[cfg(test)]

@@ -16,9 +16,9 @@ use crate::source::{SourceLineNumber, SourcePosition};
 /// executable code before the comment marker must fit the supported A=B syntax.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {
-    /// Stored location.
+    /// Source location where parsing failed.
     location: ParseErrorLocation,
-    /// Stored kind.
+    /// Structured parse failure reason.
     kind: ParseErrorKind,
 }
 

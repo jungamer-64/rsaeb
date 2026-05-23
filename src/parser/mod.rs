@@ -1,8 +1,8 @@
-/// Internal line module.
+/// Source-line normalization pipeline.
 mod line;
-/// Internal location module.
+/// Parser source-location conversion helpers.
 mod location;
-/// Internal rule line module.
+/// Compact rule-line syntax parser.
 mod rule_line;
 
 #[cfg(test)]

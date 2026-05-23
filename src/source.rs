@@ -31,7 +31,7 @@
 /// input; syntax validation still happens in [`program::Program::parse`](crate::program::Program::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgramSource<'source> {
-    /// Stored bytes.
+    /// Raw source bytes owned by the caller.
     bytes: &'source [u8],
 }
 
@@ -74,7 +74,7 @@ impl<'source> ProgramSource<'source> {
 /// One-based source line number in parsed source diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceLineNumber {
-    /// Stored one based.
+    /// One-based source line used in parse diagnostics.
     one_based: usize,
 }
 
@@ -102,7 +102,7 @@ impl SourceLineNumber {
 /// One-based source column in parsed source diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceColumn {
-    /// Stored one based.
+    /// One-based source column used in parse diagnostics.
     one_based: usize,
 }
 
@@ -123,14 +123,14 @@ impl SourceColumn {
 /// One-based source position in parsed source diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourcePosition {
-    /// Stored line.
+    /// One-based source line.
     line: SourceLineNumber,
-    /// Stored column.
+    /// One-based source column.
     column: SourceColumn,
 }
 
 impl SourcePosition {
-    /// Constructs the value from validated parts.
+    /// Combines already validated source coordinates.
     pub(crate) const fn new(line: SourceLineNumber, column: SourceColumn) -> Self {
         Self { line, column }
     }

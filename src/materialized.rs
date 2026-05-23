@@ -1,33 +1,33 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-/// Internal runtime state snapshot domain alternatives.
+/// Marker for bytes materialized from runtime state.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeStateSnapshotDomain {}
 
-/// Internal return output domain alternatives.
+/// Marker for bytes materialized from `(return)` output.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ReturnOutputDomain {}
 
-/// Internal payload inspection domain alternatives.
+/// Marker for bytes materialized from parsed payload inspection.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum PayloadInspectionDomain {}
 
-/// Internal canonical rule source domain alternatives.
+/// Marker for bytes materialized as canonical rule source.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CanonicalRuleSourceDomain {}
 
-/// Internal materialized bytes.
+/// Owned bytes tagged with the domain that produced them.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct MaterializedBytes<Domain> {
-    /// Stored bytes.
+    /// Materialized byte payload.
     bytes: Vec<u8>,
-    /// Stored domain.
+    /// Compile-time tag preventing byte-domain mixups.
     domain: PhantomData<fn() -> Domain>,
 }
 
 impl<Domain> MaterializedBytes<Domain> {
-    /// Builds the value from vec input.
+    /// Tags already materialized bytes with their producing domain.
     pub(crate) fn from_vec(bytes: Vec<u8>) -> Self {
         Self {
             bytes,
@@ -35,12 +35,12 @@ impl<Domain> MaterializedBytes<Domain> {
         }
     }
 
-    /// Runs the as slice operation.
+    /// Borrows the materialized bytes without erasing the domain tag.
     pub(crate) fn as_slice(&self) -> &[u8] {
         &self.bytes
     }
 
-    /// Runs the into raw bytes operation.
+    /// Releases the byte payload at the public boundary.
     pub(crate) fn into_raw_bytes(self) -> Vec<u8> {
         self.bytes
     }

@@ -1,6 +1,6 @@
-/// Internal canonical module.
+/// Canonical source generation from typed rule data.
 mod canonical;
-/// Internal model module.
+/// Parsed rule domain model.
 mod model;
 
 pub(crate) use canonical::canonical_source;

@@ -25,26 +25,26 @@ pub enum RunOutcome {
 /// bytes have been materialized successfully.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RuntimeStateSnapshot {
-    /// Stored bytes.
+    /// Owned bytes tagged as a stable runtime-state snapshot.
     bytes: MaterializedBytes<RuntimeStateSnapshotDomain>,
 }
 
 impl RuntimeStateSnapshot {
-    /// Builds the value from execution state input.
+    /// Tags bytes materialized from a stable execution state.
     pub(crate) fn from_execution_state(bytes: Vec<u8>) -> Self {
         Self {
             bytes: MaterializedBytes::from_vec(bytes),
         }
     }
 
-    /// Builds the value from runtime state view input.
+    /// Tags bytes materialized from a borrowed runtime-state view.
     pub(crate) fn from_runtime_state_view(bytes: Vec<u8>) -> Self {
         Self {
             bytes: MaterializedBytes::from_vec(bytes),
         }
     }
 
-    /// Builds the value from trace snapshot input.
+    /// Tags bytes materialized while retaining a trace snapshot.
     pub(crate) fn from_trace_snapshot(bytes: Vec<u8>) -> Self {
         Self {
             bytes: MaterializedBytes::from_vec(bytes),
@@ -81,7 +81,7 @@ impl RuntimeStateSnapshot {
 /// This value owns public raw bytes from the return payload.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ReturnOutput {
-    /// Stored bytes.
+    /// Owned bytes tagged as `(return)` output.
     bytes: MaterializedBytes<ReturnOutputDomain>,
 }
 
@@ -91,19 +91,19 @@ pub struct ReturnOutput {
 /// runtime return paths and materializes into [`ReturnOutput`].
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ReturnOutputView<'program> {
-    /// Stored payload.
+    /// Return payload borrowed from the committed parsed rule.
     payload: &'program Payload,
 }
 
 impl ReturnOutput {
-    /// Builds the value from return payload input.
+    /// Tags bytes materialized from a committed return payload.
     pub(crate) fn from_return_payload(bytes: Vec<u8>) -> Self {
         Self {
             bytes: MaterializedBytes::from_vec(bytes),
         }
     }
 
-    /// Builds the value from trace snapshot input.
+    /// Tags bytes materialized while retaining a trace snapshot.
     pub(crate) fn from_trace_snapshot(bytes: Vec<u8>) -> Self {
         Self {
             bytes: MaterializedBytes::from_vec(bytes),
@@ -136,7 +136,7 @@ impl ReturnOutput {
 }
 
 impl<'program> ReturnOutputView<'program> {
-    /// Constructs the value from validated parts.
+    /// Borrows a parsed payload specifically as runtime return output.
     pub(crate) const fn new(payload: &'program Payload) -> Self {
         Self { payload }
     }
@@ -192,9 +192,9 @@ impl core::fmt::Debug for ReturnOutputView<'_> {
 /// outcome reached by the run.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RunResult {
-    /// Stored steps.
+    /// Number of committed rewrite steps in this run.
     steps: StepCount,
-    /// Stored outcome.
+    /// Terminal execution outcome.
     outcome: RunOutcome,
 }
 
@@ -207,7 +207,7 @@ impl RunResult {
         }
     }
 
-    /// Builds the value from return input.
+    /// Builds a result for a run ended by `(return)`.
     pub(crate) fn from_return(output: ReturnOutput, steps: StepCount) -> Self {
         Self {
             steps,

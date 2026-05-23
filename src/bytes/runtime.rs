@@ -5,7 +5,7 @@ use super::rejection::NonAsciiInputByte;
 
 use runtime_ascii::{AsciiByte, ClassifiedAsciiByte, NonProgramAsciiByte};
 
-/// Internal runtime ascii module.
+/// ASCII validation layer for host runtime input.
 mod runtime_ascii {
     use super::{InputColumn, NonAsciiInputByte, ProgramByte, RuntimeInputError};
 
@@ -15,16 +15,16 @@ mod runtime_ascii {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) struct AsciiByte(u8);
 
-    /// Internal classified ascii byte alternatives.
+    /// Runtime-domain classification of validated ASCII input.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) enum ClassifiedAsciiByte {
-        /// Program case.
+        /// Byte can also be constructed by program payload syntax.
         Program(ProgramByte),
-        /// Non program case.
+        /// Byte is valid runtime input but cannot appear in executable payloads.
         NonProgram(NonProgramAsciiByte),
     }
 
-    /// Internal non program ascii byte.
+    /// Runtime-only ASCII byte kept opaque to program payload matching.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) struct NonProgramAsciiByte(AsciiByte);
 
@@ -53,13 +53,13 @@ mod runtime_ascii {
             self.0
         }
 
-        /// Builds the value from validated input.
+        /// Rebuilds the witness after a prior ASCII validation pass.
         pub(super) fn from_validated(byte: u8) -> Self {
             debug_assert!(byte.is_ascii());
             Self(byte)
         }
 
-        /// Runs the classify operation.
+        /// Separates executable payload bytes from runtime-only bytes.
         pub(crate) fn classify(self) -> ClassifiedAsciiByte {
             if let Some(byte) = ProgramByte::from_valid_raw(self.get()) {
                 ClassifiedAsciiByte::Program(byte)
@@ -70,7 +70,7 @@ mod runtime_ascii {
     }
 
     impl NonProgramAsciiByte {
-        /// Runs the materialize operation.
+        /// Returns the original ASCII byte.
         pub(crate) const fn materialize(self) -> u8 {
             self.0.get()
         }
@@ -79,12 +79,12 @@ mod runtime_ascii {
 
 /// A raw runtime-input byte after input-boundary validation.
 ///
-/// This witness is the only path from host `u8` input into the runtime byte
+/// This witness is the only host-byte path into the runtime byte
 /// domain. It keeps the validation result attached until the byte is classified
 /// for mutable runtime state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RuntimeInputByte {
-    /// Stored byte.
+    /// ASCII witness for one validated runtime-input byte.
     byte: AsciiByte,
 }
 
@@ -101,14 +101,14 @@ impl RuntimeInputByte {
         })
     }
 
-    /// Builds the value from validated ascii input.
+    /// Rebuilds a runtime-input witness from bytes validated as ASCII earlier.
     pub(crate) fn from_validated_ascii(byte: u8) -> Self {
         Self {
             byte: AsciiByte::from_validated(byte),
         }
     }
 
-    /// Runs the into runtime byte operation.
+    /// Classifies this input byte for storage in mutable runtime state.
     pub(crate) fn into_runtime_byte(self) -> RuntimeByte {
         RuntimeByte::from_ascii(self.byte)
     }
@@ -121,19 +121,19 @@ impl RuntimeInputByte {
 /// bytes, or reserved syntax as program payload data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeByte {
-    /// Program constructible case.
+    /// Byte may participate in executable payload matching.
     ProgramConstructible(ProgramByte),
-    /// Opaque case.
+    /// Byte remains visible in state but never matches program payload syntax.
     Opaque(NonProgramAsciiByte),
 }
 
 impl RuntimeByte {
-    /// Builds the value from program input.
+    /// Lifts a program payload byte into the runtime-state domain.
     pub(crate) const fn from_program(byte: ProgramByte) -> Self {
         Self::ProgramConstructible(byte)
     }
 
-    /// Builds the value from ascii input.
+    /// Classifies a validated ASCII byte for runtime-state storage.
     fn from_ascii(byte: AsciiByte) -> Self {
         match byte.classify() {
             ClassifiedAsciiByte::Program(byte) => Self::ProgramConstructible(byte),
@@ -141,7 +141,7 @@ impl RuntimeByte {
         }
     }
 
-    /// Runs the materialize operation.
+    /// Returns the byte value visible to callers and trace output.
     pub(crate) const fn materialize(self) -> u8 {
         match self {
             Self::ProgramConstructible(byte) => byte.get(),
@@ -149,7 +149,7 @@ impl RuntimeByte {
         }
     }
 
-    /// Runs the program byte operation.
+    /// Returns the executable payload byte when this state byte is matchable.
     pub(crate) const fn program_byte(self) -> Option<ProgramByte> {
         match self {
             Self::ProgramConstructible(byte) => Some(byte),

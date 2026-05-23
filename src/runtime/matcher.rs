@@ -4,47 +4,47 @@ use crate::error::RunError;
 use crate::inspect::{RulePosition, RulePositions};
 use crate::rule::{Rule, RuleAnchorSyntax};
 
-/// Internal rule search alternatives.
+/// Outcome of scanning the rule table for the next applicable rule.
 #[derive(Debug)]
 pub(crate) enum RuleSearch<'program, 'once> {
-    /// Matched case.
+    /// A rule matched and carries the commit permit needed after success.
     Matched(MatchedRuleApplication<'program, 'once>),
-    /// Stable case.
+    /// No currently available rule matched the runtime state.
     Stable,
 }
 
-/// Internal matched rule application.
+/// Matched rule plus the state range and commit action needed to apply it.
 #[derive(Debug)]
 pub(crate) struct MatchedRuleApplication<'program, 'once> {
-    /// Stored position.
+    /// Execution-order position of the matched rule.
     position: RulePosition,
-    /// Stored rule.
+    /// Parsed rule selected by the matcher.
     rule: &'program Rule,
-    /// Stored commit.
+    /// Once-state side effect to apply only after successful rewrite.
     commit: MatchedRuleCommit<'once>,
-    /// Stored state match.
+    /// Runtime-state range matched by the rule left side.
     state_match: StateMatch,
 }
 
-/// Internal matched rule candidate.
+/// Rule candidate before a linear commit permit has been reserved.
 struct MatchedRuleCandidate<'program> {
-    /// Stored position.
+    /// Execution-order position of the candidate rule.
     position: RulePosition,
-    /// Stored rule.
+    /// Parsed rule selected as a candidate.
     rule: &'program Rule,
-    /// Stored state match.
+    /// Runtime-state range matched by the rule left side.
     state_match: StateMatch,
 }
 
-/// Internal committed rule.
+/// Rule position after all runtime side effects have committed.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CommittedRule {
-    /// Stored position.
+    /// Execution-order position safe to expose in the transition.
     position: RulePosition,
 }
 
 impl<'program> MatchedRuleCandidate<'program> {
-    /// Constructs the value from validated parts.
+    /// Captures a rule match before once-state commit is permitted.
     const fn new(position: RulePosition, rule: &'program Rule, state_match: StateMatch) -> Self {
         Self {
             position,
@@ -53,7 +53,7 @@ impl<'program> MatchedRuleCandidate<'program> {
         }
     }
 
-    /// Runs the into application operation.
+    /// Attaches the linear commit action to the matched candidate.
     const fn into_application<'once>(
         self,
         commit: MatchedRuleCommit<'once>,
@@ -63,7 +63,7 @@ impl<'program> MatchedRuleCandidate<'program> {
 }
 
 impl<'program, 'once> MatchedRuleApplication<'program, 'once> {
-    /// Constructs the value from validated parts.
+    /// Captures the complete data needed to apply a matched rule.
     const fn new(
         position: RulePosition,
         rule: &'program Rule,
@@ -78,17 +78,17 @@ impl<'program, 'once> MatchedRuleApplication<'program, 'once> {
         }
     }
 
-    /// Runs the rule operation.
+    /// Parsed rule selected by the matcher.
     pub(crate) const fn rule(&self) -> &'program Rule {
         self.rule
     }
 
-    /// Runs the state match operation.
+    /// Runtime-state range matched by the selected rule.
     pub(crate) const fn state_match(&self) -> StateMatch {
         self.state_match
     }
 
-    /// Runs the commit operation.
+    /// Commits the matched rule's deferred side effects.
     pub(crate) fn commit(self) -> CommittedRule {
         self.commit.commit();
         CommittedRule {
@@ -98,7 +98,7 @@ impl<'program, 'once> MatchedRuleApplication<'program, 'once> {
 }
 
 impl CommittedRule {
-    /// Runs the position operation.
+    /// Execution-order position of the committed rule.
     pub(crate) const fn position(self) -> RulePosition {
         self.position
     }

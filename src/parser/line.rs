@@ -13,16 +13,16 @@ use super::rule_line::RuleSyntaxLine;
 
 /// Internal raw source line.
 pub(super) struct RawSourceLine<'source> {
-    /// Stored line number.
+    /// Original one-based source line number.
     line_number: SourceLineNumber,
-    /// Stored bytes.
+    /// Raw line bytes before comment splitting.
     bytes: &'source [u8],
-    /// Stored code line limit.
+    /// Maximum executable bytes allowed before whitespace compaction.
     code_line_limit: CodeLineByteLimit,
 }
 
 impl<'source> RawSourceLine<'source> {
-    /// Constructs the value from validated parts.
+    /// Labels one raw source line with its parser budget.
     pub(super) fn new(
         line_number: SourceLineNumber,
         bytes: &'source [u8],
@@ -89,9 +89,9 @@ impl<'source> RawSourceLine<'source> {
 
 /// Internal code line.
 pub(super) struct CodeLine<'source> {
-    /// Stored line number.
+    /// Original one-based source line number.
     line_number: SourceLineNumber,
-    /// Stored bytes.
+    /// Executable bytes before whitespace compaction.
     bytes: &'source [u8],
 }
 
@@ -179,7 +179,7 @@ impl CodeLine<'_> {
 /// Internal compact code byte count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CompactCodeByteCount {
-    /// Stored value.
+    /// Number of executable bytes after whitespace removal.
     value: usize,
 }
 
@@ -211,14 +211,14 @@ impl CompactCodeByteCount {
 /// Internal compact code line.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct CompactCodeLine {
-    /// Stored line number.
+    /// Original one-based source line number.
     line_number: SourceLineNumber,
-    /// Stored bytes.
+    /// Compact bytes with source-column witnesses.
     bytes: Vec<CompactByte>,
 }
 
 impl CompactCodeLine {
-    /// Runs the into non empty operation.
+    /// Discards blank/comment-only lines before rule parsing.
     pub(super) fn into_non_empty(self) -> Option<NonEmptyCompactCodeLine> {
         (!self.bytes.is_empty()).then_some(NonEmptyCompactCodeLine {
             line_number: self.line_number,
@@ -230,9 +230,9 @@ impl CompactCodeLine {
 /// Internal non empty compact code line.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct NonEmptyCompactCodeLine {
-    /// Stored line number.
+    /// Original one-based source line number.
     line_number: SourceLineNumber,
-    /// Stored bytes.
+    /// Compact executable bytes known to contain at least one token.
     bytes: Vec<CompactByte>,
 }
 

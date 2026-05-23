@@ -166,7 +166,7 @@ impl Error for RunAdmissionError {}
 /// runtime-input boundary, not by source parsing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InputColumn {
-    /// Stored one based.
+    /// One-based runtime-input byte column.
     one_based: usize,
 }
 
@@ -190,16 +190,16 @@ impl InputColumn {
 /// could not represent the length of the state that a rewrite would produce.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateSizeError {
-    /// Stored state.
+    /// Runtime state length before the rewrite.
     state: RuntimeStateByteCount,
-    /// Stored lhs.
+    /// Matched left-side payload length being removed.
     lhs: PayloadByteCount,
-    /// Stored rhs.
+    /// Right-side payload length being inserted.
     rhs: PayloadByteCount,
 }
 
 impl StateSizeError {
-    /// Constructs the value from validated parts.
+    /// Records the lengths that overflowed rewrite-size arithmetic.
     pub(crate) const fn new(
         state_len: RuntimeStateByteCount,
         lhs_len: PayloadByteCount,

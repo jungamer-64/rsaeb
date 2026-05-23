@@ -1,14 +1,14 @@
-/// Internal compact module.
+/// Compact source bytes with diagnostic positions.
 mod compact;
-/// Internal count module.
+/// Byte-count domain types.
 mod count;
-/// Internal payload module.
+/// Parsed payload storage and matcher views.
 mod payload;
-/// Internal program module.
+/// Executable program byte domain.
 mod program;
-/// Internal rejection module.
+/// Rejected-byte diagnostic domains.
 mod rejection;
-/// Internal runtime module.
+/// Runtime input and state byte domains.
 mod runtime;
 
 #[cfg(test)]

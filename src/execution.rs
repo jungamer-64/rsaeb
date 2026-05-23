@@ -37,9 +37,9 @@ use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
 /// with `step` methods. Stable and returned runs are represented by separate
 /// terminal types, so callers cannot step after completion.
 pub struct RunSession<'program> {
-    /// Stored program.
+    /// Parsed program borrowed for rule lookup and rule-view materialization.
     program: &'program Program,
-    /// Stored core.
+    /// Mutable execution state shared with owned sessions.
     core: RunCore,
 }
 
@@ -48,22 +48,22 @@ pub struct RunSession<'program> {
 /// This is the owned counterpart of [`RunSession`]. It uses the same runtime
 /// core and step semantics while carrying the parsed program by value.
 pub struct OwnedRunSession {
-    /// Stored program.
+    /// Parsed program owned by this session for rule lookup and inspection.
     program: Program,
-    /// Stored core.
+    /// Mutable execution state shared with borrowed sessions.
     core: RunCore,
 }
 
-/// Internal run core.
+/// Mutable runtime state independent of program ownership mode.
 #[derive(Debug)]
 struct RunCore {
-    /// Stored state.
+    /// Current runtime byte state.
     state: State,
-    /// Stored scratch.
+    /// Reusable buffer for candidate rewrites.
     scratch: RewriteScratch,
-    /// Stored budget.
+    /// Runtime limits and completed-step count.
     budget: RuntimeBudgetState,
-    /// Stored once states.
+    /// Per-run consumption state for `(once)` rules.
     once_states: OnceStateSet,
 }
 
@@ -102,21 +102,21 @@ pub enum OwnedStepTransition {
 /// This value lets a caller inspect the applied rule and post-step state before
 /// deciding whether to continue the run.
 pub struct AppliedStep<'program> {
-    /// Stored step.
+    /// Step number committed by this transition.
     step: StepCount,
-    /// Stored rule.
+    /// Program-local rule position committed by this transition.
     rule: RulePosition,
-    /// Stored session.
+    /// Continuation session after the committed rewrite.
     session: RunSession<'program>,
 }
 
 /// One committed non-terminal rule application for an owned run session.
 pub struct OwnedAppliedStep {
-    /// Stored step.
+    /// Step number committed by this transition.
     step: StepCount,
-    /// Stored rule.
+    /// Program-local rule position committed by this transition.
     rule: RulePosition,
-    /// Stored session.
+    /// Owned continuation session after the committed rewrite.
     session: OwnedRunSession,
 }
 
@@ -125,19 +125,19 @@ pub struct OwnedAppliedStep {
 /// Stable runs still own the final runtime state until the caller either
 /// borrows it or materializes it with [`StableRun::into_result`].
 pub struct StableRun {
-    /// Stored steps.
+    /// Number of committed steps before no rule matched.
     steps: StepCount,
-    /// Stored core.
+    /// Terminal runtime core containing the stable state.
     core: RunCore,
 }
 
 /// Terminal owned run state reached by no matching rule.
 pub struct OwnedStableRun {
-    /// Stored steps.
+    /// Number of committed steps before no rule matched.
     steps: StepCount,
-    /// Stored program.
+    /// Parsed program retained by the owned terminal state.
     program: Program,
-    /// Stored core.
+    /// Terminal runtime core containing the stable state.
     core: RunCore,
 }
 
@@ -146,21 +146,21 @@ pub struct OwnedStableRun {
 /// The output is a borrowed return output until the caller materializes the
 /// terminal [`RunResult`] through [`ReturnedRun::into_result`].
 pub struct ReturnedRun<'program> {
-    /// Stored step.
+    /// Step number that executed the return action.
     step: StepCount,
-    /// Stored rule.
+    /// Program-local return rule position.
     rule: RulePosition,
-    /// Stored program.
+    /// Parsed program used to borrow the return payload.
     program: &'program Program,
 }
 
 /// Terminal owned run state reached by `(return)`.
 pub struct OwnedReturnedRun {
-    /// Stored step.
+    /// Step number that executed the return action.
     step: StepCount,
-    /// Stored rule.
+    /// Program-local return rule position.
     rule: RulePosition,
-    /// Stored program.
+    /// Parsed program used to borrow the return payload.
     program: Program,
 }
 
@@ -170,17 +170,17 @@ pub struct OwnedReturnedRun {
 /// terminal public state: callers can inspect the uncommitted state, then
 /// discard the failed run into its runtime error.
 pub struct FailedRun<'program> {
-    /// Stored error.
+    /// Runtime error that stopped the candidate step before commit.
     error: RunError,
-    /// Stored session.
+    /// Uncommitted session retained for diagnostic inspection.
     session: RunSession<'program>,
 }
 
 /// Runtime failure that preserves owned uncommitted state for inspection.
 pub struct OwnedFailedRun {
-    /// Stored error.
+    /// Runtime error that stopped the candidate step before commit.
     error: RunError,
-    /// Stored session.
+    /// Uncommitted owned session retained for diagnostic inspection.
     session: OwnedRunSession,
 }
 
@@ -331,12 +331,12 @@ impl RunCore {
         })
     }
 
-    /// Runs the completed steps operation.
+    /// Number of steps already committed in this core.
     const fn completed_steps(&self) -> StepCount {
         self.budget.completed_steps()
     }
 
-    /// Runs the state operation.
+    /// Borrows the current runtime state.
     fn state(&self) -> RuntimeStateView<'_> {
         self.state.view()
     }
@@ -373,11 +373,11 @@ impl RunCore {
     }
 }
 
-/// Internal core step alternatives.
+/// Internal non-error result of one core step attempt.
 enum CoreStep {
-    /// Applied case.
+    /// A rule committed and may have terminal side effects.
     Applied(AppliedRule),
-    /// Stable case.
+    /// No rule matched the current runtime state.
     Stable(StepCount),
 }
 
@@ -584,7 +584,7 @@ impl OwnedRunSession {
 }
 
 impl AppliedRule {
-    /// Runs the into transition operation.
+    /// Converts the internal applied rule into the borrowed public transition.
     fn into_transition(self, session: RunSession<'_>) -> StepTransition<'_> {
         match self.effect {
             AppliedRuleEffect::Continue => StepTransition::Applied(AppliedStep {
@@ -600,7 +600,7 @@ impl AppliedRule {
         }
     }
 
-    /// Runs the into owned transition operation.
+    /// Converts the internal applied rule into the owned public transition.
     fn into_owned_transition(self, session: OwnedRunSession) -> OwnedStepTransition {
         match self.effect {
             AppliedRuleEffect::Continue => OwnedStepTransition::Applied(OwnedAppliedStep {
@@ -816,7 +816,7 @@ impl OwnedReturnedRun {
 }
 
 impl<'program> FailedRun<'program> {
-    /// Constructs the value from validated parts.
+    /// Captures a failed borrowed session without committing the attempted step.
     fn new(error: RunError, session: RunSession<'program>) -> Self {
         Self { error, session }
     }
@@ -847,7 +847,7 @@ impl<'program> FailedRun<'program> {
 }
 
 impl OwnedFailedRun {
-    /// Constructs the value from validated parts.
+    /// Captures a failed owned session without committing the attempted step.
     fn new(error: RunError, session: OwnedRunSession) -> Self {
         Self { error, session }
     }

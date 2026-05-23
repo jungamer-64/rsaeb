@@ -46,13 +46,13 @@
 //! # }
 //! ```
 
-/// Internal error formatting module.
+/// Display implementations for public error domains.
 mod fmt;
-/// Internal parse module.
+/// Parse error model.
 mod parse;
-/// Internal run module.
+/// Runtime and admission error model.
 mod run;
-/// Internal traced module.
+/// Trace error model.
 mod traced;
 
 pub use crate::allocation::{

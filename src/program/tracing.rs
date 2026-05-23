@@ -7,11 +7,11 @@ use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 use super::Program;
 use super::result::RunResult;
 
-/// Internal snapshot trace callback error alternatives.
+/// Trace callback failure split used while borrowed events become snapshots.
 enum SnapshotTraceCallbackError<E> {
-    /// Snapshot case.
+    /// Snapshot materialization failed before the user callback ran.
     Snapshot(TraceSnapshotError),
-    /// Trace case.
+    /// User callback rejected a materialized snapshot event.
     Trace(E),
 }
 

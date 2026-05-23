@@ -6,61 +6,61 @@ use crate::allocation::{
 use crate::error::{InternalInvariantError, RunError};
 use crate::rule::{OnceRuleCount, OnceRuleSlot, Rule, RuleRepeatState};
 
-/// Internal once state set.
+/// Per-run consumption table for parsed `(once)` rules.
 #[derive(Debug)]
 pub(crate) struct OnceStateSet {
-    /// Stored states.
+    /// Consumption state indexed by parsed once-rule slots.
     states: Vec<OnceRuleState>,
 }
 
-/// Internal once rule state alternatives.
+/// Consumption state for one `(once)` rule during a single run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OnceRuleState {
-    /// Fresh case.
+    /// Rule has not committed in this run.
     Fresh,
-    /// Consumed case.
+    /// Rule has already committed in this run.
     Consumed,
 }
 
-/// Internal matched rule commit alternatives.
+/// Linear commit action for a matched rule.
 #[derive(Debug)]
 pub(super) enum MatchedRuleCommit<'once> {
-    /// Always case.
+    /// Rule has no once-state side effect.
     Always,
-    /// Once case.
+    /// Rule owns the unique permit to consume its once state.
     Once(OnceMatchPermit<'once>),
 }
 
-/// Internal once rule availability alternatives.
+/// Availability of a rule before matching work is attempted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum OnceRuleAvailability {
-    /// Available case.
+    /// Rule may be considered by the matcher.
     Available,
-    /// Consumed case.
+    /// Rule has already committed in this run.
     Consumed,
 }
 
-/// Internal once match permit.
+/// Unique mutable permit that consumes one fresh once-rule state on commit.
 #[derive(Debug)]
 pub(super) struct OnceMatchPermit<'once> {
-    /// Stored state.
+    /// Fresh once-state cell reserved for the matched rule.
     state: &'once mut OnceRuleState,
 }
 
 impl<'once> OnceMatchPermit<'once> {
-    /// Constructs the value from validated parts.
+    /// Creates the commit permit after availability has been checked.
     const fn new(state: &'once mut OnceRuleState) -> Self {
         Self { state }
     }
 
-    /// Runs the commit operation.
+    /// Marks the reserved once-rule state as consumed.
     fn commit(self) {
         *self.state = OnceRuleState::Consumed;
     }
 }
 
 impl MatchedRuleCommit<'_> {
-    /// Runs the commit operation.
+    /// Applies the rule's once-state side effect after rewrite success.
     pub(super) fn commit(self) {
         match self {
             Self::Always => {}
@@ -170,7 +170,7 @@ impl OnceStateSet {
 }
 
 impl OnceRuleState {
-    /// Runs the is fresh operation.
+    /// Whether this once slot can still be matched.
     const fn is_fresh(self) -> bool {
         matches!(self, Self::Fresh)
     }

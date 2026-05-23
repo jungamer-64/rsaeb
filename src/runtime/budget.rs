@@ -2,24 +2,24 @@ use crate::bytes::{ReturnOutputByteCount, RuntimeStateByteCount};
 use crate::error::{LimitError, RunError};
 use crate::limits::{ExecutionLimits, StepCount};
 
-/// Internal runtime budget state.
+/// Execution budgets plus the number of committed rewrite steps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RuntimeBudgetState {
-    /// Stored limits.
+    /// Host execution policy admitted for this run.
     limits: ExecutionLimits,
-    /// Stored completed steps.
+    /// Steps committed so far.
     completed_steps: StepCount,
 }
 
-/// Internal step permit.
+/// Reserved next step number that becomes visible only after commit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StepPermit {
-    /// Stored next step.
+    /// Step count to publish when the rewrite commits.
     next_step: StepCount,
 }
 
 impl RuntimeBudgetState {
-    /// Constructs the value from validated parts.
+    /// Starts runtime budget tracking for a newly admitted run.
     pub(crate) const fn new(limits: ExecutionLimits) -> Self {
         Self {
             limits,
@@ -27,7 +27,7 @@ impl RuntimeBudgetState {
         }
     }
 
-    /// Runs the completed steps operation.
+    /// Number of rewrite steps committed so far.
     pub(crate) const fn completed_steps(self) -> StepCount {
         self.completed_steps
     }
@@ -109,7 +109,7 @@ impl RuntimeBudgetState {
         Ok(StepPermit { next_step })
     }
 
-    /// Runs the commit operation.
+    /// Publishes a reserved step after the matched rule commits.
     pub(crate) fn commit(&mut self, permit: StepPermit) -> StepCount {
         self.completed_steps = permit.next_step;
         permit.next_step

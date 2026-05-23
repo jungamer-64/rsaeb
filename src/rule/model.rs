@@ -2,12 +2,12 @@ use crate::bytes::Payload;
 use crate::inspect::{PayloadView, RuleActionView, RuleAnchor, RuleRepeat};
 use crate::source::SourceLineNumber;
 
-/// Internal rule action alternatives.
+/// Parsed right-side action after syntax has been assigned a domain.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RuleAction {
-    /// Rewrite case.
+    /// Rewrite the runtime state and optionally continue.
     Rewrite(RewriteAction),
-    /// Return case.
+    /// Stop execution and materialize the payload as return output.
     Return(Payload),
 }
 
@@ -20,7 +20,7 @@ impl RuleAction {
         }
     }
 
-    /// Runs the canonical right side operation.
+    /// Borrows the right-side shape used for canonical source generation.
     pub(crate) const fn canonical_right_side(&self) -> CanonicalRightSide<'_> {
         match self {
             Self::Rewrite(action) => action.canonical_right_side(),
@@ -29,14 +29,14 @@ impl RuleAction {
     }
 }
 
-/// Internal rewrite action alternatives.
+/// Parsed non-return rewrite action.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RewriteAction {
-    /// Replace case.
+    /// Replace the matched payload at the match position.
     Replace(Payload),
-    /// Move start case.
+    /// Move replacement payload to the start of runtime state.
     MoveStart(Payload),
-    /// Move end case.
+    /// Move replacement payload to the end of runtime state.
     MoveEnd(Payload),
 }
 
@@ -50,7 +50,7 @@ impl RewriteAction {
         }
     }
 
-    /// Runs the canonical right side operation.
+    /// Borrows the rewrite shape used for canonical source generation.
     pub(crate) const fn canonical_right_side(&self) -> CanonicalRightSide<'_> {
         match self {
             Self::Replace(payload) => CanonicalRightSide::Replace(payload),
@@ -59,7 +59,7 @@ impl RewriteAction {
         }
     }
 
-    /// Runs the payload operation.
+    /// Payload emitted by this rewrite action.
     pub(crate) const fn payload(&self) -> &Payload {
         match self {
             Self::Replace(payload) | Self::MoveStart(payload) | Self::MoveEnd(payload) => payload,
@@ -67,32 +67,32 @@ impl RewriteAction {
     }
 }
 
-/// Internal canonical right side alternatives.
+/// Right-side syntax shape used by canonical source generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CanonicalRightSide<'rule> {
-    /// Replace case.
+    /// Plain replacement payload.
     Replace(&'rule Payload),
-    /// Move start case.
+    /// `(start)` action payload.
     MoveStart(&'rule Payload),
-    /// Move end case.
+    /// `(end)` action payload.
     MoveEnd(&'rule Payload),
-    /// Return case.
+    /// `(return)` action payload.
     Return(&'rule Payload),
 }
 
 /// Internal rule head.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RuleHead {
-    /// Stored repeat.
+    /// Parsed repeat modifier.
     repeat: RuleRepeatSyntax,
-    /// Stored anchor.
+    /// Parsed match anchor modifier.
     anchor: RuleAnchorSyntax,
-    /// Stored lhs.
+    /// Left-side executable match payload.
     lhs: Payload,
 }
 
 impl RuleHead {
-    /// Constructs the value from validated parts.
+    /// Groups parsed left-side rule fields before once-slot assignment.
     pub(crate) fn new(repeat: RuleRepeatSyntax, anchor: RuleAnchorSyntax, lhs: Payload) -> Self {
         Self {
             repeat,
@@ -105,12 +105,12 @@ impl RuleHead {
 /// Internal rule body.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RuleBody {
-    /// Stored action.
+    /// Parsed right-side action.
     action: RuleAction,
 }
 
 impl RuleBody {
-    /// Constructs the value from validated parts.
+    /// Wraps the parsed right-side action.
     pub(crate) const fn new(action: RuleAction) -> Self {
         Self { action }
     }
@@ -119,16 +119,16 @@ impl RuleBody {
 /// Internal parsed rule.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ParsedRule {
-    /// Stored line number.
+    /// Original source line containing this rule.
     line_number: SourceLineNumber,
-    /// Stored head.
+    /// Parsed left-side rule fields.
     head: RuleHead,
-    /// Stored body.
+    /// Parsed right-side rule action.
     body: RuleBody,
 }
 
 impl ParsedRule {
-    /// Builds the value from parts input.
+    /// Combines parsed rule parts before program-level repeat-state assignment.
     pub(crate) const fn from_parts(
         line_number: SourceLineNumber,
         head: RuleHead,
@@ -141,39 +141,39 @@ impl ParsedRule {
         }
     }
 
-    /// Runs the line number operation.
+    /// Source line used for diagnostics and public inspection.
     pub(crate) const fn line_number(&self) -> SourceLineNumber {
         self.line_number
     }
 
-    /// Runs the repeat syntax operation.
+    /// Repeat syntax before `(once)` slot assignment.
     pub(crate) const fn repeat_syntax(&self) -> RuleRepeatSyntax {
         self.head.repeat
     }
 }
 
-/// Internal rule repeat syntax alternatives.
+/// Repeat modifier as it appears in parsed syntax.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuleRepeatSyntax {
-    /// Always case.
+    /// Rule has no `(once)` modifier.
     Always,
-    /// Once case.
+    /// Rule has a `(once)` modifier and needs a run-local slot.
     Once,
 }
 
-/// Internal rule anchor syntax alternatives.
+/// Match anchor as it appears in parsed syntax.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuleAnchorSyntax {
-    /// Anywhere case.
+    /// No anchor modifier; search every possible match position.
     Anywhere,
-    /// Start case.
+    /// `(start)` modifier; match only at the beginning.
     Start,
-    /// End case.
+    /// `(end)` modifier; match only at the end.
     End,
 }
 
 impl RuleAnchorSyntax {
-    /// Runs the public anchor operation.
+    /// Converts parser syntax into the public inspection anchor.
     pub(crate) const fn public_anchor(self) -> RuleAnchor {
         match self {
             Self::Anywhere => RuleAnchor::Anywhere,
@@ -186,12 +186,12 @@ impl RuleAnchorSyntax {
 /// Internal once rule slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct OnceRuleSlot {
-    /// Stored zero based.
+    /// Zero-based index into per-run once state.
     zero_based: usize,
 }
 
 impl OnceRuleSlot {
-    /// Runs the zero based operation.
+    /// Index used by the runtime once-state table.
     pub(crate) const fn zero_based(self) -> usize {
         self.zero_based
     }
@@ -200,17 +200,17 @@ impl OnceRuleSlot {
 /// Internal once rule count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct OnceRuleCount {
-    /// Stored value.
+    /// Number of once slots assigned so far.
     value: usize,
 }
 
 impl OnceRuleCount {
-    /// Returns the primitive stored value.
+    /// Number of per-run once slots required by the program.
     pub(crate) const fn get(self) -> usize {
         self.value
     }
 
-    /// Runs the reserve next slot operation.
+    /// Reserves the next once slot while keeping assignment linear.
     pub(crate) fn reserve_next_slot(self) -> Option<(OnceRuleSlot, Self)> {
         let next = self.value.checked_add(1)?;
         Some((
@@ -222,17 +222,17 @@ impl OnceRuleCount {
     }
 }
 
-/// Internal rule repeat state alternatives.
+/// Repeat policy after program-level once-slot assignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuleRepeatState {
-    /// Always case.
+    /// Rule can apply on every match.
     Always,
-    /// Once case.
+    /// Rule can apply once per run and owns this slot.
     Once(OnceRuleSlot),
 }
 
 impl RuleRepeatState {
-    /// Runs the public repeat operation.
+    /// Converts internal repeat state into the public inspection repeat.
     pub(crate) const fn public_repeat(self) -> RuleRepeat {
         match self {
             Self::Always => RuleRepeat::Always,
@@ -244,20 +244,20 @@ impl RuleRepeatState {
 /// Internal rule.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Rule {
-    /// Stored line number.
+    /// Original source line for diagnostics and inspection.
     line_number: SourceLineNumber,
-    /// Stored repeat.
+    /// Runtime repeat policy, including once-slot ownership.
     repeat: RuleRepeatState,
-    /// Stored anchor.
+    /// Match anchor used by the runtime matcher.
     anchor: RuleAnchorSyntax,
-    /// Stored lhs.
+    /// Left-side executable match payload.
     lhs: Payload,
-    /// Stored action.
+    /// Right-side action applied after a match.
     action: RuleAction,
 }
 
 impl Rule {
-    /// Builds the value from parsed input.
+    /// Assigns runtime repeat state to a parsed rule.
     pub(crate) fn from_parsed(parsed: ParsedRule, repeat: RuleRepeatState) -> Self {
         Self {
             line_number: parsed.line_number,
@@ -268,32 +268,32 @@ impl Rule {
         }
     }
 
-    /// Runs the line number operation.
+    /// Source line used for diagnostics and public inspection.
     pub(crate) const fn line_number(&self) -> SourceLineNumber {
         self.line_number
     }
 
-    /// Runs the repeat operation.
+    /// Public repeat policy for inspection.
     pub(crate) const fn repeat(&self) -> RuleRepeat {
         self.repeat.public_repeat()
     }
 
-    /// Runs the repeat state operation.
+    /// Runtime repeat state used by the matcher.
     pub(crate) const fn repeat_state(&self) -> RuleRepeatState {
         self.repeat
     }
 
-    /// Runs the anchor operation.
+    /// Match anchor used by the matcher.
     pub(crate) const fn anchor(&self) -> RuleAnchorSyntax {
         self.anchor
     }
 
-    /// Runs the lhs operation.
+    /// Left-side executable match payload.
     pub(crate) const fn lhs(&self) -> &Payload {
         &self.lhs
     }
 
-    /// Runs the action operation.
+    /// Right-side action applied after a match.
     pub(crate) const fn action(&self) -> &RuleAction {
         &self.action
     }

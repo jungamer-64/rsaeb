@@ -73,12 +73,12 @@ use crate::program::{ReturnOutput, ReturnOutputView, RuntimeStateSnapshot};
 /// execution or trace callback.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeStateView<'run> {
-    /// Stored bytes.
+    /// Runtime-domain bytes borrowed from the current execution state.
     bytes: &'run [RuntimeByte],
 }
 
 impl<'run> RuntimeStateView<'run> {
-    /// Constructs the value from validated parts.
+    /// Borrows runtime-state bytes at an execution or trace boundary.
     pub(crate) const fn new(bytes: &'run [RuntimeByte]) -> Self {
         Self { bytes }
     }

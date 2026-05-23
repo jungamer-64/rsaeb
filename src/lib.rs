@@ -395,25 +395,25 @@ extern crate std;
 #[cfg(test)]
 mod test_support;
 
-/// Internal allocation module.
+/// Allocation boundary error model and fallible Vec helpers.
 mod allocation;
-/// Internal bytes module.
+/// Byte-domain model shared by parser and runtime.
 mod bytes;
 pub mod error;
 pub mod execution;
 pub mod input;
 pub mod inspect;
 pub mod limits;
-/// Internal materialized module.
+/// Domain-tagged owned byte buffers.
 mod materialized;
-/// Internal parser module.
+/// Program source parser.
 mod parser;
 pub mod program;
-/// Internal rule module.
+/// Parsed rule domain model.
 mod rule;
-/// Internal runtime module.
+/// Runtime execution engine.
 mod runtime;
 pub mod source;
-/// Internal syntax module.
+/// Reserved syntax token model.
 mod syntax;
 pub mod trace;

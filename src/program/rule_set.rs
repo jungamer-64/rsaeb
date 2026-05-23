@@ -6,20 +6,20 @@ use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePositi
 use crate::limits::RuleLimit;
 use crate::rule::{OnceRuleCount, ParsedRule, Rule, RuleRepeatState, RuleRepeatSyntax};
 
-/// Internal rule set.
+/// Immutable executable rule table built by the parser.
 #[derive(Debug, PartialEq, Eq, Default)]
 pub(crate) struct RuleSet {
-    /// Stored rules.
+    /// Parsed rules in execution order.
     rules: Vec<Rule>,
-    /// Stored once rule count.
+    /// Number of once slots needed by one run.
     once_rule_count: OnceRuleCount,
 }
 
-/// Internal pending rule insertion.
+/// Parsed rule after repeat-state assignment but before table insertion.
 struct PendingRuleInsertion {
-    /// Stored rule.
+    /// Rule ready for storage in execution order.
     rule: Rule,
-    /// Stored next once rule count.
+    /// Once-slot count after this rule is accepted.
     next_once_rule_count: OnceRuleCount,
 }
 
@@ -56,14 +56,14 @@ impl PendingRuleInsertion {
         })
     }
 
-    /// Runs the line number operation.
+    /// Source line used if storing this rule fails.
     const fn line_number(&self) -> crate::source::SourceLineNumber {
         self.rule.line_number()
     }
 }
 
 impl RuleSet {
-    /// Constructs the value from validated parts.
+    /// Starts an empty parsed rule table.
     pub(crate) fn new() -> Self {
         Self::default()
     }
@@ -123,22 +123,22 @@ impl RuleSet {
         Ok(())
     }
 
-    /// Runs the rule count operation.
+    /// Total executable rules in this table.
     pub(crate) fn rule_count(&self) -> RuleCount {
         RuleCount::new(self.rules.len())
     }
 
-    /// Runs the once rule count operation.
+    /// Public count of parsed `(once)` rules.
     pub(crate) fn once_rule_count(&self) -> PublicOnceRuleCount {
         PublicOnceRuleCount::new(self.once_rule_count.get())
     }
 
-    /// Runs the once slot count operation.
+    /// Internal once-slot count used to initialize per-run state.
     pub(crate) const fn once_slot_count(&self) -> OnceRuleCount {
         self.once_rule_count
     }
 
-    /// Runs the as slice operation.
+    /// Borrows rules in execution order.
     pub(crate) fn as_slice(&self) -> &[Rule] {
         &self.rules
     }
