@@ -1,8 +1,10 @@
 use alloc::vec::Vec;
 
-use crate::allocation::{AllocationContext, AllocationError, try_push};
+use crate::allocation::{
+    AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
+};
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
-use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePosition};
+use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RuleTableIndex};
 use crate::limits::RuleLimit;
 use crate::rule::{OnceRuleCount, ParsedRule, Rule, RuleRepeatState, RuleRepeatSyntax};
 
@@ -21,6 +23,54 @@ struct PendingRuleInsertion {
     rule: Rule,
     /// Once-slot count after this rule is accepted.
     next_once_rule_count: OnceRuleCount,
+}
+
+/// Checked permission to insert one parsed rule into the table.
+struct RuleInsertionPermit {
+    /// Rule count after the permitted insertion.
+    attempted_rule_count: RuleCount,
+}
+
+impl RuleInsertionPermit {
+    /// Checks rule-count budget and table-position representability together.
+    fn new(current_len: usize, limit: RuleLimit, line_number: crate::source::SourceLineNumber) -> Result<Self, ParseError> {
+        let attempted_rule_count = current_len.checked_add(1).ok_or_else(|| {
+            ParseError::at_line(
+                line_number,
+                ParseErrorKind::Allocation(AllocationError::capacity_overflow(
+                    AllocationContext::ProgramRuleTable,
+                )),
+            )
+        })?;
+        let attempted_rule_count = RuleCount::new(attempted_rule_count);
+
+        if !limit.accepts(attempted_rule_count) {
+            return Err(ParseError::at_line(
+                line_number,
+                ParseErrorKind::Limit(ParseLimitError::rules(limit, attempted_rule_count)),
+            ));
+        }
+
+        if RuleTableIndex::from_zero_based(current_len).is_none()
+            || crate::inspect::RulePosition::from_zero_based(current_len).is_none()
+        {
+            return Err(ParseError::at_line(
+                line_number,
+                ParseErrorKind::Allocation(AllocationError::capacity_overflow(
+                    AllocationContext::ProgramRuleTable,
+                )),
+            ));
+        }
+
+        Ok(Self {
+            attempted_rule_count,
+        })
+    }
+
+    /// Rule-table capacity required before insertion.
+    const fn requested_capacity(self) -> RequestedCapacity {
+        RequestedCapacity::from_rule_count(self.attempted_rule_count)
+    }
 }
 
 impl PendingRuleInsertion {
@@ -80,37 +130,19 @@ impl RuleSet {
         limit: RuleLimit,
     ) -> Result<(), ParseError> {
         let line_number = parsed.line_number();
-        let attempted_rule_count = self.rules.len().checked_add(1).ok_or_else(|| {
-            ParseError::at_line(
-                line_number,
-                ParseErrorKind::Allocation(AllocationError::capacity_overflow(
-                    AllocationContext::ProgramRuleTable,
-                )),
-            )
-        })?;
-
-        if attempted_rule_count > limit.get() {
-            return Err(ParseError::at_line(
-                line_number,
-                ParseErrorKind::Limit(ParseLimitError::rules(
-                    limit,
-                    RuleCount::new(attempted_rule_count),
-                )),
-            ));
-        }
-
-        if RulePosition::from_zero_based(self.rules.len()).is_none() {
-            return Err(ParseError::at_line(
-                line_number,
-                ParseErrorKind::Allocation(AllocationError::capacity_overflow(
-                    AllocationContext::ProgramRuleTable,
-                )),
-            ));
-        }
+        let insertion = RuleInsertionPermit::new(self.rules.len(), limit, line_number)?;
 
         let pending = PendingRuleInsertion::from_parsed(parsed, self.once_rule_count)?;
 
         let pending_line_number = pending.line_number();
+        try_reserve_total_exact(
+            &mut self.rules,
+            insertion.requested_capacity(),
+            AllocationContext::ProgramRuleTable,
+        )
+        .map_err(|error| {
+            ParseError::at_line(pending_line_number, ParseErrorKind::Allocation(error))
+        })?;
         try_push(
             &mut self.rules,
             pending.rule,

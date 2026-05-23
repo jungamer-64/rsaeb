@@ -1,6 +1,10 @@
 use alloc::vec::Vec;
 use core::error::Error;
 
+use crate::bytes::{PayloadByteCount, RuntimeInputByteCount, RuntimeStateByteCount};
+use crate::inspect::RuleCount;
+use crate::rule::OnceRuleCount;
+
 /// Interpreter allocation site reported by [`AllocationError`].
 ///
 /// The value identifies the domain boundary that was allocating, so callers can
@@ -67,6 +71,31 @@ impl RequestedCapacity {
     /// Records a capacity request after the caller has chosen the allocation boundary.
     pub(crate) const fn new(value: usize) -> Self {
         Self { value }
+    }
+
+    /// Requests storage for validated runtime-input bytes.
+    pub(crate) const fn from_runtime_input_count(count: RuntimeInputByteCount) -> Self {
+        Self { value: count.get() }
+    }
+
+    /// Requests storage for runtime-state bytes.
+    pub(crate) const fn from_runtime_state_count(count: RuntimeStateByteCount) -> Self {
+        Self { value: count.get() }
+    }
+
+    /// Requests storage for parsed payload bytes.
+    pub(crate) const fn from_payload_count(count: PayloadByteCount) -> Self {
+        Self { value: count.get() }
+    }
+
+    /// Requests storage for parsed rule-table entries.
+    pub(crate) const fn from_rule_count(count: RuleCount) -> Self {
+        Self { value: count.get() }
+    }
+
+    /// Requests storage for per-run `(once)` state slots.
+    pub(crate) const fn from_once_rule_count(count: OnceRuleCount) -> Self {
+        Self { value: count.get() }
     }
 
     /// Requested capacity as a primitive value.

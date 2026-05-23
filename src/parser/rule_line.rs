@@ -639,7 +639,7 @@ fn ensure_payload_within_limit(
     attempted_len: PayloadByteCount,
     limit: PayloadByteLimit,
 ) -> Result<(), ParseError> {
-    if attempted_len.get() <= limit.get() {
+    if limit.accepts(attempted_len) {
         return Ok(());
     }
 

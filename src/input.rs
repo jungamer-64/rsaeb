@@ -13,6 +13,7 @@ use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_rese
 use crate::bytes::{RuntimeByte, RuntimeInputByte, RuntimeInputByteCount, RuntimeStateByteCount};
 use crate::error::{RunAdmissionError, RuntimeInputError};
 use crate::limits::{ExecutionLimits, RuntimeInputByteLimit, RuntimeInputLimits};
+use crate::runtime::budget::RuntimeBudgetState;
 
 /// Borrowed runtime input source at the validation boundary.
 ///
@@ -65,7 +66,7 @@ impl<'input> ValidatedRuntimeInputSource<'input> {
         limit: RuntimeInputByteLimit,
     ) -> Result<Self, RuntimeInputError> {
         let byte_count = RuntimeInputByteCount::new(source.as_bytes().len());
-        if byte_count.get() > limit.get() {
+        if !limit.accepts(byte_count) {
             return Err(RuntimeInputError::input_limit(limit, byte_count));
         }
 
@@ -152,7 +153,7 @@ impl RuntimeInput {
         let mut bytes = Vec::new();
         try_reserve_total_exact(
             &mut bytes,
-            RequestedCapacity::new(input.byte_count().get()),
+            RequestedCapacity::from_runtime_input_count(input.byte_count()),
             AllocationContext::RuntimeInputValidation,
         )?;
 
@@ -193,10 +194,10 @@ impl RuntimeInput {
 /// Run-start witness tying checked input to execution limits.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RunSeed {
-    /// Validated input admitted as the initial runtime state.
-    input: RuntimeInput,
-    /// Execution budgets bound to this run.
-    limits: ExecutionLimits,
+    /// Runtime-domain bytes admitted as the initial execution state.
+    initial_state: InitialStateBytes,
+    /// Execution budgets already tied to this admitted run.
+    budget: RuntimeBudgetState,
 }
 
 impl RunSeed {
@@ -208,24 +209,24 @@ impl RunSeed {
     /// initial runtime-state budget.
     pub fn admit(input: RuntimeInput, limits: ExecutionLimits) -> Result<Self, RunAdmissionError> {
         let initial_state_len = RuntimeStateByteCount::from_runtime_input_count(input.byte_count());
-        if initial_state_len.get() > limits.state_byte_limit().get() {
+        if !limits.state_byte_limit().accepts(initial_state_len) {
             return Err(RunAdmissionError::initial_state_limit(
                 limits.state_byte_limit(),
                 initial_state_len,
             ));
         }
 
-        Ok(Self { input, limits })
+        Ok(Self {
+            initial_state: InitialStateBytes {
+                bytes: input.into_runtime_bytes(),
+            },
+            budget: RuntimeBudgetState::new(limits),
+        })
     }
 
-    /// Splits the admitted run seed into runtime state bytes and budgets.
-    pub(crate) fn into_runtime_parts(self) -> (InitialStateBytes, ExecutionLimits) {
-        (
-            InitialStateBytes {
-                bytes: self.input.into_runtime_bytes(),
-            },
-            self.limits,
-        )
+    /// Splits the admitted run seed into runtime state bytes and budget state.
+    pub(crate) fn into_runtime_parts(self) -> (InitialStateBytes, RuntimeBudgetState) {
+        (self.initial_state, self.budget)
     }
 }
 

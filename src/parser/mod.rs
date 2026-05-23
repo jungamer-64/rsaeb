@@ -61,7 +61,7 @@ fn ensure_source_within_limit(
 ) -> Result<(), ParseError> {
     let attempted_len = SourceByteCount::new(source.as_bytes().len());
     let limit = limits.source_byte_limit();
-    if attempted_len.get() <= limit.get() {
+    if limit.accepts(attempted_len) {
         return Ok(());
     }
 

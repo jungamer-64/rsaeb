@@ -62,7 +62,7 @@ pub(crate) fn canonical_source(rule: &Rule) -> Result<Vec<u8>, AllocationError> 
 ///
 /// Returns `AllocationError` if canonical source length arithmetic overflows.
 fn canonical_source_len(rule: &Rule) -> Result<usize, AllocationError> {
-    let mut len = rule.lhs().len();
+    let mut len = rule.lhs().byte_count().get();
 
     if matches!(rule.repeat_state(), RuleRepeatState::Once(_)) {
         len = len.checked_add(SyntaxToken::Once.len()).ok_or_else(|| {
@@ -77,22 +77,22 @@ fn canonical_source_len(rule: &Rule) -> Result<usize, AllocationError> {
     };
 
     let right_side_len = match rule.action().canonical_right_side() {
-        CanonicalRightSide::Replace(payload) => payload.len(),
+        CanonicalRightSide::Replace(payload) => payload.byte_count().get(),
         CanonicalRightSide::MoveStart(payload) => SyntaxToken::Start
             .len()
-            .checked_add(payload.len())
+            .checked_add(payload.byte_count().get())
             .ok_or_else(|| {
                 AllocationError::capacity_overflow(AllocationContext::CanonicalSource)
             })?,
         CanonicalRightSide::MoveEnd(payload) => SyntaxToken::End
             .len()
-            .checked_add(payload.len())
+            .checked_add(payload.byte_count().get())
             .ok_or_else(|| {
             AllocationError::capacity_overflow(AllocationContext::CanonicalSource)
         })?,
         CanonicalRightSide::Return(payload) => SyntaxToken::Return
             .len()
-            .checked_add(payload.len())
+            .checked_add(payload.byte_count().get())
             .ok_or_else(|| {
                 AllocationError::capacity_overflow(AllocationContext::CanonicalSource)
             })?,

@@ -47,6 +47,30 @@ pub(super) struct OnceMatchPermit<'once> {
     state: &'once mut OnceRuleState,
 }
 
+/// Checked allocation shape for one run's `(once)` state table.
+#[derive(Clone, Copy)]
+struct OnceStateCapacity {
+    /// Number of once states to initialize.
+    count: OnceRuleCount,
+}
+
+impl OnceStateCapacity {
+    /// Captures the required once-state table shape.
+    const fn new(count: OnceRuleCount) -> Self {
+        Self { count }
+    }
+
+    /// Capacity requested for the once-state table.
+    const fn requested_capacity(self) -> RequestedCapacity {
+        RequestedCapacity::from_once_rule_count(self.count)
+    }
+
+    /// Iterator over the slots that must be initialized.
+    fn slots(self) -> core::ops::Range<usize> {
+        0..self.count.get()
+    }
+}
+
 impl<'once> OnceMatchPermit<'once> {
     /// Creates the commit permit after availability has been checked.
     const fn new(state: &'once mut OnceRuleState) -> Self {
@@ -77,14 +101,15 @@ impl OnceStateSet {
     /// Returns `AllocationError` if the per-execution once-state table cannot
     /// be allocated.
     pub(crate) fn new(once_rule_count: OnceRuleCount) -> Result<Self, AllocationError> {
+        let capacity = OnceStateCapacity::new(once_rule_count);
         let mut states = Vec::new();
         try_reserve_total_exact(
             &mut states,
-            RequestedCapacity::new(once_rule_count.get()),
+            capacity.requested_capacity(),
             AllocationContext::RuntimeOnceRuleState,
         )?;
 
-        for _ in 0..once_rule_count.get() {
+        for _ in capacity.slots() {
             try_push(
                 &mut states,
                 OnceRuleState::Fresh,

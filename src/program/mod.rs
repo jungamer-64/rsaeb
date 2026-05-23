@@ -118,7 +118,7 @@ impl Program {
         let rule = self
             .rule_set
             .as_slice()
-            .get(position.zero_based())
+            .get(position.table_index().get())
             .ok_or_else(InternalInvariantError::missing_committed_rule)?;
         Ok(RuleView::new(position, rule))
     }
@@ -137,12 +137,12 @@ impl Program {
         let rule = self
             .rule_set
             .as_slice()
-            .get(position.zero_based())
+            .get(position.table_index().get())
             .ok_or_else(InternalInvariantError::missing_committed_rule)?;
-        let RuleAction::Return(output) = rule.action() else {
-            return Err(InternalInvariantError::returned_rule_without_output().into());
-        };
-        Ok(ReturnOutputView::new(output))
+        match rule.action() {
+            RuleAction::Return(output) => Ok(ReturnOutputView::new(output)),
+            RuleAction::Rewrite(_) => Err(InternalInvariantError::returned_rule_without_output().into()),
+        }
     }
 
     /// Number of once slots required for each new run.

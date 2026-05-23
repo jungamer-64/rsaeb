@@ -104,7 +104,7 @@ impl ValidatedPayloadSyntax<'_> {
         let mut bytes = Vec::new();
         try_reserve_total_exact(
             &mut bytes,
-            RequestedCapacity::new(self.byte_count.get()),
+            RequestedCapacity::from_payload_count(self.byte_count),
             AllocationContext::ProgramPayload,
         )
         .map_err(|error| {
@@ -178,7 +178,11 @@ impl Payload {
         context: AllocationContext,
     ) -> Result<Vec<u8>, AllocationError> {
         let mut output = Vec::new();
-        try_reserve_total_exact(&mut output, RequestedCapacity::new(self.byte_count().get()), context)?;
+        try_reserve_total_exact(
+            &mut output,
+            RequestedCapacity::from_payload_count(self.byte_count()),
+            context,
+        )?;
         self.push_bytes_to(&mut output, context)?;
         Ok(output)
     }

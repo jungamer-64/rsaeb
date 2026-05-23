@@ -1,5 +1,11 @@
 use core::fmt;
 
+use crate::bytes::{
+    PayloadByteCount, ReturnOutputByteCount, RuntimeInputByteCount, RuntimeStateByteCount,
+    TraceSnapshotByteCount,
+};
+use crate::inspect::RuleCount;
+
 /// Documents the internal default byte budget item.
 const DEFAULT_BYTE_BUDGET: usize = 16_777_216;
 
@@ -106,6 +112,11 @@ impl SourceByteLimit {
     pub const fn get(self) -> usize {
         self.value
     }
+
+    /// Checks whether a measured source length exceeds this parser budget.
+    pub(crate) const fn accepts(self, attempted_len: SourceByteCount) -> bool {
+        attempted_len.get() <= self.value
+    }
 }
 
 /// Maximum executable code-line length accepted by [`program::Program::parse`](crate::program::Program::parse).
@@ -126,6 +137,11 @@ impl CodeLineByteLimit {
     #[must_use]
     pub const fn get(self) -> usize {
         self.value
+    }
+
+    /// Checks whether a measured executable line length exceeds this parser budget.
+    pub(crate) const fn accepts(self, attempted_len: CodeLineByteCount) -> bool {
+        attempted_len.get() <= self.value
     }
 }
 
@@ -148,6 +164,11 @@ impl PayloadByteLimit {
     pub const fn get(self) -> usize {
         self.value
     }
+
+    /// Checks whether a measured payload length exceeds this parser budget.
+    pub(crate) const fn accepts(self, attempted_len: PayloadByteCount) -> bool {
+        attempted_len.get() <= self.value
+    }
 }
 
 /// Maximum executable rule count accepted by [`program::Program::parse`](crate::program::Program::parse).
@@ -168,6 +189,11 @@ impl RuleLimit {
     #[must_use]
     pub const fn get(self) -> usize {
         self.value
+    }
+
+    /// Checks whether a parsed-rule count remains inside this parser budget.
+    pub(crate) const fn accepts(self, attempted_count: RuleCount) -> bool {
+        attempted_count.get() <= self.value
     }
 }
 
@@ -251,6 +277,11 @@ impl StepLimit {
     pub const fn get(self) -> usize {
         self.value
     }
+
+    /// Checks whether another step may be reserved after the completed count.
+    pub(crate) const fn allows_next_after(self, completed_steps: StepCount) -> bool {
+        completed_steps.get() < self.value
+    }
 }
 
 /// Maximum runtime state length in bytes.
@@ -274,6 +305,11 @@ impl RuntimeStateByteLimit {
     #[must_use]
     pub const fn get(self) -> usize {
         self.value
+    }
+
+    /// Checks whether a runtime-state length remains inside this execution budget.
+    pub(crate) const fn accepts(self, attempted_len: RuntimeStateByteCount) -> bool {
+        attempted_len.get() <= self.value
     }
 }
 
@@ -300,6 +336,11 @@ impl RuntimeInputByteLimit {
     pub const fn get(self) -> usize {
         self.value
     }
+
+    /// Checks whether a runtime-input length remains inside this input budget.
+    pub(crate) const fn accepts(self, attempted_len: RuntimeInputByteCount) -> bool {
+        attempted_len.get() <= self.value
+    }
 }
 
 /// Maximum `(return)` output length in bytes.
@@ -324,6 +365,11 @@ impl ReturnByteLimit {
     pub const fn get(self) -> usize {
         self.value
     }
+
+    /// Checks whether a return-output length remains inside this execution budget.
+    pub(crate) const fn accepts(self, attempted_len: ReturnOutputByteCount) -> bool {
+        attempted_len.get() <= self.value
+    }
 }
 
 /// Maximum state/output bytes materialized for one trace snapshot event.
@@ -347,6 +393,11 @@ impl TraceSnapshotByteLimit {
     #[must_use]
     pub const fn get(self) -> usize {
         self.value
+    }
+
+    /// Checks whether one materialized trace event remains inside this snapshot budget.
+    pub(crate) const fn accepts(self, attempted_len: TraceSnapshotByteCount) -> bool {
+        attempted_len.get() <= self.value
     }
 }
 

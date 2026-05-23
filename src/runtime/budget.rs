@@ -42,7 +42,7 @@ impl RuntimeBudgetState {
         self,
         attempted_len: RuntimeStateByteCount,
     ) -> Result<(), RunError> {
-        if attempted_len.get() > self.limits.state_byte_limit().get() {
+        if !self.limits.state_byte_limit().accepts(attempted_len) {
             return Err(LimitError::state(self.limits.state_byte_limit(), attempted_len).into());
         }
 
@@ -59,7 +59,7 @@ impl RuntimeBudgetState {
         self,
         attempted_len: ReturnOutputByteCount,
     ) -> Result<(), RunError> {
-        if attempted_len.get() > self.limits.return_byte_limit().get() {
+        if !self.limits.return_byte_limit().accepts(attempted_len) {
             return Err(
                 LimitError::return_output(self.limits.return_byte_limit(), attempted_len).into(),
             );
@@ -75,7 +75,11 @@ impl RuntimeBudgetState {
     /// Returns `LimitError` if the configured step limit has already been
     /// reached.
     fn ensure_next_step_allowed(self, state_len: RuntimeStateByteCount) -> Result<(), LimitError> {
-        if self.completed_steps.get() >= self.limits.step_limit().get() {
+        if !self
+            .limits
+            .step_limit()
+            .allows_next_after(self.completed_steps)
+        {
             return Err(LimitError::step(
                 self.limits.step_limit(),
                 self.completed_steps,

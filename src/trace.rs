@@ -112,7 +112,7 @@ impl<'run> RuntimeStateView<'run> {
         let mut output = Vec::new();
         try_reserve_total_exact(
             &mut output,
-            RequestedCapacity::new(self.bytes.len()),
+            RequestedCapacity::from_runtime_state_count(self.byte_count()),
             context,
         )?;
         for byte in self.materialized_bytes() {
@@ -324,7 +324,7 @@ fn ensure_trace_len(
     len: TraceSnapshotByteCount,
     limit: TraceSnapshotByteLimit,
 ) -> Result<(), TraceSnapshotError> {
-    if len.get() > limit.get() {
+    if !limit.accepts(len) {
         return Err(TraceSnapshotError::Limit {
             limit,
             attempted_len: len,

@@ -239,7 +239,11 @@ impl State {
     /// Returns `AllocationError` if the output buffer cannot be allocated.
     fn materialize(&self, context: AllocationContext) -> Result<Vec<u8>, AllocationError> {
         let mut output = Vec::new();
-        try_reserve_total_exact(&mut output, RequestedCapacity::new(self.byte_count().get()), context)?;
+        try_reserve_total_exact(
+            &mut output,
+            RequestedCapacity::from_runtime_state_count(self.byte_count()),
+            context,
+        )?;
         for byte in self.bytes.iter().copied() {
             try_push(&mut output, byte.materialize(), context)?;
         }

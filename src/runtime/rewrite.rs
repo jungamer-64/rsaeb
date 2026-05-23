@@ -57,7 +57,7 @@ impl RewriteScratch {
         self.bytes.clear();
         try_reserve_total_exact(
             &mut self.bytes,
-            RequestedCapacity::new(capacity.get()),
+            RequestedCapacity::from_runtime_state_count(capacity),
             AllocationContext::RuntimeRewriteState,
         )
     }

@@ -49,7 +49,7 @@ impl<'source> RawSourceLine<'source> {
             .unwrap_or(self.bytes);
 
         let attempted_len = CodeLineByteCount::new(code_bytes.len());
-        if attempted_len.get() > self.code_line_limit.get() {
+        if !self.code_line_limit.accepts(attempted_len) {
             return Err(ParseError::at_line(
                 self.line_number,
                 ParseErrorKind::Limit(ParseLimitError::code_line(

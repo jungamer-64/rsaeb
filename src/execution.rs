@@ -309,8 +309,7 @@ impl RunCore {
     ///
     /// Returns `RunError` if per-run rule state allocation fails.
     fn new(program: &Program, seed: RunSeed) -> Result<Self, RunError> {
-        let (input, limits) = seed.into_runtime_parts();
-        let budget = RuntimeBudgetState::new(limits);
+        let (input, budget) = seed.into_runtime_parts();
         let state = State::from_input(input);
         let once_states = OnceStateSet::new(program.once_slot_count())?;
         Ok(Self {

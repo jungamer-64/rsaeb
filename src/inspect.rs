@@ -134,11 +134,25 @@ pub struct RulePosition {
     number: RuleNumber,
 }
 
+/// Zero-based index into the internal rule table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct RuleTableIndex {
+    /// Zero-based rule-table offset.
+    zero_based: usize,
+}
+
 impl RulePosition {
     /// Builds an index from a zero-based offset.
     pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
         let number = RuleNumber::from_zero_based(zero_based)?;
         Some(Self { number })
+    }
+
+    /// Converts this checked public position into an internal table index.
+    pub(crate) fn table_index(self) -> RuleTableIndex {
+        RuleTableIndex {
+            zero_based: self.number.one_based - 1,
+        }
     }
 
     /// Builds the first value.
@@ -158,6 +172,19 @@ impl RulePosition {
     #[must_use]
     pub const fn number(self) -> RuleNumber {
         self.number
+    }
+}
+
+impl RuleTableIndex {
+    /// Builds a checked rule-table index from a primitive offset.
+    pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
+        RuleNumber::from_zero_based(zero_based)?;
+        Some(Self { zero_based })
+    }
+
+    /// Primitive offset used only at the slice-access boundary.
+    pub(crate) const fn get(self) -> usize {
+        self.zero_based
     }
 }
 
