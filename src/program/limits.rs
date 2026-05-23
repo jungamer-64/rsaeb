@@ -266,9 +266,9 @@ impl RuntimeStateByteLimit {
 
 /// Maximum runtime input length accepted before owned byte classification.
 ///
-/// This limit is part of [`RunLimits`] and is enforced by
-/// [`input::RunInput::validate`](crate::input::RunInput::validate) before owned
-/// input allocation starts.
+/// This limit is part of [`RuntimeInputLimits`] and is enforced by
+/// [`input::RuntimeInput::validate`](crate::input::RuntimeInput::validate)
+/// before owned input allocation starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuntimeInputByteLimit {
     value: usize,
@@ -358,35 +358,22 @@ impl StepCount {
     }
 }
 
-/// Resource limits for one runtime invocation.
+/// Resource limits for runtime input validation.
 ///
-/// The interpreter checks these limits before allocating oversized runtime
-/// states or return outputs. Step limits alone are not enough for a rewriting
-/// system because a tiny number of steps can still expand into a very large
-/// state. Runtime input length is validated as part of constructing run-bound
-/// input with this same limit set.
+/// Input limits are host policy for raw runtime input only. They do not carry
+/// execution budgets, so validated input cannot accidentally decide how a run is
+/// executed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RunLimits {
+pub struct RuntimeInputLimits {
     input_len: RuntimeInputByteLimit,
-    steps: StepLimit,
-    state_len: RuntimeStateByteLimit,
-    return_len: ReturnByteLimit,
 }
 
-impl RunLimits {
-    /// Creates limits with every runtime budget specified explicitly.
+impl RuntimeInputLimits {
+    /// Creates runtime input limits with every input budget specified explicitly.
     #[must_use]
-    pub const fn new(
-        max_input_len: RuntimeInputByteLimit,
-        max_steps: StepLimit,
-        max_state_len: RuntimeStateByteLimit,
-        max_return_len: ReturnByteLimit,
-    ) -> Self {
+    pub const fn new(max_input_len: RuntimeInputByteLimit) -> Self {
         Self {
             input_len: max_input_len,
-            steps: max_steps,
-            state_len: max_state_len,
-            return_len: max_return_len,
         }
     }
 
@@ -394,6 +381,36 @@ impl RunLimits {
     #[must_use]
     pub const fn input_byte_limit(self) -> RuntimeInputByteLimit {
         self.input_len
+    }
+
+}
+
+/// Resource limits for one execution invocation.
+///
+/// The interpreter checks these limits before allocating oversized runtime
+/// states or return outputs. Step limits alone are not enough for a rewriting
+/// system because a tiny number of steps can still expand into a very large
+/// state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExecutionLimits {
+    steps: StepLimit,
+    state_len: RuntimeStateByteLimit,
+    return_len: ReturnByteLimit,
+}
+
+impl ExecutionLimits {
+    /// Creates execution limits with every runtime execution budget specified explicitly.
+    #[must_use]
+    pub const fn new(
+        max_steps: StepLimit,
+        max_state_len: RuntimeStateByteLimit,
+        max_return_len: ReturnByteLimit,
+    ) -> Self {
+        Self {
+            steps: max_steps,
+            state_len: max_state_len,
+            return_len: max_return_len,
+        }
     }
 
     /// Maximum number of rewrite steps that may be applied.

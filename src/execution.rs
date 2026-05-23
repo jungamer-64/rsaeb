@@ -17,7 +17,7 @@
 //! public API.
 
 use crate::error::{RunError, TracedRunError};
-use crate::input::{InitialStateBytes, RunInput};
+use crate::input::RunSeed;
 use crate::inspect::{RulePosition, RuleView};
 use crate::limits::StepCount;
 use crate::program::{Program, ReturnOutputView, RunResult};
@@ -288,8 +288,8 @@ impl RunCore {
     /// # Errors
     ///
     /// Returns `RunError` if per-run rule state allocation fails.
-    fn new(program: &Program, input: RunInput) -> Result<Self, RunError> {
-        let (input, limits) = InitialStateBytes::from_run_input(input);
+    fn new(program: &Program, seed: RunSeed) -> Result<Self, RunError> {
+        let (input, limits) = seed.into_runtime_parts();
         let budget = RuntimeBudgetState::new(limits);
         let state = State::from_input(input);
         let once_states = OnceStateSet::new(program.once_slot_count())?;
@@ -347,15 +347,15 @@ enum CoreStep {
 }
 
 impl<'program> RunSession<'program> {
-    /// Starts a new run session for a parsed program and validated input.
+    /// Starts a new run session for a parsed program and admitted run seed.
     ///
     /// # Errors
     ///
     /// Returns `RunError` if allocating per-run rule state fails.
-    pub(crate) fn new(program: &'program Program, input: RunInput) -> Result<Self, RunError> {
+    pub(crate) fn new(program: &'program Program, seed: RunSeed) -> Result<Self, RunError> {
         Ok(Self {
             program,
-            core: RunCore::new(program, input)?,
+            core: RunCore::new(program, seed)?,
         })
     }
 
@@ -482,13 +482,13 @@ impl<'program> RunSession<'program> {
 }
 
 impl OwnedRunSession {
-    /// Starts a new owned run session for a parsed program and validated input.
+    /// Starts a new owned run session for a parsed program and admitted run seed.
     ///
     /// # Errors
     ///
     /// Returns `RunError` if allocating per-run rule state fails.
-    pub(crate) fn new(program: Program, input: RunInput) -> Result<Self, RunError> {
-        let core = RunCore::new(&program, input)?;
+    pub(crate) fn new(program: Program, seed: RunSeed) -> Result<Self, RunError> {
+        let core = RunCore::new(&program, seed)?;
         Ok(Self { program, core })
     }
 

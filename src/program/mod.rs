@@ -1,10 +1,9 @@
 //! Parsed program and run-to-completion result types.
 //!
 //! [`Program`] is the immutable parsed A=B rule table. Hosts parse typed
-//! [`ProgramSource`] under [`ParseLimits`], then run with [`RunInput`] already
-//! admitted under [`RunLimits`](crate::limits::RunLimits). Runtime budget and
-//! byte-count types live in [`limits`](crate::limits); runtime input lives in
-//! [`input`](crate::input).
+//! [`ProgramSource`] under [`ParseLimits`], then run with an admitted
+//! [`RunSeed`]. Runtime budget and byte-count types live in
+//! [`limits`](crate::limits); runtime input lives in [`input`](crate::input).
 
 pub(crate) mod limits;
 mod result;
@@ -13,7 +12,7 @@ mod tracing;
 
 use crate::error::{InternalInvariantError, ParseError, RunError};
 use crate::execution::{OwnedRunSession, RunSession};
-use crate::input::RunInput;
+use crate::input::RunSeed;
 use crate::inspect::{OnceRuleCount, RuleCount, RulePositions, RuleView};
 use crate::limits::ParseLimits;
 use crate::parser::parse_rules_impl;
@@ -145,9 +144,9 @@ impl Program {
 
     /// Starts a stateful run session for this program.
     ///
-    /// The input must already be admitted as [`RunInput`]. This function
+    /// The seed must already be admitted from runtime input and execution limits. This function
     /// consumes it and moves its typed bytes into the mutable runtime-state
-    /// domain under the limits bound to the input.
+    /// domain under the admitted execution limits.
     ///
     /// The returned [`RunSession`] can be advanced one matching rule at a time.
     /// Use [`Program::run`] when the caller wants to run to completion in one
@@ -156,8 +155,8 @@ impl Program {
     /// # Errors
     ///
     /// Returns `RunError` when allocating per-run execution state fails.
-    pub fn start_run(&self, input: RunInput) -> Result<RunSession<'_>, RunError> {
-        RunSession::new(self, input)
+    pub fn start_run(&self, seed: RunSeed) -> Result<RunSession<'_>, RunError> {
+        RunSession::new(self, seed)
     }
 
     /// Starts a stateful run session that owns this parsed program.
@@ -170,11 +169,11 @@ impl Program {
     /// # Errors
     ///
     /// Returns `RunError` when allocating per-run execution state fails.
-    pub fn into_run(self, input: RunInput) -> Result<OwnedRunSession, RunError> {
-        OwnedRunSession::new(self, input)
+    pub fn into_run(self, seed: RunSeed) -> Result<OwnedRunSession, RunError> {
+        OwnedRunSession::new(self, seed)
     }
 
-    /// Runs this program with already-validated runtime input.
+    /// Runs this program with admitted runtime seed.
     ///
     /// This is the run-to-completion API. Use [`Program::start_run`] when
     /// the host needs to observe or pause after each committed rule.
@@ -183,7 +182,7 @@ impl Program {
     ///
     /// Returns `RunError` when allocation fails, state-size arithmetic
     /// overflows, or a configured execution budget would be exceeded.
-    pub fn run(&self, input: RunInput) -> Result<RunResult, RunError> {
-        RunSession::new(self, input)?.finish()
+    pub fn run(&self, seed: RunSeed) -> Result<RunResult, RunError> {
+        RunSession::new(self, seed)?.finish()
     }
 }

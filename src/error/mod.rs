@@ -7,7 +7,8 @@
 //! The main domains are:
 //!
 //! - [`ParseError`] for source syntax and parser allocation failures.
-//! - [`RunInputError`] for raw input bytes rejected before execution.
+//! - [`RuntimeInputError`] for raw input bytes rejected before execution.
+//! - [`RunAdmissionError`] for validated input rejected as an initial runtime state.
 //! - [`RunError`] for execution-time allocation, state-size, budget failures,
 //!   and runtime invariant failures that public inputs should not be able to
 //!   construct.
@@ -20,21 +21,14 @@
 //!   user callback failures.
 //!
 //! ```
-//! use rsaeb::error::RunInputError;
-//! use rsaeb::input::{RunInput, RuntimeInputSource};
-//! use rsaeb::limits::{
-//!     ReturnByteLimit, RunLimits, RuntimeInputByteLimit, RuntimeStateByteLimit, StepLimit,
-//! };
+//! use rsaeb::error::RuntimeInputError;
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::limits::{RuntimeInputByteLimit, RuntimeInputLimits};
 //!
-//! fn validate(bytes: &[u8]) -> Result<RunInput, RunInputError> {
-//!     RunInput::validate(
+//! fn validate(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
+//!     RuntimeInput::validate(
 //!         RuntimeInputSource::from_bytes(bytes),
-//!         RunLimits::new(
-//!             RuntimeInputByteLimit::new(8),
-//!             StepLimit::new(16),
-//!             RuntimeStateByteLimit::new(8),
-//!             ReturnByteLimit::new(8),
-//!         ),
+//!         RuntimeInputLimits::new(RuntimeInputByteLimit::new(8)),
 //!     )
 //! }
 //!
@@ -45,7 +39,7 @@
 //!
 //! assert!(matches!(
 //!     error,
-//!     RunInputError::NonAscii { column, byte }
+//!     RuntimeInputError::NonAscii { column, byte }
 //!         if column.get() == 2 && byte.get() == 0xff
 //! ));
 //! # Ok(())
@@ -68,6 +62,7 @@ pub use parse::{
     ParseLimitError, PayloadKind, RightActionKind,
 };
 pub use run::{
-    InputColumn, InternalInvariantError, LimitError, RunError, RunInputError, StateSizeError,
+    InputColumn, InternalInvariantError, LimitError, RunAdmissionError, RunError,
+    RuntimeInputError, StateSizeError,
 };
 pub use traced::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};

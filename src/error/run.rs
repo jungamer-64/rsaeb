@@ -63,14 +63,14 @@ impl From<InternalInvariantError> for RunError {
     }
 }
 
-/// Run input boundary error.
+/// Runtime input validation boundary error.
 ///
 /// This error is produced before execution starts, while raw host bytes are
-/// being classified and admitted as [`input::RunInput`](crate::input::RunInput).
+/// being classified as [`input::RuntimeInput`](crate::input::RuntimeInput).
 /// It is intentionally separate from [`RunError`] so callers can report invalid
-/// or inadmissible input without treating it as a runtime failure.
+/// input without treating it as a runtime failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RunInputError {
+pub enum RuntimeInputError {
     /// Runtime input contained a non-ASCII byte.
     NonAscii {
         /// One-based input column.
@@ -87,18 +87,11 @@ pub enum RunInputError {
         /// Runtime input length that would have been classified.
         attempted_len: RuntimeInputByteCount,
     },
-    /// Runtime input exceeded the initial runtime-state budget for this run.
-    InitialStateLimit {
-        /// Configured maximum runtime state length.
-        limit: RuntimeStateByteLimit,
-        /// Runtime state length that would have been materialized.
-        attempted_len: RuntimeStateByteCount,
-    },
     /// Storing validated runtime input failed.
     Allocation(AllocationError),
 }
 
-impl RunInputError {
+impl RuntimeInputError {
     pub(crate) const fn non_ascii(column: InputColumn, byte: NonAsciiInputByte) -> Self {
         Self::NonAscii { column, byte }
     }
@@ -117,6 +110,40 @@ impl RunInputError {
         }
     }
 
+}
+
+impl Error for RuntimeInputError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Allocation(error) => Some(error),
+            Self::NonAscii { .. } | Self::ColumnOverflow | Self::InputLimit { .. } => None,
+        }
+    }
+}
+
+impl From<AllocationError> for RuntimeInputError {
+    fn from(value: AllocationError) -> Self {
+        Self::Allocation(value)
+    }
+}
+
+/// Run admission boundary error.
+///
+/// This error is produced after runtime input validation and before execution
+/// starts, while validated input is admitted as the initial runtime state under
+/// execution limits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunAdmissionError {
+    /// Runtime input exceeded the initial runtime-state budget for this run.
+    InitialStateLimit {
+        /// Configured maximum runtime state length.
+        limit: RuntimeStateByteLimit,
+        /// Runtime state length that would have been materialized.
+        attempted_len: RuntimeStateByteCount,
+    },
+}
+
+impl RunAdmissionError {
     pub(crate) const fn initial_state_limit(
         limit: RuntimeStateByteLimit,
         attempted_len: RuntimeStateByteCount,
@@ -128,23 +155,7 @@ impl RunInputError {
     }
 }
 
-impl Error for RunInputError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Allocation(error) => Some(error),
-            Self::NonAscii { .. }
-            | Self::ColumnOverflow
-            | Self::InputLimit { .. }
-            | Self::InitialStateLimit { .. } => None,
-        }
-    }
-}
-
-impl From<AllocationError> for RunInputError {
-    fn from(value: AllocationError) -> Self {
-        Self::Allocation(value)
-    }
-}
+impl Error for RunAdmissionError {}
 
 /// One-based runtime input column.
 ///

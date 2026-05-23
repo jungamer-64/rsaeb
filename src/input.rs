@@ -1,24 +1,24 @@
 //! Runtime-input boundary types.
 //!
 //! Host bytes enter the interpreter as [`RuntimeInputSource`], then
-//! [`RunInput::validate`] checks the run input contract before storing owned
-//! runtime-domain bytes. Execution consumes [`RunInput`], so validated input
-//! cannot be reused accidentally across runs or paired with different runtime
-//! limits.
+//! [`RuntimeInput::validate`] checks the runtime input contract before storing
+//! owned runtime-domain bytes. Execution consumes a [`RunSeed`] admitted from
+//! validated input and execution limits, so input validation and execution
+//! budgets cannot be conflated.
 
 use alloc::vec::Vec;
 use core::fmt;
 
 use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeInputByte, RuntimeInputByteCount, RuntimeStateByteCount};
-use crate::error::RunInputError;
-use crate::limits::{RunLimits, RuntimeInputByteLimit};
+use crate::error::{RunAdmissionError, RuntimeInputError};
+use crate::limits::{ExecutionLimits, RuntimeInputByteLimit, RuntimeInputLimits};
 
 /// Borrowed runtime input source at the validation boundary.
 ///
 /// Constructing this value labels host bytes as runtime input bytes. It does
 /// not validate ASCII or classify bytes into the runtime domain; that ownership
-/// belongs to [`RunInput::validate`].
+/// belongs to [`RuntimeInput::validate`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeInputSource<'input> {
     bytes: &'input [u8],
@@ -59,7 +59,7 @@ impl<'input> ValidatedRuntimeInputSource<'input> {
     fn new(
         source: RuntimeInputSource<'input>,
         limit: RuntimeInputByteLimit,
-    ) -> Result<Self, RunInputError> {
+    ) -> Result<Self, RuntimeInputError> {
         let byte_count = RuntimeInputByteCount::new(source.as_bytes().len());
         if byte_count.get() > limit.get() {
             return Err(RunInputError::input_limit(limit, byte_count));
@@ -88,29 +88,27 @@ impl<'input> ValidatedRuntimeInputSource<'input> {
     }
 }
 
-/// Runtime input admitted for one run after validation and limit binding.
+/// Runtime input admitted after validation.
 ///
 /// Runtime input is a separate byte domain from program source. It may contain
 /// ASCII whitespace, control bytes, and reserved syntax bytes, but it cannot
-/// contain non-ASCII bytes. Validation owns the input bytes until a run starts;
-/// execution consumes this value and moves the classified bytes directly into
-/// mutable runtime state.
+/// contain non-ASCII bytes. This value owns validated bytes only; execution
+/// budgets are admitted later by [`RunSeed`].
 #[derive(PartialEq, Eq)]
-pub struct RunInput {
+pub struct RuntimeInput {
     bytes: Vec<RuntimeByte>,
-    limits: RunLimits,
 }
 
-impl fmt::Debug for RunInput {
+impl fmt::Debug for RuntimeInput {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("RunInput")
+            .debug_struct("RuntimeInput")
             .field("bytes", &RuntimeInputDebugBytes(self))
             .finish()
     }
 }
 
-struct RuntimeInputDebugBytes<'input>(&'input RunInput);
+struct RuntimeInputDebugBytes<'input>(&'input RuntimeInput);
 
 impl fmt::Debug for RuntimeInputDebugBytes<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -121,7 +119,7 @@ impl fmt::Debug for RuntimeInputDebugBytes<'_> {
     }
 }
 
-impl RunInput {
+impl RuntimeInput {
     /// Validates a runtime input source for one run.
     ///
     /// Runtime input accepts all ASCII bytes, including bytes that would be
@@ -136,16 +134,9 @@ impl RunInput {
     /// storage cannot be allocated.
     pub fn validate(
         input: RuntimeInputSource<'_>,
-        limits: RunLimits,
-    ) -> Result<Self, RunInputError> {
+        limits: RuntimeInputLimits,
+    ) -> Result<Self, RuntimeInputError> {
         let input = ValidatedRuntimeInputSource::new(input, limits.input_byte_limit())?;
-        let initial_state_len = RuntimeStateByteCount::from_runtime_input_count(input.byte_count());
-        if initial_state_len.get() > limits.state_byte_limit().get() {
-            return Err(RunInputError::initial_state_limit(
-                limits.state_byte_limit(),
-                initial_state_len,
-            ));
-        }
 
         // Allocation starts only after the complete boundary validation pass;
         // the iterator below consumes that witness instead of validating each
@@ -165,7 +156,7 @@ impl RunInput {
             )?;
         }
 
-        Ok(Self { bytes, limits })
+        Ok(Self { bytes })
     }
 
     pub(crate) fn materialized_bytes(&self) -> impl Iterator<Item = u8> + '_ {
@@ -184,8 +175,47 @@ impl RunInput {
         self.bytes.is_empty()
     }
 
-    pub(crate) fn into_runtime_parts(self) -> (Vec<RuntimeByte>, RunLimits) {
-        (self.bytes, self.limits)
+    fn into_runtime_bytes(self) -> Vec<RuntimeByte> {
+        self.bytes
+    }
+}
+
+/// Run-start witness admitted from validated input and execution limits.
+#[derive(Debug, PartialEq, Eq)]
+pub struct RunSeed {
+    input: RuntimeInput,
+    limits: ExecutionLimits,
+}
+
+impl RunSeed {
+    /// Admits validated runtime input for execution under execution limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunAdmissionError` if the validated input would exceed the
+    /// initial runtime-state budget.
+    pub fn admit(
+        input: RuntimeInput,
+        limits: ExecutionLimits,
+    ) -> Result<Self, RunAdmissionError> {
+        let initial_state_len = RuntimeStateByteCount::from_runtime_input_count(input.byte_count());
+        if initial_state_len.get() > limits.state_byte_limit().get() {
+            return Err(RunAdmissionError::initial_state_limit(
+                limits.state_byte_limit(),
+                initial_state_len,
+            ));
+        }
+
+        Ok(Self { input, limits })
+    }
+
+    pub(crate) fn into_runtime_parts(self) -> (InitialStateBytes, ExecutionLimits) {
+        (
+            InitialStateBytes {
+                bytes: self.input.into_runtime_bytes(),
+            },
+            self.limits,
+        )
     }
 }
 
@@ -196,11 +226,6 @@ pub(crate) struct InitialStateBytes {
 }
 
 impl InitialStateBytes {
-    pub(crate) fn from_run_input(input: RunInput) -> (Self, RunLimits) {
-        let (bytes, limits) = input.into_runtime_parts();
-        (Self { bytes }, limits)
-    }
-
     pub(crate) fn into_runtime_bytes(self) -> Vec<RuntimeByte> {
         self.bytes
     }

@@ -1,10 +1,10 @@
 use crate::bytes::{ReturnOutputByteCount, RuntimeStateByteCount};
 use crate::error::{LimitError, RunError};
-use crate::limits::{RunLimits, StepCount};
+use crate::limits::{ExecutionLimits, StepCount};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RuntimeBudgetState {
-    limits: RunLimits,
+    limits: ExecutionLimits,
     completed_steps: StepCount,
 }
 
@@ -14,7 +14,7 @@ pub(crate) struct StepPermit {
 }
 
 impl RuntimeBudgetState {
-    pub(crate) const fn new(limits: RunLimits) -> Self {
+    pub(crate) const fn new(limits: ExecutionLimits) -> Self {
         Self {
             limits,
             completed_steps: StepCount::ZERO,

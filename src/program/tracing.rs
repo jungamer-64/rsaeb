@@ -1,6 +1,6 @@
 use crate::error::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
 use crate::execution::RunSession;
-use crate::input::RunInput;
+use crate::input::RunSeed;
 use crate::limits::TraceSnapshotByteLimit;
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
@@ -28,14 +28,14 @@ impl Program {
     /// returns an error.
     pub fn run_with_trace_snapshots<'program, F, E>(
         &'program self,
-        input: RunInput,
+        seed: RunSeed,
         snapshot_byte_limit: TraceSnapshotByteLimit,
         mut trace: F,
     ) -> Result<RunResult, TraceSnapshotRunError<E>>
     where
         F: FnMut(TraceSnapshotEvent<'program>) -> Result<(), E>,
     {
-        let result = self.run_with_borrowed_trace(input, |event| {
+        let result = self.run_with_borrowed_trace(seed, |event| {
             let snapshot = event
                 .to_snapshot(snapshot_byte_limit)
                 .map_err(SnapshotTraceCallbackError::Snapshot)?;
@@ -67,13 +67,13 @@ impl Program {
     /// error.
     pub fn run_with_borrowed_trace<'program, F, E>(
         &'program self,
-        input: RunInput,
+        seed: RunSeed,
         trace: F,
     ) -> Result<RunResult, TracedRunError<E>>
     where
         F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
     {
-        RunSession::new(self, input)
+        RunSession::new(self, seed)
             .map_err(TracedRunError::Run)?
             .run_with_borrowed_trace(trace)
     }
