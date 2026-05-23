@@ -127,7 +127,7 @@ impl<'run> RuntimeStateView<'run> {
     ///
     /// Returns `AllocationError` if the output buffer cannot be allocated.
     pub fn materialize(self) -> Result<RuntimeStateSnapshot, AllocationError> {
-        Ok(RuntimeStateSnapshot::from_runtime_state_view(
+        Ok(RuntimeStateSnapshot::from_materialized(
             self.to_vec_with_context(AllocationContext::RuntimeStateView)?,
         ))
     }
@@ -209,12 +209,12 @@ impl TraceEffect<RuntimeStateView<'_>, ReturnOutputView<'_>> {
         ensure_trace_len(self.byte_count(), limit)?;
         match self {
             Self::Continue { state } => Ok(TraceSnapshotEffect::Continue {
-                state: RuntimeStateSnapshot::from_trace_snapshot(
+                state: RuntimeStateSnapshot::from_materialized(
                     state.to_vec_with_context(AllocationContext::TraceSnapshot)?,
                 ),
             }),
             Self::Return { output } => Ok(TraceSnapshotEffect::Return {
-                output: ReturnOutput::from_trace_snapshot(
+                output: ReturnOutput::from_materialized(
                     output.to_vec_with_context(AllocationContext::TraceSnapshot)?,
                 ),
             }),
@@ -301,7 +301,7 @@ impl<'program> TraceEvent<'program, RuntimeStateView<'_>, BorrowedTraceEffect<'p
                     limit,
                 )?;
                 Ok(TraceSnapshotEvent::Initial {
-                    state: RuntimeStateSnapshot::from_trace_snapshot(
+                    state: RuntimeStateSnapshot::from_materialized(
                         state.to_vec_with_context(AllocationContext::TraceSnapshot)?,
                     ),
                 })

@@ -64,7 +64,7 @@ The primary execution path is:
 1. Construct `ProgramSource` with `from_text` or `from_bytes`.
 2. Parse it with `Program::parse`.
 3. Label host bytes with `RuntimeInputSource::from_bytes` and validate them with `RuntimeInput::validate`.
-4. Consume `RuntimeInput` with `Program::run`, `Program::start_run`, or `Program::into_run`.
+4. Admit `RuntimeInput` with `RunSeed::admit`, then execute with `Program::run` or `Program::into_run`.
 
 The crate intentionally contains no filesystem, process, stdout/stderr,
 argument parsing, environment access, or lossy display boundary. Hosts should
@@ -73,16 +73,15 @@ perform I/O outside the interpreter and pass already-loaded bytes to
 
 ### Stepwise Execution
 
-Use `Program::start_run` when a host needs control after each applied rule
-while borrowing a parsed program. Use `Program::into_run` when the session
-should own the parsed program. Both paths share the same runtime core.
+Use `Program::into_run` when a host needs control after each applied rule.
+The session owns the parsed program, so the public stepwise lifecycle has one
+ownership model. `Program::run` remains the borrowed run-to-completion path.
 
-The public typestate API lives under `rsaeb::execution`: only `RunSession` and
-`OwnedRunSession` can step, while applied, stable, returned, and failed states
-represent post-step states. `(return)` is terminal, not an ordinary
-continuation step. Running, applied, and stable executions expose borrowed
-`RuntimeStateView` values for observation. A failed step returns
-`StepTransition::Failed` or `OwnedStepTransition::Failed`, so a host can
+The public typestate API lives under `rsaeb::execution`: only `RunSession` can
+step, while applied, stable, returned, and failed states represent post-step
+states. `(return)` is terminal, not an ordinary continuation step. Running,
+applied, and stable executions expose borrowed `RuntimeStateView` values for
+observation. A failed step returns `StepTransition::Failed`, so a host can
 inspect the uncommitted state and then discard the failed run into its runtime
 error. The failed state is not a retryable session.
 
@@ -403,7 +402,7 @@ raw line bytes
 runtime input bytes
   -> AsciiByte         # runtime input domain validation
   -> RuntimeByte       # private ProgramConstructible(ProgramByte) or Opaque(NonProgramAsciiByte)
-  -> RunSession / OwnedRunSession
+  -> RunSession
                        # consumes RuntimeInput and owns mutable execution state
 ```
 
@@ -492,10 +491,8 @@ type import paths.
   `RuntimeStateByteLimit`, `ReturnByteLimit`, `TraceSnapshotByteLimit`,
   parser/runtime byte-count value types, `StepCount`, and default budget
   constants
-- `rsaeb::execution`: borrowed run typestates (`RunSession`,
+- `rsaeb::execution`: owned stepwise run typestates (`RunSession`,
   `StepTransition`, `AppliedStep`, `StableRun`, `ReturnedRun`, `FailedRun`)
-  and owned run typestates (`OwnedRunSession`, `OwnedStepTransition`,
-  `OwnedAppliedStep`, `OwnedStableRun`, `OwnedReturnedRun`, `OwnedFailedRun`)
 - `rsaeb::inspect`: `RuleView`, `RuleActionView`, `PayloadView`,
   `PayloadBytes`, `CanonicalRuleSource`, rule position/count types,
   `OnceRuleCount`, `RuleRepeat`, and `RuleAnchor`

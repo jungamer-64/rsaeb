@@ -260,7 +260,7 @@ impl State {
         let bytes = self
             .materialize(AllocationContext::FinalOutput)
             .map_err(RunError::from)?;
-        Ok(RuntimeStateSnapshot::from_execution_state(bytes))
+        Ok(RuntimeStateSnapshot::from_materialized(bytes))
     }
 }
 

@@ -5,7 +5,7 @@ use super::rewrite::RewriteScratch;
 use super::state::{State, StateMatch};
 use crate::bytes::{CompactByte, Payload, PayloadByteCount, PayloadSyntax};
 use crate::error::{InternalInvariantError, LimitError, PayloadKind, RunError, RuntimeInputError};
-use crate::execution::{FailedRun, RunSession, StepTransition};
+use crate::execution::{BorrowedFailedRun, BorrowedRunSession, BorrowedStepTransition};
 use crate::input::{RuntimeInput, RuntimeInputSource};
 use crate::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit,
@@ -71,12 +71,12 @@ fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping succeeds.
-fn expect_step_error(result: StepTransition<'_>) -> Result<FailedRun<'_>, TestFailure> {
+fn expect_step_error(result: BorrowedStepTransition) -> Result<BorrowedFailedRun, TestFailure> {
     match result {
-        StepTransition::Failed(failed) => Ok(failed),
-        StepTransition::Applied(_) | StepTransition::Stable(_) | StepTransition::Returned(_) => {
-            Err(TestFailure::message("expected step error"))
-        }
+        BorrowedStepTransition::Failed(failed) => Ok(failed),
+        BorrowedStepTransition::Applied(_)
+        | BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::Returned(_) => Err(TestFailure::message("expected step error")),
     }
 }
 
@@ -85,9 +85,11 @@ fn expect_step_error(result: StepTransition<'_>) -> Result<FailedRun<'_>, TestFa
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping fails.
-fn expect_step_transition(result: StepTransition<'_>) -> Result<StepTransition<'_>, TestFailure> {
+fn expect_step_transition(
+    result: BorrowedStepTransition,
+) -> Result<BorrowedStepTransition, TestFailure> {
     match result {
-        StepTransition::Failed(failed) => Err(TestFailure::from(failed.into_error())),
+        BorrowedStepTransition::Failed(failed) => Err(TestFailure::from(failed.into_error())),
         transition => Ok(transition),
     }
 }
@@ -117,7 +119,7 @@ fn once_rule_failure_preserves_state_before_step_commit() -> TestResult {
         ReturnByteLimit::new(1),
     );
     let input = run_seed(b"a", limits)?;
-    let runtime = RunSession::new(&program, input)?;
+    let runtime = BorrowedRunSession::new(&program, input)?;
     let error = expect_step_error(runtime.step())?;
     ensure_eq!(
         error.error(),
@@ -148,22 +150,24 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
         DEFAULT_MAX_RETURN_LEN,
     );
     let no_match_input = run_seed(b"x", limits)?;
-    let no_match = RunSession::new(&program, no_match_input)?;
+    let no_match = BorrowedRunSession::new(&program, no_match_input)?;
     match expect_step_transition(no_match.step())? {
-        StepTransition::Stable(stable) => {
+        BorrowedStepTransition::Stable(stable) => {
             ensure_eq!(stable.steps().get(), 0)?;
             ensure_eq!(
                 runtime_view_bytes(stable.state()).as_slice(),
                 b"x".as_slice()
             )?;
         }
-        StepTransition::Applied(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
+        BorrowedStepTransition::Applied(_)
+        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::Failed(_) => {
             return Err(TestFailure::message("expected stable completion"));
         }
     }
 
     let would_match_input = run_seed(b"a", limits)?;
-    let would_match = RunSession::new(&program, would_match_input)?;
+    let would_match = BorrowedRunSession::new(&program, would_match_input)?;
     let error = expect_step_error(would_match.step())?;
     ensure_eq!(
         expect_step_limit(error.into_error())?,
@@ -173,7 +177,7 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
             state_len: RuntimeStateByteCount::new(1),
         },
     )?;
-    let would_match = RunSession::new(&program, run_seed(b"a", limits)?)?;
+    let would_match = BorrowedRunSession::new(&program, run_seed(b"a", limits)?)?;
     let error = expect_step_error(would_match.step())?;
     ensure_eq!(error.completed_steps(), StepCount::ZERO)?;
     ensure_eq!(
@@ -204,7 +208,7 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     );
     let state_program = parse_program("=a")?;
     let state_input = run_seed(b"aa", state_limits)?;
-    let state_limited = RunSession::new(&state_program, state_input)?;
+    let state_limited = BorrowedRunSession::new(&state_program, state_input)?;
     let state_error = expect_step_error(state_limited.step())?;
     ensure_eq!(
         state_error.error(),
@@ -234,7 +238,7 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     );
     let return_program = parse_program("a=(return)ok")?;
     let return_input = run_seed(b"a", return_limits)?;
-    let return_limited = RunSession::new(&return_program, return_input)?;
+    let return_limited = BorrowedRunSession::new(&return_program, return_input)?;
     let return_error = expect_step_error(return_limited.step())?;
     ensure_eq!(
         return_error.error(),
@@ -270,10 +274,10 @@ fn return_action_bypasses_rewrite_state_mutation_path() -> TestResult {
         RuntimeStateByteLimit::new(1),
         ReturnByteLimit::new(2),
     );
-    let session = RunSession::new(&program, run_seed(b"a", limits)?)?;
+    let session = BorrowedRunSession::new(&program, run_seed(b"a", limits)?)?;
 
     match expect_step_transition(session.step())? {
-        StepTransition::Returned(returned) => {
+        BorrowedStepTransition::Returned(returned) => {
             let result = returned.into_result()?;
             ensure_eq!(result.steps().get(), 1)?;
             ensure_matches(
@@ -284,7 +288,9 @@ fn return_action_bypasses_rewrite_state_mutation_path() -> TestResult {
                 "expected return output to bypass rewrite state limit",
             )
         }
-        StepTransition::Applied(_) | StepTransition::Stable(_) | StepTransition::Failed(_) => {
+        BorrowedStepTransition::Applied(_)
+        | BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::Failed(_) => {
             Err(TestFailure::message("expected return transition"))
         }
     }
@@ -582,13 +588,15 @@ fn empty_payload_matches_keep_anchor_specific_span_placement() -> TestResult {
             DEFAULT_MAX_STATE_LEN,
             DEFAULT_MAX_RETURN_LEN,
         );
-        let session = RunSession::new(&program, run_seed(b"ab", limits)?)?;
+        let session = BorrowedRunSession::new(&program, run_seed(b"ab", limits)?)?;
 
         match expect_step_transition(session.step())? {
-            StepTransition::Applied(applied) => {
+            BorrowedStepTransition::Applied(applied) => {
                 ensure_eq!(runtime_view_bytes(applied.state()).as_slice(), expected)?;
             }
-            StepTransition::Stable(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
+            BorrowedStepTransition::Stable(_)
+            | BorrowedStepTransition::Returned(_)
+            | BorrowedStepTransition::Failed(_) => {
                 return Err(TestFailure::message("expected one empty-payload rewrite"));
             }
         }

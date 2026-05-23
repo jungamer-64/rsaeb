@@ -30,22 +30,8 @@ pub struct RuntimeStateSnapshot {
 }
 
 impl RuntimeStateSnapshot {
-    /// Tags bytes materialized from a stable execution state.
-    pub(crate) fn from_execution_state(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes: MaterializedBytes::from_vec(bytes),
-        }
-    }
-
-    /// Tags bytes materialized from a borrowed runtime-state view.
-    pub(crate) fn from_runtime_state_view(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes: MaterializedBytes::from_vec(bytes),
-        }
-    }
-
-    /// Tags bytes materialized while retaining a trace snapshot.
-    pub(crate) fn from_trace_snapshot(bytes: Vec<u8>) -> Self {
+    /// Tags materialized runtime-state bytes.
+    pub(crate) fn from_materialized(bytes: Vec<u8>) -> Self {
         Self {
             bytes: MaterializedBytes::from_vec(bytes),
         }
@@ -96,15 +82,8 @@ pub struct ReturnOutputView<'program> {
 }
 
 impl ReturnOutput {
-    /// Tags bytes materialized from a committed return payload.
-    pub(crate) fn from_return_payload(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes: MaterializedBytes::from_vec(bytes),
-        }
-    }
-
-    /// Tags bytes materialized while retaining a trace snapshot.
-    pub(crate) fn from_trace_snapshot(bytes: Vec<u8>) -> Self {
+    /// Tags materialized `(return)` output bytes.
+    pub(crate) fn from_materialized(bytes: Vec<u8>) -> Self {
         Self {
             bytes: MaterializedBytes::from_vec(bytes),
         }
@@ -171,7 +150,7 @@ impl<'program> ReturnOutputView<'program> {
     ///
     /// Returns `AllocationError` if return-output allocation fails.
     pub fn materialize(self) -> Result<ReturnOutput, AllocationError> {
-        Ok(ReturnOutput::from_return_payload(
+        Ok(ReturnOutput::from_materialized(
             self.to_vec_with_context(AllocationContext::ReturnOutput)?,
         ))
     }
