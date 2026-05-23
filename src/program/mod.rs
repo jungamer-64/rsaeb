@@ -1,10 +1,8 @@
 //! Parsed program and run-to-completion result types.
 //!
 //! [`Program`] is the immutable parsed A=B rule table. Hosts parse typed
-//! [`ProgramSource`](crate::source::ProgramSource) under
-//! [`ParseLimits`](crate::limits::ParseLimits), then run with already validated
-//! [`RuntimeInput`](crate::input::RuntimeInput) under
-//! [`RunLimits`](crate::limits::RunLimits). Runtime budget and byte-count types
+//! [`ProgramSource`] under [`ParseLimits`], then run with already validated
+//! [`RuntimeInput`] under [`RunLimits`]. Runtime budget and byte-count types
 //! live in [`limits`](crate::limits); runtime input lives in
 //! [`input`](crate::input).
 
@@ -101,6 +99,12 @@ impl Program {
         self.rule_set.as_slice()
     }
 
+    /// Resolves a committed rule position back to a borrowed rule view.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError::InternalInvariant` if the position no longer
+    /// resolves inside this parsed program.
     pub(crate) fn rule_view_at(
         &self,
         position: crate::inspect::RulePosition,
@@ -113,6 +117,13 @@ impl Program {
         Ok(RuleView::new(position, rule))
     }
 
+    /// Resolves a committed return-rule position to its return-output view.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError::InternalInvariant` if the position no longer
+    /// resolves inside this parsed program or if it points at a non-return
+    /// rule.
     pub(crate) fn return_output_at(
         &self,
         position: crate::inspect::RulePosition,

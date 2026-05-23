@@ -33,9 +33,9 @@ use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
 
 /// Stateful run session that can still apply rules.
 ///
-/// This type represents the only public state with a `step` method. Stable and
-/// returned runs are represented by separate terminal types, so callers cannot
-/// step after completion.
+/// This borrowed session and [`OwnedRunSession`] are the only public states
+/// with `step` methods. Stable and returned runs are represented by separate
+/// terminal types, so callers cannot step after completion.
 pub struct RunSession<'program> {
     program: &'program Program,
     core: RunCore,
@@ -319,6 +319,13 @@ impl RunCore {
         Ok(RunResult::stable(self.state.into_snapshot()?, steps))
     }
 
+    /// Advances the mutable runtime core against the supplied immutable program.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if rule matching detects an internal invariant
+    /// failure or if applying the matched rule exceeds limits or allocation
+    /// fails.
     fn step(&mut self, program: &Program) -> Result<CoreStep, RunError> {
         let matched =
             match find_next_match(program.rule_slice(), &mut self.once_states, &self.state)? {
@@ -382,7 +389,7 @@ impl<'program> RunSession<'program> {
                 steps,
                 core: self.core,
             }),
-            Err(error) => return StepTransition::Failed(FailedRun::new(error, self)),
+            Err(error) => StepTransition::Failed(FailedRun::new(error, self)),
         }
     }
 
@@ -553,7 +560,7 @@ impl OwnedRunSession {
 }
 
 impl AppliedRule {
-    fn into_transition<'program>(self, session: RunSession<'program>) -> StepTransition<'program> {
+    fn into_transition(self, session: RunSession<'_>) -> StepTransition<'_> {
         match self.effect {
             AppliedRuleEffect::Continue => StepTransition::Applied(AppliedStep {
                 step: self.step,

@@ -23,8 +23,9 @@
 //!   byte domain until execution consumes the value.
 //! - [`limits::RunLimits`] and [`limits::TraceSnapshotLimits`] keep runtime execution
 //!   limits separate from trace snapshot materialization limits.
-//! - [`program::Program::run`] runs to completion, while [`program::Program::start_run`]
-//!   returns a typestate execution that can pause after each applied rule.
+//! - [`program::Program::run`] runs to completion, [`program::Program::start_run`]
+//!   returns a borrowed typestate execution, and [`program::Program::into_run`]
+//!   returns an owned typestate execution.
 //! - [`program::Program::run_with_borrowed_trace`] observes borrowed trace events without
 //!   per-event allocation; [`program::Program::run_with_trace_snapshots`] materializes
 //!   bounded owned trace events.
@@ -105,7 +106,7 @@
 //! # Stepwise execution
 //!
 //! Use [`program::Program::start_run`] when a host wants to wait after each
-//! applied rule:
+//! applied rule while borrowing the parsed program:
 //!
 //! ```
 //! use rsaeb::execution::StepTransition;

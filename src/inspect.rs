@@ -133,8 +133,8 @@ impl RulePosition {
         Some(Self { number })
     }
 
-    pub(crate) const fn zero_based(self) -> usize {
-        self.number.one_based - 1
+    pub(crate) fn zero_based(self) -> usize {
+        self.number.one_based.saturating_sub(1)
     }
 
     const fn first() -> Self {

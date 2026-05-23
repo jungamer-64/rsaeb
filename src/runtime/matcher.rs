@@ -83,6 +83,12 @@ impl CommittedRule {
     }
 }
 
+/// Finds the first currently available rule that matches `state`.
+///
+/// # Errors
+///
+/// Returns `RunError::InternalInvariant` if once-rule metadata or state-match
+/// ranges no longer resolve against their owning runtime structures.
 pub(crate) fn find_next_match<'program, 'once>(
     rules: &'program [Rule],
     once_states: &'once mut OnceStateSet,
@@ -101,6 +107,12 @@ pub(crate) fn find_next_match<'program, 'once>(
     Ok(RuleSearch::Stable)
 }
 
+/// Builds a committed-rule candidate for a single parsed rule.
+///
+/// # Errors
+///
+/// Returns `RunError::InternalInvariant` if the rule's once slot or matched
+/// state range is invalid for this run.
 fn matched_candidate_for_rule<'program>(
     rule: &'program Rule,
     position: RulePosition,
@@ -113,10 +125,16 @@ fn matched_candidate_for_rule<'program>(
     match once_states.availability_for_rule(rule)? {
         OnceRuleAvailability::Available => {}
         OnceRuleAvailability::Consumed => return Ok(None),
-    };
+    }
     Ok(Some(MatchedRuleCandidate::new(position, rule, state_match)))
 }
 
+/// Finds this rule's match span in the current state.
+///
+/// # Errors
+///
+/// Returns `RunError::InternalInvariant` if a derived state-match range no
+/// longer resolves inside the current runtime state.
 fn find_match(state: &State, rule: &Rule) -> Result<Option<StateMatch>, RunError> {
     match rule.anchor() {
         RuleAnchorSyntax::Anywhere => state.find_payload(rule.lhs()),

@@ -1,11 +1,11 @@
 //! Program-source boundary and source-position value types.
 //!
-//! A [`source::ProgramSource`] only labels bytes as source input; it does not validate
+//! A [`ProgramSource`] only labels bytes as source input; it does not validate
 //! A=B syntax. Validation belongs to [`program::Program::parse`](crate::program::Program::parse),
 //! which can then report parse failures with [`SourceLineNumber`],
 //! [`SourceColumn`], and [`SourcePosition`].
 //!
-//! Source is intentionally separate from [`input::RuntimeInput`](crate::input::RuntimeInput).
+//! Source is intentionally separate from [`crate::input::RuntimeInput`].
 //! Comments may contain arbitrary bytes, while executable source code is
 //! validated by the parser and runtime input is validated by the runtime-input
 //! boundary.
@@ -49,7 +49,7 @@ impl<'source> ProgramSource<'source> {
     /// Labels a UTF-8 string as parser input.
     ///
     /// This is the ergonomic constructor for ordinary source literals. It is
-    /// equivalent to [`source::ProgramSource::from_bytes`] on `source.as_bytes()`.
+    /// equivalent to [`ProgramSource::from_bytes`] on `source.as_bytes()`.
     #[must_use]
     pub const fn from_text(source: &'source str) -> Self {
         Self {

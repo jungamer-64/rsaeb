@@ -417,7 +417,7 @@ fn missing_once_rule_state_is_an_internal_invariant_error() -> TestResult {
 
     match find_next_match(program.rule_slice(), &mut once_states, &state) {
         Err(RunError::InternalInvariant(InternalInvariantError::MissingOnceRuleState)) => {}
-        Ok(RuleSearch::Matched(_)) | Ok(RuleSearch::Stable) | Err(_) => {
+        Ok(RuleSearch::Matched(_) | RuleSearch::Stable) | Err(_) => {
             return Err(TestFailure::message(
                 "expected missing once state invariant",
             ));

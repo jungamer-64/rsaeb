@@ -47,6 +47,12 @@ impl State {
         scratch.store_previous_state(previous_state);
     }
 
+    /// Finds a match at the start of the current state.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError::InternalInvariant` if a derived match range no longer
+    /// resolves inside this runtime state.
     pub(crate) fn starts_with_payload(
         &self,
         payload: &Payload,
@@ -59,6 +65,12 @@ impl State {
         }
     }
 
+    /// Finds a match at the end of the current state.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError::InternalInvariant` if a derived match range no longer
+    /// resolves inside this runtime state.
     pub(crate) fn ends_with_payload(
         &self,
         payload: &Payload,
@@ -78,6 +90,12 @@ impl State {
         }
     }
 
+    /// Finds the leftmost match in the current state.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError::InternalInvariant` if a derived match range no longer
+    /// resolves inside this runtime state.
     pub(crate) fn find_payload(&self, payload: &Payload) -> Result<Option<StateMatch>, RunError> {
         match payload.needle() {
             PayloadNeedle::Empty(needle) => {
@@ -110,6 +128,12 @@ impl State {
         }
     }
 
+    /// Checks whether a non-empty payload matches at a concrete state index.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError::InternalInvariant` if the derived match range no
+    /// longer resolves inside this runtime state.
     fn matches_payload_at(
         &self,
         position: StateIndex,
@@ -375,6 +399,12 @@ impl StateMatch {
         self.range.byte_count()
     }
 
+    /// Iterates over the bytes covered by this match witness.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError::InternalInvariant` if the match range no longer
+    /// resolves inside the supplied runtime state bytes.
     fn matched_bytes(
         self,
         bytes: &[RuntimeByte],
@@ -382,6 +412,12 @@ impl StateMatch {
         Ok(self.slices(bytes)?.matched().iter().copied())
     }
 
+    /// Splits runtime state bytes around this match witness.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError::InternalInvariant` if the match range no longer
+    /// resolves inside the supplied runtime state bytes.
     fn slices(self, bytes: &[RuntimeByte]) -> Result<MatchedStateSlices<'_>, RunError> {
         let prefix = bytes
             .get(..self.range.start())

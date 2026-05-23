@@ -58,7 +58,7 @@ The primary execution path is:
 1. Construct `ProgramSource` with `from_text` or `from_bytes`.
 2. Parse it with `Program::parse`.
 3. Label host bytes with `RuntimeInputSource::from_bytes` and validate them with `RuntimeInput::validate`.
-4. Consume `RuntimeInput` with `Program::run` or `Program::start_run`.
+4. Consume `RuntimeInput` with `Program::run`, `Program::start_run`, or `Program::into_run`.
 
 The crate intentionally contains no filesystem, process, stdout/stderr,
 argument parsing, environment access, or lossy display boundary. Hosts should
@@ -67,15 +67,18 @@ perform I/O outside the interpreter and pass already-loaded bytes to
 
 ### Stepwise Execution
 
-Use `Program::start_run` when a host needs control after each applied
-rule instead of running to completion in one call. The public typestate API
-lives under `rsaeb::execution`: only `RunSession` can step, while
-`AppliedStep`, `StableRun`, `ReturnedRun`, and `FailedRun` represent
-post-step states. `(return)` is terminal, not an ordinary continuation step.
-Running, applied, and stable executions expose borrowed `RuntimeStateView`
-values for observation. A failed step returns `StepTransition::Failed`, so a
-host can inspect the uncommitted state and then discard the failed run into its
-runtime error. The failed state is not a retryable session.
+Use `Program::start_run` when a host needs control after each applied rule
+while borrowing a parsed program. Use `Program::into_run` when the session
+should own the parsed program. Both paths share the same runtime core.
+
+The public typestate API lives under `rsaeb::execution`: only `RunSession` and
+`OwnedRunSession` can step, while applied, stable, returned, and failed states
+represent post-step states. `(return)` is terminal, not an ordinary
+continuation step. Running, applied, and stable executions expose borrowed
+`RuntimeStateView` values for observation. A failed step returns
+`StepTransition::Failed` or `OwnedStepTransition::Failed`, so a host can
+inspect the uncommitted state and then discard the failed run into its runtime
+error. The failed state is not a retryable session.
 
 The docs.rs crate page contains a complete doctested stepwise example.
 
@@ -387,7 +390,8 @@ raw line bytes
 runtime input bytes
   -> AsciiByte         # runtime input domain validation
   -> RuntimeByte       # private ProgramConstructible(ProgramByte) or Opaque(NonProgramAsciiByte)
-  -> RunSession        # consumes RuntimeInput and owns mutable execution state
+  -> RunSession / OwnedRunSession
+                       # consumes RuntimeInput and owns mutable execution state
 ```
 
 Program payloads are stored as `ProgramByte`, not raw `u8`. Runtime state is
@@ -461,40 +465,32 @@ be handled before bytes enter `ProgramSource::from_bytes`,
 
 ## Public API Overview
 
-The generated rustdoc is the complete API reference. The crate root is kept to
-the primary execution path:
+The generated rustdoc is the complete API reference. Public types live under
+their domain modules; the crate root intentionally does not provide duplicate
+type import paths.
 
-- `ProgramSource`
-- `RuntimeInputSource`
-- `RuntimeInput`
-- `Program`
-- `ParseLimits`
-- `RunLimits`
-- `RunResult`
-- `RunOutcome`
-- `RuntimeStateSnapshot`
-- `ReturnOutput`
-- `ReturnOutputView`
-- `RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), limit)`
-
-Secondary domains live under explicit namespaces:
-
+- `rsaeb::source`: `ProgramSource` and source-position value types used by
+  parser diagnostics
+- `rsaeb::input`: `RuntimeInputSource` and `RuntimeInput`
+- `rsaeb::program`: `Program`, `RunResult`, `RunOutcome`,
+  `RuntimeStateSnapshot`, `ReturnOutput`, and `ReturnOutputView`
 - `rsaeb::limits`: `ParseLimits`, `SourceByteLimit`, `CodeLineByteLimit`,
   `PayloadByteLimit`, `RuleLimit`, `StepLimit`, `RuntimeInputByteLimit`,
   `RuntimeStateByteLimit`, `ReturnByteLimit`, `TraceSnapshotByteLimit`,
   `TraceSnapshotLimits`, parser/runtime byte-count value types, `StepCount`,
   and default budget constants
-- `rsaeb::execution`: `RunSession`, `StepTransition`,
-  `AppliedStep`, `StableRun`, `ReturnedRun`, and `FailedRun`
+- `rsaeb::execution`: borrowed run typestates (`RunSession`,
+  `StepTransition`, `AppliedStep`, `StableRun`, `ReturnedRun`, `FailedRun`)
+  and owned run typestates (`OwnedRunSession`, `OwnedStepTransition`,
+  `OwnedAppliedStep`, `OwnedStableRun`, `OwnedReturnedRun`, `OwnedFailedRun`)
 - `rsaeb::inspect`: `RuleView`, `RuleActionView`, `PayloadView`,
   `PayloadBytes`, `CanonicalRuleSource`, rule position/count types,
   `OnceRuleCount`, `RuleRepeat`, and `RuleAnchor`
-- `rsaeb::trace`: borrowed trace events/effects, snapshot trace events/effects,
-  and `RuntimeStateView`
+- `rsaeb::trace`: `TraceEvent`, `TraceEffect`, borrowed trace aliases,
+  snapshot trace aliases, and `RuntimeStateView`
 - `rsaeb::error`: parse, input, runtime, allocation, limit, and trace error
   types, including rejected-byte diagnostic value types and
   `RequestedCapacity`
-- `rsaeb::source`: source-position value types used by parser diagnostics
 
 ## Development Checks
 

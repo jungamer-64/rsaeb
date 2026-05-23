@@ -79,6 +79,12 @@ impl OnceStateSet {
         Ok(Self { states })
     }
 
+    /// Reports whether a parsed rule may currently be applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError::InternalInvariant` if a parsed `(once)` rule points
+    /// outside this run's once-state table.
     pub(super) fn availability_for_rule(
         &self,
         rule: &Rule,
@@ -121,6 +127,12 @@ impl OnceStateSet {
         }
     }
 
+    /// Returns the current state for one once-rule slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError::InternalInvariant` if the slot is outside this run's
+    /// once-state table.
     fn state_for_slot(&self, slot: OnceRuleSlot) -> Result<OnceRuleState, RunError> {
         self.states
             .get(slot.zero_based())
@@ -128,6 +140,12 @@ impl OnceStateSet {
             .ok_or_else(|| InternalInvariantError::missing_once_rule_state().into())
     }
 
+    /// Returns the mutable state for one once-rule slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError::InternalInvariant` if the slot is outside this run's
+    /// once-state table.
     fn state_for_slot_mut(&mut self, slot: OnceRuleSlot) -> Result<&mut OnceRuleState, RunError> {
         self.states
             .get_mut(slot.zero_based())

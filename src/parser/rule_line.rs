@@ -58,6 +58,10 @@ impl RuleSyntaxLine {
 
     /// Borrows the compact line as left and right syntax slices.
     ///
+    /// # Errors
+    ///
+    /// Returns `ParseError::InternalInvariant` if the stored rule-side witness
+    /// no longer resolves inside this compact line.
     fn syntax_parts(&self) -> Result<(LeftSyntax<'_>, RightSyntax<'_>), ParseError> {
         let slices = self.sides.slices(self.line_number, &self.bytes)?;
         Ok((
