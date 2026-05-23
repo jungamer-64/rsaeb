@@ -6,7 +6,7 @@
 //!
 //! `rsaeb` is a `no_std + alloc` library crate. It parses compact A=B source
 //! into an immutable [`program::Program`] and runs that program against typed
-//! [`input::RuntimeInput`] validated before execution. The interpreter core does not
+//! [`input::RunInput`] validated before execution. The interpreter core does not
 //! read files, use process arguments, access environment variables, write
 //! stdout/stderr, or perform lossy byte-to-text display conversion.
 //!
@@ -19,10 +19,10 @@
 //! - [`program::Program::parse`] validates source syntax under [`limits::ParseLimits`] and
 //!   returns a reusable [`program::Program`].
 //! - [`input::RuntimeInputSource::from_bytes`] labels host input bytes, and
-//!   [`input::RuntimeInput::validate`] validates and owns them in the runtime input
+//!   [`input::RunInput::validate`] validates and owns them in the runtime input
 //!   byte domain until execution consumes the value.
-//! - [`limits::RunLimits`] and [`limits::TraceSnapshotLimits`] keep runtime execution
-//!   limits separate from trace snapshot materialization limits.
+//! - [`limits::RunLimits`] binds runtime input admission and execution limits,
+//!   while [`limits::TraceSnapshotByteLimit`] bounds trace snapshot materialization.
 //! - [`program::Program::run`] runs to completion, [`program::Program::start_run`]
 //!   returns a borrowed typestate execution, and [`program::Program::into_run`]
 //!   returns an owned typestate execution.
@@ -43,22 +43,27 @@
 //!
 //! # Basic execution
 //!
-//! Parse [`source::ProgramSource`] and [`input::RuntimeInput`] explicitly before running:
+//! Parse [`source::ProgramSource`] and [`input::RunInput`] explicitly before running:
 //!
 //! ```
 //! use rsaeb::limits::{
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
 //! };
-//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{RunInput, RuntimeInputSource};
 //! use rsaeb::limits::RunLimits;
 //! use rsaeb::program::{Program, RunOutcome};
 //! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?;
-//! let limits = RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), DEFAULT_MAX_INPUT_LEN)?;
-//! let result = program.run(input, limits)?;
+//! let limits = RunLimits::new(
+//!     DEFAULT_MAX_INPUT_LEN,
+//!     DEFAULT_MAX_STEPS,
+//!     DEFAULT_MAX_STATE_LEN,
+//!     DEFAULT_MAX_RETURN_LEN,
+//! );
+//! let input = RunInput::validate(RuntimeInputSource::from_bytes(b"a"), limits)?;
+//! let result = program.run(input)?;
 //!
 //! assert!(matches!(
 //!     result.outcome(),
@@ -77,19 +82,24 @@
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
 //!     RunLimits, StepLimit,
 //! };
-//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{RunInput, RuntimeInputSource};
 //! use rsaeb::program::{Program, RunOutcome};
 //! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("(once)a=b\na=c"), DEFAULT_PARSE_LIMITS)?;
-//! let limits = RunLimits::new(StepLimit::new(10_000), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
+//! let limits = RunLimits::new(
+//!     DEFAULT_MAX_INPUT_LEN,
+//!     StepLimit::new(10_000),
+//!     DEFAULT_MAX_STATE_LEN,
+//!     DEFAULT_MAX_RETURN_LEN,
+//! );
 //!
-//! let first_input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"aa"), DEFAULT_MAX_INPUT_LEN)?;
-//! let second_input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"aa"), DEFAULT_MAX_INPUT_LEN)?;
+//! let first_input = RunInput::validate(RuntimeInputSource::from_bytes(b"aa"), limits)?;
+//! let second_input = RunInput::validate(RuntimeInputSource::from_bytes(b"aa"), limits)?;
 //!
-//! let first = program.run(first_input, limits)?;
-//! let second = program.run(second_input, limits)?;
+//! let first = program.run(first_input)?;
+//! let second = program.run(second_input)?;
 //!
 //! assert!(matches!(
 //!     first.outcome(),
@@ -113,19 +123,21 @@
 //! use rsaeb::limits::{
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 //! };
-//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{RunInput, RuntimeInputSource};
 //! use rsaeb::limits::RunLimits;
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("a=b\nb=c"), DEFAULT_PARSE_LIMITS)?;
-//! let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), DEFAULT_MAX_INPUT_LEN)?;
-//! let execution = program.start_run(
-//!     input,
-//!     limits,
-//! )?;
+//! let limits = RunLimits::new(
+//!     DEFAULT_MAX_INPUT_LEN,
+//!     StepLimit::new(10),
+//!     DEFAULT_MAX_STATE_LEN,
+//!     DEFAULT_MAX_RETURN_LEN,
+//! );
+//! let input = RunInput::validate(RuntimeInputSource::from_bytes(b"a"), limits)?;
+//! let execution = program.start_run(input)?;
 //!
 //! let execution = match execution.step() {
 //!     StepTransition::Applied(applied) => {
@@ -166,10 +178,9 @@
 //!
 //! # Limits
 //!
-//! [`limits::RuntimeInputByteLimit`] bounds owned input classification before
-//! allocation.
-//! [`limits::RunLimits`] carries the step budget and byte budgets for runtime states and
-//! `(return)` outputs. Trace snapshot materialization uses an explicit
+//! [`limits::RunLimits`] carries input-byte admission, initial runtime-state
+//! admission, the step budget, and byte budgets for rewrite states and `(return)`
+//! outputs. Trace snapshot materialization uses an explicit
 //! [`limits::TraceSnapshotByteLimit`]. Step limits are checked only when another
 //! matching rule would apply after the configured number of completed steps:
 //!
@@ -178,15 +189,20 @@
 //! use rsaeb::limits::{
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 //! };
-//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{RunInput, RuntimeInputSource};
 //! use rsaeb::limits::RunLimits;
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let limits = RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), DEFAULT_MAX_INPUT_LEN)?;
-//! let result = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?.run(input, limits);
+//! let limits = RunLimits::new(
+//!     DEFAULT_MAX_INPUT_LEN,
+//!     StepLimit::new(0),
+//!     DEFAULT_MAX_STATE_LEN,
+//!     DEFAULT_MAX_RETURN_LEN,
+//! );
+//! let input = RunInput::validate(RuntimeInputSource::from_bytes(b"a"), limits)?;
+//! let result = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?.run(input);
 //!
 //! assert!(matches!(
 //!     result,
@@ -242,7 +258,7 @@
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 //! };
 //! use rsaeb::trace::BorrowedTraceEvent;
-//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{RunInput, RuntimeInputSource};
 //! use rsaeb::limits::RunLimits;
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
@@ -250,12 +266,16 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("a=b\nb=(return)ok"), DEFAULT_PARSE_LIMITS)?;
 //! let mut byte_counts = Vec::new();
-//! let limits = RunLimits::new(StepLimit::new(10), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), DEFAULT_MAX_INPUT_LEN)?;
+//! let limits = RunLimits::new(
+//!     DEFAULT_MAX_INPUT_LEN,
+//!     StepLimit::new(10),
+//!     DEFAULT_MAX_STATE_LEN,
+//!     DEFAULT_MAX_RETURN_LEN,
+//! );
+//! let input = RunInput::validate(RuntimeInputSource::from_bytes(b"a"), limits)?;
 //!
 //! program.run_with_borrowed_trace(
 //!     input,
-//!     limits,
 //!     |event| {
 //!         byte_counts.push(event.byte_count().get());
 //!         if let BorrowedTraceEvent::Step { rule, .. } = event {
@@ -276,27 +296,27 @@
 //! ```
 //! use rsaeb::limits::{
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
-//!     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit, TraceSnapshotLimits,
+//!     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit,
 //! };
 //! use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
-//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{RunInput, RuntimeInputSource};
 //! use rsaeb::limits::RunLimits;
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("a=b\nb=(return)ok"), DEFAULT_PARSE_LIMITS)?;
-//! let run_limits = RunLimits::new(
+//! let limits = RunLimits::new(
+//!     DEFAULT_MAX_INPUT_LEN,
 //!     StepLimit::new(10),
 //!     DEFAULT_MAX_STATE_LEN,
 //!     DEFAULT_MAX_RETURN_LEN,
 //! );
-//! let trace_limits = TraceSnapshotLimits::new(run_limits, DEFAULT_MAX_TRACE_SNAPSHOT_LEN);
-//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), DEFAULT_MAX_INPUT_LEN)?;
+//! let input = RunInput::validate(RuntimeInputSource::from_bytes(b"a"), limits)?;
 //! let mut states = Vec::new();
 //! let mut returns = Vec::new();
 //!
-//! program.run_with_trace_snapshots(input, trace_limits, |event| {
+//! program.run_with_trace_snapshots(input, DEFAULT_MAX_TRACE_SNAPSHOT_LEN, |event| {
 //!     match event {
 //!         TraceSnapshotEvent::Initial { state } => states.push(state.into_raw_bytes()),
 //!         TraceSnapshotEvent::Step {
@@ -321,7 +341,7 @@
 //!
 //! Source parsing, runtime input validation, runtime execution, trace snapshot
 //! materialization, and user trace-sink failures are reported with structured
-//! error types such as [`error::ParseError`], [`error::RuntimeInputError`],
+//! error types such as [`error::ParseError`], [`error::RunInputError`],
 //! [`error::RunError`], [`error::AllocationError`],
 //! [`error::TraceSnapshotError`], [`error::TraceSnapshotRunError`], and
 //! [`error::TracedRunError`].
@@ -331,12 +351,20 @@
 //! are reported as [`error::RunError::InternalInvariant`].
 //!
 //! ```
-//! use rsaeb::error::RuntimeInputError;
-//! use rsaeb::limits::RuntimeInputByteLimit;
-//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::error::RunInputError;
+//! use rsaeb::limits::{
+//!     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, RunLimits, RuntimeInputByteLimit, StepLimit,
+//! };
+//! use rsaeb::input::{RunInput, RuntimeInputSource};
 //!
-//! fn validate_host_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
-//!     RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), RuntimeInputByteLimit::new(4))
+//! fn validate_host_input(bytes: &[u8]) -> Result<RunInput, RunInputError> {
+//!     let limits = RunLimits::new(
+//!         RuntimeInputByteLimit::new(4),
+//!         StepLimit::new(10),
+//!         DEFAULT_MAX_STATE_LEN,
+//!         DEFAULT_MAX_RETURN_LEN,
+//!     );
+//!     RunInput::validate(RuntimeInputSource::from_bytes(bytes), limits)
 //! }
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -346,7 +374,7 @@
 //!
 //! assert!(matches!(
 //!     error,
-//!     RuntimeInputError::NonAscii { column, byte }
+//!     RunInputError::NonAscii { column, byte }
 //!         if column.get() == 1 && byte.get() == 0xff
 //! ));
 //! # Ok(())

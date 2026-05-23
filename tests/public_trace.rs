@@ -3,11 +3,10 @@
 mod support;
 
 use rsaeb::error::{RunError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
-use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+use rsaeb::input::{RunInput, RuntimeInputSource};
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, RunLimits, StepLimit, TraceSnapshotByteLimit,
-    TraceSnapshotLimits,
 };
 use rsaeb::program::{Program, RunOutcome, RunResult};
 use rsaeb::trace::{
@@ -39,18 +38,20 @@ fn trace_snapshot_example(
     program: &Program,
 ) -> Result<(RunResult, Vec<TraceSnapshotEvent<'_>>), TestFailure> {
     let mut events = Vec::new();
-    let limits = TraceSnapshotLimits::new(
-        RunLimits::new(
-            StepLimit::new(10_000),
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        ),
-        DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
+    let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10_000),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
     );
-    let result = program.run_with_trace_snapshots(runtime_input(b"a")?, limits, |event| {
-        events.push(event);
-        Ok::<(), TestFailure>(())
-    })?;
+    let result = program.run_with_trace_snapshots(
+        runtime_input(b"a", limits)?,
+        DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
+        |event| {
+            events.push(event);
+            Ok::<(), TestFailure>(())
+        },
+    )?;
 
     Ok((result, events))
 }
@@ -76,9 +77,9 @@ fn traced_test_failure(error: TracedRunError<TestFailure>) -> TestFailure {
 ///
 /// # Errors
 ///
-/// Returns `RuntimeInputError` if the bytes are not valid runtime input.
-fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
-    RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), DEFAULT_MAX_INPUT_LEN)
+/// Returns `RunInputError` if the bytes are not valid runtime input.
+fn runtime_input(bytes: &[u8], limits: RunLimits) -> Result<RunInput, rsaeb::error::RunInputError> {
+    RunInput::validate(RuntimeInputSource::from_bytes(bytes), limits)
 }
 
 /// # Errors
@@ -90,13 +91,14 @@ fn trace_borrowed_events_are_emitted_without_snapshots() -> TestResult {
     let program = parse_program("a=b\nb=(return)ok")?;
     let mut seen = Vec::new();
     let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10_000),
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
 
     let result = program
-        .run_with_borrowed_trace(runtime_input(b"a")?, limits, |event| {
+        .run_with_borrowed_trace(runtime_input(b"a", limits)?, |event| {
             let bytes = match event {
                 BorrowedTraceEvent::Initial { state }
                 | BorrowedTraceEvent::Step {
@@ -209,22 +211,20 @@ fn trace_snapshot_continue_step_carries_rule_view() -> TestResult {
 fn trace_borrowed_to_snapshot_uses_only_snapshot_limit() -> TestResult {
     let program = parse_program("a=b")?;
     let mut materialization = None;
+    let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
 
     program
-        .run_with_borrowed_trace(
-            runtime_input(b"a")?,
-            RunLimits::new(
-                StepLimit::new(10),
-                DEFAULT_MAX_STATE_LEN,
-                DEFAULT_MAX_RETURN_LEN,
-            ),
-            |event| {
-                if materialization.is_none() {
-                    materialization = Some(event.to_snapshot(TraceSnapshotByteLimit::new(0)));
-                }
-                Ok::<(), TestFailure>(())
-            },
-        )
+        .run_with_borrowed_trace(runtime_input(b"a", limits)?, |event| {
+            if materialization.is_none() {
+                materialization = Some(event.to_snapshot(TraceSnapshotByteLimit::new(0)));
+            }
+            Ok::<(), TestFailure>(())
+        })
         .map_err(traced_test_failure)?;
 
     ensure_matches(
@@ -246,16 +246,15 @@ fn trace_borrowed_to_snapshot_uses_only_snapshot_limit() -> TestResult {
 #[test]
 fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult {
     let program = parse_program("a=b")?;
+    let runtime_limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(0),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
     let runtime_error = program.run_with_trace_snapshots(
-        runtime_input(b"a")?,
-        TraceSnapshotLimits::new(
-            RunLimits::new(
-                StepLimit::new(0),
-                DEFAULT_MAX_STATE_LEN,
-                DEFAULT_MAX_RETURN_LEN,
-            ),
-            TraceSnapshotByteLimit::new(10),
-        ),
+        runtime_input(b"a", runtime_limits)?,
+        TraceSnapshotByteLimit::new(10),
         |_event| Ok::<(), TestFailure>(()),
     );
     let runtime_error = expect_trace_snapshot_error(runtime_error)?;
@@ -267,16 +266,15 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
         "expected runtime failure variant",
     )?;
 
+    let snapshot_limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
     let snapshot_error = program.run_with_trace_snapshots(
-        runtime_input(b"a")?,
-        TraceSnapshotLimits::new(
-            RunLimits::new(
-                StepLimit::new(10),
-                DEFAULT_MAX_STATE_LEN,
-                DEFAULT_MAX_RETURN_LEN,
-            ),
-            TraceSnapshotByteLimit::new(0),
-        ),
+        runtime_input(b"a", snapshot_limits)?,
+        TraceSnapshotByteLimit::new(0),
         |_event| Ok::<(), TestFailure>(()),
     );
     ensure_matches(
@@ -290,16 +288,15 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
         "expected snapshot materialization limit",
     )?;
 
+    let sink_limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
     let sink_error = program.run_with_trace_snapshots(
-        runtime_input(b"a")?,
-        TraceSnapshotLimits::new(
-            RunLimits::new(
-                StepLimit::new(10),
-                DEFAULT_MAX_STATE_LEN,
-                DEFAULT_MAX_RETURN_LEN,
-            ),
-            TraceSnapshotByteLimit::new(10),
-        ),
+        runtime_input(b"a", sink_limits)?,
+        TraceSnapshotByteLimit::new(10),
         |_event| Err::<(), _>("trace sink full"),
     );
     ensure_eq!(
@@ -316,19 +313,21 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
 fn trace_final_event_matches_run_result() -> TestResult {
     let program = parse_program("a=b\nb=(return)c")?;
     let mut events = Vec::new();
-    let limits = TraceSnapshotLimits::new(
-        RunLimits::new(
-            StepLimit::new(10),
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        ),
-        DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
+    let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
     );
 
-    let result = program.run_with_trace_snapshots(runtime_input(b"a")?, limits, |event| {
-        events.push(event);
-        Ok::<(), TestFailure>(())
-    })?;
+    let result = program.run_with_trace_snapshots(
+        runtime_input(b"a", limits)?,
+        DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
+        |event| {
+            events.push(event);
+            Ok::<(), TestFailure>(())
+        },
+    )?;
 
     let last = events
         .last()

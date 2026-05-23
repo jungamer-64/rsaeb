@@ -1,8 +1,6 @@
 use std::string::{FromUtf8Error, String};
 
-use rsaeb::error::{
-    AllocationError, ParseError, RunError, RuntimeInputError, TraceSnapshotRunError,
-};
+use rsaeb::error::{AllocationError, ParseError, RunError, RunInputError, TraceSnapshotRunError};
 use rsaeb::limits::DEFAULT_PARSE_LIMITS;
 use rsaeb::program::Program;
 use rsaeb::source::ProgramSource;
@@ -10,7 +8,7 @@ use rsaeb::source::ProgramSource;
 pub enum TestFailure {
     Message(String),
     Parse(ParseError),
-    Input(RuntimeInputError),
+    Input(RunInputError),
     Run(RunError),
     TraceSnapshot(String),
     Utf8(FromUtf8Error),
@@ -45,8 +43,8 @@ impl From<ParseError> for TestFailure {
     }
 }
 
-impl From<RuntimeInputError> for TestFailure {
-    fn from(value: RuntimeInputError) -> Self {
+impl From<RunInputError> for TestFailure {
+    fn from(value: RunInputError) -> Self {
         Self::Input(value)
     }
 }

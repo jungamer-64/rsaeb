@@ -2,8 +2,8 @@
 //!
 //! [`Program`] is the immutable parsed A=B rule table. Hosts parse typed
 //! [`ProgramSource`] under [`ParseLimits`], then run with [`RunInput`] already
-//! admitted under [`RunLimits`]. Runtime budget and byte-count types live in
-//! [`limits`](crate::limits); runtime input lives in
+//! admitted under [`RunLimits`](crate::limits::RunLimits). Runtime budget and
+//! byte-count types live in [`limits`](crate::limits); runtime input lives in
 //! [`input`](crate::input).
 
 pub(crate) mod limits;
@@ -15,7 +15,7 @@ use crate::error::{InternalInvariantError, ParseError, RunError};
 use crate::execution::{OwnedRunSession, RunSession};
 use crate::input::RunInput;
 use crate::inspect::{OnceRuleCount, RuleCount, RulePositions, RuleView};
-use crate::limits::{ParseLimits, RunLimits};
+use crate::limits::ParseLimits;
 use crate::parser::parse_rules_impl;
 use crate::rule::{Rule, RuleAction};
 use crate::source::ProgramSource;
@@ -155,12 +155,8 @@ impl Program {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` when the validated input exceeds this run's state
-    /// limit or when allocating per-run execution state fails.
-    pub fn start_run(
-        &self,
-        input: RunInput,
-    ) -> Result<RunSession<'_>, RunError> {
+    /// Returns `RunError` when allocating per-run execution state fails.
+    pub fn start_run(&self, input: RunInput) -> Result<RunSession<'_>, RunError> {
         RunSession::new(self, input)
     }
 
@@ -173,12 +169,8 @@ impl Program {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` when the validated input exceeds this run's state
-    /// limit or when allocating per-run execution state fails.
-    pub fn into_run(
-        self,
-        input: RunInput,
-    ) -> Result<OwnedRunSession, RunError> {
+    /// Returns `RunError` when allocating per-run execution state fails.
+    pub fn into_run(self, input: RunInput) -> Result<OwnedRunSession, RunError> {
         OwnedRunSession::new(self, input)
     }
 
@@ -189,9 +181,8 @@ impl Program {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` when the input exceeds this run's state limit,
-    /// allocation fails, state-size arithmetic overflows, or a configured
-    /// `RunLimits` budget would be exceeded.
+    /// Returns `RunError` when allocation fails, state-size arithmetic
+    /// overflows, or a configured execution budget would be exceeded.
     pub fn run(&self, input: RunInput) -> Result<RunResult, RunError> {
         RunSession::new(self, input)?.finish()
     }

@@ -12,26 +12,26 @@
 //! ```
 //! use rsaeb::limits::{
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
-//!     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit, TraceSnapshotLimits,
+//!     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit,
 //! };
 //! use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
-//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{RunInput, RuntimeInputSource};
 //! use rsaeb::limits::RunLimits;
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("a=b\nb=(return)ok"), DEFAULT_PARSE_LIMITS)?;
-//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), DEFAULT_MAX_INPUT_LEN)?;
 //! let run_limits = RunLimits::new(
+//!     DEFAULT_MAX_INPUT_LEN,
 //!     StepLimit::new(10),
 //!     DEFAULT_MAX_STATE_LEN,
 //!     DEFAULT_MAX_RETURN_LEN,
 //! );
-//! let trace_limits = TraceSnapshotLimits::new(run_limits, DEFAULT_MAX_TRACE_SNAPSHOT_LEN);
+//! let input = RunInput::validate(RuntimeInputSource::from_bytes(b"a"), run_limits)?;
 //! let mut retained = Vec::new();
 //!
-//! program.run_with_trace_snapshots(input, trace_limits, |event| {
+//! program.run_with_trace_snapshots(input, DEFAULT_MAX_TRACE_SNAPSHOT_LEN, |event| {
 //!     match event {
 //!         TraceSnapshotEvent::Initial { state } => retained.push(state.into_raw_bytes()),
 //!         TraceSnapshotEvent::Step {

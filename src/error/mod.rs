@@ -68,7 +68,6 @@ pub use parse::{
     ParseLimitError, PayloadKind, RightActionKind,
 };
 pub use run::{
-    InputColumn, InternalInvariantError, LimitError, RunError, RunInputError, StateLimitContext,
-    StateSizeError,
+    InputColumn, InternalInvariantError, LimitError, RunError, RunInputError, StateSizeError,
 };
 pub use traced::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};

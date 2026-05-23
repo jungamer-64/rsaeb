@@ -26,15 +26,20 @@ use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
     DEFAULT_MAX_STEPS, RunLimits,
 };
-use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+use rsaeb::input::{RunInput, RuntimeInputSource};
 use rsaeb::program::{Program, RunOutcome};
 use rsaeb::source::ProgramSource;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?;
-    let limits = RunLimits::new(DEFAULT_MAX_STEPS, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), DEFAULT_MAX_INPUT_LEN)?;
-    let result = program.run(input, limits)?;
+    let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        DEFAULT_MAX_STEPS,
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let input = RunInput::validate(RuntimeInputSource::from_bytes(b"a"), limits)?;
+    let result = program.run(input)?;
 
     assert!(matches!(
         result.outcome(),
@@ -57,13 +62,13 @@ The primary execution path is:
 
 1. Construct `ProgramSource` with `from_text` or `from_bytes`.
 2. Parse it with `Program::parse`.
-3. Label host bytes with `RuntimeInputSource::from_bytes` and validate them with `RuntimeInput::validate`.
-4. Consume `RuntimeInput` with `Program::run`, `Program::start_run`, or `Program::into_run`.
+3. Label host bytes with `RuntimeInputSource::from_bytes` and validate them with `RunInput::validate`.
+4. Consume `RunInput` with `Program::run`, `Program::start_run`, or `Program::into_run`.
 
 The crate intentionally contains no filesystem, process, stdout/stderr,
 argument parsing, environment access, or lossy display boundary. Hosts should
 perform I/O outside the interpreter and pass already-loaded bytes to
-`ProgramSource` and `RuntimeInput`.
+`ProgramSource` and `RunInput`.
 
 ### Stepwise Execution
 
@@ -88,8 +93,11 @@ The docs.rs crate page contains a complete doctested stepwise example.
 code-line bytes, parsed payload bytes, and executable rule count before the
 parser accepts host-provided source into the program domain.
 
-`RunLimits` is the execution contract. Step count alone is not enough for a
-rewrite system because a short run can still expand state aggressively.
+`RunLimits` is the run admission and execution contract. It validates input
+byte length and initial runtime-state size before execution starts, then carries
+the step, rewrite-state, and return-output budgets through the run. Step count
+alone is not enough for a rewrite system because a short run can still expand
+state aggressively.
 
 ```rust
 use rsaeb::error::{LimitError, RunError};
@@ -97,14 +105,19 @@ use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
     RunLimits, StepLimit,
 };
-use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+use rsaeb::input::{RunInput, RuntimeInputSource};
 use rsaeb::program::Program;
 use rsaeb::source::ProgramSource;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let limits = RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
-    let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), DEFAULT_MAX_INPUT_LEN)?;
-    let result = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?.run(input, limits);
+    let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(0),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let input = RunInput::validate(RuntimeInputSource::from_bytes(b"a"), limits)?;
+    let result = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?.run(input);
 
     assert!(matches!(
         result,
@@ -120,9 +133,10 @@ Execution may succeed exactly at the step limit. The step limit becomes an
 error only when another rule would still apply after the configured number of
 completed steps.
 
-Runtime input validation is bounded by `RuntimeInputByteLimit` before the
-interpreter materializes owned input state. Trace snapshot materialization has
-its own `TraceSnapshotByteLimit` because tracing is outside runtime execution.
+Runtime input validation is bounded by `RunLimits` before the interpreter
+materializes owned input state or creates an execution session. Trace snapshot
+materialization has its own `TraceSnapshotByteLimit` because tracing is outside
+runtime execution.
 
 ### Tracing
 
@@ -130,7 +144,7 @@ Tracing has two layers:
 
 - Borrowed tracing does not materialize owned event snapshots. Events borrow
   runtime state or return payload bytes only for the callback invocation.
-- Snapshot tracing materializes owned event bytes under `TraceSnapshotLimits`.
+- Snapshot tracing materializes owned event bytes under `TraceSnapshotByteLimit`.
 
 Borrowed trace sinks use `run_with_borrowed_trace`, which separates runtime
 errors from trace-sink errors with `TracedRunError`. Snapshot tracing adds one
@@ -391,7 +405,7 @@ runtime input bytes
   -> AsciiByte         # runtime input domain validation
   -> RuntimeByte       # private ProgramConstructible(ProgramByte) or Opaque(NonProgramAsciiByte)
   -> RunSession / OwnedRunSession
-                       # consumes RuntimeInput and owns mutable execution state
+                       # consumes RunInput and owns mutable execution state
 ```
 
 Program payloads are stored as `ProgramByte`, not raw `u8`. Runtime state is
@@ -406,7 +420,7 @@ observation crosses an explicit materialization boundary: `RuntimeStateView`
 materializes to `RuntimeStateSnapshot`, stable run results use
 `RuntimeStateSnapshot`, `(return)` outputs use `ReturnOutput`, parsed payload
 inspection materializes to `PayloadBytes`, and snapshot tracing materializes
-owned event bytes under `TraceSnapshotLimits`. During execution, the active
+owned event bytes under `TraceSnapshotByteLimit`. During execution, the active
 state and the rewrite scratch buffer are distinct typed buffers, and the
 runtime swaps them only after a successful continuation step. `(once)` rules
 carry private slots assigned during parsing; only a committed application can
@@ -471,14 +485,14 @@ type import paths.
 
 - `rsaeb::source`: `ProgramSource` and source-position value types used by
   parser diagnostics
-- `rsaeb::input`: `RuntimeInputSource` and `RuntimeInput`
+- `rsaeb::input`: `RuntimeInputSource` and `RunInput`
 - `rsaeb::program`: `Program`, `RunResult`, `RunOutcome`,
   `RuntimeStateSnapshot`, `ReturnOutput`, and `ReturnOutputView`
 - `rsaeb::limits`: `ParseLimits`, `SourceByteLimit`, `CodeLineByteLimit`,
   `PayloadByteLimit`, `RuleLimit`, `StepLimit`, `RuntimeInputByteLimit`,
   `RuntimeStateByteLimit`, `ReturnByteLimit`, `TraceSnapshotByteLimit`,
-  `TraceSnapshotLimits`, parser/runtime byte-count value types, `StepCount`,
-  and default budget constants
+  parser/runtime byte-count value types, `StepCount`, and default budget
+  constants
 - `rsaeb::execution`: borrowed run typestates (`RunSession`,
   `StepTransition`, `AppliedStep`, `StableRun`, `ReturnedRun`, `FailedRun`)
   and owned run typestates (`OwnedRunSession`, `OwnedStepTransition`,

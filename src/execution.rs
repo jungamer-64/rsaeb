@@ -17,9 +17,9 @@
 //! public API.
 
 use crate::error::{RunError, TracedRunError};
-use crate::input::{InitialStateBytes, RuntimeInput};
+use crate::input::{InitialStateBytes, RunInput};
 use crate::inspect::{RulePosition, RuleView};
-use crate::limits::{RunLimits, StepCount};
+use crate::limits::StepCount;
 use crate::program::{Program, ReturnOutputView, RunResult};
 use crate::runtime::action::{
     AppliedRule, AppliedRuleEffect, apply_matched_rule, materialize_return_output,
@@ -287,11 +287,10 @@ impl RunCore {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if input exceeds runtime state limits or per-run
-    /// rule state allocation fails.
-    fn new(program: &Program, input: RuntimeInput, limits: RunLimits) -> Result<Self, RunError> {
+    /// Returns `RunError` if per-run rule state allocation fails.
+    fn new(program: &Program, input: RunInput) -> Result<Self, RunError> {
+        let (input, limits) = InitialStateBytes::from_run_input(input);
         let budget = RuntimeBudgetState::new(limits);
-        let input = InitialStateBytes::from_runtime_input(input, budget)?;
         let state = State::from_input(input);
         let once_states = OnceStateSet::new(program.once_slot_count())?;
         Ok(Self {
@@ -352,16 +351,11 @@ impl<'program> RunSession<'program> {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if the consumed runtime input exceeds this run's
-    /// state limits or if allocating per-run rule state fails.
-    pub(crate) fn new(
-        program: &'program Program,
-        input: RuntimeInput,
-        limits: RunLimits,
-    ) -> Result<Self, RunError> {
+    /// Returns `RunError` if allocating per-run rule state fails.
+    pub(crate) fn new(program: &'program Program, input: RunInput) -> Result<Self, RunError> {
         Ok(Self {
             program,
-            core: RunCore::new(program, input, limits)?,
+            core: RunCore::new(program, input)?,
         })
     }
 
@@ -492,14 +486,9 @@ impl OwnedRunSession {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if the consumed runtime input exceeds this run's
-    /// state limits or if allocating per-run rule state fails.
-    pub(crate) fn new(
-        program: Program,
-        input: RuntimeInput,
-        limits: RunLimits,
-    ) -> Result<Self, RunError> {
-        let core = RunCore::new(&program, input, limits)?;
+    /// Returns `RunError` if allocating per-run rule state fails.
+    pub(crate) fn new(program: Program, input: RunInput) -> Result<Self, RunError> {
+        let core = RunCore::new(&program, input)?;
         Ok(Self { program, core })
     }
 

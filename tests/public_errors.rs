@@ -3,7 +3,7 @@
 mod support;
 
 use rsaeb::error::{ParseErrorKind, ParseErrorLocation, PayloadKind, RunError};
-use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+use rsaeb::input::{RunInput, RuntimeInputSource};
 use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, RunLimits};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
@@ -23,9 +23,9 @@ fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFail
 ///
 /// # Errors
 ///
-/// Returns `RuntimeInputError` if the bytes are not valid runtime input.
-fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
-    RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), DEFAULT_MAX_INPUT_LEN)
+/// Returns `RunInputError` if the bytes are not valid runtime input.
+fn runtime_input(bytes: &[u8], limits: RunLimits) -> Result<RunInput, rsaeb::error::RunInputError> {
+    RunInput::validate(RuntimeInputSource::from_bytes(bytes), limits)
 }
 
 /// # Errors
@@ -100,7 +100,13 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
         "parse error at line 1, column 4: multiple '=' characters are not allowed",
     )?;
 
-    let Err(input_error) = runtime_input(&[0xff]) else {
+    let input_limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        rsaeb::limits::StepLimit::new(1),
+        rsaeb::limits::DEFAULT_MAX_STATE_LEN,
+        rsaeb::limits::DEFAULT_MAX_RETURN_LEN,
+    );
+    let Err(input_error) = runtime_input(&[0xff], input_limits) else {
         return Err(TestFailure::message("expected input error"));
     };
     ensure_eq!(
@@ -108,14 +114,13 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
         "input error: non-ASCII byte 0xff at column 1",
     )?;
 
-    let return_error = parse_program("a=(return)ok")?.run(
-        runtime_input(b"a")?,
-        RunLimits::new(
-            rsaeb::limits::StepLimit::new(1),
-            rsaeb::limits::DEFAULT_MAX_STATE_LEN,
-            rsaeb::limits::ReturnByteLimit::new(1),
-        ),
+    let return_limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        rsaeb::limits::StepLimit::new(1),
+        rsaeb::limits::DEFAULT_MAX_STATE_LEN,
+        rsaeb::limits::ReturnByteLimit::new(1),
     );
+    let return_error = parse_program("a=(return)ok")?.run(runtime_input(b"a", return_limits)?);
     ensure_matches(
         matches!(
             expect_run_error(return_error)?,

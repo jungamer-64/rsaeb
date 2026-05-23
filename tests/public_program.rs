@@ -2,7 +2,7 @@
 
 mod support;
 
-use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+use rsaeb::input::{RunInput, RuntimeInputSource};
 use rsaeb::inspect::OnceRuleCount;
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
@@ -49,9 +49,9 @@ fn expect_return_bytes<'result>(
 ///
 /// # Errors
 ///
-/// Returns `RuntimeInputError` if the bytes are not valid runtime input.
-fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
-    RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), DEFAULT_MAX_INPUT_LEN)
+/// Returns `RunInputError` if the bytes are not valid runtime input.
+fn runtime_input(bytes: &[u8], limits: RunLimits) -> Result<RunInput, rsaeb::error::RunInputError> {
+    RunInput::validate(RuntimeInputSource::from_bytes(bytes), limits)
 }
 
 /// # Errors
@@ -61,20 +61,21 @@ fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInpu
 #[test]
 fn program_parse_accepts_text_and_byte_sources() -> TestResult {
     let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
         DEFAULT_MAX_STEPS,
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
 
     let program = parse_program("a=b")?;
-    let input = runtime_input(b"a")?;
-    let result = program.run(input, limits)?;
+    let input = runtime_input(b"a", limits)?;
+    let result = program.run(input)?;
     expect_stable_bytes(&result, b"b")?;
     ensure_matches(result.steps().get() == 1, "expected one rewrite step")?;
 
     let program = Program::parse(ProgramSource::from_bytes(b"a=b#\xff"), DEFAULT_PARSE_LIMITS)?;
-    let input = runtime_input(b"a")?;
-    let result = program.run(input, limits)?;
+    let input = runtime_input(b"a", limits)?;
+    let result = program.run(input)?;
     expect_stable_bytes(&result, b"b")?;
     Ok(())
 }
@@ -86,41 +87,42 @@ fn program_parse_accepts_text_and_byte_sources() -> TestResult {
 #[test]
 fn program_language_surface_handles_spacing_comments_and_actions() -> TestResult {
     let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10_000),
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
 
     let program = parse_program("a b=bb")?;
-    let result = program.run(runtime_input(b"abc")?, limits)?;
+    let result = program.run(runtime_input(b"abc", limits)?)?;
     expect_stable_bytes(&result, b"bbc")?;
 
     let program = parse_program("a=b\r\nb=c\r\n")?;
-    let result = program.run(runtime_input(b"a")?, limits)?;
+    let result = program.run(runtime_input(b"a", limits)?)?;
     expect_stable_bytes(&result, b"c")?;
 
     let program = parse_program("a\tb = c\tc")?;
-    let result = program.run(runtime_input(b"ab")?, limits)?;
+    let result = program.run(runtime_input(b"ab", limits)?)?;
     expect_stable_bytes(&result, b"cc")?;
 
     let program = parse_program("a=b#ignored")?;
-    let result = program.run(runtime_input(b"a")?, limits)?;
+    let result = program.run(runtime_input(b"a", limits)?)?;
     expect_stable_bytes(&result, b"b")?;
 
     let program = parse_program("#a=b")?;
-    let result = program.run(runtime_input(b"a")?, limits)?;
+    let result = program.run(runtime_input(b"a", limits)?)?;
     expect_stable_bytes(&result, b"a")?;
 
     let program = parse_program("a=(start)x")?;
-    let result = program.run(runtime_input(b"ba")?, limits)?;
+    let result = program.run(runtime_input(b"ba", limits)?)?;
     expect_stable_bytes(&result, b"xb")?;
 
     let program = parse_program("a=(end)x")?;
-    let result = program.run(runtime_input(b"ba")?, limits)?;
+    let result = program.run(runtime_input(b"ba", limits)?)?;
     expect_stable_bytes(&result, b"bx")?;
 
     let program = parse_program("a=(return)ok")?;
-    let result = program.run(runtime_input(b"a")?, limits)?;
+    let result = program.run(runtime_input(b"a", limits)?)?;
     expect_return_bytes(&result, b"ok")?;
     Ok(())
 }
@@ -131,13 +133,14 @@ fn program_language_surface_handles_spacing_comments_and_actions() -> TestResult
 #[test]
 fn program_values_are_reusable_across_runs() -> TestResult {
     let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10_000),
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
     let program = parse_program("(once)a=b\na=c")?;
-    let first = program.run(runtime_input(b"aa")?, limits)?;
-    let second = program.run(runtime_input(b"aa")?, limits)?;
+    let first = program.run(runtime_input(b"aa", limits)?)?;
+    let second = program.run(runtime_input(b"aa", limits)?)?;
 
     expect_stable_bytes(&first, b"bc")?;
     expect_stable_bytes(&second, b"bc")?;

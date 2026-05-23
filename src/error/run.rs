@@ -254,15 +254,6 @@ impl InternalInvariantError {
 
 impl Error for InternalInvariantError {}
 
-/// Context in which the configured state limit was exceeded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StateLimitContext {
-    /// Initial runtime input was larger than the configured state limit.
-    Input,
-    /// A rewrite would create a state larger than the configured state limit.
-    Rewrite,
-}
-
 /// Configured runtime budget failure.
 ///
 /// Limits are checked before committing the operation that would exceed them,
@@ -272,9 +263,6 @@ pub enum StateLimitContext {
 pub enum LimitError {
     /// Runtime state would exceed the configured state length limit.
     State {
-        /// Whether the limit was exceeded by input, rewrite, or replacement
-        /// limits for an existing execution state.
-        context: StateLimitContext,
         /// Configured maximum runtime state length.
         limit: RuntimeStateByteLimit,
         /// State length that would have been accepted without this guard.
@@ -300,12 +288,10 @@ pub enum LimitError {
 
 impl LimitError {
     pub(crate) const fn state(
-        context: StateLimitContext,
         limit: RuntimeStateByteLimit,
         attempted_len: RuntimeStateByteCount,
     ) -> Self {
         Self::State {
-            context,
             limit,
             attempted_len,
         }

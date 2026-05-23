@@ -11,9 +11,8 @@ use core::fmt;
 
 use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeInputByte, RuntimeInputByteCount, RuntimeStateByteCount};
-use crate::error::{RunError, RunInputError};
+use crate::error::RunInputError;
 use crate::limits::{RunLimits, RuntimeInputByteLimit};
-use crate::runtime::budget::RuntimeBudgetState;
 
 /// Borrowed runtime input source at the validation boundary.
 ///
@@ -140,6 +139,13 @@ impl RunInput {
         limits: RunLimits,
     ) -> Result<Self, RunInputError> {
         let input = ValidatedRuntimeInputSource::new(input, limits.input_byte_limit())?;
+        let initial_state_len = RuntimeStateByteCount::from_runtime_input_count(input.byte_count());
+        if initial_state_len.get() > limits.state_byte_limit().get() {
+            return Err(RunInputError::initial_state_limit(
+                limits.state_byte_limit(),
+                initial_state_len,
+            ));
+        }
 
         // Allocation starts only after the complete boundary validation pass;
         // the iterator below consumes that witness instead of validating each
@@ -190,21 +196,9 @@ pub(crate) struct InitialStateBytes {
 }
 
 impl InitialStateBytes {
-    /// Moves validated runtime input into mutable execution state bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` if the input exceeds runtime state limits.
-    pub(crate) fn from_runtime_input(
-        input: RunInput,
-    ) -> Result<Self, RunError> {
+    pub(crate) fn from_run_input(input: RunInput) -> (Self, RunLimits) {
         let (bytes, limits) = input.into_runtime_parts();
-        let budget = RuntimeBudgetState::new(limits);
-        let byte_count = input.byte_count();
-        let state_len = RuntimeStateByteCount::from_runtime_input_count(byte_count);
-
-        budget.ensure_initial_state_len(state_len)?;
-        Ok(Self { bytes })
+        (Self { bytes }, limits)
     }
 
     pub(crate) fn into_runtime_bytes(self) -> Vec<RuntimeByte> {

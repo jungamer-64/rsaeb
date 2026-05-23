@@ -266,9 +266,9 @@ impl RuntimeStateByteLimit {
 
 /// Maximum runtime input length accepted before owned byte classification.
 ///
-/// This limit belongs to [`input::RuntimeInput::validate`](crate::input::RuntimeInput::validate),
-/// not to [`program::Program::run`](crate::program::Program::run). Runtime state limits are
-/// checked separately when execution materializes the validated input.
+/// This limit is part of [`RunLimits`] and is enforced by
+/// [`input::RunInput::validate`](crate::input::RunInput::validate) before owned
+/// input allocation starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuntimeInputByteLimit {
     value: usize,

@@ -2,10 +2,10 @@
 //!
 //! Parser limits, runtime limits, and trace snapshot limits are separate
 //! domains. Parser limits bound source ingestion and parsed program size;
-//! runtime limits decide whether execution may allocate or continue; trace
-//! snapshot limits decide whether a borrowed trace event may be materialized as
-//! owned bytes. Count types report measured lengths without erasing those
-//! domains into plain `usize` values.
+//! runtime limits bind input admission and decide whether execution may allocate
+//! or continue; trace snapshot limits decide whether a borrowed trace event may
+//! be materialized as owned bytes. Count types report measured lengths without
+//! erasing those domains into plain `usize` values.
 //!
 //! ```
 //! use rsaeb::limits::{

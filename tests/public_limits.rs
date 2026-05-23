@@ -2,8 +2,8 @@
 
 mod support;
 
-use rsaeb::error::{LimitError, ParseErrorKind, ParseLimitError, RunError, StateLimitContext};
-use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+use rsaeb::error::{LimitError, ParseErrorKind, ParseLimitError, RunError, RunInputError};
+use rsaeb::input::{RunInput, RuntimeInputSource};
 use rsaeb::limits::{
     CodeLineByteLimit, DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
     DEFAULT_PARSE_LIMITS, ParseLimits, PayloadByteLimit, ReturnByteLimit, RuleLimit, RunLimits,
@@ -59,9 +59,9 @@ fn expect_state_limit(error: RunError) -> Result<LimitError, TestFailure> {
 ///
 /// # Errors
 ///
-/// Returns `RuntimeInputError` if the bytes are not valid runtime input.
-fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
-    RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), DEFAULT_MAX_INPUT_LEN)
+/// Returns `RunInputError` if the bytes are not valid runtime input.
+fn runtime_input(bytes: &[u8], limits: RunLimits) -> Result<RunInput, rsaeb::error::RunInputError> {
+    RunInput::validate(RuntimeInputSource::from_bytes(bytes), limits)
 }
 
 /// # Errors
@@ -159,14 +159,13 @@ fn limits_parse_resource_errors_are_structured() -> TestResult {
 /// step, state, and return domains.
 #[test]
 fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
-    let step_limited = parse_program("a=b")?.run(
-        runtime_input(b"a")?,
-        RunLimits::new(
-            StepLimit::new(0),
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        ),
+    let step_limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(0),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
     );
+    let step_limited = parse_program("a=b")?.run(runtime_input(b"a", step_limits)?);
     let step_limited = expect_step_limit(expect_run_error(step_limited)?)?;
     ensure_matches(
         matches!(
@@ -182,36 +181,56 @@ fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
         "expected step limit details",
     )?;
 
-    let state_limited = parse_program("# no executable rules")?.run(
-        runtime_input(b"aa")?,
-        RunLimits::new(
-            StepLimit::new(10),
-            RuntimeStateByteLimit::new(1),
-            ReturnByteLimit::new(10),
-        ),
+    let initial_state_limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10),
+        RuntimeStateByteLimit::new(1),
+        ReturnByteLimit::new(10),
     );
-    let state_limited = expect_state_limit(expect_run_error(state_limited)?)?;
+    let Err(initial_state_limited) = runtime_input(b"aa", initial_state_limits) else {
+        return Err(TestFailure::message(
+            "expected initial state admission error",
+        ));
+    };
     ensure_matches(
         matches!(
-            state_limited,
-            LimitError::State {
-                context: StateLimitContext::Input,
+            initial_state_limited,
+            RunInputError::InitialStateLimit {
                 limit,
                 attempted_len,
             } if limit == RuntimeStateByteLimit::new(1)
                 && attempted_len.get() == 2
         ),
-        "expected runtime input state limit",
+        "expected run input state admission limit",
     )?;
 
-    let return_limited = parse_program("a=(return)ok")?.run(
-        runtime_input(b"a")?,
-        RunLimits::new(
-            StepLimit::new(1),
-            RuntimeStateByteLimit::new(10),
-            ReturnByteLimit::new(1),
-        ),
+    let rewrite_limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(1),
+        RuntimeStateByteLimit::new(2),
+        ReturnByteLimit::new(10),
     );
+    let rewrite_limited = parse_program("=a")?.run(runtime_input(b"aa", rewrite_limits)?);
+    let rewrite_limited = expect_state_limit(expect_run_error(rewrite_limited)?)?;
+    ensure_matches(
+        matches!(
+            rewrite_limited,
+            LimitError::State {
+                limit,
+                attempted_len,
+            } if limit == RuntimeStateByteLimit::new(2)
+                && attempted_len.get() == 3
+        ),
+        "expected rewrite state limit",
+    )?;
+
+    let return_limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(1),
+        RuntimeStateByteLimit::new(10),
+        ReturnByteLimit::new(1),
+    );
+    let return_limited = parse_program("a=(return)ok")?.run(runtime_input(b"a", return_limits)?);
     let return_limited = expect_run_error(return_limited)?;
     ensure_matches(
         matches!(
@@ -231,28 +250,40 @@ fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
 /// public domain details.
 #[test]
 fn limits_display_output_names_public_contexts() -> TestResult {
-    let state_error = parse_program("# no executable rules")?.run(
-        runtime_input(b"aa")?,
-        RunLimits::new(
-            StepLimit::new(10),
-            RuntimeStateByteLimit::new(1),
-            ReturnByteLimit::new(10),
-        ),
+    let input_limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10),
+        RuntimeStateByteLimit::new(1),
+        ReturnByteLimit::new(10),
     );
-    let state_error = expect_state_limit(expect_run_error(state_error)?)?;
+    let Err(input_error) = runtime_input(b"aa", input_limits) else {
+        return Err(TestFailure::message("expected input admission error"));
+    };
     ensure_eq!(
-        state_error.to_string(),
-        "state limit exceeded by runtime input; attempted length: 2, limit: 1",
+        input_error.to_string(),
+        "input error: initial runtime state length 2 exceeds the configured state limit 1",
     )?;
 
-    let step_error = parse_program("a=b")?.run(
-        runtime_input(b"a")?,
-        RunLimits::new(
-            StepLimit::new(0),
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        ),
+    let rewrite_limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(1),
+        RuntimeStateByteLimit::new(2),
+        ReturnByteLimit::new(10),
     );
+    let rewrite_error = parse_program("=a")?.run(runtime_input(b"aa", rewrite_limits)?);
+    let rewrite_error = expect_state_limit(expect_run_error(rewrite_error)?)?;
+    ensure_eq!(
+        rewrite_error.to_string(),
+        "rewrite state limit exceeded; attempted length: 3, limit: 2",
+    )?;
+
+    let step_limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(0),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let step_error = parse_program("a=b")?.run(runtime_input(b"a", step_limits)?);
     let step_error = expect_step_limit(expect_run_error(step_error)?)?;
     ensure_eq!(
         step_error.to_string(),

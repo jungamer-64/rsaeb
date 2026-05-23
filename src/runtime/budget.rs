@@ -1,6 +1,6 @@
 use crate::bytes::{ReturnOutputByteCount, RuntimeStateByteCount};
-use crate::error::{LimitError, RunError, StateLimitContext};
-use crate::limits::{RunLimits, RuntimeStateByteLimit, StepCount};
+use crate::error::{LimitError, RunError};
+use crate::limits::{RunLimits, StepCount};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RuntimeBudgetState {
@@ -25,23 +25,6 @@ impl RuntimeBudgetState {
         self.completed_steps
     }
 
-    /// Checks initial input materialization against runtime state limits.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` if the initial input state exceeds the configured
-    /// runtime state limit.
-    pub(crate) fn ensure_initial_state_len(
-        self,
-        attempted_len: RuntimeStateByteCount,
-    ) -> Result<(), RunError> {
-        Self::ensure_state_len(
-            StateLimitContext::Input,
-            self.limits.state_byte_limit(),
-            attempted_len,
-        )
-    }
-
     /// Checks a candidate rewrite state against runtime state limits.
     ///
     /// # Errors
@@ -52,11 +35,11 @@ impl RuntimeBudgetState {
         self,
         attempted_len: RuntimeStateByteCount,
     ) -> Result<(), RunError> {
-        Self::ensure_state_len(
-            StateLimitContext::Rewrite,
-            self.limits.state_byte_limit(),
-            attempted_len,
-        )
+        if attempted_len.get() > self.limits.state_byte_limit().get() {
+            return Err(LimitError::state(self.limits.state_byte_limit(), attempted_len).into());
+        }
+
+        Ok(())
     }
 
     /// Checks a `(return)` payload against return-output limits.
@@ -73,23 +56,6 @@ impl RuntimeBudgetState {
             return Err(
                 LimitError::return_output(self.limits.return_byte_limit(), attempted_len).into(),
             );
-        }
-
-        Ok(())
-    }
-
-    /// Checks a runtime state byte count against a state limit.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` if `attempted_len` exceeds `limit`.
-    fn ensure_state_len(
-        context: StateLimitContext,
-        limit: RuntimeStateByteLimit,
-        attempted_len: RuntimeStateByteCount,
-    ) -> Result<(), RunError> {
-        if attempted_len.get() > limit.get() {
-            return Err(LimitError::state(context, limit, attempted_len).into());
         }
 
         Ok(())

@@ -4,22 +4,20 @@ use super::once::OnceStateSet;
 use super::rewrite::RewriteScratch;
 use super::state::{State, StateMatch};
 use crate::bytes::{CompactByte, Payload, PayloadByteCount, PayloadSyntax};
-use crate::error::{
-    InternalInvariantError, LimitError, PayloadKind, RunError, RuntimeInputError, StateLimitContext,
-};
+use crate::error::{InternalInvariantError, LimitError, PayloadKind, RunError, RunInputError};
 use crate::execution::{FailedRun, RunSession, StepTransition};
-use crate::input::{InitialStateBytes, RuntimeInput, RuntimeInputSource};
+use crate::input::{InitialStateBytes, RunInput, RuntimeInputSource};
 use crate::limits::{
-    DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit, ReturnOutputByteCount,
-    RunLimits, RuntimeInputByteCount, RuntimeInputByteLimit, RuntimeStateByteCount,
-    RuntimeStateByteLimit, StepCount, StepLimit,
+    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit,
+    ReturnOutputByteCount, RunLimits, RuntimeInputByteCount, RuntimeInputByteLimit,
+    RuntimeStateByteCount, RuntimeStateByteLimit, StepCount, StepLimit,
 };
 use crate::program::RunOutcome;
 use crate::rule::RuleAction;
 use crate::runtime::action::apply_matched_rule;
 use crate::test_support::{
-    TestFailure, TestResult, ensure_eq, ensure_matches, parse_program, runtime_input,
-    source_column, source_line_number,
+    TestFailure, TestResult, default_run_limits, ensure_eq, ensure_matches, parse_program,
+    runtime_input, source_column, source_line_number,
 };
 use crate::trace::RuntimeStateView;
 use std::vec::Vec;
@@ -101,10 +99,8 @@ fn expect_step_transition(result: StepTransition<'_>) -> Result<StepTransition<'
 /// Returns `TestFailure` if input validation fails or the input exceeds runtime
 /// state limits.
 fn state_from_input_bytes(input: &[u8], limits: RunLimits) -> Result<State, TestFailure> {
-    Ok(State::from_input(InitialStateBytes::from_runtime_input(
-        runtime_input(input)?,
-        RuntimeBudgetState::new(limits),
-    )?))
+    let (input, _) = InitialStateBytes::from_run_input(runtime_input(input, limits)?);
+    Ok(State::from_input(input))
 }
 
 /// # Errors
@@ -114,13 +110,14 @@ fn state_from_input_bytes(input: &[u8], limits: RunLimits) -> Result<State, Test
 #[test]
 fn once_rule_failure_preserves_state_before_step_commit() -> TestResult {
     let program = parse_program("(once)a=(return)ok")?;
-    let input = runtime_input(b"a")?;
     let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(1),
         DEFAULT_MAX_STATE_LEN,
         ReturnByteLimit::new(1),
     );
-    let runtime = RunSession::new(&program, input, limits)?;
+    let input = runtime_input(b"a", limits)?;
+    let runtime = RunSession::new(&program, input)?;
     let error = expect_step_error(runtime.step())?;
     ensure_eq!(
         error.error(),
@@ -144,16 +141,14 @@ fn once_rule_failure_preserves_state_before_step_commit() -> TestResult {
 #[test]
 fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
     let program = parse_program("a=b")?;
-    let no_match_input = runtime_input(b"x")?;
-    let no_match = RunSession::new(
-        &program,
-        no_match_input,
-        RunLimits::new(
-            StepLimit::new(0),
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        ),
-    )?;
+    let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(0),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let no_match_input = runtime_input(b"x", limits)?;
+    let no_match = RunSession::new(&program, no_match_input)?;
     match expect_step_transition(no_match.step())? {
         StepTransition::Stable(stable) => {
             ensure_eq!(stable.steps().get(), 0)?;
@@ -167,16 +162,8 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
         }
     }
 
-    let would_match_input = runtime_input(b"a")?;
-    let would_match = RunSession::new(
-        &program,
-        would_match_input,
-        RunLimits::new(
-            StepLimit::new(0),
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        ),
-    )?;
+    let would_match_input = runtime_input(b"a", limits)?;
+    let would_match = RunSession::new(&program, would_match_input)?;
     let error = expect_step_error(would_match.step())?;
     ensure_eq!(
         expect_step_limit(error.into_error())?,
@@ -186,15 +173,7 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
             state_len: RuntimeStateByteCount::new(1),
         },
     )?;
-    let would_match = RunSession::new(
-        &program,
-        runtime_input(b"a")?,
-        RunLimits::new(
-            StepLimit::new(0),
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        ),
-    )?;
+    let would_match = RunSession::new(&program, runtime_input(b"a", limits)?)?;
     let error = expect_step_error(would_match.step())?;
     ensure_eq!(error.completed_steps(), StepCount::ZERO)?;
     ensure_eq!(
@@ -218,18 +197,18 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
 #[test]
 fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     let state_limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(1),
         RuntimeStateByteLimit::new(2),
         ReturnByteLimit::new(10),
     );
     let state_program = parse_program("=a")?;
-    let state_input = runtime_input(b"aa")?;
-    let state_limited = RunSession::new(&state_program, state_input, state_limits)?;
+    let state_input = runtime_input(b"aa", state_limits)?;
+    let state_limited = RunSession::new(&state_program, state_input)?;
     let state_error = expect_step_error(state_limited.step())?;
     ensure_eq!(
         state_error.error(),
         &RunError::Limit(LimitError::State {
-            context: StateLimitContext::Rewrite,
             limit: RuntimeStateByteLimit::new(2),
             attempted_len: RuntimeStateByteCount::new(3),
         }),
@@ -242,20 +221,20 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     ensure_eq!(
         state_error.into_error(),
         RunError::Limit(LimitError::State {
-            context: StateLimitContext::Rewrite,
             limit: RuntimeStateByteLimit::new(2),
             attempted_len: RuntimeStateByteCount::new(3),
         }),
     )?;
 
     let return_limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(1),
         RuntimeStateByteLimit::new(10),
         ReturnByteLimit::new(1),
     );
     let return_program = parse_program("a=(return)ok")?;
-    let return_input = runtime_input(b"a")?;
-    let return_limited = RunSession::new(&return_program, return_input, return_limits)?;
+    let return_input = runtime_input(b"a", return_limits)?;
+    let return_limited = RunSession::new(&return_program, return_input)?;
     let return_error = expect_step_error(return_limited.step())?;
     ensure_eq!(
         return_error.error(),
@@ -285,15 +264,13 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
 #[test]
 fn return_action_bypasses_rewrite_state_mutation_path() -> TestResult {
     let program = parse_program("a=(return)ok")?;
-    let session = RunSession::new(
-        &program,
-        runtime_input(b"a")?,
-        RunLimits::new(
-            StepLimit::new(1),
-            RuntimeStateByteLimit::new(1),
-            ReturnByteLimit::new(2),
-        ),
-    )?;
+    let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(1),
+        RuntimeStateByteLimit::new(1),
+        ReturnByteLimit::new(2),
+    );
+    let session = RunSession::new(&program, runtime_input(b"a", limits)?)?;
 
     match expect_step_transition(session.step())? {
         StepTransition::Returned(returned) => {
@@ -320,6 +297,7 @@ fn return_action_bypasses_rewrite_state_mutation_path() -> TestResult {
 fn once_rewrite_limit_failure_does_not_commit_rule() -> TestResult {
     let program = parse_program("(once)=aa")?;
     let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(1),
         RuntimeStateByteLimit::new(1),
         DEFAULT_MAX_RETURN_LEN,
@@ -339,7 +317,6 @@ fn once_rewrite_limit_failure_does_not_commit_rule() -> TestResult {
     ensure_eq!(
         apply_matched_rule(&mut state, &mut scratch, &mut budget, matched),
         Err(RunError::Limit(LimitError::State {
-            context: StateLimitContext::Rewrite,
             limit: RuntimeStateByteLimit::new(1),
             attempted_len: RuntimeStateByteCount::new(3),
         })),
@@ -363,6 +340,7 @@ fn once_rewrite_limit_failure_does_not_commit_rule() -> TestResult {
 fn once_return_limit_failure_does_not_commit_rule() -> TestResult {
     let program = parse_program("(once)a=(return)ok")?;
     let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(1),
         DEFAULT_MAX_STATE_LEN,
         ReturnByteLimit::new(1),
@@ -408,6 +386,7 @@ fn missing_once_rule_state_is_an_internal_invariant_error() -> TestResult {
     let state = state_from_input_bytes(
         b"a",
         RunLimits::new(
+            DEFAULT_MAX_INPUT_LEN,
             StepLimit::new(1),
             DEFAULT_MAX_STATE_LEN,
             DEFAULT_MAX_RETURN_LEN,
@@ -433,24 +412,34 @@ fn missing_once_rule_state_is_an_internal_invariant_error() -> TestResult {
 /// information.
 #[test]
 fn runtime_input_error_is_structured_at_the_runtime_boundary() -> TestResult {
-    let Err(error) = RuntimeInput::validate(
+    let Err(error) = RunInput::validate(
         RuntimeInputSource::from_bytes(b"abc"),
-        RuntimeInputByteLimit::new(2),
+        RunLimits::new(
+            RuntimeInputByteLimit::new(2),
+            StepLimit::new(10),
+            DEFAULT_MAX_STATE_LEN,
+            DEFAULT_MAX_RETURN_LEN,
+        ),
     ) else {
         return Err(TestFailure::message("expected input limit error"));
     };
 
     ensure_eq!(
         error,
-        RuntimeInputError::Limit {
+        RunInputError::InputLimit {
             limit: RuntimeInputByteLimit::new(2),
             attempted_len: RuntimeInputByteCount::new(3),
         },
     )?;
 
-    let Err(error) = RuntimeInput::validate(
+    let Err(error) = RunInput::validate(
         RuntimeInputSource::from_bytes("a\u{80}".as_bytes()),
-        RuntimeInputByteLimit::new(1),
+        RunLimits::new(
+            RuntimeInputByteLimit::new(1),
+            StepLimit::new(10),
+            DEFAULT_MAX_STATE_LEN,
+            DEFAULT_MAX_RETURN_LEN,
+        ),
     ) else {
         return Err(TestFailure::message(
             "expected input limit before byte error",
@@ -459,20 +448,20 @@ fn runtime_input_error_is_structured_at_the_runtime_boundary() -> TestResult {
 
     ensure_eq!(
         error,
-        RuntimeInputError::Limit {
+        RunInputError::InputLimit {
             limit: RuntimeInputByteLimit::new(1),
             attempted_len: RuntimeInputByteCount::new(3),
         },
     )?;
 
-    let Err(error) = runtime_input("a\u{80}".as_bytes()) else {
+    let Err(error) = runtime_input("a\u{80}".as_bytes(), default_run_limits()) else {
         return Err(TestFailure::message("expected input error"));
     };
 
     ensure_matches(
         matches!(
             error,
-            RuntimeInputError::NonAscii { column, .. } if column.get() == 2
+            RunInputError::NonAscii { column, .. } if column.get() == 2
         ),
         "expected non-ASCII input error at the original column",
     )
@@ -488,15 +477,14 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
     let payload = PayloadSyntax::new(&compact, source_line_number(1)?, PayloadKind::LeftSideData)
         .validate()?
         .into_payload()?;
-    let input = runtime_input(b"a=()# ")?;
-    let state = State::from_input(InitialStateBytes::from_runtime_input(
-        input,
-        RuntimeBudgetState::new(RunLimits::new(
-            StepLimit::new(10_000),
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        )),
-    )?);
+    let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10_000),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let (input, _) = InitialStateBytes::from_run_input(runtime_input(b"a=()# ", limits)?);
+    let state = State::from_input(input);
 
     ensure_eq!(expect_payload_byte(&payload, 0)?, b'a')?;
     ensure_eq!(expect_runtime_byte(&state, 0)?, b'a')?;
@@ -505,14 +493,7 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
     ensure_eq!(expect_runtime_byte(&state, 5)?, b' ')?;
 
     let program = parse_program("a=b")?;
-    let result = program.run(
-        runtime_input(b"a=()# ")?,
-        RunLimits::new(
-            StepLimit::new(10_000),
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        ),
-    )?;
+    let result = program.run(runtime_input(b"a=()# ", limits)?)?;
     ensure_matches(
         matches!(
             result.outcome(),
@@ -529,14 +510,13 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
 #[test]
 fn once_rule_commit_proof_allows_only_one_successful_application() -> TestResult {
     let program = parse_program("(once)a=a\na=b")?;
-    let result = program.run(
-        runtime_input(b"a")?,
-        RunLimits::new(
-            StepLimit::new(10),
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        ),
-    )?;
+    let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let result = program.run(runtime_input(b"a", limits)?)?;
 
     ensure_eq!(result.steps().get(), 2)?;
     ensure_matches(
@@ -559,14 +539,13 @@ fn rewrite_action_variants_preserve_runtime_placement() -> TestResult {
         ("b=(start)x", b"ab".as_slice(), b"xa".as_slice()),
         ("a=(end)x", b"ab".as_slice(), b"bx".as_slice()),
     ] {
-        let result = parse_program(source)?.run(
-            runtime_input(input)?,
-            RunLimits::new(
-                StepLimit::new(1),
-                DEFAULT_MAX_STATE_LEN,
-                DEFAULT_MAX_RETURN_LEN,
-            ),
-        )?;
+        let limits = RunLimits::new(
+            DEFAULT_MAX_INPUT_LEN,
+            StepLimit::new(1),
+            DEFAULT_MAX_STATE_LEN,
+            DEFAULT_MAX_RETURN_LEN,
+        );
+        let result = parse_program(source)?.run(runtime_input(input, limits)?)?;
 
         ensure_matches(
             matches!(
@@ -592,15 +571,13 @@ fn empty_payload_matches_keep_anchor_specific_span_placement() -> TestResult {
         ("(end)=x", b"abx".as_slice()),
     ] {
         let program = parse_program(source)?;
-        let session = RunSession::new(
-            &program,
-            runtime_input(b"ab")?,
-            RunLimits::new(
-                StepLimit::new(1),
-                DEFAULT_MAX_STATE_LEN,
-                DEFAULT_MAX_RETURN_LEN,
-            ),
-        )?;
+        let limits = RunLimits::new(
+            DEFAULT_MAX_INPUT_LEN,
+            StepLimit::new(1),
+            DEFAULT_MAX_STATE_LEN,
+            DEFAULT_MAX_RETURN_LEN,
+        );
+        let session = RunSession::new(&program, runtime_input(b"ab", limits)?)?;
 
         match expect_step_transition(session.step())? {
             StepTransition::Applied(applied) => {
@@ -622,6 +599,7 @@ fn empty_payload_matches_keep_anchor_specific_span_placement() -> TestResult {
 #[test]
 fn invalid_state_match_range_is_structured_runtime_invariant() -> TestResult {
     let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(1),
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,

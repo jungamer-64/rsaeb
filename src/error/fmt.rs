@@ -4,9 +4,8 @@ use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind}
 
 use super::{
     InputColumn, InternalInvariantError, LeftModifierKind, LimitError, ParseError, ParseErrorKind,
-    ParseErrorLocation, ParseInvariantError, PayloadKind, RightActionKind, RunError,
-    RuntimeInputError, StateLimitContext, StateSizeError, TraceSnapshotError,
-    TraceSnapshotRunError, TracedRunError,
+    ParseErrorLocation, ParseInvariantError, PayloadKind, RightActionKind, RunError, RunInputError,
+    StateSizeError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -255,7 +254,7 @@ where
     }
 }
 
-impl fmt::Display for RuntimeInputError {
+impl fmt::Display for RunInputError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NonAscii { column, byte } => write!(
@@ -264,12 +263,21 @@ impl fmt::Display for RuntimeInputError {
                 byte.get(),
             ),
             Self::ColumnOverflow => write!(f, "input error: column number overflow"),
-            Self::Limit {
+            Self::InputLimit {
                 limit,
                 attempted_len,
             } => write!(
                 f,
                 "input error: runtime input length {} exceeds the configured input limit {}",
+                attempted_len.get(),
+                limit.get()
+            ),
+            Self::InitialStateLimit {
+                limit,
+                attempted_len,
+            } => write!(
+                f,
+                "input error: initial runtime state length {} exceeds the configured state limit {}",
                 attempted_len.get(),
                 limit.get()
             ),
@@ -296,25 +304,15 @@ impl fmt::Display for StateSizeError {
     }
 }
 
-impl fmt::Display for StateLimitContext {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Input => f.write_str("runtime input"),
-            Self::Rewrite => f.write_str("rewrite result"),
-        }
-    }
-}
-
 impl fmt::Display for LimitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::State {
-                context,
                 limit,
                 attempted_len,
             } => write!(
                 f,
-                "state limit exceeded by {context}; attempted length: {attempted_len}, limit: {}",
+                "rewrite state limit exceeded; attempted length: {attempted_len}, limit: {}",
                 limit.get(),
             ),
             Self::Return {

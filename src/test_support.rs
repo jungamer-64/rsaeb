@@ -3,19 +3,20 @@
 use std::string::{FromUtf8Error, String};
 
 use crate::error::{
-    AllocationError, ParseError, ParseErrorLocation, RunError, RuntimeInputError,
-    TraceSnapshotRunError,
+    AllocationError, ParseError, ParseErrorLocation, RunError, RunInputError, TraceSnapshotRunError,
 };
-use crate::input::{RuntimeInput, RuntimeInputSource};
-use crate::limits::DEFAULT_MAX_INPUT_LEN;
-use crate::limits::DEFAULT_PARSE_LIMITS;
+use crate::input::{RunInput, RuntimeInputSource};
+use crate::limits::{
+    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
+    DEFAULT_PARSE_LIMITS, RunLimits,
+};
 use crate::program::Program;
 use crate::source::{ProgramSource, SourceColumn, SourceLineNumber, SourcePosition};
 
 pub(crate) enum TestFailure {
     Message(String),
     Parse(ParseError),
-    Input(RuntimeInputError),
+    Input(RunInputError),
     Run(RunError),
     TraceSnapshot(String),
     Utf8(FromUtf8Error),
@@ -77,22 +78,33 @@ impl From<AllocationError> for TestFailure {
     }
 }
 
-impl From<RuntimeInputError> for TestFailure {
-    fn from(value: RuntimeInputError) -> Self {
+impl From<RunInputError> for TestFailure {
+    fn from(value: RunInputError) -> Self {
         Self::Input(value)
     }
 }
 
 pub(crate) type TestResult = Result<(), TestFailure>;
 
-/// Validates runtime input with the default input byte limit.
+/// Default run limits used by crate-local tests.
+#[must_use]
+pub(crate) const fn default_run_limits() -> RunLimits {
+    RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
+        DEFAULT_MAX_STEPS,
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    )
+}
+
+/// Validates runtime input with the supplied run limits.
 ///
 /// # Errors
 ///
-/// Returns `RuntimeInputError` if the test input violates runtime input
-/// validation or allocation constraints.
-pub(crate) fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
-    RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), DEFAULT_MAX_INPUT_LEN)
+/// Returns `RunInputError` if the test input violates validation, allocation,
+/// or initial runtime-state admission constraints.
+pub(crate) fn runtime_input(bytes: &[u8], limits: RunLimits) -> Result<RunInput, RunInputError> {
+    RunInput::validate(RuntimeInputSource::from_bytes(bytes), limits)
 }
 
 /// Parses source text with the default parser limits.

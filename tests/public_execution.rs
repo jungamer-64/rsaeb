@@ -7,7 +7,7 @@ use rsaeb::execution::{
     AppliedStep, FailedRun, OwnedRunSession, OwnedStepTransition, ReturnedRun, RunSession,
     StableRun, StepTransition,
 };
-use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+use rsaeb::input::{RunInput, RuntimeInputSource};
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit,
     RunLimits, StepLimit,
@@ -193,9 +193,9 @@ fn expect_failed_transition(result: StepTransition<'_>) -> Result<FailedRun<'_>,
 ///
 /// # Errors
 ///
-/// Returns `RuntimeInputError` if the bytes are not valid runtime input.
-fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
-    RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), DEFAULT_MAX_INPUT_LEN)
+/// Returns `RunInputError` if the bytes are not valid runtime input.
+fn runtime_input(bytes: &[u8], limits: RunLimits) -> Result<RunInput, rsaeb::error::RunInputError> {
+    RunInput::validate(RuntimeInputSource::from_bytes(bytes), limits)
 }
 
 /// # Errors
@@ -205,33 +205,34 @@ fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInpu
 #[test]
 fn execution_rewrite_semantics_follow_public_contract() -> TestResult {
     let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10_000),
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
 
     let program = parse_program("aa=x\na=y")?;
-    let result = program.run(runtime_input(b"aaaa")?, limits)?;
+    let result = program.run(runtime_input(b"aaaa", limits)?)?;
     expect_stable_bytes(&result, b"xx")?;
 
     let program = parse_program("(start)a=x")?;
-    let result = program.run(runtime_input(b"aba")?, limits)?;
+    let result = program.run(runtime_input(b"aba", limits)?)?;
     expect_stable_bytes(&result, b"xba")?;
 
     let program = parse_program("(end)a=x")?;
-    let result = program.run(runtime_input(b"aba")?, limits)?;
+    let result = program.run(runtime_input(b"aba", limits)?)?;
     expect_stable_bytes(&result, b"abx")?;
 
     let program = parse_program("(once)a=b\na=c")?;
-    let result = program.run(runtime_input(b"aa")?, limits)?;
+    let result = program.run(runtime_input(b"aa", limits)?)?;
     expect_stable_bytes(&result, b"bc")?;
 
     let program = parse_program("ab=x")?;
-    let result = program.run(runtime_input(b"a=b")?, limits)?;
+    let result = program.run(runtime_input(b"a=b", limits)?)?;
     expect_stable_bytes(&result, b"a=b")?;
 
     let program = parse_program("a= b")?;
-    let result = program.run(runtime_input(b"a bc")?, limits)?;
+    let result = program.run(runtime_input(b"a bc", limits)?)?;
     expect_stable_bytes(&result, b"b bc")
 }
 
@@ -242,13 +243,14 @@ fn execution_rewrite_semantics_follow_public_contract() -> TestResult {
 #[test]
 fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
     let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10),
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
     let program = parse_program("a=b\nb=c")?;
-    let input = runtime_input(b"a")?;
-    let execution = program.start_run(input, limits)?;
+    let input = runtime_input(b"a", limits)?;
+    let execution = program.start_run(input)?;
     ensure_eq!(execution.completed_steps().get(), 0)?;
 
     let execution = match expect_step_transition(execution.step())? {
@@ -310,13 +312,14 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
 #[test]
 fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
     let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10),
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
     let program = parse_program("a=b")?;
-    let input = runtime_input(b"a")?;
-    let execution = program.start_run(input, limits)?;
+    let input = runtime_input(b"a", limits)?;
+    let execution = program.start_run(input)?;
 
     ensure_eq!(
         runtime_view_bytes(execution.state())?.as_slice(),
@@ -349,14 +352,15 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
 #[test]
 fn execution_consumes_runtime_input_without_session_leakage() -> TestResult {
     let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10),
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
     let program = parse_program("(once)a=b\na=c")?;
 
-    let first = program.start_run(runtime_input(b"aa")?, limits)?;
-    let second = program.start_run(runtime_input(b"aa")?, limits)?;
+    let first = program.start_run(runtime_input(b"aa", limits)?)?;
+    let second = program.start_run(runtime_input(b"aa", limits)?)?;
 
     ensure_eq!(
         finish_step_signatures(first)?,
@@ -379,7 +383,7 @@ fn execution_consumes_runtime_input_without_session_leakage() -> TestResult {
     )?;
     ensure_eq!(
         finish_step_signatures(second)?,
-        finish_step_signatures(program.start_run(runtime_input(b"aa")?, limits)?)?,
+        finish_step_signatures(program.start_run(runtime_input(b"aa", limits)?)?)?,
     )
 }
 
@@ -391,15 +395,16 @@ fn execution_consumes_runtime_input_without_session_leakage() -> TestResult {
 fn execution_borrowed_and_owned_sessions_share_step_contract() -> TestResult {
     let source = "a=b\nb=(return)ok";
     let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10),
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
 
     let borrowed =
-        finish_step_signatures(parse_program(source)?.start_run(runtime_input(b"a")?, limits)?)?;
+        finish_step_signatures(parse_program(source)?.start_run(runtime_input(b"a", limits)?)?)?;
     let owned = finish_owned_step_signatures(
-        parse_program(source)?.into_run(runtime_input(b"a")?, limits)?,
+        parse_program(source)?.into_run(runtime_input(b"a", limits)?)?,
     )?;
 
     ensure_eq!(borrowed, owned)
@@ -413,11 +418,12 @@ fn execution_borrowed_and_owned_sessions_share_step_contract() -> TestResult {
 fn execution_step_failure_is_terminal_transition() -> TestResult {
     let program = parse_program("a=(return)ok")?;
     let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(1),
         DEFAULT_MAX_STATE_LEN,
         ReturnByteLimit::new(1),
     );
-    let execution = program.start_run(runtime_input(b"a")?, limits)?;
+    let execution = program.start_run(runtime_input(b"a", limits)?)?;
 
     let failed = expect_failed_transition(execution.step())?;
     ensure_eq!(failed.completed_steps().get(), 0)?;
@@ -445,11 +451,12 @@ fn execution_step_failure_is_terminal_transition() -> TestResult {
 fn execution_step_failure_preserves_current_progress() -> TestResult {
     let program = parse_program("a=b\nb=c")?;
     let limits = RunLimits::new(
+        DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(1),
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
-    let execution = program.start_run(runtime_input(b"a")?, limits)?;
+    let execution = program.start_run(runtime_input(b"a", limits)?)?;
 
     let running = match expect_step_transition(execution.step())? {
         StepTransition::Applied(applied) => applied.into_session(),
