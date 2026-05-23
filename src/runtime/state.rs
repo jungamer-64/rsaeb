@@ -7,7 +7,7 @@ use crate::bytes::{
     NonEmptyPayloadNeedle, Payload, PayloadByteCount, PayloadNeedle, RuntimeByte,
     RuntimeStateByteCount,
 };
-use crate::error::{RunError, StateSizeError};
+use crate::error::{InternalInvariantError, RunError, StateSizeError};
 use crate::input::InitialStateBytes;
 use crate::program::RuntimeStateSnapshot;
 use crate::rule::RewriteAction;
@@ -47,45 +47,65 @@ impl State {
         scratch.store_previous_state(previous_state);
     }
 
-    pub(crate) fn starts_with_payload(&self, payload: &Payload) -> Option<StateMatch> {
+    pub(crate) fn starts_with_payload(
+        &self,
+        payload: &Payload,
+    ) -> Result<Option<StateMatch>, RunError> {
         match payload.needle() {
             PayloadNeedle::Empty(needle) => {
-                StateMatch::at_start(needle.byte_count(), self.byte_count())
+                Ok(StateMatch::at_start(needle.byte_count(), self.byte_count()))
             }
             PayloadNeedle::NonEmpty(needle) => self.matches_payload_at(StateIndex::start(), needle),
         }
     }
 
-    pub(crate) fn ends_with_payload(&self, payload: &Payload) -> Option<StateMatch> {
+    pub(crate) fn ends_with_payload(
+        &self,
+        payload: &Payload,
+    ) -> Result<Option<StateMatch>, RunError> {
         match payload.needle() {
             PayloadNeedle::Empty(needle) => {
-                StateMatch::at_end(needle.byte_count(), self.byte_count())
+                Ok(StateMatch::at_end(needle.byte_count(), self.byte_count()))
             }
             PayloadNeedle::NonEmpty(needle) => {
-                let start = StateIndex::ending_match_start(self.byte_count(), needle.byte_count())?;
+                let Some(start) =
+                    StateIndex::ending_match_start(self.byte_count(), needle.byte_count())
+                else {
+                    return Ok(None);
+                };
                 self.matches_payload_at(start, needle)
             }
         }
     }
 
-    pub(crate) fn find_payload(&self, payload: &Payload) -> Option<StateMatch> {
+    pub(crate) fn find_payload(&self, payload: &Payload) -> Result<Option<StateMatch>, RunError> {
         match payload.needle() {
             PayloadNeedle::Empty(needle) => {
-                StateMatch::at_start(needle.byte_count(), self.byte_count())
+                Ok(StateMatch::at_start(needle.byte_count(), self.byte_count()))
             }
             PayloadNeedle::NonEmpty(needle) => {
-                let last_start =
-                    StateIndex::ending_match_start(self.byte_count(), needle.byte_count())?;
+                let Some(last_start) =
+                    StateIndex::ending_match_start(self.byte_count(), needle.byte_count())
+                else {
+                    return Ok(None);
+                };
 
-                StateSearchRange::from_start_to(last_start)
-                    .filter(|&position| {
-                        self.bytes
-                            .get(position.get())
-                            .copied()
-                            .and_then(RuntimeByte::program_byte)
-                            == Some(needle.first_byte())
-                    })
-                    .find_map(|position| self.matches_payload_at(position, needle))
+                for position in StateSearchRange::from_start_to(last_start) {
+                    let first_byte_matches = self
+                        .bytes
+                        .get(position.get())
+                        .copied()
+                        .and_then(RuntimeByte::program_byte)
+                        == Some(needle.first_byte());
+                    if !first_byte_matches {
+                        continue;
+                    }
+
+                    if let Some(state_match) = self.matches_payload_at(position, needle)? {
+                        return Ok(Some(state_match));
+                    }
+                }
+                Ok(None)
             }
         }
     }
@@ -94,14 +114,17 @@ impl State {
         &self,
         position: StateIndex,
         needle: NonEmptyPayloadNeedle<'_>,
-    ) -> Option<StateMatch> {
-        let state_match =
-            StateMatch::at_position(position, needle.byte_count(), self.byte_count())?;
-        state_match
-            .matched_bytes(&self.bytes)
+    ) -> Result<Option<StateMatch>, RunError> {
+        let Some(state_match) =
+            StateMatch::at_position(position, needle.byte_count(), self.byte_count())
+        else {
+            return Ok(None);
+        };
+        let matches = state_match
+            .matched_bytes(&self.bytes)?
             .zip(needle.program_bytes().iter().copied())
-            .all(|(actual, expected)| actual.program_byte() == Some(expected))
-            .then_some(state_match)
+            .all(|(actual, expected)| actual.program_byte() == Some(expected));
+        Ok(matches.then_some(state_match))
     }
 
     /// Rewrites this state into scratch storage according to `request`.
@@ -118,7 +141,7 @@ impl State {
         budget: RuntimeBudgetState,
     ) -> Result<PreparedRewrite, RunError> {
         self.prepare_replacement_buffer(state_match, action.payload(), output, budget)?;
-        let slices = state_match.slices(&self.bytes);
+        let slices = state_match.slices(&self.bytes)?;
         match action {
             RewriteAction::Replace(rhs) => {
                 output.push_existing(slices.prefix().iter().copied())?;
@@ -309,6 +332,10 @@ impl StateSpanRange {
         self.start.get()
     }
 
+    const fn end(self) -> usize {
+        self.end.get()
+    }
+
     fn byte_count(self) -> PayloadByteCount {
         PayloadByteCount::new((self.start.get()..self.end.get()).len())
     }
@@ -348,18 +375,28 @@ impl StateMatch {
         self.range.byte_count()
     }
 
-    fn matched_bytes(self, bytes: &[RuntimeByte]) -> impl Iterator<Item = RuntimeByte> + '_ {
-        self.slices(bytes).matched().iter().copied()
+    fn matched_bytes(
+        self,
+        bytes: &[RuntimeByte],
+    ) -> Result<impl Iterator<Item = RuntimeByte> + '_, RunError> {
+        Ok(self.slices(bytes)?.matched().iter().copied())
     }
 
-    fn slices(self, bytes: &[RuntimeByte]) -> MatchedStateSlices<'_> {
-        let (prefix, matched_and_suffix) = bytes.split_at(self.range.start());
-        let (matched, suffix) = matched_and_suffix.split_at(self.matched_len().get());
-        MatchedStateSlices {
+    fn slices(self, bytes: &[RuntimeByte]) -> Result<MatchedStateSlices<'_>, RunError> {
+        let prefix = bytes
+            .get(..self.range.start())
+            .ok_or_else(InternalInvariantError::invalid_state_match_range)?;
+        let matched = bytes
+            .get(self.range.start()..self.range.end())
+            .ok_or_else(InternalInvariantError::invalid_state_match_range)?;
+        let suffix = bytes
+            .get(self.range.end()..)
+            .ok_or_else(InternalInvariantError::invalid_state_match_range)?;
+        Ok(MatchedStateSlices {
             prefix,
             matched,
             suffix,
-        }
+        })
     }
 }
 

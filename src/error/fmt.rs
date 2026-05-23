@@ -4,8 +4,9 @@ use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind}
 
 use super::{
     InputColumn, InternalInvariantError, LeftModifierKind, LimitError, ParseError, ParseErrorKind,
-    ParseErrorLocation, PayloadKind, RightActionKind, RunError, RuntimeInputError,
-    StateLimitContext, StateSizeError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
+    ParseErrorLocation, ParseInvariantError, PayloadKind, RightActionKind, RunError,
+    RuntimeInputError, StateLimitContext, StateSizeError, TraceSnapshotError,
+    TraceSnapshotRunError, TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -69,6 +70,7 @@ impl fmt::Display for ParseErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Allocation(error) => error.fmt(f),
+            Self::InternalInvariant(error) => error.fmt(f),
             Self::Limit(error) => error.fmt(f),
             Self::NonAsciiInCode { byte } => {
                 write!(f, "non-ASCII byte 0x{:02x} in code", byte.get())
@@ -92,6 +94,16 @@ impl fmt::Display for ParseErrorKind {
                     f,
                     "nested or unsupported right-side action syntax at {action}"
                 )
+            }
+        }
+    }
+}
+
+impl fmt::Display for ParseInvariantError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidRuleSideRange => {
+                f.write_str("internal parser invariant violation: invalid rule-side range")
             }
         }
     }
@@ -194,6 +206,9 @@ impl fmt::Display for InternalInvariantError {
             }
             Self::ReturnedRuleWithoutOutput => {
                 f.write_str("internal invariant violation: returned rule has no return output")
+            }
+            Self::InvalidStateMatchRange => {
+                f.write_str("internal invariant violation: invalid state-match range")
             }
         }
     }

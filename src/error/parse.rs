@@ -61,6 +61,7 @@ impl Error for ParseError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match &self.kind {
             ParseErrorKind::Allocation(error) => Some(error),
+            ParseErrorKind::InternalInvariant(error) => Some(error),
             ParseErrorKind::Limit(error) => Some(error),
             ParseErrorKind::NonAsciiInCode { .. }
             | ParseErrorKind::NonPrintableAsciiInCode { .. }
@@ -93,6 +94,8 @@ pub enum ParseErrorLocation {
 pub enum ParseErrorKind {
     /// A fallible allocation failed while parsing source.
     Allocation(AllocationError),
+    /// Parser invariants were violated while deriving typed syntax ranges.
+    InternalInvariant(ParseInvariantError),
     /// A configured parser resource limit would be exceeded.
     Limit(ParseLimitError),
     /// A non-ASCII byte appeared before the line comment marker.
@@ -127,6 +130,23 @@ pub enum ParseErrorKind {
         action: RightActionKind,
     },
 }
+
+/// Parser invariant violation that should be unrepresentable from accepted
+/// source bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseInvariantError {
+    /// A previously validated rule-side range no longer resolved inside its
+    /// compact source line.
+    InvalidRuleSideRange,
+}
+
+impl ParseInvariantError {
+    pub(crate) const fn invalid_rule_side_range() -> Self {
+        Self::InvalidRuleSideRange
+    }
+}
+
+impl Error for ParseInvariantError {}
 
 /// Configured parser budget failure.
 ///

@@ -3,7 +3,8 @@ use alloc::vec::Vec;
 use crate::allocation::{AllocationContext, AllocationError};
 use crate::bytes::{CompactByte, Payload, PayloadByteCount, PayloadSyntax};
 use crate::error::{
-    LeftModifierKind, ParseError, ParseErrorKind, ParseLimitError, PayloadKind, RightActionKind,
+    LeftModifierKind, ParseError, ParseErrorKind, ParseInvariantError, ParseLimitError,
+    PayloadKind, RightActionKind,
 };
 use crate::limits::PayloadByteLimit;
 use crate::rule::{
@@ -48,7 +49,7 @@ impl RuleSyntaxLine {
     /// Returns `ParseError` if either rule side contains invalid modifier,
     /// action, or payload syntax.
     pub(super) fn parse(&self, payload_limit: PayloadByteLimit) -> Result<ParsedRule, ParseError> {
-        let (left, right) = self.syntax_parts();
+        let (left, right) = self.syntax_parts()?;
         let head = left.parse(payload_limit)?;
         let body = right.parse(payload_limit)?;
 
@@ -57,9 +58,9 @@ impl RuleSyntaxLine {
 
     /// Borrows the compact line as left and right syntax slices.
     ///
-    fn syntax_parts(&self) -> (LeftSyntax<'_>, RightSyntax<'_>) {
-        let slices = self.sides.slices(&self.bytes);
-        (
+    fn syntax_parts(&self) -> Result<(LeftSyntax<'_>, RightSyntax<'_>), ParseError> {
+        let slices = self.sides.slices(self.line_number, &self.bytes)?;
+        Ok((
             LeftSyntax {
                 line_number: self.line_number,
                 bytes: slices.left,
@@ -68,7 +69,7 @@ impl RuleSyntaxLine {
                 line_number: self.line_number,
                 bytes: slices.right,
             },
-        )
+        ))
     }
 }
 
@@ -238,32 +239,41 @@ impl RuleSides {
         bytes: &[CompactByte],
         separator: RuleSeparator,
     ) -> Result<Self, ParseError> {
-        bytes.get(..separator.equals().get()).ok_or_else(|| {
-            parse_allocation_error(
-                line_number,
-                AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
-            )
-        })?;
-        bytes.get(separator.right_start().get()..).ok_or_else(|| {
-            parse_allocation_error(
-                line_number,
-                AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
-            )
-        })?;
         let sides = Self { separator };
+        sides.slices(line_number, bytes)?;
         Ok(sides)
     }
 
     /// Borrows the proven left and right slices from compact line bytes.
-    fn slices(self, bytes: &[CompactByte]) -> RuleSideSlices<'_> {
-        let (left, _) = bytes.split_at(self.separator.equals().get());
-        let (_, right) = bytes.split_at(self.separator.right_start().get());
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError::InternalInvariant` if the separator witness no
+    /// longer resolves inside the compact line bytes.
+    fn slices(
+        self,
+        line_number: SourceLineNumber,
+        bytes: &[CompactByte],
+    ) -> Result<RuleSideSlices<'_>, ParseError> {
+        let left = bytes
+            .get(..self.separator.equals().get())
+            .ok_or_else(|| invalid_rule_side_range(line_number))?;
+        let right = bytes
+            .get(self.separator.right_start().get()..)
+            .ok_or_else(|| invalid_rule_side_range(line_number))?;
 
-        RuleSideSlices {
+        Ok(RuleSideSlices {
             left: CompactSyntax::new(left),
             right: CompactSyntax::new(right),
-        }
+        })
     }
+}
+
+fn invalid_rule_side_range(line_number: SourceLineNumber) -> ParseError {
+    ParseError::at_line(
+        line_number,
+        ParseErrorKind::InternalInvariant(ParseInvariantError::invalid_rule_side_range()),
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -628,4 +638,44 @@ fn reject_nested_rhs_action(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod invariant_tests {
+    use super::*;
+    use crate::test_support::{TestFailure, ensure_matches, source_column, source_line_number};
+
+    type TestResult = Result<(), TestFailure>;
+
+    /// # Errors
+    ///
+    /// Returns `TestFailure` if invalid rule-side witnesses are not reported as
+    /// structured parser invariants.
+    #[test]
+    fn rule_side_witness_rechecks_compact_line_range() -> TestResult {
+        let line_number = source_line_number(1)?;
+        let bytes = [
+            CompactByte::new(b'a', source_column(1)?),
+            CompactByte::new(b'=', source_column(2)?),
+            CompactByte::new(b'b', source_column(3)?),
+        ];
+        let sides = RuleSides {
+            separator: RuleSeparator {
+                equals: CompactLineIndex::from_zero_based(3),
+                right_start: CompactLineIndex::from_zero_based(4),
+            },
+        };
+
+        let Err(error) = sides.slices(line_number, &bytes) else {
+            return Err(TestFailure::message("expected invalid rule-side range"));
+        };
+
+        ensure_matches(
+            matches!(
+                error.kind(),
+                ParseErrorKind::InternalInvariant(ParseInvariantError::InvalidRuleSideRange)
+            ),
+            "expected rule-side range invariant",
+        )
+    }
 }
