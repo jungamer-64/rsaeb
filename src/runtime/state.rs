@@ -367,6 +367,8 @@ struct StateSpanRange {
     start: StateIndex,
     /// Exclusive end index of the span.
     end: StateIndex,
+    /// Runtime-state length this span was checked against.
+    state_len: RuntimeStateByteCount,
 }
 
 impl StateSpanRange {
@@ -377,8 +379,11 @@ impl StateSpanRange {
         state_len: RuntimeStateByteCount,
     ) -> Option<Self> {
         let end = start.checked_add_count(matched_len)?;
-        (start.get() <= state_len.get() && end.get() <= state_len.get())
-            .then_some(Self { start, end })
+        (start.get() <= state_len.get() && end.get() <= state_len.get()).then_some(Self {
+            start,
+            end,
+            state_len,
+        })
     }
 
     /// Returns the inclusive start offset.
@@ -393,7 +398,16 @@ impl StateSpanRange {
 
     /// Returns the typed byte count.
     fn byte_count(self) -> PayloadByteCount {
-        PayloadByteCount::new((self.start.get()..self.end.get()).len())
+        PayloadByteCount::new(self.end.get() - self.start.get())
+    }
+
+    /// Ensures the span is being opened against the state length that created it.
+    fn ensure_matches_state_len(self, bytes: &[RuntimeByte]) -> Result<(), RunError> {
+        if RuntimeStateByteCount::new(bytes.len()) == self.state_len {
+            Ok(())
+        } else {
+            Err(InternalInvariantError::invalid_state_match_range().into())
+        }
     }
 }
 
@@ -457,6 +471,7 @@ impl StateMatch {
     /// Returns `RunError::InternalInvariant` if the match range no longer
     /// resolves inside the supplied runtime state bytes.
     fn slices(self, bytes: &[RuntimeByte]) -> Result<MatchedStateSlices<'_>, RunError> {
+        self.range.ensure_matches_state_len(bytes)?;
         let prefix = bytes
             .get(..self.range.start())
             .ok_or_else(InternalInvariantError::invalid_state_match_range)?;
