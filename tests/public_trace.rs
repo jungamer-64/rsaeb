@@ -1,5 +1,7 @@
 //! Public trace API contract tests.
 
+#[path = "support/runtime.rs"]
+mod runtime_support;
 mod support;
 
 use rsaeb::error::{RunError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
@@ -12,7 +14,8 @@ use rsaeb::program::{Program, RunOutcome, RunResult};
 use rsaeb::trace::{
     BorrowedTraceEffect, BorrowedTraceEvent, TraceSnapshotEffect, TraceSnapshotEvent,
 };
-use support::{TestFailure, TestResult, TestRunPolicy, ensure_eq, ensure_matches, parse_program};
+use runtime_support::TestRunPolicy;
+use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns the expected trace snapshot run error.
 ///
@@ -79,7 +82,7 @@ fn traced_test_failure(error: TracedRunError<TestFailure>) -> TestFailure {
 ///
 /// Returns `RuntimeInputError` if the bytes are not valid runtime input.
 fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFailure> {
-    support::run_seed(bytes, limits)
+    runtime_support::run_seed(bytes, limits)
 }
 
 /// # Errors

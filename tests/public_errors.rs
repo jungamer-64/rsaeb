@@ -1,11 +1,14 @@
 //! Public error model contract tests.
 
+#[path = "support/runtime.rs"]
+mod runtime_support;
 mod support;
 
 use rsaeb::error::{ParseErrorKind, ParseErrorLocation, PayloadKind, RunError};
 use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
 use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, RuntimeInputLimits};
-use support::{TestFailure, TestResult, TestRunPolicy, ensure_eq, ensure_matches, parse_program};
+use runtime_support::TestRunPolicy;
+use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns the expected runtime error.
 ///
@@ -25,7 +28,7 @@ fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFail
 ///
 /// Returns `RuntimeInputError` if the bytes are not valid runtime input.
 fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFailure> {
-    support::run_seed(bytes, limits)
+    runtime_support::run_seed(bytes, limits)
 }
 
 /// # Errors

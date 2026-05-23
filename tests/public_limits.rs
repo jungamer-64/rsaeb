@@ -1,5 +1,7 @@
 //! Public limit model contract tests.
 
+#[path = "support/runtime.rs"]
+mod runtime_support;
 mod support;
 
 use rsaeb::error::{LimitError, ParseErrorKind, ParseLimitError, RunAdmissionError, RunError};
@@ -11,7 +13,8 @@ use rsaeb::limits::{
 };
 use rsaeb::program::Program;
 use rsaeb::source::ProgramSource;
-use support::{TestFailure, TestResult, TestRunPolicy, ensure_eq, ensure_matches, parse_program};
+use runtime_support::TestRunPolicy;
+use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns the expected runtime error.
 ///
@@ -61,7 +64,7 @@ fn expect_state_limit(error: RunError) -> Result<LimitError, TestFailure> {
 ///
 /// Returns `RuntimeInputError` if the bytes are not valid runtime input.
 fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFailure> {
-    support::run_seed(bytes, limits)
+    runtime_support::run_seed(bytes, limits)
 }
 
 /// # Errors
