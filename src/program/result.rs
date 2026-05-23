@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 use crate::allocation::{AllocationContext, AllocationError};
 use crate::bytes::Payload;
 use crate::bytes::{ReturnOutputByteCount, RuntimeStateByteCount};
+use crate::materialized::{MaterializedBytes, ReturnOutputDomain, RuntimeStateSnapshotDomain};
 
 use super::limits::StepCount;
 
@@ -24,32 +25,38 @@ pub enum RunOutcome {
 /// bytes have been materialized successfully.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RuntimeStateSnapshot {
-    bytes: Vec<u8>,
+    bytes: MaterializedBytes<RuntimeStateSnapshotDomain>,
 }
 
 impl RuntimeStateSnapshot {
     pub(crate) fn from_execution_state(bytes: Vec<u8>) -> Self {
-        Self { bytes }
+        Self {
+            bytes: MaterializedBytes::from_vec(bytes),
+        }
     }
 
     pub(crate) fn from_runtime_state_view(bytes: Vec<u8>) -> Self {
-        Self { bytes }
+        Self {
+            bytes: MaterializedBytes::from_vec(bytes),
+        }
     }
 
     pub(crate) fn from_trace_snapshot(bytes: Vec<u8>) -> Self {
-        Self { bytes }
+        Self {
+            bytes: MaterializedBytes::from_vec(bytes),
+        }
     }
 
     /// Borrow the materialized runtime-state bytes.
     #[must_use]
     pub fn as_slice(&self) -> &[u8] {
-        &self.bytes
+        self.bytes.as_slice()
     }
 
     /// Consumes the snapshot and returns the materialized host bytes.
     #[must_use]
     pub fn into_raw_bytes(self) -> Vec<u8> {
-        self.bytes
+        self.bytes.into_raw_bytes()
     }
 
     /// Materialized byte length.
@@ -70,7 +77,7 @@ impl RuntimeStateSnapshot {
 /// This value owns public raw bytes from the return payload.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ReturnOutput {
-    bytes: Vec<u8>,
+    bytes: MaterializedBytes<ReturnOutputDomain>,
 }
 
 /// Borrowed `(return)` output payload produced by runtime execution.
@@ -84,23 +91,27 @@ pub struct ReturnOutputView<'program> {
 
 impl ReturnOutput {
     pub(crate) fn from_return_payload(bytes: Vec<u8>) -> Self {
-        Self { bytes }
+        Self {
+            bytes: MaterializedBytes::from_vec(bytes),
+        }
     }
 
     pub(crate) fn from_trace_snapshot(bytes: Vec<u8>) -> Self {
-        Self { bytes }
+        Self {
+            bytes: MaterializedBytes::from_vec(bytes),
+        }
     }
 
     /// Borrow the materialized `(return)` output bytes.
     #[must_use]
     pub fn as_slice(&self) -> &[u8] {
-        &self.bytes
+        self.bytes.as_slice()
     }
 
     /// Consumes the return output and returns the materialized host bytes.
     #[must_use]
     pub fn into_raw_bytes(self) -> Vec<u8> {
-        self.bytes
+        self.bytes.into_raw_bytes()
     }
 
     /// Materialized byte length.

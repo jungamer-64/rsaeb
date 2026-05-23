@@ -39,6 +39,9 @@ use core::fmt;
 use crate::allocation::{AllocationContext, AllocationError};
 use crate::bytes::{Payload, PayloadByteCount};
 use crate::limits::SourceByteCount;
+use crate::materialized::{
+    CanonicalRuleSourceDomain, MaterializedBytes, PayloadInspectionDomain,
+};
 use crate::rule::Rule;
 use crate::source::SourceLineNumber;
 
@@ -216,7 +219,7 @@ pub struct PayloadView<'program> {
 /// program data.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PayloadBytes {
-    bytes: Vec<u8>,
+    bytes: MaterializedBytes<PayloadInspectionDomain>,
 }
 
 /// Materialized canonical source for one parsed rule.
@@ -225,7 +228,7 @@ pub struct PayloadBytes {
 /// whitespace or comments from the original program source.
 #[derive(Debug, PartialEq, Eq)]
 pub struct CanonicalRuleSource {
-    bytes: Vec<u8>,
+    bytes: MaterializedBytes<CanonicalRuleSourceDomain>,
 }
 
 impl<'program> PayloadView<'program> {
@@ -268,7 +271,9 @@ impl<'program> PayloadView<'program> {
     /// Returns `AllocationError` if the output buffer cannot be allocated.
     pub fn materialize(self) -> Result<PayloadBytes, AllocationError> {
         Ok(PayloadBytes {
-            bytes: self.to_vec_with_context(AllocationContext::PayloadView)?,
+            bytes: MaterializedBytes::from_vec(
+                self.to_vec_with_context(AllocationContext::PayloadView)?,
+            ),
         })
     }
 }
@@ -277,13 +282,13 @@ impl PayloadBytes {
     /// Borrow the materialized payload bytes.
     #[must_use]
     pub fn as_slice(&self) -> &[u8] {
-        &self.bytes
+        self.bytes.as_slice()
     }
 
     /// Consumes this value and returns the materialized host bytes.
     #[must_use]
     pub fn into_raw_bytes(self) -> Vec<u8> {
-        self.bytes
+        self.bytes.into_raw_bytes()
     }
 
     /// Materialized payload length in bytes.
@@ -303,13 +308,13 @@ impl CanonicalRuleSource {
     /// Borrow the generated canonical source bytes.
     #[must_use]
     pub fn as_slice(&self) -> &[u8] {
-        &self.bytes
+        self.bytes.as_slice()
     }
 
     /// Consumes this value and returns the generated source bytes.
     #[must_use]
     pub fn into_raw_bytes(self) -> Vec<u8> {
-        self.bytes
+        self.bytes.into_raw_bytes()
     }
 
     /// Generated canonical source length in bytes.
@@ -320,7 +325,7 @@ impl CanonicalRuleSource {
 
     /// Returns whether the generated canonical source contains no bytes.
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.bytes.is_empty()
     }
 }
@@ -441,7 +446,7 @@ impl<'program> RuleView<'program> {
     /// allocated or if its computed length overflows.
     pub fn canonical_source(self) -> Result<CanonicalRuleSource, AllocationError> {
         Ok(CanonicalRuleSource {
-            bytes: crate::rule::canonical_source(self.rule)?,
+            bytes: MaterializedBytes::from_vec(crate::rule::canonical_source(self.rule)?),
         })
     }
 }

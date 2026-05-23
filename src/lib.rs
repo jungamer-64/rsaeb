@@ -369,6 +369,7 @@ pub mod execution;
 pub mod input;
 pub mod inspect;
 pub mod limits;
+mod materialized;
 mod parser;
 pub mod program;
 mod rule;
