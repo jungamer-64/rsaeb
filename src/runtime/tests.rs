@@ -332,3 +332,96 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
         "expected rewrite to leave runtime-only input bytes materialized but unmatched",
     )
 }
+
+/// # Errors
+///
+/// Returns `TestFailure` if a consumed `(once)` rule can be matched again
+/// before later rules are considered.
+#[test]
+fn once_rule_commit_proof_allows_only_one_successful_application() -> TestResult {
+    let program = parse_program("(once)a=a\na=b")?;
+    let result = program.run(
+        runtime_input(b"a")?,
+        RunLimits::new(
+            StepLimit::new(10),
+            DEFAULT_MAX_STATE_LEN,
+            DEFAULT_MAX_RETURN_LEN,
+        ),
+    )?;
+
+    ensure_eq!(result.steps().get(), 2)?;
+    ensure_matches(
+        matches!(
+            result.outcome(),
+            crate::RunOutcome::Stable(output) if output.as_slice() == b"b"
+        ),
+        "expected consumed once rule to give the later rule a chance",
+    )
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if rewrite action variants lose their placement
+/// semantics after being prepared from matched state spans.
+#[test]
+fn rewrite_action_variants_preserve_runtime_placement() -> TestResult {
+    for (source, input, expected) in [
+        ("a=x", b"ab".as_slice(), b"xb".as_slice()),
+        ("b=(start)x", b"ab".as_slice(), b"xa".as_slice()),
+        ("a=(end)x", b"ab".as_slice(), b"bx".as_slice()),
+    ] {
+        let result = parse_program(source)?.run(
+            runtime_input(input)?,
+            RunLimits::new(
+                StepLimit::new(1),
+                DEFAULT_MAX_STATE_LEN,
+                DEFAULT_MAX_RETURN_LEN,
+            ),
+        )?;
+
+        ensure_matches(
+            matches!(
+                result.outcome(),
+                crate::RunOutcome::Stable(output) if output.as_slice() == expected
+            ),
+            "expected rewrite action variant to preserve placement",
+        )?;
+    }
+
+    Ok(())
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if empty payload matches lose their start/end span
+/// placement while deriving matched length from the validated range.
+#[test]
+fn empty_payload_matches_keep_anchor_specific_span_placement() -> TestResult {
+    for (source, expected) in [
+        ("=x", b"xab".as_slice()),
+        ("(start)=x", b"xab".as_slice()),
+        ("(end)=x", b"abx".as_slice()),
+    ] {
+        let program = parse_program(source)?;
+        let session = RunSession::new(
+            &program,
+            runtime_input(b"ab")?,
+            RunLimits::new(
+                StepLimit::new(1),
+                DEFAULT_MAX_STATE_LEN,
+                DEFAULT_MAX_RETURN_LEN,
+            ),
+        )?;
+
+        match expect_step_transition(session.step())? {
+            StepTransition::Applied(applied) => {
+                ensure_eq!(runtime_view_bytes(applied.state()).as_slice(), expected)?;
+            }
+            StepTransition::Stable(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
+                return Err(TestFailure::message("expected one empty-payload rewrite"));
+            }
+        }
+    }
+
+    Ok(())
+}

@@ -3,20 +3,40 @@ use crate::inspect::{PayloadView, RuleActionView, RuleAnchor, RuleRepeat};
 use crate::source::SourceLineNumber;
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Action {
-    Replace(Payload),
-    MoveStart(Payload),
-    MoveEnd(Payload),
+pub(crate) enum RuleAction {
+    Rewrite(RewriteAction),
     Return(Payload),
 }
 
-impl Action {
+impl RuleAction {
+    pub(crate) fn view(&self) -> RuleActionView<'_> {
+        match self {
+            Self::Rewrite(action) => action.view(),
+            Self::Return(payload) => RuleActionView::Return(PayloadView::new(payload)),
+        }
+    }
+
+    pub(crate) const fn canonical_right_side(&self) -> CanonicalRightSide<'_> {
+        match self {
+            Self::Rewrite(action) => action.canonical_right_side(),
+            Self::Return(payload) => CanonicalRightSide::Return(payload),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RewriteAction {
+    Replace(Payload),
+    MoveStart(Payload),
+    MoveEnd(Payload),
+}
+
+impl RewriteAction {
     pub(crate) fn view(&self) -> RuleActionView<'_> {
         match self {
             Self::Replace(payload) => RuleActionView::Replace(PayloadView::new(payload)),
             Self::MoveStart(payload) => RuleActionView::MoveStart(PayloadView::new(payload)),
             Self::MoveEnd(payload) => RuleActionView::MoveEnd(PayloadView::new(payload)),
-            Self::Return(payload) => RuleActionView::Return(PayloadView::new(payload)),
         }
     }
 
@@ -25,7 +45,12 @@ impl Action {
             Self::Replace(payload) => CanonicalRightSide::Replace(payload),
             Self::MoveStart(payload) => CanonicalRightSide::MoveStart(payload),
             Self::MoveEnd(payload) => CanonicalRightSide::MoveEnd(payload),
-            Self::Return(payload) => CanonicalRightSide::Return(payload),
+        }
+    }
+
+    pub(crate) const fn payload(&self) -> &Payload {
+        match self {
+            Self::Replace(payload) | Self::MoveStart(payload) | Self::MoveEnd(payload) => payload,
         }
     }
 }
@@ -57,11 +82,11 @@ impl RuleHead {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RuleBody {
-    action: Action,
+    action: RuleAction,
 }
 
 impl RuleBody {
-    pub(crate) const fn new(action: Action) -> Self {
+    pub(crate) const fn new(action: RuleAction) -> Self {
         Self { action }
     }
 }
@@ -171,7 +196,7 @@ pub(crate) struct Rule {
     repeat: RuleRepeatState,
     anchor: RuleAnchorSyntax,
     lhs: Payload,
-    action: Action,
+    action: RuleAction,
 }
 
 impl Rule {
@@ -205,7 +230,7 @@ impl Rule {
         &self.lhs
     }
 
-    pub(crate) const fn action(&self) -> &Action {
+    pub(crate) const fn action(&self) -> &RuleAction {
         &self.action
     }
 }

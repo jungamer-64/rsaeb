@@ -6,7 +6,9 @@ use crate::error::{
     LeftModifierKind, ParseError, ParseErrorKind, ParseLimitError, PayloadKind, RightActionKind,
 };
 use crate::program::PayloadByteLimit;
-use crate::rule::{Action, ParsedRule, RuleAnchorSyntax, RuleBody, RuleHead, RuleRepeatSyntax};
+use crate::rule::{
+    ParsedRule, RewriteAction, RuleAction, RuleAnchorSyntax, RuleBody, RuleHead, RuleRepeatSyntax,
+};
 use crate::source::{SourceLineNumber, SourcePosition};
 use crate::syntax::SyntaxToken;
 
@@ -391,41 +393,45 @@ impl<'code> RightSyntax<'code> {
     ///
     /// Returns `ParseError` if right-side action or payload syntax is invalid.
     fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleBody, ParseError> {
-        self.into_payload_syntax().parse(payload_limit)
+        self.into_payload_syntax()?.parse(payload_limit)
     }
 
-    fn into_payload_syntax(self) -> RightPayloadSyntax<'code> {
+    /// Classifies right-side syntax into replacement payload or action payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if an action payload starts with another
+    /// right-side action token.
+    fn into_payload_syntax(self) -> Result<RightPayloadSyntax<'code>, ParseError> {
         if let Some(rest) = self.bytes.strip_token(SyntaxToken::Start) {
-            RightPayloadSyntax {
-                line_number: self.line_number,
-                bytes: rest,
-                action: RightActionSyntax::MoveStart,
-            }
+            return Ok(RightPayloadSyntax::Action(RightActionPayloadSyntax::new(
+                self.line_number,
+                rest,
+                RightActionSyntax::MoveStart,
+            )?));
         } else if let Some(rest) = self.bytes.strip_token(SyntaxToken::End) {
-            RightPayloadSyntax {
-                line_number: self.line_number,
-                bytes: rest,
-                action: RightActionSyntax::MoveEnd,
-            }
+            return Ok(RightPayloadSyntax::Action(RightActionPayloadSyntax::new(
+                self.line_number,
+                rest,
+                RightActionSyntax::MoveEnd,
+            )?));
         } else if let Some(rest) = self.bytes.strip_token(SyntaxToken::Return) {
-            RightPayloadSyntax {
-                line_number: self.line_number,
-                bytes: rest,
-                action: RightActionSyntax::Return,
-            }
-        } else {
-            RightPayloadSyntax {
-                line_number: self.line_number,
-                bytes: self.bytes,
-                action: RightActionSyntax::Replace,
-            }
+            return Ok(RightPayloadSyntax::Action(RightActionPayloadSyntax::new(
+                self.line_number,
+                rest,
+                RightActionSyntax::Return,
+            )?));
         }
+
+        Ok(RightPayloadSyntax::Replace(RightReplacePayloadSyntax {
+            line_number: self.line_number,
+            bytes: self.bytes,
+        }))
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RightActionSyntax {
-    Replace,
     MoveStart,
     MoveEnd,
     Return,
@@ -434,7 +440,6 @@ enum RightActionSyntax {
 impl RightActionSyntax {
     const fn payload_kind(self) -> PayloadKind {
         match self {
-            Self::Replace => PayloadKind::RightSideData,
             Self::MoveStart => PayloadKind::RightSideMoveStartPayload,
             Self::MoveEnd => PayloadKind::RightSideMoveEndPayload,
             Self::Return => PayloadKind::RightSideReturnPayload,
@@ -443,10 +448,9 @@ impl RightActionSyntax {
 
     fn into_body(self, payload: Payload) -> RuleBody {
         let action = match self {
-            Self::Replace => Action::Replace(payload),
-            Self::MoveStart => Action::MoveStart(payload),
-            Self::MoveEnd => Action::MoveEnd(payload),
-            Self::Return => Action::Return(payload),
+            Self::MoveStart => RuleAction::Rewrite(RewriteAction::MoveStart(payload)),
+            Self::MoveEnd => RuleAction::Rewrite(RewriteAction::MoveEnd(payload)),
+            Self::Return => RuleAction::Return(payload),
         };
 
         RuleBody::new(action)
@@ -454,10 +458,9 @@ impl RightActionSyntax {
 }
 
 #[derive(Clone, Copy)]
-struct RightPayloadSyntax<'code> {
-    line_number: SourceLineNumber,
-    bytes: CompactSyntax<'code>,
-    action: RightActionSyntax,
+enum RightPayloadSyntax<'code> {
+    Replace(RightReplacePayloadSyntax<'code>),
+    Action(RightActionPayloadSyntax<'code>),
 }
 
 impl RightPayloadSyntax<'_> {
@@ -465,13 +468,73 @@ impl RightPayloadSyntax<'_> {
     ///
     /// # Errors
     ///
-    /// Returns `ParseError` if action syntax is nested, payload bytes are
-    /// invalid, or allocation fails.
+    /// Returns `ParseError` if payload bytes are invalid or allocation fails.
     fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleBody, ParseError> {
-        if self.action != RightActionSyntax::Replace {
-            reject_nested_rhs_action(self.bytes, self.line_number)?;
+        match self {
+            Self::Replace(payload) => payload.parse(payload_limit),
+            Self::Action(payload) => payload.parse(payload_limit),
         }
+    }
+}
 
+#[derive(Clone, Copy)]
+struct RightReplacePayloadSyntax<'code> {
+    line_number: SourceLineNumber,
+    bytes: CompactSyntax<'code>,
+}
+
+impl RightReplacePayloadSyntax<'_> {
+    /// Parses direct replacement payload syntax into a typed rule body.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if payload bytes are invalid or allocation fails.
+    fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleBody, ParseError> {
+        ensure_payload_within_limit(self.line_number, self.bytes.byte_count(), payload_limit)?;
+        let payload = Payload::parse(
+            self.bytes.as_slice(),
+            self.line_number,
+            PayloadKind::RightSideData,
+        )?;
+        Ok(RuleBody::new(RuleAction::Rewrite(RewriteAction::Replace(
+            payload,
+        ))))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RightActionPayloadSyntax<'code> {
+    line_number: SourceLineNumber,
+    bytes: CompactSyntax<'code>,
+    action: RightActionSyntax,
+}
+
+impl<'code> RightActionPayloadSyntax<'code> {
+    /// Builds a right-side action payload after rejecting nested action tokens.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if the action payload starts with another
+    /// right-side action token.
+    fn new(
+        line_number: SourceLineNumber,
+        bytes: CompactSyntax<'code>,
+        action: RightActionSyntax,
+    ) -> Result<Self, ParseError> {
+        reject_nested_rhs_action(bytes, line_number)?;
+        Ok(Self {
+            line_number,
+            bytes,
+            action,
+        })
+    }
+
+    /// Parses action payload syntax into a typed rule body.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if payload bytes are invalid or allocation fails.
+    fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleBody, ParseError> {
         ensure_payload_within_limit(self.line_number, self.bytes.byte_count(), payload_limit)?;
         let payload = Payload::parse(
             self.bytes.as_slice(),

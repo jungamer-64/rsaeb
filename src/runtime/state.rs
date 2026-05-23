@@ -1,6 +1,6 @@
 use super::budget::RuntimeBudgetState;
 use super::input::InitialStateBytes;
-use super::rewrite::{PreparedRewrite, RewriteRequest, RewriteScratch};
+use super::rewrite::{MatchedRewrite, PreparedRewrite, RewriteScratch};
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
@@ -10,6 +10,7 @@ use crate::bytes::{
 };
 use crate::error::{RunError, StateSizeError};
 use crate::program::RuntimeStateSnapshot;
+use crate::rule::RewriteAction;
 use crate::trace::RuntimeStateView;
 use alloc::vec::Vec;
 
@@ -111,26 +112,28 @@ impl State {
     /// rewritten state exceeds limits, or scratch allocation fails.
     pub(crate) fn rewrite_into(
         &self,
-        request: RewriteRequest<'_>,
+        rewrite: MatchedRewrite<'_>,
         output: &mut RewriteScratch,
         budget: RuntimeBudgetState,
     ) -> Result<PreparedRewrite, RunError> {
-        self.prepare_replacement_buffer(request, output, budget)?;
-        match request {
-            RewriteRequest::Replace(operands) => {
-                self.push_prefix(output, operands.state_match())?;
-                output.push_payload(operands.rhs())?;
-                self.push_suffix(output, operands.state_match())?;
+        self.prepare_replacement_buffer(rewrite, output, budget)?;
+        let state_match = rewrite.state_match();
+        let slices = state_match.slices(&self.bytes);
+        match rewrite.action() {
+            RewriteAction::Replace(rhs) => {
+                output.push_existing(slices.prefix().iter().copied())?;
+                output.push_payload(rhs)?;
+                output.push_existing(slices.suffix().iter().copied())?;
             }
-            RewriteRequest::MoveStart(operands) => {
-                output.push_payload(operands.rhs())?;
-                self.push_prefix(output, operands.state_match())?;
-                self.push_suffix(output, operands.state_match())?;
+            RewriteAction::MoveStart(rhs) => {
+                output.push_payload(rhs)?;
+                output.push_existing(slices.prefix().iter().copied())?;
+                output.push_existing(slices.suffix().iter().copied())?;
             }
-            RewriteRequest::MoveEnd(operands) => {
-                self.push_prefix(output, operands.state_match())?;
-                self.push_suffix(output, operands.state_match())?;
-                output.push_payload(operands.rhs())?;
+            RewriteAction::MoveEnd(rhs) => {
+                output.push_existing(slices.prefix().iter().copied())?;
+                output.push_existing(slices.suffix().iter().copied())?;
+                output.push_payload(rhs)?;
             }
         }
         Ok(output.take_prepared())
@@ -144,11 +147,11 @@ impl State {
     /// cannot be represented as a runtime state byte count.
     fn replaced_byte_count(
         &self,
-        request: RewriteRequest<'_>,
+        rewrite: MatchedRewrite<'_>,
     ) -> Result<RuntimeStateByteCount, StateSizeError> {
         let state_len = self.byte_count();
-        let lhs_len = request.state_match().matched_len();
-        let rhs_len = request.rhs().byte_count();
+        let lhs_len = rewrite.state_match().matched_len();
+        let rhs_len = rewrite.rhs().byte_count();
 
         state_len
             .get()
@@ -166,42 +169,16 @@ impl State {
     /// rewritten state exceeds limits, or scratch allocation fails.
     fn prepare_replacement_buffer(
         &self,
-        request: RewriteRequest<'_>,
+        rewrite: MatchedRewrite<'_>,
         output: &mut RewriteScratch,
         budget: RuntimeBudgetState,
     ) -> Result<(), RunError> {
-        let capacity = self.replaced_byte_count(request)?;
+        let capacity = self.replaced_byte_count(rewrite)?;
 
         budget.ensure_rewrite_state_len(capacity)?;
 
         output.clear_and_reserve(capacity)?;
         Ok(())
-    }
-
-    /// Copies bytes before the matched span into scratch storage.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AllocationError` if scratch storage cannot grow.
-    fn push_prefix(
-        &self,
-        output: &mut RewriteScratch,
-        state_match: MatchedStateSpan,
-    ) -> Result<(), AllocationError> {
-        output.push_existing(state_match.prefix_bytes(&self.bytes))
-    }
-
-    /// Copies bytes after the matched span into scratch storage.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AllocationError` if scratch storage cannot grow.
-    fn push_suffix(
-        &self,
-        output: &mut RewriteScratch,
-        state_match: MatchedStateSpan,
-    ) -> Result<(), AllocationError> {
-        output.push_existing(state_match.suffix_bytes(&self.bytes))
     }
 
     /// Materializes runtime state bytes at the requested allocation site.
@@ -269,17 +246,22 @@ impl StateIndex {
 }
 
 struct StateSearchRange {
-    next: StateIndex,
-    end: StateIndex,
-    finished: bool,
+    cursor: StateSearchCursor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StateSearchCursor {
+    Active { next: StateIndex, end: StateIndex },
+    Done,
 }
 
 impl StateSearchRange {
     const fn from_start_to(end: StateIndex) -> Self {
         Self {
-            next: StateIndex::start(),
-            end,
-            finished: false,
+            cursor: StateSearchCursor::Active {
+                next: StateIndex::start(),
+                end,
+            },
         }
     }
 }
@@ -288,17 +270,17 @@ impl Iterator for StateSearchRange {
     type Item = StateIndex;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.finished {
+        let StateSearchCursor::Active { next, end } = self.cursor else {
             return None;
-        }
+        };
 
-        let current = self.next;
-        if current == self.end {
-            self.finished = true;
-        } else if let Some(next) = self.next.checked_next() {
-            self.next = next;
+        let current = next;
+        if current == end {
+            self.cursor = StateSearchCursor::Done;
+        } else if let Some(next) = next.checked_next() {
+            self.cursor = StateSearchCursor::Active { next, end };
         } else {
-            self.finished = true;
+            self.cursor = StateSearchCursor::Done;
         }
         Some(current)
     }
@@ -321,19 +303,18 @@ impl StateSpanRange {
             .then_some(Self { start, end })
     }
 
-    const fn prefix_end(self) -> usize {
+    const fn start(self) -> usize {
         self.start.get()
     }
 
-    const fn suffix_start(self) -> usize {
-        self.end.get()
+    fn byte_count(self) -> PayloadByteCount {
+        PayloadByteCount::new((self.start.get()..self.end.get()).len())
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MatchedStateSpan {
     range: StateSpanRange,
-    matched_len: PayloadByteCount,
 }
 
 impl MatchedStateSpan {
@@ -358,26 +339,45 @@ impl MatchedStateSpan {
         state_len: RuntimeStateByteCount,
     ) -> Option<Self> {
         let range = StateSpanRange::at_position(start, matched_len, state_len)?;
-        Some(Self { range, matched_len })
+        Some(Self { range })
     }
 
-    pub(crate) const fn matched_len(self) -> PayloadByteCount {
-        self.matched_len
+    pub(crate) fn matched_len(self) -> PayloadByteCount {
+        self.range.byte_count()
     }
 
     fn matched_bytes(self, bytes: &[RuntimeByte]) -> impl Iterator<Item = RuntimeByte> + '_ {
-        bytes
-            .iter()
-            .copied()
-            .skip(self.range.prefix_end())
-            .take(self.matched_len.get())
+        self.slices(bytes).matched().iter().copied()
     }
 
-    fn prefix_bytes(self, bytes: &[RuntimeByte]) -> impl Iterator<Item = RuntimeByte> + '_ {
-        bytes.iter().copied().take(self.range.prefix_end())
+    fn slices(self, bytes: &[RuntimeByte]) -> MatchedStateSlices<'_> {
+        let (prefix, matched_and_suffix) = bytes.split_at(self.range.start());
+        let (matched, suffix) = matched_and_suffix.split_at(self.matched_len().get());
+        MatchedStateSlices {
+            prefix,
+            matched,
+            suffix,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MatchedStateSlices<'state> {
+    prefix: &'state [RuntimeByte],
+    matched: &'state [RuntimeByte],
+    suffix: &'state [RuntimeByte],
+}
+
+impl<'state> MatchedStateSlices<'state> {
+    const fn prefix(self) -> &'state [RuntimeByte] {
+        self.prefix
     }
 
-    fn suffix_bytes(self, bytes: &[RuntimeByte]) -> impl Iterator<Item = RuntimeByte> + '_ {
-        bytes.iter().copied().skip(self.range.suffix_start())
+    const fn matched(self) -> &'state [RuntimeByte] {
+        self.matched
+    }
+
+    const fn suffix(self) -> &'state [RuntimeByte] {
+        self.suffix
     }
 }

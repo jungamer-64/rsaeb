@@ -13,6 +13,49 @@ pub(crate) struct RuleSet {
     once_rule_count: OnceRuleCount,
 }
 
+struct PendingRuleInsertion {
+    rule: Rule,
+    next_once_rule_count: OnceRuleCount,
+}
+
+impl PendingRuleInsertion {
+    /// Assigns runtime repeat state to one parsed rule before storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if assigning the next `(once)` slot overflows.
+    fn from_parsed(
+        parsed: ParsedRule,
+        current_once_rule_count: OnceRuleCount,
+    ) -> Result<Self, ParseError> {
+        let line_number = parsed.line_number();
+        let (repeat, next_once_rule_count) = match parsed.repeat_syntax() {
+            RuleRepeatSyntax::Once => {
+                let (slot, next_once_rule_count) =
+                    current_once_rule_count.reserve_next_slot().ok_or_else(|| {
+                        ParseError::at_line(
+                            line_number,
+                            ParseErrorKind::Allocation(AllocationError::capacity_overflow(
+                                AllocationContext::ProgramRuleTable,
+                            )),
+                        )
+                    })?;
+                (RuleRepeatState::Once(slot), next_once_rule_count)
+            }
+            RuleRepeatSyntax::Always => (RuleRepeatState::Always, current_once_rule_count),
+        };
+
+        Ok(Self {
+            rule: Rule::from_parsed(parsed, repeat),
+            next_once_rule_count,
+        })
+    }
+
+    const fn line_number(&self) -> crate::source::SourceLineNumber {
+        self.rule.line_number()
+    }
+}
+
 impl RuleSet {
     pub(crate) fn new() -> Self {
         Self::default()
@@ -58,29 +101,18 @@ impl RuleSet {
             ));
         }
 
-        let (repeat, next_once_rule_count) = match parsed.repeat_syntax() {
-            RuleRepeatSyntax::Once => {
-                let (slot, next_once_rule_count) =
-                    self.once_rule_count.reserve_next_slot().ok_or_else(|| {
-                        ParseError::at_line(
-                            line_number,
-                            ParseErrorKind::Allocation(AllocationError::capacity_overflow(
-                                AllocationContext::ProgramRuleTable,
-                            )),
-                        )
-                    })?;
-                (RuleRepeatState::Once(slot), Some(next_once_rule_count))
-            }
-            RuleRepeatSyntax::Always => (RuleRepeatState::Always, None),
-        };
+        let pending = PendingRuleInsertion::from_parsed(parsed, self.once_rule_count)?;
 
-        let rule = Rule::from_parsed(parsed, repeat);
-
-        try_push(&mut self.rules, rule, AllocationContext::ProgramRuleTable)
-            .map_err(|error| ParseError::at_line(line_number, ParseErrorKind::Allocation(error)))?;
-        if let Some(next_once_rule_count) = next_once_rule_count {
-            self.once_rule_count = next_once_rule_count;
-        }
+        let pending_line_number = pending.line_number();
+        try_push(
+            &mut self.rules,
+            pending.rule,
+            AllocationContext::ProgramRuleTable,
+        )
+        .map_err(|error| {
+            ParseError::at_line(pending_line_number, ParseErrorKind::Allocation(error))
+        })?;
+        self.once_rule_count = pending.next_once_rule_count;
         Ok(())
     }
 

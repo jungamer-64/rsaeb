@@ -1,13 +1,14 @@
 use alloc::vec::Vec;
+use core::cell::Cell;
 
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
 use crate::rule::{OnceRuleCount, OnceRuleSlot, Rule, RuleRepeatState};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) struct OnceStateSet {
-    states: Vec<OnceRuleState>,
+    states: Vec<Cell<OnceRuleState>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,16 +25,16 @@ pub(crate) enum MatchedRuleCommit<'once> {
 
 #[derive(Debug)]
 pub(crate) struct ValidOnceCommit<'once> {
-    state: &'once mut OnceRuleState,
+    state: &'once Cell<OnceRuleState>,
 }
 
 impl<'once> ValidOnceCommit<'once> {
-    const fn new(state: &'once mut OnceRuleState) -> Self {
+    const fn new(state: &'once Cell<OnceRuleState>) -> Self {
         Self { state }
     }
 
     fn commit(self) {
-        *self.state = OnceRuleState::Consumed;
+        self.state.set(OnceRuleState::Consumed);
     }
 }
 
@@ -64,7 +65,7 @@ impl OnceStateSet {
         for _ in 0..once_rule_count.get() {
             try_push(
                 &mut states,
-                OnceRuleState::Fresh,
+                Cell::new(OnceRuleState::Fresh),
                 AllocationContext::RuntimeOnceRuleState,
             )?;
         }
@@ -72,17 +73,7 @@ impl OnceStateSet {
         Ok(Self { states })
     }
 
-    pub(crate) fn rule_can_commit(&self, rule: &Rule) -> bool {
-        match rule.repeat_state() {
-            RuleRepeatState::Always => true,
-            RuleRepeatState::Once(slot) => self
-                .states
-                .get(slot.zero_based())
-                .is_some_and(|state| state.is_fresh()),
-        }
-    }
-
-    pub(crate) fn matched_commit_for_rule(&mut self, rule: &Rule) -> Option<MatchedRuleCommit<'_>> {
+    pub(crate) fn matched_commit_for_rule(&self, rule: &Rule) -> Option<MatchedRuleCommit<'_>> {
         match rule.repeat_state() {
             RuleRepeatState::Always => Some(MatchedRuleCommit::Always),
             RuleRepeatState::Once(slot) => {
@@ -91,10 +82,10 @@ impl OnceStateSet {
         }
     }
 
-    fn valid_once_commit(&mut self, slot: OnceRuleSlot) -> Option<ValidOnceCommit<'_>> {
+    fn valid_once_commit(&self, slot: OnceRuleSlot) -> Option<ValidOnceCommit<'_>> {
         self.states
-            .get_mut(slot.zero_based())
-            .filter(|state| state.is_fresh())
+            .get(slot.zero_based())
+            .filter(|state| state.get().is_fresh())
             .map(ValidOnceCommit::new)
     }
 }

@@ -37,7 +37,7 @@ pub struct RunSession<'program> {
     core: RunCore<'program>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 struct RunCore<'program> {
     state: State,
     scratch: RewriteScratch,
