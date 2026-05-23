@@ -4,36 +4,6 @@ use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
 use crate::bytes::{Payload, RuntimeByte, RuntimeStateByteCount};
-use crate::rule::RewriteAction;
-
-use super::state::MatchedStateSpan;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct MatchedRewrite<'rule> {
-    state_match: MatchedStateSpan,
-    action: &'rule RewriteAction,
-}
-
-impl<'rule> MatchedRewrite<'rule> {
-    pub(crate) const fn new(state_match: MatchedStateSpan, action: &'rule RewriteAction) -> Self {
-        Self {
-            state_match,
-            action,
-        }
-    }
-
-    pub(crate) const fn state_match(self) -> MatchedStateSpan {
-        self.state_match
-    }
-
-    pub(crate) const fn action(self) -> &'rule RewriteAction {
-        self.action
-    }
-
-    pub(crate) const fn rhs(self) -> &'rule Payload {
-        self.action.payload()
-    }
-}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RewriteScratch {
