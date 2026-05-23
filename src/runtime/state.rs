@@ -29,11 +29,6 @@ impl State {
         }
     }
 
-    /// Returns the runtime state length in bytes.
-    pub(crate) fn len(&self) -> usize {
-        self.bytes.len()
-    }
-
     /// Returns the typed byte count.
     pub(crate) fn byte_count(&self) -> RuntimeStateByteCount {
         RuntimeStateByteCount::new(self.bytes.len())
@@ -244,7 +239,7 @@ impl State {
     /// Returns `AllocationError` if the output buffer cannot be allocated.
     fn materialize(&self, context: AllocationContext) -> Result<Vec<u8>, AllocationError> {
         let mut output = Vec::new();
-        try_reserve_total_exact(&mut output, RequestedCapacity::new(self.len()), context)?;
+        try_reserve_total_exact(&mut output, RequestedCapacity::new(self.byte_count().get()), context)?;
         for byte in self.bytes.iter().copied() {
             try_push(&mut output, byte.materialize(), context)?;
         }

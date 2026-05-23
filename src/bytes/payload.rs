@@ -123,11 +123,6 @@ impl ValidatedPayloadSyntax<'_> {
 }
 
 impl Payload {
-    /// Returns the runtime state length in bytes.
-    pub(crate) fn len(&self) -> usize {
-        self.bytes.len()
-    }
-
     /// Returns the typed byte count.
     pub(crate) fn byte_count(&self) -> PayloadByteCount {
         PayloadByteCount::new(self.bytes.len())
@@ -183,7 +178,7 @@ impl Payload {
         context: AllocationContext,
     ) -> Result<Vec<u8>, AllocationError> {
         let mut output = Vec::new();
-        try_reserve_total_exact(&mut output, RequestedCapacity::new(self.len()), context)?;
+        try_reserve_total_exact(&mut output, RequestedCapacity::new(self.byte_count().get()), context)?;
         self.push_bytes_to(&mut output, context)?;
         Ok(output)
     }

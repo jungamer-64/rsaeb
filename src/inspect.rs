@@ -141,11 +141,6 @@ impl RulePosition {
         Some(Self { number })
     }
 
-    /// Converts this execution-order position to a table index.
-    pub(crate) fn zero_based(self) -> usize {
-        self.number.one_based.saturating_sub(1)
-    }
-
     /// Builds the first value.
     const fn first() -> Self {
         Self {
