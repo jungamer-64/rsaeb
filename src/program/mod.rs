@@ -15,7 +15,7 @@ mod rule_set;
 mod tracing;
 
 use crate::error::{InternalInvariantError, ParseError, RunError};
-use crate::execution::{OwnedRunSession, RunSession};
+use crate::execution::OwnedRunSession;
 use crate::input::RunSeed;
 use crate::inspect::{OnceRuleCount, RuleCount, RulePositions, RuleView};
 use crate::limits::ParseLimits;
@@ -150,29 +150,10 @@ impl Program {
         self.rule_set.once_slot_count()
     }
 
-    /// Starts a stateful run session for this program.
-    ///
-    /// The seed must already tie checked input to execution limits. This function
-    /// consumes it and moves its typed bytes into the mutable runtime-state
-    /// domain under the admitted execution limits.
-    ///
-    /// The returned [`RunSession`] can be advanced one matching rule at a time.
-    /// Use [`Program::run`] when the caller wants to run to completion in one
-    /// call.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` when allocating per-run execution state fails.
-    pub fn start_run(&self, seed: RunSeed) -> Result<RunSession<'_>, RunError> {
-        RunSession::new(self, seed)
-    }
-
     /// Starts a stateful run session that owns this parsed program.
     ///
-    /// This is the owned counterpart of [`Program::start_run`]. It consumes
-    /// `self` so hosts can move the parsed rule table into a long-lived
-    /// execution state without keeping a separate program borrow alive. The
-    /// mutable runtime core is the same one used by borrowed sessions.
+    /// This consumes `self` so hosts move the parsed rule table into the
+    /// execution typestate instead of keeping a separate program borrow alive.
     ///
     /// # Errors
     ///
@@ -183,14 +164,14 @@ impl Program {
 
     /// Runs this program with admitted runtime seed.
     ///
-    /// This is the run-to-completion API. Use [`Program::start_run`] when
-    /// the host needs to observe or pause after each committed rule.
+    /// This is the borrowed run-to-completion API. Use [`Program::into_run`]
+    /// when the host needs owned stepwise control after each committed rule.
     ///
     /// # Errors
     ///
     /// Returns `RunError` when allocation fails, state-size arithmetic
     /// overflows, or a configured execution budget would be exceeded.
     pub fn run(&self, seed: RunSeed) -> Result<RunResult, RunError> {
-        RunSession::new(self, seed)?.finish()
+        crate::execution::finish_borrowed_run(self, seed)
     }
 }
