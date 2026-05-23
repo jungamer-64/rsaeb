@@ -9,22 +9,20 @@
 //!
 //! ```
 //! use rsaeb::limits::{
-//!     ReturnByteLimit, RunLimits, RuntimeStateByteLimit, StepLimit,
-//!     TraceSnapshotByteLimit, TraceSnapshotLimits,
+//!     ReturnByteLimit, RunLimits, RuntimeInputByteLimit, RuntimeStateByteLimit, StepLimit,
+//!     TraceSnapshotByteLimit,
 //! };
 //!
 //! let run_limits = RunLimits::new(
+//!     RuntimeInputByteLimit::new(4096),
 //!     StepLimit::new(100),
 //!     RuntimeStateByteLimit::new(4096),
 //!     ReturnByteLimit::new(1024),
 //! );
-//! let trace_limits = TraceSnapshotLimits::new(
-//!     run_limits,
-//!     TraceSnapshotByteLimit::new(2048),
-//! );
 //!
-//! assert_eq!(trace_limits.run_limits().step_limit().get(), 100);
-//! assert_eq!(trace_limits.snapshot_byte_limit().get(), 2048);
+//! assert_eq!(run_limits.input_byte_limit().get(), 4096);
+//! assert_eq!(run_limits.step_limit().get(), 100);
+//! assert_eq!(TraceSnapshotByteLimit::new(2048).get(), 2048);
 //! ```
 
 pub use crate::bytes::{
@@ -37,5 +35,5 @@ pub use crate::program::limits::{
     DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, DEFAULT_MAX_TRACE_SNAPSHOT_LEN, DEFAULT_PARSE_LIMITS,
     ParseLimits, PayloadByteLimit, ReturnByteLimit, RuleLimit, RunLimits, RuntimeInputByteLimit,
     RuntimeStateByteLimit, SourceByteCount, SourceByteLimit, StepCount, StepLimit,
-    TraceSnapshotByteLimit, TraceSnapshotLimits,
+    TraceSnapshotByteLimit,
 };

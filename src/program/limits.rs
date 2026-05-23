@@ -363,10 +363,11 @@ impl StepCount {
 /// The interpreter checks these limits before allocating oversized runtime
 /// states or return outputs. Step limits alone are not enough for a rewriting
 /// system because a tiny number of steps can still expand into a very large
-/// state. Runtime input length is validated before execution with
-/// [`RuntimeInputByteLimit`].
+/// state. Runtime input length is validated as part of constructing run-bound
+/// input with this same limit set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunLimits {
+    input_len: RuntimeInputByteLimit,
     steps: StepLimit,
     state_len: RuntimeStateByteLimit,
     return_len: ReturnByteLimit,
@@ -376,15 +377,23 @@ impl RunLimits {
     /// Creates limits with every runtime budget specified explicitly.
     #[must_use]
     pub const fn new(
+        max_input_len: RuntimeInputByteLimit,
         max_steps: StepLimit,
         max_state_len: RuntimeStateByteLimit,
         max_return_len: ReturnByteLimit,
     ) -> Self {
         Self {
+            input_len: max_input_len,
             steps: max_steps,
             state_len: max_state_len,
             return_len: max_return_len,
         }
+    }
+
+    /// Maximum runtime input bytes accepted before owned classification.
+    #[must_use]
+    pub const fn input_byte_limit(self) -> RuntimeInputByteLimit {
+        self.input_len
     }
 
     /// Maximum number of rewrite steps that may be applied.
@@ -403,40 +412,5 @@ impl RunLimits {
     #[must_use]
     pub const fn return_byte_limit(self) -> ReturnByteLimit {
         self.return_len
-    }
-}
-
-/// Resource limits for one trace-snapshot runtime invocation.
-///
-/// Runtime execution limits and trace snapshot materialization limits are
-/// separate domains, but snapshot tracing needs both. Keeping them in one value
-/// prevents trace APIs from growing parallel primitive-like budget arguments.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TraceSnapshotLimits {
-    run: RunLimits,
-    snapshot: TraceSnapshotByteLimit,
-}
-
-impl TraceSnapshotLimits {
-    /// Creates trace-snapshot limits from runtime limits and a snapshot byte
-    /// budget.
-    #[must_use]
-    pub const fn new(run_limits: RunLimits, snapshot_byte_limit: TraceSnapshotByteLimit) -> Self {
-        Self {
-            run: run_limits,
-            snapshot: snapshot_byte_limit,
-        }
-    }
-
-    /// Runtime limits used by the underlying interpreter execution.
-    #[must_use]
-    pub const fn run_limits(self) -> RunLimits {
-        self.run
-    }
-
-    /// Maximum bytes materialized for one trace snapshot event.
-    #[must_use]
-    pub const fn snapshot_byte_limit(self) -> TraceSnapshotByteLimit {
-        self.snapshot
     }
 }

@@ -1,4 +1,4 @@
-use crate::error::{InputColumn, RuntimeInputError};
+use crate::error::{InputColumn, RunInputError};
 
 use super::program::ProgramByte;
 use super::rejection::NonAsciiInputByte;
@@ -6,7 +6,7 @@ use super::rejection::NonAsciiInputByte;
 use runtime_ascii::{AsciiByte, ClassifiedAsciiByte, NonProgramAsciiByte};
 
 mod runtime_ascii {
-    use super::{InputColumn, NonAsciiInputByte, ProgramByte, RuntimeInputError};
+    use super::{InputColumn, NonAsciiInputByte, ProgramByte, RunInputError};
 
     /// ASCII byte accepted by runtime input.
     ///
@@ -28,16 +28,13 @@ mod runtime_ascii {
         ///
         /// # Errors
         ///
-        /// Returns `RuntimeInputError` when the byte is non-ASCII or its
+        /// Returns `RunInputError` when the byte is non-ASCII or its
         /// one-based input column cannot be represented.
-        pub(crate) fn validate(
-            byte: u8,
-            zero_based_column: usize,
-        ) -> Result<Self, RuntimeInputError> {
+        pub(crate) fn validate(byte: u8, zero_based_column: usize) -> Result<Self, RunInputError> {
             if let Some(rejected) = NonAsciiInputByte::parse(byte) {
                 let column = InputColumn::from_zero_based(zero_based_column)
-                    .ok_or_else(RuntimeInputError::column_overflow)?;
-                Err(RuntimeInputError::non_ascii(column, rejected))
+                    .ok_or_else(RunInputError::column_overflow)?;
+                Err(RunInputError::non_ascii(column, rejected))
             } else {
                 Ok(Self(byte))
             }
@@ -83,9 +80,9 @@ impl RuntimeInputByte {
     ///
     /// # Errors
     ///
-    /// Returns `RuntimeInputError` when ASCII validation fails or the input
+    /// Returns `RunInputError` when ASCII validation fails or the input
     /// column cannot be represented.
-    pub(crate) fn validate(byte: u8, zero_based_column: usize) -> Result<Self, RuntimeInputError> {
+    pub(crate) fn validate(byte: u8, zero_based_column: usize) -> Result<Self, RunInputError> {
         Ok(Self {
             byte: AsciiByte::validate(byte, zero_based_column)?,
         })

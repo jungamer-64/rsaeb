@@ -1,25 +1,25 @@
 //! Runtime-input boundary types.
 //!
 //! Host bytes enter the interpreter as [`RuntimeInputSource`], then
-//! [`RuntimeInput::validate`] checks the input byte budget and ASCII validity
-//! before storing owned runtime-domain bytes. Execution consumes
-//! [`RuntimeInput`], so validated input cannot be reused accidentally across
-//! runs.
+//! [`RunInput::validate`] checks the run input contract before storing owned
+//! runtime-domain bytes. Execution consumes [`RunInput`], so validated input
+//! cannot be reused accidentally across runs or paired with different runtime
+//! limits.
 
 use alloc::vec::Vec;
 use core::fmt;
 
 use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeInputByte, RuntimeInputByteCount, RuntimeStateByteCount};
-use crate::error::{RunError, RuntimeInputError};
-use crate::limits::RuntimeInputByteLimit;
+use crate::error::{RunError, RunInputError};
+use crate::limits::{RunLimits, RuntimeInputByteLimit};
 use crate::runtime::budget::RuntimeBudgetState;
 
 /// Borrowed runtime input source at the validation boundary.
 ///
 /// Constructing this value labels host bytes as runtime input bytes. It does
 /// not validate ASCII or classify bytes into the runtime domain; that ownership
-/// belongs to [`RuntimeInput::validate`].
+/// belongs to [`RunInput::validate`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeInputSource<'input> {
     bytes: &'input [u8],
@@ -55,15 +55,15 @@ impl<'input> ValidatedRuntimeInputSource<'input> {
     ///
     /// # Errors
     ///
-    /// Returns `RuntimeInputError` if the input exceeds `limit`, if any input
+    /// Returns `RunInputError` if the input exceeds `limit`, if any input
     /// byte is non-ASCII, or if its one-based column cannot be represented.
     fn new(
         source: RuntimeInputSource<'input>,
         limit: RuntimeInputByteLimit,
-    ) -> Result<Self, RuntimeInputError> {
+    ) -> Result<Self, RunInputError> {
         let byte_count = RuntimeInputByteCount::new(source.as_bytes().len());
         if byte_count.get() > limit.get() {
-            return Err(RuntimeInputError::limit(limit, byte_count));
+            return Err(RunInputError::input_limit(limit, byte_count));
         }
 
         for (zero_based_column, byte) in source.as_bytes().iter().copied().enumerate() {
@@ -89,7 +89,7 @@ impl<'input> ValidatedRuntimeInputSource<'input> {
     }
 }
 
-/// Runtime input after ASCII validation and byte-domain classification.
+/// Runtime input admitted for one run after validation and limit binding.
 ///
 /// Runtime input is a separate byte domain from program source. It may contain
 /// ASCII whitespace, control bytes, and reserved syntax bytes, but it cannot
@@ -97,20 +97,21 @@ impl<'input> ValidatedRuntimeInputSource<'input> {
 /// execution consumes this value and moves the classified bytes directly into
 /// mutable runtime state.
 #[derive(PartialEq, Eq)]
-pub struct RuntimeInput {
+pub struct RunInput {
     bytes: Vec<RuntimeByte>,
+    limits: RunLimits,
 }
 
-impl fmt::Debug for RuntimeInput {
+impl fmt::Debug for RunInput {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("RuntimeInput")
+            .debug_struct("RunInput")
             .field("bytes", &RuntimeInputDebugBytes(self))
             .finish()
     }
 }
 
-struct RuntimeInputDebugBytes<'input>(&'input RuntimeInput);
+struct RuntimeInputDebugBytes<'input>(&'input RunInput);
 
 impl fmt::Debug for RuntimeInputDebugBytes<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -121,8 +122,8 @@ impl fmt::Debug for RuntimeInputDebugBytes<'_> {
     }
 }
 
-impl RuntimeInput {
-    /// Validates a runtime input source as owned runtime input.
+impl RunInput {
+    /// Validates a runtime input source for one run.
     ///
     /// Runtime input accepts all ASCII bytes, including bytes that would be
     /// reserved syntax in program source. Non-ASCII bytes are rejected with a
@@ -130,14 +131,15 @@ impl RuntimeInput {
     ///
     /// # Errors
     ///
-    /// Returns `RuntimeInputError` if the input exceeds `limits`, if any input
-    /// byte is non-ASCII, if its one-based column cannot be represented, or if
-    /// owned storage cannot be allocated.
+    /// Returns `RunInputError` if the input exceeds `limits`, if any input byte
+    /// is non-ASCII, if its one-based column cannot be represented, if the
+    /// admitted input exceeds the initial runtime-state limit, or if owned
+    /// storage cannot be allocated.
     pub fn validate(
         input: RuntimeInputSource<'_>,
-        limit: RuntimeInputByteLimit,
-    ) -> Result<Self, RuntimeInputError> {
-        let input = ValidatedRuntimeInputSource::new(input, limit)?;
+        limits: RunLimits,
+    ) -> Result<Self, RunInputError> {
+        let input = ValidatedRuntimeInputSource::new(input, limits.input_byte_limit())?;
 
         // Allocation starts only after the complete boundary validation pass;
         // the iterator below consumes that witness instead of validating each
@@ -157,7 +159,7 @@ impl RuntimeInput {
             )?;
         }
 
-        Ok(Self { bytes })
+        Ok(Self { bytes, limits })
     }
 
     pub(crate) fn materialized_bytes(&self) -> impl Iterator<Item = u8> + '_ {
@@ -176,8 +178,8 @@ impl RuntimeInput {
         self.bytes.is_empty()
     }
 
-    pub(crate) fn into_runtime_bytes(self) -> Vec<RuntimeByte> {
-        self.bytes
+    pub(crate) fn into_runtime_parts(self) -> (Vec<RuntimeByte>, RunLimits) {
+        (self.bytes, self.limits)
     }
 }
 
@@ -194,16 +196,15 @@ impl InitialStateBytes {
     ///
     /// Returns `RunError` if the input exceeds runtime state limits.
     pub(crate) fn from_runtime_input(
-        input: RuntimeInput,
-        budget: RuntimeBudgetState,
+        input: RunInput,
     ) -> Result<Self, RunError> {
+        let (bytes, limits) = input.into_runtime_parts();
+        let budget = RuntimeBudgetState::new(limits);
         let byte_count = input.byte_count();
         let state_len = RuntimeStateByteCount::from_runtime_input_count(byte_count);
 
         budget.ensure_initial_state_len(state_len)?;
-        Ok(Self {
-            bytes: input.into_runtime_bytes(),
-        })
+        Ok(Self { bytes })
     }
 
     pub(crate) fn into_runtime_bytes(self) -> Vec<RuntimeByte> {

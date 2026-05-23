@@ -63,14 +63,14 @@ impl From<InternalInvariantError> for RunError {
     }
 }
 
-/// Runtime input boundary error.
+/// Run input boundary error.
 ///
 /// This error is produced before execution starts, while raw host bytes are
-/// being classified as [`input::RuntimeInput`](crate::input::RuntimeInput). It is intentionally
-/// separate from [`RunError`] so callers can report invalid input without
-/// treating it as a runtime failure.
+/// being classified and admitted as [`input::RunInput`](crate::input::RunInput).
+/// It is intentionally separate from [`RunError`] so callers can report invalid
+/// or inadmissible input without treating it as a runtime failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RuntimeInputError {
+pub enum RunInputError {
     /// Runtime input contained a non-ASCII byte.
     NonAscii {
         /// One-based input column.
@@ -80,18 +80,25 @@ pub enum RuntimeInputError {
     },
     /// A one-based input column could not be represented.
     ColumnOverflow,
-    /// Runtime input exceeded its construction byte budget.
-    Limit {
+    /// Runtime input exceeded its input-byte construction budget.
+    InputLimit {
         /// Configured maximum runtime input length.
         limit: RuntimeInputByteLimit,
         /// Runtime input length that would have been classified.
         attempted_len: RuntimeInputByteCount,
     },
+    /// Runtime input exceeded the initial runtime-state budget for this run.
+    InitialStateLimit {
+        /// Configured maximum runtime state length.
+        limit: RuntimeStateByteLimit,
+        /// Runtime state length that would have been materialized.
+        attempted_len: RuntimeStateByteCount,
+    },
     /// Storing validated runtime input failed.
     Allocation(AllocationError),
 }
 
-impl RuntimeInputError {
+impl RunInputError {
     pub(crate) const fn non_ascii(column: InputColumn, byte: NonAsciiInputByte) -> Self {
         Self::NonAscii { column, byte }
     }
@@ -100,27 +107,40 @@ impl RuntimeInputError {
         Self::ColumnOverflow
     }
 
-    pub(crate) const fn limit(
+    pub(crate) const fn input_limit(
         limit: RuntimeInputByteLimit,
         attempted_len: RuntimeInputByteCount,
     ) -> Self {
-        Self::Limit {
+        Self::InputLimit {
+            limit,
+            attempted_len,
+        }
+    }
+
+    pub(crate) const fn initial_state_limit(
+        limit: RuntimeStateByteLimit,
+        attempted_len: RuntimeStateByteCount,
+    ) -> Self {
+        Self::InitialStateLimit {
             limit,
             attempted_len,
         }
     }
 }
 
-impl Error for RuntimeInputError {
+impl Error for RunInputError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Allocation(error) => Some(error),
-            Self::NonAscii { .. } | Self::ColumnOverflow | Self::Limit { .. } => None,
+            Self::NonAscii { .. }
+            | Self::ColumnOverflow
+            | Self::InputLimit { .. }
+            | Self::InitialStateLimit { .. } => None,
         }
     }
 }
 
-impl From<AllocationError> for RuntimeInputError {
+impl From<AllocationError> for RunInputError {
     fn from(value: AllocationError) -> Self {
         Self::Allocation(value)
     }

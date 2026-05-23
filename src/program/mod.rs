@@ -1,9 +1,9 @@
 //! Parsed program and run-to-completion result types.
 //!
 //! [`Program`] is the immutable parsed A=B rule table. Hosts parse typed
-//! [`ProgramSource`] under [`ParseLimits`], then run with already validated
-//! [`RuntimeInput`] under [`RunLimits`]. Runtime budget and byte-count types
-//! live in [`limits`](crate::limits); runtime input lives in
+//! [`ProgramSource`] under [`ParseLimits`], then run with [`RunInput`] already
+//! admitted under [`RunLimits`]. Runtime budget and byte-count types live in
+//! [`limits`](crate::limits); runtime input lives in
 //! [`input`](crate::input).
 
 pub(crate) mod limits;
@@ -13,7 +13,7 @@ mod tracing;
 
 use crate::error::{InternalInvariantError, ParseError, RunError};
 use crate::execution::{OwnedRunSession, RunSession};
-use crate::input::RuntimeInput;
+use crate::input::RunInput;
 use crate::inspect::{OnceRuleCount, RuleCount, RulePositions, RuleView};
 use crate::limits::{ParseLimits, RunLimits};
 use crate::parser::parse_rules_impl;
@@ -145,9 +145,9 @@ impl Program {
 
     /// Starts a stateful run session for this program.
     ///
-    /// The input must already be validated as [`RuntimeInput`]. This function
+    /// The input must already be admitted as [`RunInput`]. This function
     /// consumes it and moves its typed bytes into the mutable runtime-state
-    /// domain under `limits`.
+    /// domain under the limits bound to the input.
     ///
     /// The returned [`RunSession`] can be advanced one matching rule at a time.
     /// Use [`Program::run`] when the caller wants to run to completion in one
@@ -159,10 +159,9 @@ impl Program {
     /// limit or when allocating per-run execution state fails.
     pub fn start_run(
         &self,
-        input: RuntimeInput,
-        limits: RunLimits,
+        input: RunInput,
     ) -> Result<RunSession<'_>, RunError> {
-        RunSession::new(self, input, limits)
+        RunSession::new(self, input)
     }
 
     /// Starts a stateful run session that owns this parsed program.
@@ -178,10 +177,9 @@ impl Program {
     /// limit or when allocating per-run execution state fails.
     pub fn into_run(
         self,
-        input: RuntimeInput,
-        limits: RunLimits,
+        input: RunInput,
     ) -> Result<OwnedRunSession, RunError> {
-        OwnedRunSession::new(self, input, limits)
+        OwnedRunSession::new(self, input)
     }
 
     /// Runs this program with already-validated runtime input.
@@ -194,7 +192,7 @@ impl Program {
     /// Returns `RunError` when the input exceeds this run's state limit,
     /// allocation fails, state-size arithmetic overflows, or a configured
     /// `RunLimits` budget would be exceeded.
-    pub fn run(&self, input: RuntimeInput, limits: RunLimits) -> Result<RunResult, RunError> {
-        RunSession::new(self, input, limits)?.finish()
+    pub fn run(&self, input: RunInput) -> Result<RunResult, RunError> {
+        RunSession::new(self, input)?.finish()
     }
 }

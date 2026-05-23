@@ -7,7 +7,7 @@
 //! The main domains are:
 //!
 //! - [`ParseError`] for source syntax and parser allocation failures.
-//! - [`RuntimeInputError`] for raw input bytes rejected before execution.
+//! - [`RunInputError`] for raw input bytes rejected before execution.
 //! - [`RunError`] for execution-time allocation, state-size, budget failures,
 //!   and runtime invariant failures that public inputs should not be able to
 //!   construct.
@@ -20,14 +20,21 @@
 //!   user callback failures.
 //!
 //! ```
-//! use rsaeb::error::RuntimeInputError;
-//! use rsaeb::limits::RuntimeInputByteLimit;
-//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::error::RunInputError;
+//! use rsaeb::input::{RunInput, RuntimeInputSource};
+//! use rsaeb::limits::{
+//!     ReturnByteLimit, RunLimits, RuntimeInputByteLimit, RuntimeStateByteLimit, StepLimit,
+//! };
 //!
-//! fn validate(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
-//!     RuntimeInput::validate(
+//! fn validate(bytes: &[u8]) -> Result<RunInput, RunInputError> {
+//!     RunInput::validate(
 //!         RuntimeInputSource::from_bytes(bytes),
-//!         RuntimeInputByteLimit::new(8),
+//!         RunLimits::new(
+//!             RuntimeInputByteLimit::new(8),
+//!             StepLimit::new(16),
+//!             RuntimeStateByteLimit::new(8),
+//!             ReturnByteLimit::new(8),
+//!         ),
 //!     )
 //! }
 //!
@@ -38,7 +45,7 @@
 //!
 //! assert!(matches!(
 //!     error,
-//!     RuntimeInputError::NonAscii { column, byte }
+//!     RunInputError::NonAscii { column, byte }
 //!         if column.get() == 2 && byte.get() == 0xff
 //! ));
 //! # Ok(())
@@ -61,7 +68,7 @@ pub use parse::{
     ParseLimitError, PayloadKind, RightActionKind,
 };
 pub use run::{
-    InputColumn, InternalInvariantError, LimitError, RunError, RuntimeInputError,
-    StateLimitContext, StateSizeError,
+    InputColumn, InternalInvariantError, LimitError, RunError, RunInputError, StateLimitContext,
+    StateSizeError,
 };
 pub use traced::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
