@@ -254,14 +254,15 @@ impl<'program> RunSession<'program> {
             } = &mut self.core;
 
             let matched = match find_next_match(rules, once_states, state) {
-                RuleSearch::Matched(matched) => matched,
-                RuleSearch::Stable => {
+                Ok(RuleSearch::Matched(matched)) => matched,
+                Ok(RuleSearch::Stable) => {
                     let steps = budget.completed_steps();
                     return StepTransition::Stable(StableRun {
                         steps,
                         core: self.core,
                     });
                 }
+                Err(error) => return StepTransition::Failed(FailedRun::new(error, self)),
             };
 
             apply_matched_rule(state, scratch, budget, matched)

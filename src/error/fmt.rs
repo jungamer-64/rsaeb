@@ -3,9 +3,9 @@ use core::fmt;
 use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind};
 
 use super::{
-    InputColumn, LeftModifierKind, LimitError, ParseError, ParseErrorKind, ParseErrorLocation,
-    PayloadKind, RightActionKind, RunError, RuntimeInputError, StateLimitContext, StateSizeError,
-    TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
+    InputColumn, InternalInvariantError, LeftModifierKind, LimitError, ParseError, ParseErrorKind,
+    ParseErrorLocation, PayloadKind, RightActionKind, RunError, RuntimeInputError,
+    StateLimitContext, StateSizeError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -175,6 +175,20 @@ impl fmt::Display for RunError {
             Self::Allocation(error) => error.fmt(f),
             Self::StateSize(error) => error.fmt(f),
             Self::Limit(error) => error.fmt(f),
+            Self::InternalInvariant(error) => error.fmt(f),
+        }
+    }
+}
+
+impl fmt::Display for InternalInvariantError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingOnceRuleState => {
+                f.write_str("internal invariant violation: missing once-rule state")
+            }
+            Self::ConsumedOnceRuleCommit => {
+                f.write_str("internal invariant violation: consumed once-rule commit")
+            }
         }
     }
 }

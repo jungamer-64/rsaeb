@@ -1,5 +1,6 @@
-use super::once::{MatchedRuleCommit, OnceRuleUnavailable, OnceStateSet, RuleAvailability};
+use super::once::{MatchedRuleCommit, OnceRuleAvailability, OnceStateSet};
 use super::state::{State, StateMatch};
+use crate::error::RunError;
 use crate::inspect::{RulePosition, RulePositions};
 use crate::rule::{Rule, RuleAnchorSyntax};
 
@@ -17,10 +18,33 @@ pub(crate) struct MatchedRuleApplication<'program, 'once> {
     state_match: StateMatch,
 }
 
+struct MatchedRuleCandidate<'program> {
+    position: RulePosition,
+    rule: &'program Rule,
+    state_match: StateMatch,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CommittedRule<'program> {
     position: RulePosition,
     rule: &'program Rule,
+}
+
+impl<'program> MatchedRuleCandidate<'program> {
+    const fn new(position: RulePosition, rule: &'program Rule, state_match: StateMatch) -> Self {
+        Self {
+            position,
+            rule,
+            state_match,
+        }
+    }
+
+    const fn into_application<'once>(
+        self,
+        commit: MatchedRuleCommit<'once>,
+    ) -> MatchedRuleApplication<'program, 'once> {
+        MatchedRuleApplication::new(self.position, self.rule, self.state_match, commit)
+    }
 }
 
 impl<'program, 'once> MatchedRuleApplication<'program, 'once> {
@@ -63,40 +87,34 @@ impl<'program> CommittedRule<'program> {
 
 pub(crate) fn find_next_match<'program, 'once>(
     rules: &'program [Rule],
-    once_states: &'once OnceStateSet,
+    once_states: &'once mut OnceStateSet,
     state: &State,
-) -> RuleSearch<'program, 'once> {
+) -> Result<RuleSearch<'program, 'once>, RunError> {
     for (rule, position) in rules.iter().zip(RulePositions::new()) {
-        let Some(application) = matched_application_for_rule(rule, position, once_states, state)
+        let Some(candidate) = matched_candidate_for_rule(rule, position, once_states, state)?
         else {
             continue;
         };
 
-        return RuleSearch::Matched(application);
+        let commit = once_states.commit_for_available_rule(rule)?;
+        return Ok(RuleSearch::Matched(candidate.into_application(commit)));
     }
 
-    RuleSearch::Stable
+    Ok(RuleSearch::Stable)
 }
 
-fn matched_application_for_rule<'program, 'once>(
+fn matched_candidate_for_rule<'program>(
     rule: &'program Rule,
     position: RulePosition,
-    once_states: &'once OnceStateSet,
+    once_states: &OnceStateSet,
     state: &State,
-) -> Option<MatchedRuleApplication<'program, 'once>> {
+) -> Result<Option<MatchedRuleCandidate<'program>>, RunError> {
     let state_match = find_match(state, rule)?;
-    let commit = match once_states.availability_for_rule(rule) {
-        RuleAvailability::Available(commit) => commit,
-        RuleAvailability::Unavailable(
-            OnceRuleUnavailable::Consumed | OnceRuleUnavailable::MissingSlot,
-        ) => return None,
+    match once_states.availability_for_rule(rule)? {
+        OnceRuleAvailability::Available => {}
+        OnceRuleAvailability::Consumed => return Ok(None),
     };
-    Some(MatchedRuleApplication::new(
-        position,
-        rule,
-        state_match,
-        commit,
-    ))
+    Ok(Some(MatchedRuleCandidate::new(position, rule, state_match)))
 }
 
 fn find_match(state: &State, rule: &Rule) -> Option<StateMatch> {

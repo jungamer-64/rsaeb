@@ -60,6 +60,7 @@ pub use parse::{
     RightActionKind,
 };
 pub use run::{
-    InputColumn, LimitError, RunError, RuntimeInputError, StateLimitContext, StateSizeError,
+    InputColumn, InternalInvariantError, LimitError, RunError, RuntimeInputError,
+    StateLimitContext, StateSizeError,
 };
 pub use traced::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
