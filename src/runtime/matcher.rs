@@ -25,9 +25,8 @@ struct MatchedRuleCandidate<'program> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct CommittedRule<'program> {
+pub(crate) struct CommittedRule {
     position: RulePosition,
-    rule: &'program Rule,
 }
 
 impl<'program> MatchedRuleCandidate<'program> {
@@ -70,18 +69,17 @@ impl<'program, 'once> MatchedRuleApplication<'program, 'once> {
         self.state_match
     }
 
-    pub(crate) fn commit(self) -> CommittedRule<'program> {
+    pub(crate) fn commit(self) -> CommittedRule {
         self.commit.commit();
         CommittedRule {
             position: self.position,
-            rule: self.rule,
         }
     }
 }
 
-impl<'program> CommittedRule<'program> {
-    pub(crate) const fn view(self) -> crate::inspect::RuleView<'program> {
-        crate::inspect::RuleView::new(self.position, self.rule)
+impl CommittedRule {
+    pub(crate) const fn position(self) -> RulePosition {
+        self.position
     }
 }
 

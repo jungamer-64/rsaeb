@@ -1,6 +1,6 @@
 use crate::bytes::ReturnOutputByteCount;
 use crate::error::RunError;
-use crate::inspect::RuleView;
+use crate::inspect::RulePosition;
 use crate::limits::StepCount;
 use crate::program::{ReturnOutput, ReturnOutputView};
 use crate::rule::RuleAction;
@@ -11,16 +11,16 @@ use super::rewrite::RewriteScratch;
 use super::state::State;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AppliedRuleEffect<'program> {
+pub(crate) enum AppliedRuleEffect {
     Continue,
-    Return(ReturnOutputView<'program>),
+    Return,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct AppliedRule<'program> {
+pub(crate) struct AppliedRule {
     pub(crate) step: StepCount,
-    pub(crate) rule: RuleView<'program>,
-    pub(crate) effect: AppliedRuleEffect<'program>,
+    pub(crate) rule: RulePosition,
+    pub(crate) effect: AppliedRuleEffect,
 }
 
 /// Materializes a return payload as public return output.
@@ -45,7 +45,7 @@ pub(crate) fn apply_matched_rule<'program>(
     scratch: &mut RewriteScratch,
     budget: &mut RuntimeBudgetState,
     matched: MatchedRuleApplication<'program, '_>,
-) -> Result<AppliedRule<'program>, RunError> {
+) -> Result<AppliedRule, RunError> {
     let permit = budget.reserve_next_step(state.byte_count())?;
     match matched.rule().action() {
         RuleAction::Rewrite(action) => {
@@ -55,7 +55,7 @@ pub(crate) fn apply_matched_rule<'program>(
             state.commit_rewrite(rewrite, scratch);
             Ok(AppliedRule {
                 step,
-                rule: committed.view(),
+                rule: committed.position(),
                 effect: AppliedRuleEffect::Continue,
             })
         }
@@ -63,13 +63,12 @@ pub(crate) fn apply_matched_rule<'program>(
             let output_len = ReturnOutputByteCount::from_payload_count(output.byte_count());
             (*budget).ensure_return_len(output_len)?;
 
-            let output = ReturnOutputView::new(output);
             let committed = matched.commit();
             let step = budget.commit(permit);
             Ok(AppliedRule {
                 step,
-                rule: committed.view(),
-                effect: AppliedRuleEffect::Return(output),
+                rule: committed.position(),
+                effect: AppliedRuleEffect::Return,
             })
         }
     }

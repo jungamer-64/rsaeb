@@ -4,7 +4,8 @@ mod support;
 
 use rsaeb::error::LimitError;
 use rsaeb::execution::{
-    AppliedStep, FailedRun, ReturnedRun, RunSession, StableRun, StepTransition,
+    AppliedStep, FailedRun, OwnedRunSession, OwnedStepTransition, ReturnedRun, RunSession,
+    StableRun, StepTransition,
 };
 use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 use rsaeb::limits::{
@@ -62,7 +63,7 @@ enum StepSignature {
 fn applied_signature(applied: &AppliedStep<'_>) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Applied {
         step: applied.step().get(),
-        rule: applied.rule().canonical_source()?.into_raw_bytes(),
+        rule: applied.rule()?.canonical_source()?.into_raw_bytes(),
         state: runtime_view_bytes(applied.state())?,
     })
 }
@@ -72,7 +73,7 @@ fn applied_signature(applied: &AppliedStep<'_>) -> Result<StepSignature, TestFai
 /// # Errors
 ///
 /// Returns `TestFailure` if stable-state materialization fails.
-fn stable_signature(stable: &StableRun<'_>) -> Result<StepSignature, TestFailure> {
+fn stable_signature(stable: &StableRun) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Stable {
         steps: stable.steps().get(),
         state: runtime_view_bytes(stable.state())?,
@@ -88,8 +89,8 @@ fn stable_signature(stable: &StableRun<'_>) -> Result<StepSignature, TestFailure
 fn returned_signature(returned: &ReturnedRun<'_>) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Return {
         step: returned.step().get(),
-        rule: returned.rule().canonical_source()?.into_raw_bytes(),
-        output: returned.output().materialize()?.into_raw_bytes(),
+        rule: returned.rule()?.canonical_source()?.into_raw_bytes(),
+        output: returned.output()?.materialize()?.into_raw_bytes(),
     })
 }
 
@@ -117,6 +118,47 @@ fn finish_step_signatures(
                 return Ok(signatures);
             }
             StepTransition::Failed(failed) => return Err(TestFailure::from(failed.into_error())),
+        }
+    }
+}
+
+/// Runs owned stepwise execution and collects comparable transition signatures.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if a step fails or transition materialization fails.
+fn finish_owned_step_signatures(
+    mut execution: OwnedRunSession,
+) -> Result<Vec<StepSignature>, TestFailure> {
+    let mut signatures = Vec::new();
+    loop {
+        match execution.step() {
+            OwnedStepTransition::Applied(applied) => {
+                signatures.push(StepSignature::Applied {
+                    step: applied.step().get(),
+                    rule: applied.rule()?.canonical_source()?.into_raw_bytes(),
+                    state: runtime_view_bytes(applied.state())?,
+                });
+                execution = applied.into_session();
+            }
+            OwnedStepTransition::Stable(stable) => {
+                signatures.push(StepSignature::Stable {
+                    steps: stable.steps().get(),
+                    state: runtime_view_bytes(stable.state())?,
+                });
+                return Ok(signatures);
+            }
+            OwnedStepTransition::Returned(returned) => {
+                signatures.push(StepSignature::Return {
+                    step: returned.step().get(),
+                    rule: returned.rule()?.canonical_source()?.into_raw_bytes(),
+                    output: returned.output()?.materialize()?.into_raw_bytes(),
+                });
+                return Ok(signatures);
+            }
+            OwnedStepTransition::Failed(failed) => {
+                return Err(TestFailure::from(failed.into_error()));
+            }
         }
     }
 }
@@ -213,7 +255,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
         StepTransition::Applied(applied) => {
             ensure_eq!(applied.step().get(), 1)?;
             ensure_eq!(
-                applied.rule().canonical_source()?.as_slice(),
+                applied.rule()?.canonical_source()?.as_slice(),
                 b"a=b".as_slice()
             )?;
             ensure_eq!(
@@ -232,7 +274,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
         StepTransition::Applied(applied) => {
             ensure_eq!(applied.step().get(), 2)?;
             ensure_eq!(
-                applied.rule().canonical_source()?.as_slice(),
+                applied.rule()?.canonical_source()?.as_slice(),
                 b"b=c".as_slice()
             )?;
             ensure_eq!(
@@ -339,6 +381,28 @@ fn execution_consumes_runtime_input_without_session_leakage() -> TestResult {
         finish_step_signatures(second)?,
         finish_step_signatures(program.start_run(runtime_input(b"aa")?, limits)?)?,
     )
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if borrowed and owned run sessions diverge for the
+/// same source, input, and limits.
+#[test]
+fn execution_borrowed_and_owned_sessions_share_step_contract() -> TestResult {
+    let source = "a=b\nb=(return)ok";
+    let limits = RunLimits::new(
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+
+    let borrowed =
+        finish_step_signatures(parse_program(source)?.start_run(runtime_input(b"a")?, limits)?)?;
+    let owned = finish_owned_step_signatures(
+        parse_program(source)?.into_run(runtime_input(b"a")?, limits)?,
+    )?;
+
+    ensure_eq!(borrowed, owned)
 }
 
 /// # Errors

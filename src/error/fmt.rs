@@ -189,6 +189,12 @@ impl fmt::Display for InternalInvariantError {
             Self::ConsumedOnceRuleCommit => {
                 f.write_str("internal invariant violation: consumed once-rule commit")
             }
+            Self::MissingCommittedRule => {
+                f.write_str("internal invariant violation: missing committed rule")
+            }
+            Self::ReturnedRuleWithoutOutput => {
+                f.write_str("internal invariant violation: returned rule has no return output")
+            }
         }
     }
 }

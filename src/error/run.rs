@@ -201,6 +201,10 @@ pub enum InternalInvariantError {
     MissingOnceRuleState,
     /// Runtime attempted to commit a `(once)` rule without a fresh slot permit.
     ConsumedOnceRuleCommit,
+    /// A committed rule position did not resolve inside its originating program.
+    MissingCommittedRule,
+    /// A committed return transition pointed at a non-return rule.
+    ReturnedRuleWithoutOutput,
 }
 
 impl InternalInvariantError {
@@ -210,6 +214,14 @@ impl InternalInvariantError {
 
     pub(crate) const fn consumed_once_rule_commit() -> Self {
         Self::ConsumedOnceRuleCommit
+    }
+
+    pub(crate) const fn missing_committed_rule() -> Self {
+        Self::MissingCommittedRule
+    }
+
+    pub(crate) const fn returned_rule_without_output() -> Self {
+        Self::ReturnedRuleWithoutOutput
     }
 }
 

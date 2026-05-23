@@ -39,9 +39,7 @@ use core::fmt;
 use crate::allocation::{AllocationContext, AllocationError};
 use crate::bytes::{Payload, PayloadByteCount};
 use crate::limits::SourceByteCount;
-use crate::materialized::{
-    CanonicalRuleSourceDomain, MaterializedBytes, PayloadInspectionDomain,
-};
+use crate::materialized::{CanonicalRuleSourceDomain, MaterializedBytes, PayloadInspectionDomain};
 use crate::rule::Rule;
 use crate::source::SourceLineNumber;
 
@@ -133,6 +131,10 @@ impl RulePosition {
     pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
         let number = RuleNumber::from_zero_based(zero_based)?;
         Some(Self { number })
+    }
+
+    pub(crate) const fn zero_based(self) -> usize {
+        self.number.one_based - 1
     }
 
     const fn first() -> Self {

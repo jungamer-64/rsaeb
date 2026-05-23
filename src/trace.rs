@@ -136,21 +136,22 @@ impl core::fmt::Debug for RuntimeStateView<'_> {
     }
 }
 
-/// Owned trace effect emitted by trace snapshot APIs.
+/// Trace effect emitted by step trace events.
 ///
-/// Continuation steps materialize the post-step runtime state. Return steps
-/// materialize the final `(return)` output instead of a state.
-#[derive(Debug, PartialEq, Eq)]
-pub enum TraceSnapshotEffect {
+/// `State` and `Output` decide whether the effect borrows runtime bytes or owns
+/// materialized snapshots. The effect semantics are otherwise single-sourced:
+/// a step either continues with a runtime state or returns an output payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraceEffect<State, Output> {
     /// The step produced the next runtime state and execution may continue.
     Continue {
-        /// Materialized runtime state after the rewrite step.
-        state: RuntimeStateSnapshot,
+        /// Runtime state after the rewrite step.
+        state: State,
     },
     /// The step executed `(return)` and produced final output bytes.
     Return {
-        /// Materialized `(return)` output bytes.
-        output: ReturnOutput,
+        /// `(return)` output bytes.
+        output: Output,
     },
 }
 
@@ -158,21 +159,16 @@ pub enum TraceSnapshotEffect {
 ///
 /// Borrowed effects avoid allocation by borrowing the post-step state or parsed
 /// return payload for the duration of the callback.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BorrowedTraceEffect<'program, 'run> {
-    /// The step produced the next runtime state and execution may continue.
-    Continue {
-        /// Borrowed runtime state after the rewrite step.
-        state: RuntimeStateView<'run>,
-    },
-    /// The step executed `(return)` and produced final output bytes.
-    Return {
-        /// Borrowed `(return)` output bytes from runtime execution.
-        output: ReturnOutputView<'program>,
-    },
-}
+pub type BorrowedTraceEffect<'program, 'run> =
+    TraceEffect<RuntimeStateView<'run>, ReturnOutputView<'program>>;
 
-impl BorrowedTraceEffect<'_, '_> {
+/// Owned trace effect emitted by trace snapshot APIs.
+///
+/// Continuation steps materialize the post-step runtime state. Return steps
+/// materialize the final `(return)` output instead of a state.
+pub type TraceSnapshotEffect = TraceEffect<RuntimeStateSnapshot, ReturnOutput>;
+
+impl TraceEffect<RuntimeStateView<'_>, ReturnOutputView<'_>> {
     /// Byte length that would be materialized by snapshot tracing.
     #[must_use]
     pub fn byte_count(self) -> TraceSnapshotByteCount {
@@ -221,18 +217,18 @@ impl BorrowedTraceEffect<'_, '_> {
     }
 }
 
-/// Trace event emitted by trace snapshot APIs.
+/// Trace event emitted by tracing APIs.
 ///
-/// State and return-output bytes are materialized as owned `Vec<u8>` snapshots.
-/// Step events still borrow the structured rule view from `Program`, so these
-/// events cannot outlive the parsed program. Return steps cannot be confused
-/// with ordinary continuation steps by forgetting to inspect a boolean flag.
-#[derive(Debug, PartialEq, Eq)]
-pub enum TraceSnapshotEvent<'program> {
+/// `State` and `Effect` decide whether event bytes are borrowed for the
+/// callback or materialized into owned snapshots. Step events always borrow the
+/// structured rule view from `Program`, so they cannot outlive the parsed
+/// program they describe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraceEvent<'program, State, Effect> {
     /// Initial runtime state before any rewrite step.
     Initial {
-        /// Materialized initial runtime state.
-        state: RuntimeStateSnapshot,
+        /// Initial runtime state.
+        state: State,
     },
     /// One applied rule.
     Step {
@@ -241,7 +237,7 @@ pub enum TraceSnapshotEvent<'program> {
         /// Structured view of the applied rule.
         rule: RuleView<'program>,
         /// Structured result of the rewrite step.
-        effect: TraceSnapshotEffect,
+        effect: Effect,
     },
 }
 
@@ -251,25 +247,18 @@ pub enum TraceSnapshotEvent<'program> {
 /// API does not materialize owned event snapshots; snapshot tracing is derived
 /// from it by materializing snapshots under an explicit
 /// [`TraceSnapshotByteLimit`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BorrowedTraceEvent<'program, 'run> {
-    /// Initial runtime state before any rewrite step.
-    Initial {
-        /// Borrowed initial runtime state.
-        state: RuntimeStateView<'run>,
-    },
-    /// One applied rule.
-    Step {
-        /// One-based applied step count.
-        step: StepCount,
-        /// Structured view of the applied rule.
-        rule: RuleView<'program>,
-        /// Structured result of the rewrite step.
-        effect: BorrowedTraceEffect<'program, 'run>,
-    },
-}
+pub type BorrowedTraceEvent<'program, 'run> =
+    TraceEvent<'program, RuntimeStateView<'run>, BorrowedTraceEffect<'program, 'run>>;
 
-impl<'program> BorrowedTraceEvent<'program, '_> {
+/// Trace event emitted by trace snapshot APIs.
+///
+/// State and return-output bytes are materialized as owned `Vec<u8>` snapshots.
+/// Return steps cannot be confused with ordinary continuation steps by
+/// forgetting to inspect a boolean flag.
+pub type TraceSnapshotEvent<'program> =
+    TraceEvent<'program, RuntimeStateSnapshot, TraceSnapshotEffect>;
+
+impl<'program> TraceEvent<'program, RuntimeStateView<'_>, BorrowedTraceEffect<'program, '_>> {
     /// Byte length that would be materialized by snapshot tracing.
     #[must_use]
     pub fn byte_count(self) -> TraceSnapshotByteCount {

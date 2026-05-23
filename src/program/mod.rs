@@ -13,13 +13,13 @@ mod result;
 mod rule_set;
 mod tracing;
 
-use crate::error::{ParseError, RunError};
-use crate::execution::RunSession;
+use crate::error::{InternalInvariantError, ParseError, RunError};
+use crate::execution::{OwnedRunSession, RunSession};
 use crate::input::RuntimeInput;
 use crate::inspect::{OnceRuleCount, RuleCount, RulePositions, RuleView};
 use crate::limits::{ParseLimits, RunLimits};
 use crate::parser::parse_rules_impl;
-use crate::rule::Rule;
+use crate::rule::{Rule, RuleAction};
 use crate::source::ProgramSource;
 
 pub(crate) use rule_set::RuleSet;
@@ -101,6 +101,33 @@ impl Program {
         self.rule_set.as_slice()
     }
 
+    pub(crate) fn rule_view_at(
+        &self,
+        position: crate::inspect::RulePosition,
+    ) -> Result<RuleView<'_>, RunError> {
+        let rule = self
+            .rule_set
+            .as_slice()
+            .get(position.zero_based())
+            .ok_or_else(InternalInvariantError::missing_committed_rule)?;
+        Ok(RuleView::new(position, rule))
+    }
+
+    pub(crate) fn return_output_at(
+        &self,
+        position: crate::inspect::RulePosition,
+    ) -> Result<ReturnOutputView<'_>, RunError> {
+        let rule = self
+            .rule_set
+            .as_slice()
+            .get(position.zero_based())
+            .ok_or_else(InternalInvariantError::missing_committed_rule)?;
+        let RuleAction::Return(output) = rule.action() else {
+            return Err(InternalInvariantError::returned_rule_without_output().into());
+        };
+        Ok(ReturnOutputView::new(output))
+    }
+
     pub(crate) const fn once_slot_count(&self) -> crate::rule::OnceRuleCount {
         self.rule_set.once_slot_count()
     }
@@ -125,6 +152,25 @@ impl Program {
         limits: RunLimits,
     ) -> Result<RunSession<'_>, RunError> {
         RunSession::new(self, input, limits)
+    }
+
+    /// Starts a stateful run session that owns this parsed program.
+    ///
+    /// This is the owned counterpart of [`Program::start_run`]. It consumes
+    /// `self` so hosts can move the parsed rule table into a long-lived
+    /// execution state without keeping a separate program borrow alive. The
+    /// mutable runtime core is the same one used by borrowed sessions.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` when the validated input exceeds this run's state
+    /// limit or when allocating per-run execution state fails.
+    pub fn into_run(
+        self,
+        input: RuntimeInput,
+        limits: RunLimits,
+    ) -> Result<OwnedRunSession, RunError> {
+        OwnedRunSession::new(self, input, limits)
     }
 
     /// Runs this program with already-validated runtime input.
