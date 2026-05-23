@@ -1,4 +1,6 @@
+/// Internal canonical module.
 mod canonical;
+/// Internal model module.
 mod model;
 
 pub(crate) use canonical::canonical_source;

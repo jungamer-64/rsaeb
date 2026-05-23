@@ -49,6 +49,7 @@ use crate::source::SourceLineNumber;
 /// from byte counts and step counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleCount {
+    /// Stored value.
     value: usize,
 }
 
@@ -72,6 +73,7 @@ impl RuleCount {
 /// distinct from the total executable rule count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct OnceRuleCount {
+    /// Stored value.
     value: usize,
 }
 
@@ -92,19 +94,23 @@ impl OnceRuleCount {
 /// One-based rule number for public diagnostics and display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleNumber {
+    /// Stored one based.
     one_based: usize,
 }
 
 impl RuleNumber {
+    /// Builds an index from a zero-based offset.
     fn from_zero_based(zero_based: usize) -> Option<Self> {
         let one_based = zero_based.checked_add(1)?;
         Some(Self { one_based })
     }
 
+    /// Builds the first value.
     const fn first() -> Self {
         Self { one_based: 1 }
     }
 
+    /// Runs the next operation.
     fn next(self) -> Option<Self> {
         let one_based = self.one_based.checked_add(1)?;
         Some(Self { one_based })
@@ -124,25 +130,30 @@ impl RuleNumber {
 /// line instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RulePosition {
+    /// Stored number.
     number: RuleNumber,
 }
 
 impl RulePosition {
+    /// Builds an index from a zero-based offset.
     pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
         let number = RuleNumber::from_zero_based(zero_based)?;
         Some(Self { number })
     }
 
+    /// Runs the zero based operation.
     pub(crate) fn zero_based(self) -> usize {
         self.number.one_based.saturating_sub(1)
     }
 
+    /// Builds the first value.
     const fn first() -> Self {
         Self {
             number: RuleNumber::first(),
         }
     }
 
+    /// Runs the next operation.
     fn next(self) -> Option<Self> {
         let number = self.number.next()?;
         Some(Self { number })
@@ -155,11 +166,14 @@ impl RulePosition {
     }
 }
 
+/// Internal rule positions.
 pub(crate) struct RulePositions {
+    /// Stored next.
     next: Option<RulePosition>,
 }
 
 impl RulePositions {
+    /// Constructs the value from validated parts.
     pub(crate) const fn new() -> Self {
         Self {
             next: Some(RulePosition::first()),
@@ -211,6 +225,7 @@ pub enum RuleAnchor {
 /// inside this view because payload construction is owned by the parser.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PayloadView<'program> {
+    /// Stored payload.
     payload: &'program Payload,
 }
 
@@ -221,6 +236,7 @@ pub struct PayloadView<'program> {
 /// program data.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PayloadBytes {
+    /// Stored bytes.
     bytes: MaterializedBytes<PayloadInspectionDomain>,
 }
 
@@ -230,10 +246,12 @@ pub struct PayloadBytes {
 /// whitespace or comments from the original program source.
 #[derive(Debug, PartialEq, Eq)]
 pub struct CanonicalRuleSource {
+    /// Stored bytes.
     bytes: MaterializedBytes<CanonicalRuleSourceDomain>,
 }
 
 impl<'program> PayloadView<'program> {
+    /// Constructs the value from validated parts.
     pub(crate) fn new(payload: &'program Payload) -> Self {
         Self { payload }
     }
@@ -250,6 +268,7 @@ impl<'program> PayloadView<'program> {
         self.byte_count().is_zero()
     }
 
+    /// Returns materialized runtime bytes.
     pub(crate) fn materialized_bytes(self) -> impl Iterator<Item = u8> + 'program {
         self.payload.bytes()
     }
@@ -364,7 +383,9 @@ pub enum RuleActionView<'program> {
 /// it is not stored as a second source of truth beside the parsed fields.
 #[derive(Clone, Copy)]
 pub struct RuleView<'program> {
+    /// Stored position.
     position: RulePosition,
+    /// Stored rule.
     rule: &'program Rule,
 }
 
@@ -396,6 +417,7 @@ impl PartialEq for RuleView<'_> {
 impl Eq for RuleView<'_> {}
 
 impl<'program> RuleView<'program> {
+    /// Constructs the value from validated parts.
     pub(crate) const fn new(position: RulePosition, rule: &'program Rule) -> Self {
         Self { position, rule }
     }

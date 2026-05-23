@@ -5,33 +5,41 @@ use crate::allocation::{
 };
 use crate::bytes::{Payload, RuntimeByte, RuntimeStateByteCount};
 
+/// Internal rewrite scratch.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RewriteScratch {
+    /// Stored bytes.
     bytes: Vec<RuntimeByte>,
 }
 
+/// Internal prepared rewrite.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct PreparedRewrite {
+    /// Stored bytes.
     bytes: Vec<RuntimeByte>,
 }
 
 impl PreparedRewrite {
+    /// Runs the into runtime bytes operation.
     pub(crate) fn into_runtime_bytes(self) -> Vec<RuntimeByte> {
         self.bytes
     }
 }
 
 impl RewriteScratch {
+    /// Constructs the value from validated parts.
     pub(crate) fn new() -> Self {
         Self { bytes: Vec::new() }
     }
 
+    /// Runs the take prepared operation.
     pub(crate) fn take_prepared(&mut self) -> PreparedRewrite {
         PreparedRewrite {
             bytes: core::mem::take(&mut self.bytes),
         }
     }
 
+    /// Runs the store previous state operation.
     pub(crate) fn store_previous_state(&mut self, bytes: Vec<RuntimeByte>) {
         self.bytes = bytes;
     }

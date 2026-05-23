@@ -10,16 +10,23 @@ use super::matcher::MatchedRuleApplication;
 use super::rewrite::RewriteScratch;
 use super::state::State;
 
+/// Internal applied rule effect alternatives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AppliedRuleEffect {
+    /// Continue case.
     Continue,
+    /// Return case.
     Return,
 }
 
+/// Internal applied rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AppliedRule {
+    /// Stored step.
     pub(crate) step: StepCount,
+    /// Stored rule.
     pub(crate) rule: RulePosition,
+    /// Stored effect.
     pub(crate) effect: AppliedRuleEffect,
 }
 

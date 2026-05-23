@@ -20,7 +20,7 @@ use crate::test_support::{
     source_column, source_line_number,
 };
 use crate::trace::RuntimeStateView;
-use std::vec::Vec;
+use alloc::vec::Vec;
 
 fn runtime_view_bytes(view: RuntimeStateView<'_>) -> Vec<u8> {
     view.materialized_bytes().collect()

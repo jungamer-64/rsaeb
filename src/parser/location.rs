@@ -2,6 +2,7 @@ use crate::allocation::{AllocationContext, AllocationError};
 use crate::error::{ParseError, ParseErrorKind};
 use crate::source::{SourceColumn, SourceLineNumber};
 
+/// Runs the internal parse allocation error operation.
 pub(super) fn parse_allocation_error(
     line_number: SourceLineNumber,
     error: AllocationError,

@@ -46,9 +46,13 @@
 //! # }
 //! ```
 
+/// Internal error formatting module.
 mod fmt;
+/// Internal parse module.
 mod parse;
+/// Internal run module.
 mod run;
+/// Internal traced module.
 mod traced;
 
 pub use crate::allocation::{

@@ -1,5 +1,6 @@
 use core::fmt;
 
+/// Documents the internal default byte budget item.
 const DEFAULT_BYTE_BUDGET: usize = 16_777_216;
 
 /// Default program-source byte budget for callers that want the crate policy value.
@@ -35,6 +36,7 @@ pub const DEFAULT_PARSE_LIMITS: ParseLimits = ParseLimits::new(
 /// Source byte length measured before parsing starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceByteCount {
+    /// Stored value.
     value: usize,
 }
 
@@ -61,6 +63,7 @@ impl fmt::Display for SourceByteCount {
 /// Executable code-line byte length after comment removal and before whitespace compaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CodeLineByteCount {
+    /// Stored value.
     value: usize,
 }
 
@@ -87,6 +90,7 @@ impl fmt::Display for CodeLineByteCount {
 /// Maximum source length accepted by [`program::Program::parse`](crate::program::Program::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceByteLimit {
+    /// Stored value.
     value: usize,
 }
 
@@ -107,6 +111,7 @@ impl SourceByteLimit {
 /// Maximum executable code-line length accepted by [`program::Program::parse`](crate::program::Program::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CodeLineByteLimit {
+    /// Stored value.
     value: usize,
 }
 
@@ -127,6 +132,7 @@ impl CodeLineByteLimit {
 /// Maximum parsed payload length accepted by [`program::Program::parse`](crate::program::Program::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PayloadByteLimit {
+    /// Stored value.
     value: usize,
 }
 
@@ -147,6 +153,7 @@ impl PayloadByteLimit {
 /// Maximum executable rule count accepted by [`program::Program::parse`](crate::program::Program::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleLimit {
+    /// Stored value.
     value: usize,
 }
 
@@ -170,9 +177,13 @@ impl RuleLimit {
 /// allocations grow beyond the declared source, line, payload, or rule budgets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParseLimits {
+    /// Stored source len.
     source_len: SourceByteLimit,
+    /// Stored code line len.
     code_line_len: CodeLineByteLimit,
+    /// Stored payload len.
     payload_len: PayloadByteLimit,
+    /// Stored rules.
     rules: RuleLimit,
 }
 
@@ -224,6 +235,7 @@ impl ParseLimits {
 /// matching rule fails with a step-limit error instead of committing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StepLimit {
+    /// Stored value.
     value: usize,
 }
 
@@ -247,6 +259,7 @@ impl StepLimit {
 /// that would be produced by a rewrite.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuntimeStateByteLimit {
+    /// Stored value.
     value: usize,
 }
 
@@ -271,6 +284,7 @@ impl RuntimeStateByteLimit {
 /// before owned input allocation starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuntimeInputByteLimit {
+    /// Stored value.
     value: usize,
 }
 
@@ -294,6 +308,7 @@ impl RuntimeInputByteLimit {
 /// final states are governed by [`RuntimeStateByteLimit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ReturnByteLimit {
+    /// Stored value.
     value: usize,
 }
 
@@ -317,6 +332,7 @@ impl ReturnByteLimit {
 /// snapshot events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TraceSnapshotByteLimit {
+    /// Stored value.
     value: usize,
 }
 
@@ -340,10 +356,12 @@ impl TraceSnapshotByteLimit {
 /// this value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StepCount {
+    /// Stored value.
     value: usize,
 }
 
 impl StepCount {
+    /// ZERO boundary value.
     pub(crate) const ZERO: Self = Self { value: 0 };
 
     /// Returns this completed-step count as a primitive count.
@@ -352,6 +370,7 @@ impl StepCount {
         self.value
     }
 
+    /// Returns the checked next result.
     pub(crate) fn checked_next(self) -> Option<Self> {
         let value = self.value.checked_add(1)?;
         Some(Self { value })
@@ -365,6 +384,7 @@ impl StepCount {
 /// executed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeInputLimits {
+    /// Stored input len.
     input_len: RuntimeInputByteLimit,
 }
 
@@ -392,8 +412,11 @@ impl RuntimeInputLimits {
 /// state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionLimits {
+    /// Stored steps.
     steps: StepLimit,
+    /// Stored state len.
     state_len: RuntimeStateByteLimit,
+    /// Stored return len.
     return_len: ReturnByteLimit,
 }
 

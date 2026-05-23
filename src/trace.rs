@@ -73,10 +73,12 @@ use crate::program::{ReturnOutput, ReturnOutputView, RuntimeStateSnapshot};
 /// execution or trace callback.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeStateView<'run> {
+    /// Stored bytes.
     bytes: &'run [RuntimeByte],
 }
 
 impl<'run> RuntimeStateView<'run> {
+    /// Constructs the value from validated parts.
     pub(crate) const fn new(bytes: &'run [RuntimeByte]) -> Self {
         Self { bytes }
     }
@@ -87,6 +89,7 @@ impl<'run> RuntimeStateView<'run> {
         self.bytes.is_empty()
     }
 
+    /// Returns materialized runtime bytes.
     pub(crate) fn materialized_bytes(self) -> impl Iterator<Item = u8> + 'run {
         self.bytes.iter().copied().map(RuntimeByte::materialize)
     }

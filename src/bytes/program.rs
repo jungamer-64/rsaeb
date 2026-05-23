@@ -13,10 +13,12 @@ use super::rejection::{NonAsciiCodeByte, NonPrintableCodeByte, ReservedSyntaxByt
 pub(crate) struct ProgramByte(u8);
 
 impl ProgramByte {
+    /// Builds the is valid raw value.
     pub(crate) const fn is_valid_raw(raw: u8) -> bool {
         raw.is_ascii_graphic() && ReservedSyntaxByte::parse(raw).is_none()
     }
 
+    /// Builds the value from valid raw input.
     pub(crate) const fn from_valid_raw(raw: u8) -> Option<Self> {
         if Self::is_valid_raw(raw) {
             Some(Self(raw))
@@ -25,6 +27,7 @@ impl ProgramByte {
         }
     }
 
+    /// Builds the value from validated compact input.
     pub(crate) fn from_validated_compact(byte: CompactByte) -> Self {
         debug_assert!(Self::is_valid_raw(byte.as_u8()));
         Self(byte.as_u8())
@@ -70,6 +73,7 @@ impl ProgramByte {
         Ok(Self(raw))
     }
 
+    /// Returns the primitive stored value.
     pub(crate) const fn get(self) -> u8 {
         self.0
     }

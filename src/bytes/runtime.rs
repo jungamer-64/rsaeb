@@ -5,6 +5,7 @@ use super::rejection::NonAsciiInputByte;
 
 use runtime_ascii::{AsciiByte, ClassifiedAsciiByte, NonProgramAsciiByte};
 
+/// Internal runtime ascii module.
 mod runtime_ascii {
     use super::{InputColumn, NonAsciiInputByte, ProgramByte, RuntimeInputError};
 
@@ -14,12 +15,16 @@ mod runtime_ascii {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) struct AsciiByte(u8);
 
+    /// Internal classified ascii byte alternatives.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) enum ClassifiedAsciiByte {
+        /// Program case.
         Program(ProgramByte),
+        /// Non program case.
         NonProgram(NonProgramAsciiByte),
     }
 
+    /// Internal non program ascii byte.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) struct NonProgramAsciiByte(AsciiByte);
 
@@ -43,15 +48,18 @@ mod runtime_ascii {
             }
         }
 
+        /// Returns the primitive stored value.
         pub(crate) const fn get(self) -> u8 {
             self.0
         }
 
+        /// Builds the value from validated input.
         pub(super) fn from_validated(byte: u8) -> Self {
             debug_assert!(byte.is_ascii());
             Self(byte)
         }
 
+        /// Runs the classify operation.
         pub(crate) fn classify(self) -> ClassifiedAsciiByte {
             if let Some(byte) = ProgramByte::from_valid_raw(self.get()) {
                 ClassifiedAsciiByte::Program(byte)
@@ -62,6 +70,7 @@ mod runtime_ascii {
     }
 
     impl NonProgramAsciiByte {
+        /// Runs the materialize operation.
         pub(crate) const fn materialize(self) -> u8 {
             self.0.get()
         }
@@ -75,6 +84,7 @@ mod runtime_ascii {
 /// for mutable runtime state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RuntimeInputByte {
+    /// Stored byte.
     byte: AsciiByte,
 }
 
@@ -91,12 +101,14 @@ impl RuntimeInputByte {
         })
     }
 
+    /// Builds the value from validated ascii input.
     pub(crate) fn from_validated_ascii(byte: u8) -> Self {
         Self {
             byte: AsciiByte::from_validated(byte),
         }
     }
 
+    /// Runs the into runtime byte operation.
     pub(crate) fn into_runtime_byte(self) -> RuntimeByte {
         RuntimeByte::from_ascii(self.byte)
     }
@@ -109,15 +121,19 @@ impl RuntimeInputByte {
 /// bytes, or reserved syntax as program payload data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeByte {
+    /// Program constructible case.
     ProgramConstructible(ProgramByte),
+    /// Opaque case.
     Opaque(NonProgramAsciiByte),
 }
 
 impl RuntimeByte {
+    /// Builds the value from program input.
     pub(crate) const fn from_program(byte: ProgramByte) -> Self {
         Self::ProgramConstructible(byte)
     }
 
+    /// Builds the value from ascii input.
     fn from_ascii(byte: AsciiByte) -> Self {
         match byte.classify() {
             ClassifiedAsciiByte::Program(byte) => Self::ProgramConstructible(byte),
@@ -125,6 +141,7 @@ impl RuntimeByte {
         }
     }
 
+    /// Runs the materialize operation.
     pub(crate) const fn materialize(self) -> u8 {
         match self {
             Self::ProgramConstructible(byte) => byte.get(),
@@ -132,6 +149,7 @@ impl RuntimeByte {
         }
     }
 
+    /// Runs the program byte operation.
     pub(crate) const fn program_byte(self) -> Option<ProgramByte> {
         match self {
             Self::ProgramConstructible(byte) => Some(byte),

@@ -25,22 +25,26 @@ pub enum RunOutcome {
 /// bytes have been materialized successfully.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RuntimeStateSnapshot {
+    /// Stored bytes.
     bytes: MaterializedBytes<RuntimeStateSnapshotDomain>,
 }
 
 impl RuntimeStateSnapshot {
+    /// Builds the value from execution state input.
     pub(crate) fn from_execution_state(bytes: Vec<u8>) -> Self {
         Self {
             bytes: MaterializedBytes::from_vec(bytes),
         }
     }
 
+    /// Builds the value from runtime state view input.
     pub(crate) fn from_runtime_state_view(bytes: Vec<u8>) -> Self {
         Self {
             bytes: MaterializedBytes::from_vec(bytes),
         }
     }
 
+    /// Builds the value from trace snapshot input.
     pub(crate) fn from_trace_snapshot(bytes: Vec<u8>) -> Self {
         Self {
             bytes: MaterializedBytes::from_vec(bytes),
@@ -77,6 +81,7 @@ impl RuntimeStateSnapshot {
 /// This value owns public raw bytes from the return payload.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ReturnOutput {
+    /// Stored bytes.
     bytes: MaterializedBytes<ReturnOutputDomain>,
 }
 
@@ -86,16 +91,19 @@ pub struct ReturnOutput {
 /// runtime return paths and materializes into [`ReturnOutput`].
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ReturnOutputView<'program> {
+    /// Stored payload.
     payload: &'program Payload,
 }
 
 impl ReturnOutput {
+    /// Builds the value from return payload input.
     pub(crate) fn from_return_payload(bytes: Vec<u8>) -> Self {
         Self {
             bytes: MaterializedBytes::from_vec(bytes),
         }
     }
 
+    /// Builds the value from trace snapshot input.
     pub(crate) fn from_trace_snapshot(bytes: Vec<u8>) -> Self {
         Self {
             bytes: MaterializedBytes::from_vec(bytes),
@@ -128,6 +136,7 @@ impl ReturnOutput {
 }
 
 impl<'program> ReturnOutputView<'program> {
+    /// Constructs the value from validated parts.
     pub(crate) const fn new(payload: &'program Payload) -> Self {
         Self { payload }
     }
@@ -183,11 +192,14 @@ impl core::fmt::Debug for ReturnOutputView<'_> {
 /// outcome reached by the run.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RunResult {
+    /// Stored steps.
     steps: StepCount,
+    /// Stored outcome.
     outcome: RunOutcome,
 }
 
 impl RunResult {
+    /// Builds the stable value.
     pub(crate) fn stable(output: RuntimeStateSnapshot, steps: StepCount) -> Self {
         Self {
             steps,
@@ -195,6 +207,7 @@ impl RunResult {
         }
     }
 
+    /// Builds the value from return input.
     pub(crate) fn from_return(output: ReturnOutput, steps: StepCount) -> Self {
         Self {
             steps,

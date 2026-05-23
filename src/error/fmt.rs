@@ -345,9 +345,10 @@ impl fmt::Display for LimitError {
     }
 }
 
+/// Returns the printable ASCII character or a replacement marker.
 fn printable_ascii(byte: u8) -> char {
     if byte.is_ascii() {
-        byte as char
+        char::from(byte)
     } else {
         '\u{fffd}'
     }

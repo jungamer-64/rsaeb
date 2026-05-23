@@ -5,9 +5,13 @@
 //! [`RunSeed`]. Runtime budget and byte-count types live in
 //! [`limits`](crate::limits); runtime input lives in [`input`](crate::input).
 
+/// Internal parse-limit policy module.
 pub(crate) mod limits;
+/// Internal result module.
 mod result;
+/// Internal rule set module.
 mod rule_set;
+/// Internal tracing module.
 mod tracing;
 
 use crate::error::{InternalInvariantError, ParseError, RunError};
@@ -29,6 +33,7 @@ pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeS
 /// the runtime invocation, not in this value, so repeated runs with the same
 /// [`Program`] start from fresh rule availability.
 pub struct Program {
+    /// Stored rule set.
     rule_set: RuleSet,
 }
 
@@ -43,6 +48,7 @@ impl core::fmt::Debug for Program {
 }
 
 impl Program {
+    /// Builds the value from rule set input.
     pub(crate) fn from_rule_set(rule_set: RuleSet) -> Self {
         Self { rule_set }
     }
@@ -94,6 +100,7 @@ impl Program {
             .map(|(rule, position)| RuleView::new(position, rule))
     }
 
+    /// Runs the rule slice operation.
     pub(crate) fn rule_slice(&self) -> &[Rule] {
         self.rule_set.as_slice()
     }
@@ -138,6 +145,7 @@ impl Program {
         Ok(ReturnOutputView::new(output))
     }
 
+    /// Runs the once slot count operation.
     pub(crate) const fn once_slot_count(&self) -> crate::rule::OnceRuleCount {
         self.rule_set.once_slot_count()
     }

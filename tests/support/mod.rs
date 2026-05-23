@@ -1,4 +1,7 @@
-use std::string::{FromUtf8Error, String};
+extern crate alloc;
+
+use alloc::format;
+use alloc::string::{FromUtf8Error, String};
 
 use rsaeb::error::{
     AllocationError, ParseError, RunAdmissionError, RunError, RuntimeInputError,
@@ -76,7 +79,7 @@ where
     E: core::fmt::Debug,
 {
     fn from(value: TraceSnapshotRunError<E>) -> Self {
-        Self::TraceSnapshot(std::format!("{value:?}"))
+        Self::TraceSnapshot(format!("{value:?}"))
     }
 }
 
@@ -96,7 +99,10 @@ pub type TestResult = Result<(), TestFailure>;
 
 // Shared integration-test helper; each public test target imports this module
 // but only some targets construct run seeds.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "shared integration-test policy type is imported by targets with different coverage"
+)]
 #[derive(Clone, Copy)]
 pub struct TestRunPolicy {
     input: RuntimeInputLimits,
@@ -105,7 +111,10 @@ pub struct TestRunPolicy {
 
 // Shared integration-test helper; individual test binaries use different
 // constructor/accessor subsets.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "shared integration-test policy methods are selected per public API target"
+)]
 impl TestRunPolicy {
     #[must_use]
     pub const fn new(
@@ -148,7 +157,10 @@ impl TestRunPolicy {
 /// Returns `TestFailure` if validation or run admission fails.
 // Shared integration-test helper; kept here so public tests do not add
 // production-only seed construction APIs.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "shared integration-test seed helper is unused in parse-only public API targets"
+)]
 pub fn run_seed(bytes: &[u8], policy: TestRunPolicy) -> Result<RunSeed, TestFailure> {
     let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), policy.input())?;
     Ok(RunSeed::admit(input, policy.execution())?)

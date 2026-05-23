@@ -1,8 +1,14 @@
+/// Internal compact module.
 mod compact;
+/// Internal count module.
 mod count;
+/// Internal payload module.
 mod payload;
+/// Internal program module.
 mod program;
+/// Internal rejection module.
 mod rejection;
+/// Internal runtime module.
 mod runtime;
 
 #[cfg(test)]

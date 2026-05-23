@@ -7,8 +7,11 @@ use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 use super::Program;
 use super::result::RunResult;
 
+/// Internal snapshot trace callback error alternatives.
 enum SnapshotTraceCallbackError<E> {
+    /// Snapshot case.
     Snapshot(TraceSnapshotError),
+    /// Trace case.
     Trace(E),
 }
 

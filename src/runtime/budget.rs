@@ -2,18 +2,24 @@ use crate::bytes::{ReturnOutputByteCount, RuntimeStateByteCount};
 use crate::error::{LimitError, RunError};
 use crate::limits::{ExecutionLimits, StepCount};
 
+/// Internal runtime budget state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RuntimeBudgetState {
+    /// Stored limits.
     limits: ExecutionLimits,
+    /// Stored completed steps.
     completed_steps: StepCount,
 }
 
+/// Internal step permit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StepPermit {
+    /// Stored next step.
     next_step: StepCount,
 }
 
 impl RuntimeBudgetState {
+    /// Constructs the value from validated parts.
     pub(crate) const fn new(limits: ExecutionLimits) -> Self {
         Self {
             limits,
@@ -21,6 +27,7 @@ impl RuntimeBudgetState {
         }
     }
 
+    /// Runs the completed steps operation.
     pub(crate) const fn completed_steps(self) -> StepCount {
         self.completed_steps
     }
@@ -102,6 +109,7 @@ impl RuntimeBudgetState {
         Ok(StepPermit { next_step })
     }
 
+    /// Runs the commit operation.
     pub(crate) fn commit(&mut self, permit: StepPermit) -> StepCount {
         self.completed_steps = permit.next_step;
         permit.next_step

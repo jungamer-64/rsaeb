@@ -15,10 +15,14 @@ use crate::syntax::SyntaxToken;
 
 use super::location::parse_allocation_error;
 
+/// Internal rule syntax line.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct RuleSyntaxLine {
+    /// Stored line number.
     line_number: SourceLineNumber,
+    /// Stored bytes.
     bytes: Vec<CompactByte>,
+    /// Stored sides.
     sides: RuleSides,
 }
 
@@ -77,34 +81,47 @@ impl RuleSyntaxLine {
     }
 }
 
+/// Internal rule side slices.
 #[derive(Clone, Copy)]
 struct RuleSideSlices<'code> {
+    /// Stored left.
     left: CompactSyntax<'code>,
+    /// Stored right.
     right: CompactSyntax<'code>,
 }
 
+/// Internal compact syntax.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CompactSyntax<'code> {
+    /// Stored bytes.
     bytes: &'code [CompactByte],
 }
 
+/// Internal compact line index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CompactLineIndex {
+    /// Stored zero based.
     zero_based: usize,
 }
 
+/// Internal rule separator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RuleSeparator {
+    /// Stored equals.
     equals: CompactLineIndex,
+    /// Stored right start.
     right_start: CompactLineIndex,
 }
 
+/// Internal rule sides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RuleSides {
+    /// Stored separator.
     separator: RuleSeparator,
 }
 
 impl CompactLineIndex {
+    /// Builds an index from a zero-based offset.
     const fn from_zero_based(zero_based: usize) -> Self {
         Self { zero_based }
     }
@@ -124,16 +141,19 @@ impl CompactLineIndex {
         Ok(Self { zero_based })
     }
 
+    /// Returns the primitive stored value.
     const fn get(self) -> usize {
         self.zero_based
     }
 }
 
 impl<'code> CompactSyntax<'code> {
+    /// Constructs the value from validated parts.
     const fn new(bytes: &'code [CompactByte]) -> Self {
         Self { bytes }
     }
 
+    /// Runs the as slice operation.
     const fn as_slice(self) -> &'code [CompactByte] {
         self.bytes
     }
@@ -161,6 +181,7 @@ impl<'code> CompactSyntax<'code> {
             })
     }
 
+    /// Runs the strip token operation.
     fn strip_token(self, token: SyntaxToken) -> Option<Self> {
         let token_bytes = token.bytes();
 
@@ -183,6 +204,7 @@ impl<'code> CompactSyntax<'code> {
         }
     }
 
+    /// Runs the starts with token operation.
     fn starts_with_token(self, token: SyntaxToken) -> bool {
         self.strip_token(token).is_some()
     }
@@ -222,10 +244,12 @@ impl RuleSeparator {
         found.ok_or_else(|| ParseError::at_line(line_number, ParseErrorKind::MissingEquals))
     }
 
+    /// Runs the equals operation.
     const fn equals(self) -> CompactLineIndex {
         self.equals
     }
 
+    /// Runs the right start operation.
     const fn right_start(self) -> CompactLineIndex {
         self.right_start
     }
@@ -273,6 +297,7 @@ impl RuleSides {
     }
 }
 
+/// Runs the internal invalid rule side range operation.
 fn invalid_rule_side_range(line_number: SourceLineNumber) -> ParseError {
     ParseError::at_line(
         line_number,
@@ -280,9 +305,12 @@ fn invalid_rule_side_range(line_number: SourceLineNumber) -> ParseError {
     )
 }
 
+/// Internal left syntax.
 #[derive(Clone, Copy)]
 struct LeftSyntax<'code> {
+    /// Stored line number.
     line_number: SourceLineNumber,
+    /// Stored bytes.
     bytes: CompactSyntax<'code>,
 }
 
@@ -297,6 +325,7 @@ impl<'code> LeftSyntax<'code> {
         self.into_after_repeat().parse(payload_limit)
     }
 
+    /// Runs the into after repeat operation.
     fn into_after_repeat(self) -> LeftAfterRepeat<'code> {
         if let Some(rest) = self.bytes.strip_token(SyntaxToken::Once) {
             LeftAfterRepeat {
@@ -314,10 +343,14 @@ impl<'code> LeftSyntax<'code> {
     }
 }
 
+/// Internal left after repeat.
 #[derive(Clone, Copy)]
 struct LeftAfterRepeat<'code> {
+    /// Stored line number.
     line_number: SourceLineNumber,
+    /// Stored bytes.
     bytes: CompactSyntax<'code>,
+    /// Stored repeat.
     repeat: RuleRepeatSyntax,
 }
 
@@ -364,11 +397,16 @@ impl<'code> LeftAfterRepeat<'code> {
     }
 }
 
+/// Internal left payload syntax.
 #[derive(Clone, Copy)]
 struct LeftPayloadSyntax<'code> {
+    /// Stored line number.
     line_number: SourceLineNumber,
+    /// Stored bytes.
     bytes: CompactSyntax<'code>,
+    /// Stored repeat.
     repeat: RuleRepeatSyntax,
+    /// Stored anchor.
     anchor: RuleAnchorSyntax,
 }
 
@@ -390,9 +428,12 @@ impl LeftPayloadSyntax<'_> {
     }
 }
 
+/// Internal right syntax.
 #[derive(Clone, Copy)]
 struct RightSyntax<'code> {
+    /// Stored line number.
     line_number: SourceLineNumber,
+    /// Stored bytes.
     bytes: CompactSyntax<'code>,
 }
 
@@ -440,14 +481,19 @@ impl<'code> RightSyntax<'code> {
     }
 }
 
+/// Internal right action syntax alternatives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RightActionSyntax {
+    /// Move start case.
     MoveStart,
+    /// Move end case.
     MoveEnd,
+    /// Return case.
     Return,
 }
 
 impl RightActionSyntax {
+    /// Runs the payload kind operation.
     const fn payload_kind(self) -> PayloadKind {
         match self {
             Self::MoveStart => PayloadKind::RightSideMoveStartPayload,
@@ -456,6 +502,7 @@ impl RightActionSyntax {
         }
     }
 
+    /// Runs the into body operation.
     fn into_body(self, payload: Payload) -> RuleBody {
         let action = match self {
             Self::MoveStart => RuleAction::Rewrite(RewriteAction::MoveStart(payload)),
@@ -467,9 +514,12 @@ impl RightActionSyntax {
     }
 }
 
+/// Internal right payload syntax alternatives.
 #[derive(Clone, Copy)]
 enum RightPayloadSyntax<'code> {
+    /// Replace case.
     Replace(RightReplacePayloadSyntax<'code>),
+    /// Action case.
     Action(RightActionPayloadSyntax<'code>),
 }
 
@@ -487,9 +537,12 @@ impl RightPayloadSyntax<'_> {
     }
 }
 
+/// Internal right replace payload syntax.
 #[derive(Clone, Copy)]
 struct RightReplacePayloadSyntax<'code> {
+    /// Stored line number.
     line_number: SourceLineNumber,
+    /// Stored bytes.
     bytes: CompactSyntax<'code>,
 }
 
@@ -512,10 +565,14 @@ impl RightReplacePayloadSyntax<'_> {
     }
 }
 
+/// Internal right action payload syntax.
 #[derive(Clone, Copy)]
 struct RightActionPayloadSyntax<'code> {
+    /// Stored line number.
     line_number: SourceLineNumber,
+    /// Stored bytes.
     bytes: CompactSyntax<'code>,
+    /// Stored action.
     action: RightActionSyntax,
 }
 
@@ -592,6 +649,7 @@ fn ensure_payload_within_limit(
     ))
 }
 
+/// Runs the internal first matching token kind operation.
 fn first_matching_token_kind<T: Copy>(
     input: CompactSyntax<'_>,
     mappings: &[(SyntaxToken, T)],
@@ -601,6 +659,7 @@ fn first_matching_token_kind<T: Copy>(
         .find_map(|&(token, kind)| input.starts_with_token(token).then_some(kind))
 }
 
+/// Runs the internal left modifier kind operation.
 fn left_modifier_kind(input: CompactSyntax<'_>) -> Option<LeftModifierKind> {
     first_matching_token_kind(
         input,
@@ -612,6 +671,7 @@ fn left_modifier_kind(input: CompactSyntax<'_>) -> Option<LeftModifierKind> {
     )
 }
 
+/// Runs the internal right action kind operation.
 fn right_action_kind(input: CompactSyntax<'_>) -> Option<RightActionKind> {
     first_matching_token_kind(
         input,

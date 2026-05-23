@@ -31,6 +31,7 @@
 /// input; syntax validation still happens in [`program::Program::parse`](crate::program::Program::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgramSource<'source> {
+    /// Stored bytes.
     bytes: &'source [u8],
 }
 
@@ -73,15 +74,19 @@ impl<'source> ProgramSource<'source> {
 /// One-based source line number in parsed source diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceLineNumber {
+    /// Stored one based.
     one_based: usize,
 }
 
 impl SourceLineNumber {
+    /// ONE boundary value.
     pub(crate) const ONE: Self = Self { one_based: 1 };
+    /// MAX boundary value.
     pub(crate) const MAX: Self = Self {
         one_based: usize::MAX,
     };
 
+    /// Builds an index from a zero-based offset.
     pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
         let one_based = zero_based.checked_add(1)?;
         Some(Self { one_based })
@@ -97,10 +102,12 @@ impl SourceLineNumber {
 /// One-based source column in parsed source diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceColumn {
+    /// Stored one based.
     one_based: usize,
 }
 
 impl SourceColumn {
+    /// Builds an index from a zero-based offset.
     pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
         let one_based = zero_based.checked_add(1)?;
         Some(Self { one_based })
@@ -116,11 +123,14 @@ impl SourceColumn {
 /// One-based source position in parsed source diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourcePosition {
+    /// Stored line.
     line: SourceLineNumber,
+    /// Stored column.
     column: SourceColumn,
 }
 
 impl SourcePosition {
+    /// Constructs the value from validated parts.
     pub(crate) const fn new(line: SourceLineNumber, column: SourceColumn) -> Self {
         Self { line, column }
     }

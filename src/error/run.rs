@@ -92,14 +92,17 @@ pub enum RuntimeInputError {
 }
 
 impl RuntimeInputError {
+    /// Builds the non ascii value.
     pub(crate) const fn non_ascii(column: InputColumn, byte: NonAsciiInputByte) -> Self {
         Self::NonAscii { column, byte }
     }
 
+    /// Builds the column overflow value.
     pub(crate) const fn column_overflow() -> Self {
         Self::ColumnOverflow
     }
 
+    /// Builds the input limit value.
     pub(crate) const fn input_limit(
         limit: RuntimeInputByteLimit,
         attempted_len: RuntimeInputByteCount,
@@ -143,6 +146,7 @@ pub enum RunAdmissionError {
 }
 
 impl RunAdmissionError {
+    /// Builds the initial state limit value.
     pub(crate) const fn initial_state_limit(
         limit: RuntimeStateByteLimit,
         attempted_len: RuntimeStateByteCount,
@@ -162,10 +166,12 @@ impl Error for RunAdmissionError {}
 /// runtime-input boundary, not by source parsing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InputColumn {
+    /// Stored one based.
     one_based: usize,
 }
 
 impl InputColumn {
+    /// Builds an index from a zero-based offset.
     pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
         let one_based = zero_based.checked_add(1)?;
         Some(Self { one_based })
@@ -184,12 +190,16 @@ impl InputColumn {
 /// could not represent the length of the state that a rewrite would produce.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateSizeError {
+    /// Stored state.
     state: RuntimeStateByteCount,
+    /// Stored lhs.
     lhs: PayloadByteCount,
+    /// Stored rhs.
     rhs: PayloadByteCount,
 }
 
 impl StateSizeError {
+    /// Constructs the value from validated parts.
     pub(crate) const fn new(
         state_len: RuntimeStateByteCount,
         lhs_len: PayloadByteCount,
@@ -241,22 +251,27 @@ pub enum InternalInvariantError {
 }
 
 impl InternalInvariantError {
+    /// Builds the missing once rule state value.
     pub(crate) const fn missing_once_rule_state() -> Self {
         Self::MissingOnceRuleState
     }
 
+    /// Builds the consumed once rule commit value.
     pub(crate) const fn consumed_once_rule_commit() -> Self {
         Self::ConsumedOnceRuleCommit
     }
 
+    /// Builds the missing committed rule value.
     pub(crate) const fn missing_committed_rule() -> Self {
         Self::MissingCommittedRule
     }
 
+    /// Builds the returned rule without output value.
     pub(crate) const fn returned_rule_without_output() -> Self {
         Self::ReturnedRuleWithoutOutput
     }
 
+    /// Builds the invalid state match range value.
     pub(crate) const fn invalid_state_match_range() -> Self {
         Self::InvalidStateMatchRange
     }
@@ -297,6 +312,7 @@ pub enum LimitError {
 }
 
 impl LimitError {
+    /// Builds the state value.
     pub(crate) const fn state(
         limit: RuntimeStateByteLimit,
         attempted_len: RuntimeStateByteCount,
@@ -307,6 +323,7 @@ impl LimitError {
         }
     }
 
+    /// Builds the return output value.
     pub(crate) const fn return_output(
         limit: ReturnByteLimit,
         attempted_len: ReturnOutputByteCount,
@@ -317,6 +334,7 @@ impl LimitError {
         }
     }
 
+    /// Builds the step value.
     pub(crate) const fn step(
         max_steps: StepLimit,
         completed_steps: StepCount,

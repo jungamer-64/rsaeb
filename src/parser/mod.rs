@@ -1,5 +1,8 @@
+/// Internal line module.
 mod line;
+/// Internal location module.
 mod location;
+/// Internal rule line module.
 mod rule_line;
 
 #[cfg(test)]

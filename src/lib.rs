@@ -395,18 +395,25 @@ extern crate std;
 #[cfg(test)]
 mod test_support;
 
+/// Internal allocation module.
 mod allocation;
+/// Internal bytes module.
 mod bytes;
 pub mod error;
 pub mod execution;
 pub mod input;
 pub mod inspect;
 pub mod limits;
+/// Internal materialized module.
 mod materialized;
+/// Internal parser module.
 mod parser;
 pub mod program;
+/// Internal rule module.
 mod rule;
+/// Internal runtime module.
 mod runtime;
 pub mod source;
+/// Internal syntax module.
 mod syntax;
 pub mod trace;

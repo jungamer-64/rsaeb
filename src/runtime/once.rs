@@ -6,45 +6,61 @@ use crate::allocation::{
 use crate::error::{InternalInvariantError, RunError};
 use crate::rule::{OnceRuleCount, OnceRuleSlot, Rule, RuleRepeatState};
 
+/// Internal once state set.
 #[derive(Debug)]
 pub(crate) struct OnceStateSet {
+    /// Stored states.
     states: Vec<OnceRuleState>,
 }
 
+/// Internal once rule state alternatives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OnceRuleState {
+    /// Fresh case.
     Fresh,
+    /// Consumed case.
     Consumed,
 }
 
+/// Internal matched rule commit alternatives.
 #[derive(Debug)]
 pub(super) enum MatchedRuleCommit<'once> {
+    /// Always case.
     Always,
+    /// Once case.
     Once(OnceMatchPermit<'once>),
 }
 
+/// Internal once rule availability alternatives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum OnceRuleAvailability {
+    /// Available case.
     Available,
+    /// Consumed case.
     Consumed,
 }
 
+/// Internal once match permit.
 #[derive(Debug)]
 pub(super) struct OnceMatchPermit<'once> {
+    /// Stored state.
     state: &'once mut OnceRuleState,
 }
 
 impl<'once> OnceMatchPermit<'once> {
+    /// Constructs the value from validated parts.
     const fn new(state: &'once mut OnceRuleState) -> Self {
         Self { state }
     }
 
+    /// Runs the commit operation.
     fn commit(self) {
         *self.state = OnceRuleState::Consumed;
     }
 }
 
 impl MatchedRuleCommit<'_> {
+    /// Runs the commit operation.
     pub(super) fn commit(self) {
         match self {
             Self::Always => {}
@@ -154,6 +170,7 @@ impl OnceStateSet {
 }
 
 impl OnceRuleState {
+    /// Runs the is fresh operation.
     const fn is_fresh(self) -> bool {
         matches!(self, Self::Fresh)
     }

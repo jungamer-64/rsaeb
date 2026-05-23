@@ -11,13 +11,18 @@ use crate::source::{SourceLineNumber, SourcePosition};
 use super::location::{parse_allocation_error, source_column};
 use super::rule_line::RuleSyntaxLine;
 
+/// Internal raw source line.
 pub(super) struct RawSourceLine<'source> {
+    /// Stored line number.
     line_number: SourceLineNumber,
+    /// Stored bytes.
     bytes: &'source [u8],
+    /// Stored code line limit.
     code_line_limit: CodeLineByteLimit,
 }
 
 impl<'source> RawSourceLine<'source> {
+    /// Constructs the value from validated parts.
     pub(super) fn new(
         line_number: SourceLineNumber,
         bytes: &'source [u8],
@@ -82,8 +87,11 @@ impl<'source> RawSourceLine<'source> {
     }
 }
 
+/// Internal code line.
 pub(super) struct CodeLine<'source> {
+    /// Stored line number.
     line_number: SourceLineNumber,
+    /// Stored bytes.
     bytes: &'source [u8],
 }
 
@@ -168,12 +176,15 @@ impl CodeLine<'_> {
     }
 }
 
+/// Internal compact code byte count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CompactCodeByteCount {
+    /// Stored value.
     value: usize,
 }
 
 impl CompactCodeByteCount {
+    /// ZERO boundary value.
     const ZERO: Self = Self { value: 0 };
 
     /// Returns this count after accepting one more compact code byte.
@@ -191,18 +202,23 @@ impl CompactCodeByteCount {
         Ok(Self { value })
     }
 
+    /// Returns the primitive stored value.
     const fn get(self) -> usize {
         self.value
     }
 }
 
+/// Internal compact code line.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct CompactCodeLine {
+    /// Stored line number.
     line_number: SourceLineNumber,
+    /// Stored bytes.
     bytes: Vec<CompactByte>,
 }
 
 impl CompactCodeLine {
+    /// Runs the into non empty operation.
     pub(super) fn into_non_empty(self) -> Option<NonEmptyCompactCodeLine> {
         (!self.bytes.is_empty()).then_some(NonEmptyCompactCodeLine {
             line_number: self.line_number,
@@ -211,9 +227,12 @@ impl CompactCodeLine {
     }
 }
 
+/// Internal non empty compact code line.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct NonEmptyCompactCodeLine {
+    /// Stored line number.
     line_number: SourceLineNumber,
+    /// Stored bytes.
     bytes: Vec<CompactByte>,
 }
 

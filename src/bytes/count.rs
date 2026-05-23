@@ -3,6 +3,7 @@ use core::fmt;
 /// Byte length of executable program payload data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PayloadByteCount {
+    /// Stored value.
     value: usize,
 }
 
@@ -35,6 +36,7 @@ impl fmt::Display for PayloadByteCount {
 /// Byte length of validated runtime input before execution-state materialization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuntimeInputByteCount {
+    /// Stored value.
     value: usize,
 }
 
@@ -67,6 +69,7 @@ impl fmt::Display for RuntimeInputByteCount {
 /// Byte length of materialized runtime state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuntimeStateByteCount {
+    /// Stored value.
     value: usize,
 }
 
@@ -105,6 +108,7 @@ impl fmt::Display for RuntimeStateByteCount {
 /// Byte length of a `(return)` output payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ReturnOutputByteCount {
+    /// Stored value.
     value: usize,
 }
 
@@ -143,6 +147,7 @@ impl fmt::Display for ReturnOutputByteCount {
 /// Byte length budgeted for one trace snapshot event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TraceSnapshotByteCount {
+    /// Stored value.
     value: usize,
 }
 

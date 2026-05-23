@@ -4,32 +4,47 @@ use crate::error::RunError;
 use crate::inspect::{RulePosition, RulePositions};
 use crate::rule::{Rule, RuleAnchorSyntax};
 
+/// Internal rule search alternatives.
 #[derive(Debug)]
 pub(crate) enum RuleSearch<'program, 'once> {
+    /// Matched case.
     Matched(MatchedRuleApplication<'program, 'once>),
+    /// Stable case.
     Stable,
 }
 
+/// Internal matched rule application.
 #[derive(Debug)]
 pub(crate) struct MatchedRuleApplication<'program, 'once> {
+    /// Stored position.
     position: RulePosition,
+    /// Stored rule.
     rule: &'program Rule,
+    /// Stored commit.
     commit: MatchedRuleCommit<'once>,
+    /// Stored state match.
     state_match: StateMatch,
 }
 
+/// Internal matched rule candidate.
 struct MatchedRuleCandidate<'program> {
+    /// Stored position.
     position: RulePosition,
+    /// Stored rule.
     rule: &'program Rule,
+    /// Stored state match.
     state_match: StateMatch,
 }
 
+/// Internal committed rule.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CommittedRule {
+    /// Stored position.
     position: RulePosition,
 }
 
 impl<'program> MatchedRuleCandidate<'program> {
+    /// Constructs the value from validated parts.
     const fn new(position: RulePosition, rule: &'program Rule, state_match: StateMatch) -> Self {
         Self {
             position,
@@ -38,6 +53,7 @@ impl<'program> MatchedRuleCandidate<'program> {
         }
     }
 
+    /// Runs the into application operation.
     const fn into_application<'once>(
         self,
         commit: MatchedRuleCommit<'once>,
@@ -47,6 +63,7 @@ impl<'program> MatchedRuleCandidate<'program> {
 }
 
 impl<'program, 'once> MatchedRuleApplication<'program, 'once> {
+    /// Constructs the value from validated parts.
     const fn new(
         position: RulePosition,
         rule: &'program Rule,
@@ -61,14 +78,17 @@ impl<'program, 'once> MatchedRuleApplication<'program, 'once> {
         }
     }
 
+    /// Runs the rule operation.
     pub(crate) const fn rule(&self) -> &'program Rule {
         self.rule
     }
 
+    /// Runs the state match operation.
     pub(crate) const fn state_match(&self) -> StateMatch {
         self.state_match
     }
 
+    /// Runs the commit operation.
     pub(crate) fn commit(self) -> CommittedRule {
         self.commit.commit();
         CommittedRule {
@@ -78,6 +98,7 @@ impl<'program, 'once> MatchedRuleApplication<'program, 'once> {
 }
 
 impl CommittedRule {
+    /// Runs the position operation.
     pub(crate) const fn position(self) -> RulePosition {
         self.position
     }

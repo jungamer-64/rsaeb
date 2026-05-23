@@ -38,7 +38,9 @@ pub enum AllocationContext {
 /// allocation side effects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AllocationError {
+    /// Stored context.
     context: AllocationContext,
+    /// Stored kind.
     kind: AllocationErrorKind,
 }
 
@@ -57,10 +59,12 @@ pub enum AllocationErrorKind {
 /// Vector capacity requested at a fallible allocation boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RequestedCapacity {
+    /// Stored value.
     value: usize,
 }
 
 impl RequestedCapacity {
+    /// Constructs the value from validated parts.
     pub(crate) const fn new(value: usize) -> Self {
         Self { value }
     }
@@ -79,6 +83,7 @@ impl core::fmt::Display for RequestedCapacity {
 }
 
 impl AllocationError {
+    /// Builds a capacity-overflow allocation failure.
     pub(crate) const fn capacity_overflow(context: AllocationContext) -> Self {
         Self {
             context,
@@ -86,6 +91,7 @@ impl AllocationError {
         }
     }
 
+    /// Builds a reservation-failed allocation failure.
     pub(crate) const fn reservation_failed(
         context: AllocationContext,
         requested_capacity: RequestedCapacity,

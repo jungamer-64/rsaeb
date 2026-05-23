@@ -29,25 +29,35 @@ pub(crate) fn push_bytes(
     Ok(())
 }
 
+/// Internal payload.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Payload {
+    /// Stored bytes.
     bytes: Vec<ProgramByte>,
 }
 
+/// Internal payload syntax.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PayloadSyntax<'code> {
+    /// Stored bytes.
     bytes: &'code [CompactByte],
+    /// Stored line number.
     line_number: SourceLineNumber,
+    /// Stored payload kind.
     payload_kind: PayloadKind,
 }
 
+/// Internal validated payload syntax.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ValidatedPayloadSyntax<'code> {
+    /// Stored syntax.
     syntax: PayloadSyntax<'code>,
+    /// Stored byte count.
     byte_count: PayloadByteCount,
 }
 
 impl<'code> PayloadSyntax<'code> {
+    /// Constructs the value from validated parts.
     pub(crate) const fn new(
         bytes: &'code [CompactByte],
         line_number: SourceLineNumber,
@@ -60,6 +70,7 @@ impl<'code> PayloadSyntax<'code> {
         }
     }
 
+    /// Returns the typed byte count.
     pub(crate) const fn byte_count(self) -> PayloadByteCount {
         PayloadByteCount::new(self.bytes.len())
     }
@@ -112,18 +123,22 @@ impl ValidatedPayloadSyntax<'_> {
 }
 
 impl Payload {
+    /// Returns the runtime state length in bytes.
     pub(crate) fn len(&self) -> usize {
         self.bytes.len()
     }
 
+    /// Returns the typed byte count.
     pub(crate) fn byte_count(&self) -> PayloadByteCount {
         PayloadByteCount::new(self.bytes.len())
     }
 
+    /// Runs the program bytes operation.
     pub(crate) fn program_bytes(&self) -> &[ProgramByte] {
         &self.bytes
     }
 
+    /// Runs the needle operation.
     pub(crate) fn needle(&self) -> PayloadNeedle<'_> {
         match self.bytes.split_first() {
             Some((&first, _)) => PayloadNeedle::NonEmpty(NonEmptyPayloadNeedle {
@@ -134,6 +149,7 @@ impl Payload {
         }
     }
 
+    /// Returns the stored bytes.
     pub(crate) fn bytes(&self) -> impl Iterator<Item = u8> + '_ {
         self.bytes.iter().copied().map(ProgramByte::get)
     }
@@ -152,6 +168,7 @@ impl Payload {
         push_bytes(output, self.bytes(), context)
     }
 
+    /// Runs the runtime bytes operation.
     pub(crate) fn runtime_bytes(&self) -> impl Iterator<Item = RuntimeByte> + '_ {
         self.bytes.iter().copied().map(RuntimeByte::from_program)
     }
@@ -172,38 +189,50 @@ impl Payload {
     }
 }
 
+/// Internal payload needle alternatives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PayloadNeedle<'payload> {
+    /// Empty case.
     Empty(EmptyPayloadNeedle<'payload>),
+    /// Non empty case.
     NonEmpty(NonEmptyPayloadNeedle<'payload>),
 }
 
+/// Internal empty payload needle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct EmptyPayloadNeedle<'payload> {
+    /// Stored payload.
     payload: &'payload Payload,
 }
 
+/// Internal non empty payload needle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NonEmptyPayloadNeedle<'payload> {
+    /// Stored payload.
     payload: &'payload Payload,
+    /// Stored first.
     first: ProgramByte,
 }
 
 impl EmptyPayloadNeedle<'_> {
+    /// Returns the typed byte count.
     pub(crate) fn byte_count(self) -> PayloadByteCount {
         self.payload.byte_count()
     }
 }
 
 impl<'payload> NonEmptyPayloadNeedle<'payload> {
+    /// Returns the typed byte count.
     pub(crate) fn byte_count(self) -> PayloadByteCount {
         self.payload.byte_count()
     }
 
+    /// Runs the first byte operation.
     pub(crate) const fn first_byte(self) -> ProgramByte {
         self.first
     }
 
+    /// Runs the program bytes operation.
     pub(crate) fn program_bytes(self) -> &'payload [ProgramByte] {
         self.payload.program_bytes()
     }

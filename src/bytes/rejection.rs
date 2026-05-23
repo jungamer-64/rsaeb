@@ -1,10 +1,12 @@
 /// Non-ASCII byte rejected from executable program code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NonAsciiCodeByte {
+    /// Stored byte.
     byte: u8,
 }
 
 impl NonAsciiCodeByte {
+    /// Parses the value at this boundary.
     pub(crate) const fn parse(byte: u8) -> Option<Self> {
         if byte.is_ascii() {
             None
@@ -23,10 +25,12 @@ impl NonAsciiCodeByte {
 /// Non-printable ASCII byte rejected from executable program code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NonPrintableCodeByte {
+    /// Stored byte.
     byte: u8,
 }
 
 impl NonPrintableCodeByte {
+    /// Parses the value at this boundary.
     pub(crate) const fn parse(byte: u8) -> Option<Self> {
         if byte.is_ascii() && !byte.is_ascii_graphic() {
             Some(Self { byte })
@@ -45,10 +49,12 @@ impl NonPrintableCodeByte {
 /// Non-ASCII byte rejected from runtime input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NonAsciiInputByte {
+    /// Stored byte.
     byte: u8,
 }
 
 impl NonAsciiInputByte {
+    /// Parses the value at this boundary.
     pub(crate) const fn parse(byte: u8) -> Option<Self> {
         if byte.is_ascii() {
             None
@@ -78,6 +84,7 @@ pub enum ReservedSyntaxByte {
 }
 
 impl ReservedSyntaxByte {
+    /// Parses the value at this boundary.
     pub(crate) const fn parse(byte: u8) -> Option<Self> {
         match byte {
             b'=' => Some(Self::Equals),

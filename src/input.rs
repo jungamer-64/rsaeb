@@ -21,6 +21,7 @@ use crate::limits::{ExecutionLimits, RuntimeInputByteLimit, RuntimeInputLimits};
 /// belongs to [`RuntimeInput::validate`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeInputSource<'input> {
+    /// Stored bytes.
     bytes: &'input [u8],
 }
 
@@ -44,8 +45,11 @@ impl<'input> RuntimeInputSource<'input> {
     }
 }
 
+/// Internal validated runtime input source.
 struct ValidatedRuntimeInputSource<'input> {
+    /// Stored source.
     source: RuntimeInputSource<'input>,
+    /// Stored byte count.
     byte_count: RuntimeInputByteCount,
 }
 
@@ -72,14 +76,17 @@ impl<'input> ValidatedRuntimeInputSource<'input> {
         Ok(Self { source, byte_count })
     }
 
+    /// Returns the stored bytes.
     const fn bytes(&self) -> &'input [u8] {
         self.source.as_bytes()
     }
 
+    /// Returns the typed byte count.
     const fn byte_count(&self) -> RuntimeInputByteCount {
         self.byte_count
     }
 
+    /// Runs the runtime input bytes operation.
     fn runtime_input_bytes(&self) -> impl Iterator<Item = RuntimeInputByte> + 'input {
         self.bytes()
             .iter()
@@ -96,6 +103,7 @@ impl<'input> ValidatedRuntimeInputSource<'input> {
 /// budgets are admitted later by [`RunSeed`].
 #[derive(PartialEq, Eq)]
 pub struct RuntimeInput {
+    /// Stored bytes.
     bytes: Vec<RuntimeByte>,
 }
 
@@ -108,6 +116,7 @@ impl fmt::Debug for RuntimeInput {
     }
 }
 
+/// Internal runtime input debug bytes.
 struct RuntimeInputDebugBytes<'input>(&'input RuntimeInput);
 
 impl fmt::Debug for RuntimeInputDebugBytes<'_> {
@@ -158,6 +167,7 @@ impl RuntimeInput {
         Ok(Self { bytes })
     }
 
+    /// Returns materialized runtime bytes.
     pub(crate) fn materialized_bytes(&self) -> impl Iterator<Item = u8> + '_ {
         self.bytes.iter().copied().map(RuntimeByte::materialize)
     }
@@ -174,6 +184,7 @@ impl RuntimeInput {
         self.bytes.is_empty()
     }
 
+    /// Runs the into runtime bytes operation.
     fn into_runtime_bytes(self) -> Vec<RuntimeByte> {
         self.bytes
     }
@@ -182,7 +193,9 @@ impl RuntimeInput {
 /// Run-start witness admitted from validated input and execution limits.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RunSeed {
+    /// Stored input.
     input: RuntimeInput,
+    /// Stored limits.
     limits: ExecutionLimits,
 }
 
@@ -205,6 +218,7 @@ impl RunSeed {
         Ok(Self { input, limits })
     }
 
+    /// Runs the into runtime parts operation.
     pub(crate) fn into_runtime_parts(self) -> (InitialStateBytes, ExecutionLimits) {
         (
             InitialStateBytes {
@@ -218,10 +232,12 @@ impl RunSeed {
 /// Runtime input materialized into the mutable execution byte domain.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct InitialStateBytes {
+    /// Stored bytes.
     bytes: Vec<RuntimeByte>,
 }
 
 impl InitialStateBytes {
+    /// Runs the into runtime bytes operation.
     pub(crate) fn into_runtime_bytes(self) -> Vec<RuntimeByte> {
         self.bytes
     }

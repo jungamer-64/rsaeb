@@ -14,30 +14,37 @@ use crate::rule::RewriteAction;
 use crate::trace::RuntimeStateView;
 use alloc::vec::Vec;
 
+/// Internal state.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct State {
+    /// Stored bytes.
     bytes: Vec<RuntimeByte>,
 }
 
 impl State {
+    /// Builds runtime state from validated initial input bytes.
     pub(crate) fn from_input(input: InitialStateBytes) -> Self {
         Self {
             bytes: input.into_runtime_bytes(),
         }
     }
 
+    /// Returns the runtime state length in bytes.
     pub(crate) fn len(&self) -> usize {
         self.bytes.len()
     }
 
+    /// Returns the typed byte count.
     pub(crate) fn byte_count(&self) -> RuntimeStateByteCount {
         RuntimeStateByteCount::new(self.bytes.len())
     }
 
+    /// Borrows the runtime state as a public byte view.
     pub(crate) fn view(&self) -> RuntimeStateView<'_> {
         RuntimeStateView::new(&self.bytes)
     }
 
+    /// Commits a prepared rewrite to the runtime state.
     pub(crate) fn commit_rewrite(
         &mut self,
         rewrite: PreparedRewrite,
@@ -257,20 +264,25 @@ impl State {
     }
 }
 
+/// Internal state index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StateIndex {
+    /// Stored zero based.
     zero_based: usize,
 }
 
 impl StateIndex {
+    /// Returns the first runtime-state index.
     const fn start() -> Self {
         Self { zero_based: 0 }
     }
 
+    /// Builds an index from a zero-based offset.
     const fn from_zero_based(zero_based: usize) -> Self {
         Self { zero_based }
     }
 
+    /// Returns the start index for an end-anchored match.
     fn ending_match_start(
         state_len: RuntimeStateByteCount,
         matched_len: PayloadByteCount,
@@ -279,32 +291,46 @@ impl StateIndex {
         Some(Self::from_zero_based(start))
     }
 
+    /// Returns the checked add count result.
     fn checked_add_count(self, count: PayloadByteCount) -> Option<Self> {
         let zero_based = self.zero_based.checked_add(count.get())?;
         Some(Self { zero_based })
     }
 
+    /// Returns the checked next result.
     fn checked_next(self) -> Option<Self> {
         let zero_based = self.zero_based.checked_add(1)?;
         Some(Self { zero_based })
     }
 
+    /// Returns the primitive stored value.
     const fn get(self) -> usize {
         self.zero_based
     }
 }
 
+/// Iterator over candidate runtime-state match positions.
 struct StateSearchRange {
+    /// Cursor describing the remaining search range.
     cursor: StateSearchCursor,
 }
 
+/// Search cursor state for runtime-state matching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StateSearchCursor {
-    Active { next: StateIndex, end: StateIndex },
+    /// Search still has candidate match positions to inspect.
+    Active {
+        /// Next candidate start index to inspect.
+        next: StateIndex,
+        /// Exclusive end index for the search range.
+        end: StateIndex,
+    },
+    /// No candidate positions remain.
     Done,
 }
 
 impl StateSearchRange {
+    /// Starts a search range ending at the supplied index.
     const fn from_start_to(end: StateIndex) -> Self {
         Self {
             cursor: StateSearchCursor::Active {
@@ -335,13 +361,17 @@ impl Iterator for StateSearchRange {
     }
 }
 
+/// Half-open runtime-state span for a matched payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct StateSpanRange {
+    /// Inclusive start index of the span.
     start: StateIndex,
+    /// Exclusive end index of the span.
     end: StateIndex,
 }
 
 impl StateSpanRange {
+    /// Builds a match span at a candidate position.
     fn at_position(
         start: StateIndex,
         matched_len: PayloadByteCount,
@@ -352,25 +382,31 @@ impl StateSpanRange {
             .then_some(Self { start, end })
     }
 
+    /// Returns the inclusive start offset.
     const fn start(self) -> usize {
         self.start.get()
     }
 
+    /// Returns the exclusive end offset.
     const fn end(self) -> usize {
         self.end.get()
     }
 
+    /// Returns the typed byte count.
     fn byte_count(self) -> PayloadByteCount {
         PayloadByteCount::new((self.start.get()..self.end.get()).len())
     }
 }
 
+/// Typed runtime-state match span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StateMatch {
+    /// Runtime-state range covered by the match.
     range: StateSpanRange,
 }
 
 impl StateMatch {
+    /// Builds a start-anchored match span.
     pub(crate) fn at_start(
         matched_len: PayloadByteCount,
         state_len: RuntimeStateByteCount,
@@ -378,6 +414,7 @@ impl StateMatch {
         Self::at_position(StateIndex::start(), matched_len, state_len)
     }
 
+    /// Builds an end-anchored match span.
     pub(crate) fn at_end(
         matched_len: PayloadByteCount,
         state_len: RuntimeStateByteCount,
@@ -386,6 +423,7 @@ impl StateMatch {
         Self::at_position(StateIndex::from_zero_based(start), matched_len, state_len)
     }
 
+    /// Builds a match span at a candidate position.
     fn at_position(
         start: StateIndex,
         matched_len: PayloadByteCount,
@@ -395,6 +433,7 @@ impl StateMatch {
         Some(Self { range })
     }
 
+    /// Returns the matched payload length.
     pub(crate) fn matched_len(self) -> PayloadByteCount {
         self.range.byte_count()
     }
@@ -436,22 +475,29 @@ impl StateMatch {
     }
 }
 
+/// Borrowed split of runtime state around a match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MatchedStateSlices<'state> {
+    /// Bytes before the matched span.
     prefix: &'state [RuntimeByte],
+    /// Bytes inside the matched span.
     matched: &'state [RuntimeByte],
+    /// Bytes after the matched span.
     suffix: &'state [RuntimeByte],
 }
 
 impl<'state> MatchedStateSlices<'state> {
+    /// Returns bytes before the matched span.
     const fn prefix(self) -> &'state [RuntimeByte] {
         self.prefix
     }
 
+    /// Returns bytes inside the matched span.
     const fn matched(self) -> &'state [RuntimeByte] {
         self.matched
     }
 
+    /// Returns bytes after the matched span.
     const fn suffix(self) -> &'state [RuntimeByte] {
         self.suffix
     }

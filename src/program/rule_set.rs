@@ -6,14 +6,20 @@ use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePositi
 use crate::limits::RuleLimit;
 use crate::rule::{OnceRuleCount, ParsedRule, Rule, RuleRepeatState, RuleRepeatSyntax};
 
+/// Internal rule set.
 #[derive(Debug, PartialEq, Eq, Default)]
 pub(crate) struct RuleSet {
+    /// Stored rules.
     rules: Vec<Rule>,
+    /// Stored once rule count.
     once_rule_count: OnceRuleCount,
 }
 
+/// Internal pending rule insertion.
 struct PendingRuleInsertion {
+    /// Stored rule.
     rule: Rule,
+    /// Stored next once rule count.
     next_once_rule_count: OnceRuleCount,
 }
 
@@ -50,12 +56,14 @@ impl PendingRuleInsertion {
         })
     }
 
+    /// Runs the line number operation.
     const fn line_number(&self) -> crate::source::SourceLineNumber {
         self.rule.line_number()
     }
 }
 
 impl RuleSet {
+    /// Constructs the value from validated parts.
     pub(crate) fn new() -> Self {
         Self::default()
     }
@@ -115,18 +123,22 @@ impl RuleSet {
         Ok(())
     }
 
+    /// Runs the rule count operation.
     pub(crate) fn rule_count(&self) -> RuleCount {
         RuleCount::new(self.rules.len())
     }
 
+    /// Runs the once rule count operation.
     pub(crate) fn once_rule_count(&self) -> PublicOnceRuleCount {
         PublicOnceRuleCount::new(self.once_rule_count.get())
     }
 
+    /// Runs the once slot count operation.
     pub(crate) const fn once_slot_count(&self) -> OnceRuleCount {
         self.once_rule_count
     }
 
+    /// Runs the as slice operation.
     pub(crate) fn as_slice(&self) -> &[Rule] {
         &self.rules
     }

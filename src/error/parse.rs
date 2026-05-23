@@ -16,11 +16,14 @@ use crate::source::{SourceLineNumber, SourcePosition};
 /// executable code before the comment marker must fit the supported A=B syntax.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {
+    /// Stored location.
     location: ParseErrorLocation,
+    /// Stored kind.
     kind: ParseErrorKind,
 }
 
 impl ParseError {
+    /// Builds the at line value.
     pub(crate) const fn at_line(line: SourceLineNumber, kind: ParseErrorKind) -> Self {
         Self {
             location: ParseErrorLocation::Line(line),
@@ -28,6 +31,7 @@ impl ParseError {
         }
     }
 
+    /// Builds a match span at a candidate position.
     pub(crate) const fn at_position(position: SourcePosition, kind: ParseErrorKind) -> Self {
         Self {
             location: ParseErrorLocation::Position(position),
@@ -141,6 +145,7 @@ pub enum ParseInvariantError {
 }
 
 impl ParseInvariantError {
+    /// Builds the invalid rule side range value.
     pub(crate) const fn invalid_rule_side_range() -> Self {
         Self::InvalidRuleSideRange
     }
@@ -185,6 +190,7 @@ pub enum ParseLimitError {
 }
 
 impl ParseLimitError {
+    /// Builds the source value.
     pub(crate) const fn source(limit: SourceByteLimit, attempted_len: SourceByteCount) -> Self {
         Self::Source {
             limit,
@@ -192,6 +198,7 @@ impl ParseLimitError {
         }
     }
 
+    /// Builds the code line value.
     pub(crate) const fn code_line(
         limit: CodeLineByteLimit,
         attempted_len: CodeLineByteCount,
@@ -202,6 +209,7 @@ impl ParseLimitError {
         }
     }
 
+    /// Builds the payload value.
     pub(crate) const fn payload(limit: PayloadByteLimit, attempted_len: PayloadByteCount) -> Self {
         Self::Payload {
             limit,
@@ -209,6 +217,7 @@ impl ParseLimitError {
         }
     }
 
+    /// Builds the rules value.
     pub(crate) const fn rules(limit: RuleLimit, attempted_count: RuleCount) -> Self {
         Self::Rules {
             limit,

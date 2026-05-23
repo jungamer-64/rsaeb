@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use std::string::{FromUtf8Error, String};
+use alloc::string::{FromUtf8Error, String};
 
 use crate::error::{
     AllocationError, ParseError, ParseErrorLocation, RunAdmissionError, RunError,
