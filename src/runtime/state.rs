@@ -1,6 +1,6 @@
 use super::budget::RuntimeBudgetState;
 use super::input::InitialStateBytes;
-use super::rewrite::{MatchedRewrite, PreparedRewrite, RewriteScratch};
+use super::rewrite::{PreparedRewrite, RewriteScratch};
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
@@ -47,19 +47,19 @@ impl State {
         scratch.store_previous_state(previous_state);
     }
 
-    pub(crate) fn starts_with_payload(&self, payload: &Payload) -> Option<MatchedStateSpan> {
+    pub(crate) fn starts_with_payload(&self, payload: &Payload) -> Option<StateMatch> {
         match payload.needle() {
             PayloadNeedle::Empty(needle) => {
-                MatchedStateSpan::at_start(needle.byte_count(), self.byte_count())
+                StateMatch::at_start(needle.byte_count(), self.byte_count())
             }
             PayloadNeedle::NonEmpty(needle) => self.matches_payload_at(StateIndex::start(), needle),
         }
     }
 
-    pub(crate) fn ends_with_payload(&self, payload: &Payload) -> Option<MatchedStateSpan> {
+    pub(crate) fn ends_with_payload(&self, payload: &Payload) -> Option<StateMatch> {
         match payload.needle() {
             PayloadNeedle::Empty(needle) => {
-                MatchedStateSpan::at_end(needle.byte_count(), self.byte_count())
+                StateMatch::at_end(needle.byte_count(), self.byte_count())
             }
             PayloadNeedle::NonEmpty(needle) => {
                 let start = StateIndex::ending_match_start(self.byte_count(), needle.byte_count())?;
@@ -68,10 +68,10 @@ impl State {
         }
     }
 
-    pub(crate) fn find_payload(&self, payload: &Payload) -> Option<MatchedStateSpan> {
+    pub(crate) fn find_payload(&self, payload: &Payload) -> Option<StateMatch> {
         match payload.needle() {
             PayloadNeedle::Empty(needle) => {
-                MatchedStateSpan::at_start(needle.byte_count(), self.byte_count())
+                StateMatch::at_start(needle.byte_count(), self.byte_count())
             }
             PayloadNeedle::NonEmpty(needle) => {
                 let last_start =
@@ -94,9 +94,9 @@ impl State {
         &self,
         position: StateIndex,
         needle: NonEmptyPayloadNeedle<'_>,
-    ) -> Option<MatchedStateSpan> {
+    ) -> Option<StateMatch> {
         let state_match =
-            MatchedStateSpan::at_position(position, needle.byte_count(), self.byte_count())?;
+            StateMatch::at_position(position, needle.byte_count(), self.byte_count())?;
         state_match
             .matched_bytes(&self.bytes)
             .zip(needle.program_bytes().iter().copied())
@@ -112,14 +112,14 @@ impl State {
     /// rewritten state exceeds limits, or scratch allocation fails.
     pub(crate) fn rewrite_into(
         &self,
-        rewrite: MatchedRewrite<'_>,
+        state_match: StateMatch,
+        action: &RewriteAction,
         output: &mut RewriteScratch,
         budget: RuntimeBudgetState,
     ) -> Result<PreparedRewrite, RunError> {
-        self.prepare_replacement_buffer(rewrite, output, budget)?;
-        let state_match = rewrite.state_match();
+        self.prepare_replacement_buffer(state_match, action.payload(), output, budget)?;
         let slices = state_match.slices(&self.bytes);
-        match rewrite.action() {
+        match action {
             RewriteAction::Replace(rhs) => {
                 output.push_existing(slices.prefix().iter().copied())?;
                 output.push_payload(rhs)?;
@@ -147,11 +147,12 @@ impl State {
     /// cannot be represented as a runtime state byte count.
     fn replaced_byte_count(
         &self,
-        rewrite: MatchedRewrite<'_>,
+        state_match: StateMatch,
+        rhs: &Payload,
     ) -> Result<RuntimeStateByteCount, StateSizeError> {
         let state_len = self.byte_count();
-        let lhs_len = rewrite.state_match().matched_len();
-        let rhs_len = rewrite.rhs().byte_count();
+        let lhs_len = state_match.matched_len();
+        let rhs_len = rhs.byte_count();
 
         state_len
             .get()
@@ -169,11 +170,12 @@ impl State {
     /// rewritten state exceeds limits, or scratch allocation fails.
     fn prepare_replacement_buffer(
         &self,
-        rewrite: MatchedRewrite<'_>,
+        state_match: StateMatch,
+        rhs: &Payload,
         output: &mut RewriteScratch,
         budget: RuntimeBudgetState,
     ) -> Result<(), RunError> {
-        let capacity = self.replaced_byte_count(rewrite)?;
+        let capacity = self.replaced_byte_count(state_match, rhs)?;
 
         budget.ensure_rewrite_state_len(capacity)?;
 
@@ -313,11 +315,11 @@ impl StateSpanRange {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct MatchedStateSpan {
+pub(crate) struct StateMatch {
     range: StateSpanRange,
 }
 
-impl MatchedStateSpan {
+impl StateMatch {
     pub(crate) fn at_start(
         matched_len: PayloadByteCount,
         state_len: RuntimeStateByteCount,

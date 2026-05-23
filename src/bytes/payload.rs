@@ -34,6 +34,82 @@ pub(crate) struct Payload {
     bytes: Vec<ProgramByte>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PayloadSyntax<'code> {
+    bytes: &'code [CompactByte],
+    line_number: SourceLineNumber,
+    payload_kind: PayloadKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ValidatedPayloadSyntax<'code> {
+    syntax: PayloadSyntax<'code>,
+    byte_count: PayloadByteCount,
+}
+
+impl<'code> PayloadSyntax<'code> {
+    pub(crate) const fn new(
+        bytes: &'code [CompactByte],
+        line_number: SourceLineNumber,
+        payload_kind: PayloadKind,
+    ) -> Self {
+        Self {
+            bytes,
+            line_number,
+            payload_kind,
+        }
+    }
+
+    pub(crate) const fn byte_count(self) -> PayloadByteCount {
+        PayloadByteCount::new(self.bytes.len())
+    }
+
+    /// Validates compact payload bytes before owned payload allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if any byte is invalid executable payload data.
+    pub(crate) fn validate(self) -> Result<ValidatedPayloadSyntax<'code>, ParseError> {
+        for byte in self.bytes.iter().copied() {
+            ProgramByte::parse(byte, self.line_number, self.payload_kind)?;
+        }
+
+        Ok(ValidatedPayloadSyntax {
+            syntax: self,
+            byte_count: self.byte_count(),
+        })
+    }
+}
+
+impl ValidatedPayloadSyntax<'_> {
+    /// Builds an owned executable payload from validated syntax.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if allocation fails while storing the payload.
+    pub(crate) fn into_payload(self) -> Result<Payload, ParseError> {
+        let mut bytes = Vec::new();
+        try_reserve_total_exact(
+            &mut bytes,
+            RequestedCapacity::new(self.byte_count.get()),
+            AllocationContext::ProgramPayload,
+        )
+        .map_err(|error| {
+            ParseError::at_line(self.syntax.line_number, ParseErrorKind::Allocation(error))
+        })?;
+
+        for byte in self.syntax.bytes.iter().copied() {
+            let parsed =
+                ProgramByte::parse(byte, self.syntax.line_number, self.syntax.payload_kind)?;
+            try_push(&mut bytes, parsed, AllocationContext::ProgramPayload).map_err(|error| {
+                ParseError::at_line(self.syntax.line_number, ParseErrorKind::Allocation(error))
+            })?;
+        }
+
+        Ok(Payload { bytes })
+    }
+}
+
 impl Payload {
     pub(crate) fn len(&self) -> usize {
         self.bytes.len()

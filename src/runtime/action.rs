@@ -6,7 +6,7 @@ use crate::rule::RuleAction;
 
 use super::budget::RuntimeBudgetState;
 use super::matcher::MatchedRuleApplication;
-use super::rewrite::{MatchedRewrite, RewriteScratch};
+use super::rewrite::RewriteScratch;
 use super::state::State;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,11 +48,7 @@ pub(crate) fn apply_matched_rule<'program>(
     let permit = budget.reserve_next_step(state.byte_count())?;
     match matched.rule().action() {
         RuleAction::Rewrite(action) => {
-            let rewrite = state.rewrite_into(
-                MatchedRewrite::new(matched.state_match(), action),
-                scratch,
-                *budget,
-            )?;
+            let rewrite = state.rewrite_into(matched.state_match(), action, scratch, *budget)?;
             let committed = matched.commit();
             let step = budget.commit(permit);
             state.commit_rewrite(rewrite, scratch);

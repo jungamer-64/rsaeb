@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, AllocationError};
-use crate::bytes::{CompactByte, Payload, PayloadByteCount};
+use crate::bytes::{CompactByte, Payload, PayloadByteCount, PayloadSyntax};
 use crate::error::{
     LeftModifierKind, ParseError, ParseErrorKind, ParseLimitError, PayloadKind, RightActionKind,
 };
@@ -131,10 +131,6 @@ impl<'code> CompactSyntax<'code> {
 
     const fn as_slice(self) -> &'code [CompactByte] {
         self.bytes
-    }
-
-    const fn byte_count(self) -> PayloadByteCount {
-        PayloadByteCount::new(self.bytes.len())
     }
 
     /// Returns the source column of the first compact byte.
@@ -370,11 +366,11 @@ impl LeftPayloadSyntax<'_> {
     /// Returns `ParseError` if the left-side payload contains invalid
     /// executable payload bytes or allocation fails.
     fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleHead, ParseError> {
-        ensure_payload_within_limit(self.line_number, self.bytes.byte_count(), payload_limit)?;
-        let payload = Payload::parse(
+        let payload = parse_payload(
             self.bytes.as_slice(),
             self.line_number,
             PayloadKind::LeftSideData,
+            payload_limit,
         )?;
         Ok(RuleHead::new(self.repeat, self.anchor, payload))
     }
@@ -490,11 +486,11 @@ impl RightReplacePayloadSyntax<'_> {
     ///
     /// Returns `ParseError` if payload bytes are invalid or allocation fails.
     fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleBody, ParseError> {
-        ensure_payload_within_limit(self.line_number, self.bytes.byte_count(), payload_limit)?;
-        let payload = Payload::parse(
+        let payload = parse_payload(
             self.bytes.as_slice(),
             self.line_number,
             PayloadKind::RightSideData,
+            payload_limit,
         )?;
         Ok(RuleBody::new(RuleAction::Rewrite(RewriteAction::Replace(
             payload,
@@ -535,14 +531,31 @@ impl<'code> RightActionPayloadSyntax<'code> {
     ///
     /// Returns `ParseError` if payload bytes are invalid or allocation fails.
     fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleBody, ParseError> {
-        ensure_payload_within_limit(self.line_number, self.bytes.byte_count(), payload_limit)?;
-        let payload = Payload::parse(
+        let payload = parse_payload(
             self.bytes.as_slice(),
             self.line_number,
             self.action.payload_kind(),
+            payload_limit,
         )?;
         Ok(self.action.into_body(payload))
     }
+}
+
+/// Checks payload length and validates bytes before owned payload construction.
+///
+/// # Errors
+///
+/// Returns `ParseError` if the payload exceeds `limit`, contains invalid bytes,
+/// or cannot allocate owned payload storage.
+fn parse_payload(
+    bytes: &[CompactByte],
+    line_number: SourceLineNumber,
+    payload_kind: PayloadKind,
+    limit: PayloadByteLimit,
+) -> Result<Payload, ParseError> {
+    let syntax = PayloadSyntax::new(bytes, line_number, payload_kind);
+    ensure_payload_within_limit(line_number, syntax.byte_count(), limit)?;
+    syntax.validate()?.into_payload()
 }
 
 /// Checks one parsed payload length against parser limits.

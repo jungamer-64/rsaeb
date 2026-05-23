@@ -24,6 +24,18 @@ pub(crate) enum MatchedRuleCommit<'once> {
 }
 
 #[derive(Debug)]
+pub(crate) enum RuleAvailability<'once> {
+    Available(MatchedRuleCommit<'once>),
+    Unavailable(OnceRuleUnavailable),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OnceRuleUnavailable {
+    Consumed,
+    MissingSlot,
+}
+
+#[derive(Debug)]
 pub(crate) struct ValidOnceCommit<'once> {
     state: &'once Cell<OnceRuleState>,
 }
@@ -73,20 +85,37 @@ impl OnceStateSet {
         Ok(Self { states })
     }
 
-    pub(crate) fn matched_commit_for_rule(&self, rule: &Rule) -> Option<MatchedRuleCommit<'_>> {
+    pub(crate) fn availability_for_rule(&self, rule: &Rule) -> RuleAvailability<'_> {
         match rule.repeat_state() {
-            RuleRepeatState::Always => Some(MatchedRuleCommit::Always),
-            RuleRepeatState::Once(slot) => {
-                self.valid_once_commit(slot).map(MatchedRuleCommit::Once)
-            }
+            RuleRepeatState::Always => RuleAvailability::Available(MatchedRuleCommit::Always),
+            RuleRepeatState::Once(slot) => match self.once_commit_for_slot(slot) {
+                Ok(commit) => RuleAvailability::Available(MatchedRuleCommit::Once(commit)),
+                Err(reason) => RuleAvailability::Unavailable(reason),
+            },
         }
     }
 
-    fn valid_once_commit(&self, slot: OnceRuleSlot) -> Option<ValidOnceCommit<'_>> {
-        self.states
+    /// Returns the commit witness for a concrete `(once)` slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns `OnceRuleUnavailable::MissingSlot` if the parsed rule points
+    /// outside this run's once-state table, or `OnceRuleUnavailable::Consumed`
+    /// if the slot has already committed in this run.
+    fn once_commit_for_slot(
+        &self,
+        slot: OnceRuleSlot,
+    ) -> Result<ValidOnceCommit<'_>, OnceRuleUnavailable> {
+        let state = self
+            .states
             .get(slot.zero_based())
-            .filter(|state| state.get().is_fresh())
-            .map(ValidOnceCommit::new)
+            .ok_or(OnceRuleUnavailable::MissingSlot)?;
+
+        if state.get().is_fresh() {
+            Ok(ValidOnceCommit::new(state))
+        } else {
+            Err(OnceRuleUnavailable::Consumed)
+        }
     }
 }
 

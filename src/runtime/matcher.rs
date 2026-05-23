@@ -1,5 +1,5 @@
-use super::once::{MatchedRuleCommit, OnceStateSet};
-use super::state::{MatchedStateSpan, State};
+use super::once::{MatchedRuleCommit, OnceRuleUnavailable, OnceStateSet, RuleAvailability};
+use super::state::{State, StateMatch};
 use crate::inspect::{RulePosition, RulePositions};
 use crate::rule::{Rule, RuleAnchorSyntax};
 
@@ -14,7 +14,7 @@ pub(crate) struct MatchedRuleApplication<'program, 'once> {
     position: RulePosition,
     rule: &'program Rule,
     commit: MatchedRuleCommit<'once>,
-    state_match: MatchedStateSpan,
+    state_match: StateMatch,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -27,7 +27,7 @@ impl<'program, 'once> MatchedRuleApplication<'program, 'once> {
     const fn new(
         position: RulePosition,
         rule: &'program Rule,
-        state_match: MatchedStateSpan,
+        state_match: StateMatch,
         commit: MatchedRuleCommit<'once>,
     ) -> Self {
         Self {
@@ -42,7 +42,7 @@ impl<'program, 'once> MatchedRuleApplication<'program, 'once> {
         self.rule
     }
 
-    pub(crate) const fn state_match(&self) -> MatchedStateSpan {
+    pub(crate) const fn state_match(&self) -> StateMatch {
         self.state_match
     }
 
@@ -85,7 +85,12 @@ fn matched_application_for_rule<'program, 'once>(
     state: &State,
 ) -> Option<MatchedRuleApplication<'program, 'once>> {
     let state_match = find_match(state, rule)?;
-    let commit = once_states.matched_commit_for_rule(rule)?;
+    let commit = match once_states.availability_for_rule(rule) {
+        RuleAvailability::Available(commit) => commit,
+        RuleAvailability::Unavailable(
+            OnceRuleUnavailable::Consumed | OnceRuleUnavailable::MissingSlot,
+        ) => return None,
+    };
     Some(MatchedRuleApplication::new(
         position,
         rule,
@@ -94,7 +99,7 @@ fn matched_application_for_rule<'program, 'once>(
     ))
 }
 
-fn find_match(state: &State, rule: &Rule) -> Option<MatchedStateSpan> {
+fn find_match(state: &State, rule: &Rule) -> Option<StateMatch> {
     match rule.anchor() {
         RuleAnchorSyntax::Anywhere => state.find_payload(rule.lhs()),
         RuleAnchorSyntax::Start => state.starts_with_payload(rule.lhs()),

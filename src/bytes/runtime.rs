@@ -63,6 +63,34 @@ mod runtime_ascii {
     }
 }
 
+/// A raw runtime-input byte after input-boundary validation.
+///
+/// This witness is the only path from host `u8` input into the runtime byte
+/// domain. It keeps the validation result attached until the byte is classified
+/// for mutable runtime state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeInputByte {
+    byte: AsciiByte,
+}
+
+impl RuntimeInputByte {
+    /// Validates one raw runtime input byte as a runtime-input byte.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RuntimeInputError` when ASCII validation fails or the input
+    /// column cannot be represented.
+    pub(crate) fn validate(byte: u8, zero_based_column: usize) -> Result<Self, RuntimeInputError> {
+        Ok(Self {
+            byte: AsciiByte::validate(byte, zero_based_column)?,
+        })
+    }
+
+    pub(crate) fn into_runtime_byte(self) -> RuntimeByte {
+        RuntimeByte::from_ascii(self.byte)
+    }
+}
+
 /// A byte inside the mutable runtime state.
 ///
 /// Program-constructible bytes and runtime-only bytes are separate variants, so

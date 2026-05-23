@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
-use crate::bytes::{RuntimeByte, RuntimeInputByteCount, RuntimeStateByteCount};
+use crate::bytes::{RuntimeByte, RuntimeInputByte, RuntimeInputByteCount, RuntimeStateByteCount};
 use crate::error::{RunError, RuntimeInputError};
 use crate::program::RuntimeInputByteLimit;
 
@@ -60,7 +60,7 @@ impl<'input> ValidatedRuntimeInputSource<'input> {
         }
 
         for (zero_based_column, byte) in source.as_bytes().iter().copied().enumerate() {
-            RuntimeByte::validate_input_boundary(byte, zero_based_column)?;
+            RuntimeInputByte::validate(byte, zero_based_column)?;
         }
 
         Ok(Self { source, byte_count })
@@ -132,10 +132,11 @@ impl RuntimeInput {
             AllocationContext::RuntimeInputValidation,
         )?;
 
-        for byte in input.bytes().iter().copied() {
+        for (zero_based_column, byte) in input.bytes().iter().copied().enumerate() {
+            let byte = RuntimeInputByte::validate(byte, zero_based_column)?;
             try_push(
                 &mut bytes,
-                RuntimeByte::from_validated_input(byte),
+                byte.into_runtime_byte(),
                 AllocationContext::RuntimeInputValidation,
             )?;
         }

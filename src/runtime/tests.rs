@@ -2,7 +2,7 @@ use super::budget::RuntimeBudgetState;
 use super::input::{InitialStateBytes, RuntimeInput, RuntimeInputSource};
 use super::state::State;
 use crate::RunLimits;
-use crate::bytes::{CompactByte, Payload};
+use crate::bytes::{CompactByte, Payload, PayloadSyntax};
 use crate::error::{LimitError, PayloadKind, RunError, RuntimeInputError, StateLimitContext};
 use crate::execution::{FailedRun, RunSession, StepTransition};
 use crate::limits::{
@@ -298,7 +298,9 @@ fn runtime_input_error_is_structured_at_the_runtime_boundary() -> TestResult {
 #[test]
 fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
     let compact = [CompactByte::new(b'a', source_column(1)?)];
-    let payload = Payload::parse(&compact, source_line_number(1)?, PayloadKind::LeftSideData)?;
+    let payload = PayloadSyntax::new(&compact, source_line_number(1)?, PayloadKind::LeftSideData)
+        .validate()?
+        .into_payload()?;
     let input = runtime_input(b"a=()# ")?;
     let state = State::from_input(InitialStateBytes::from_runtime_input(
         input,

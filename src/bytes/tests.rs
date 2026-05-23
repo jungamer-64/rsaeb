@@ -14,8 +14,9 @@ use crate::test_support::{
 ///
 /// Returns `TestFailure` if the byte is rejected by runtime input validation.
 fn validated_runtime_byte(byte: u8) -> Result<RuntimeByte, TestFailure> {
-    RuntimeByte::validate_input_boundary(byte, 0).map_err(TestFailure::from)?;
-    Ok(RuntimeByte::from_validated_input(byte))
+    RuntimeInputByte::validate(byte, 0)
+        .map(RuntimeInputByte::into_runtime_byte)
+        .map_err(TestFailure::from)
 }
 
 /// Parses payload bytes and returns the expected parse error.
@@ -28,10 +29,29 @@ fn parse_payload_error(
     line_number: SourceLineNumber,
     payload_kind: PayloadKind,
 ) -> Result<ParseError, TestFailure> {
-    match Payload::parse(input, line_number, payload_kind) {
+    match PayloadSyntax::new(input, line_number, payload_kind)
+        .validate()
+        .and_then(super::payload::ValidatedPayloadSyntax::into_payload)
+    {
         Ok(_) => Err(TestFailure::message("invalid payload bytes were accepted")),
         Err(error) => Ok(error),
     }
+}
+
+/// Parses payload bytes through the validated payload syntax boundary.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the bytes are not valid payload syntax.
+fn parse_payload(
+    input: &[CompactByte],
+    line_number: SourceLineNumber,
+    payload_kind: PayloadKind,
+) -> Result<Payload, TestFailure> {
+    PayloadSyntax::new(input, line_number, payload_kind)
+        .validate()?
+        .into_payload()
+        .map_err(TestFailure::from)
 }
 
 /// # Errors
@@ -111,8 +131,7 @@ fn payload_exposes_validated_bytes_without_leaking_the_internal_domain_type() ->
         CompactByte::new(b'a', source_column(1)?),
         CompactByte::new(b'b', source_column(2)?),
     ];
-    let payload = Payload::parse(&compact, source_line_number(1)?, PayloadKind::LeftSideData)
-        .map_err(TestFailure::from)?;
+    let payload = parse_payload(&compact, source_line_number(1)?, PayloadKind::LeftSideData)?;
 
     ensure_eq!(payload.bytes().collect::<Vec<_>>(), b"ab".to_vec())?;
     let PayloadNeedle::NonEmpty(needle) = payload.needle() else {
