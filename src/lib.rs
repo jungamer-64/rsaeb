@@ -349,19 +349,13 @@ mod allocation;
 mod bytes;
 pub mod error;
 pub mod execution;
+pub mod input;
 pub mod inspect;
 pub mod limits;
 mod parser;
-mod program;
+pub mod program;
 mod rule;
 mod runtime;
 pub mod source;
 mod syntax;
 pub mod trace;
-
-pub use program::{
-    ParseLimits, Program, ReturnOutput, ReturnOutputView, RunLimits, RunOutcome, RunResult,
-    RuntimeStateSnapshot,
-};
-pub use runtime::{RuntimeInput, RuntimeInputSource};
-pub use source::ProgramSource;

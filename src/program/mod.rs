@@ -1,4 +1,4 @@
-mod limits;
+pub(crate) mod limits;
 mod result;
 mod rule_set;
 mod tracing;
@@ -8,19 +8,12 @@ use crate::execution::RunSession;
 use crate::inspect::{OnceRuleCount, RuleCount, RulePositions, RuleView};
 use crate::parser::parse_rules_impl;
 use crate::rule::Rule;
-use crate::runtime::RuntimeInput;
+use crate::input::RuntimeInput;
+use crate::limits::{ParseLimits, RunLimits};
 use crate::source::ProgramSource;
 
 pub(crate) use rule_set::RuleSet;
 
-pub use limits::{
-    CodeLineByteCount, CodeLineByteLimit, DEFAULT_MAX_CODE_LINE_LEN, DEFAULT_MAX_INPUT_LEN,
-    DEFAULT_MAX_PAYLOAD_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_RULES, DEFAULT_MAX_SOURCE_LEN,
-    DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS, DEFAULT_MAX_TRACE_SNAPSHOT_LEN, DEFAULT_PARSE_LIMITS,
-    ParseLimits, PayloadByteLimit, ReturnByteLimit, RuleLimit, RunLimits, RuntimeInputByteLimit,
-    RuntimeStateByteLimit, SourceByteCount, SourceByteLimit, StepCount, StepLimit,
-    TraceSnapshotByteLimit, TraceSnapshotLimits,
-};
 pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeStateSnapshot};
 
 /// Parsed A=B rewrite program.
