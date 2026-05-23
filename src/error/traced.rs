@@ -2,7 +2,7 @@ use core::error::Error;
 
 use crate::allocation::AllocationError;
 use crate::bytes::TraceSnapshotByteCount;
-use crate::program::TraceSnapshotByteLimit;
+use crate::limits::TraceSnapshotByteLimit;
 
 use super::RunError;
 

@@ -4,7 +4,8 @@ use rsaeb::error::{
     AllocationError, ParseError, RunError, RuntimeInputError, TraceSnapshotRunError,
 };
 use rsaeb::limits::DEFAULT_PARSE_LIMITS;
-use rsaeb::{Program, ProgramSource};
+use rsaeb::program::Program;
+use rsaeb::source::ProgramSource;
 
 pub enum TestFailure {
     Message(String),

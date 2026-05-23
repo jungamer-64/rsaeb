@@ -2,14 +2,14 @@
 
 mod support;
 
+use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 use rsaeb::inspect::OnceRuleCount;
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
-    DEFAULT_PARSE_LIMITS, StepLimit,
+    DEFAULT_PARSE_LIMITS, RunLimits, StepLimit,
 };
-use rsaeb::{
-    Program, ProgramSource, RunLimits, RunOutcome, RunResult, RuntimeInput, RuntimeInputSource,
-};
+use rsaeb::program::{Program, RunOutcome, RunResult};
+use rsaeb::source::ProgramSource;
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns stable output bytes when they match `expected`.

@@ -1,12 +1,19 @@
+//! Runtime-input boundary types.
+//!
+//! Host bytes enter the interpreter as [`RuntimeInputSource`], then
+//! [`RuntimeInput::validate`] checks the input byte budget and ASCII validity
+//! before storing owned runtime-domain bytes. Execution consumes
+//! [`RuntimeInput`], so validated input cannot be reused accidentally across
+//! runs.
+
 use alloc::vec::Vec;
 use core::fmt;
 
 use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeInputByte, RuntimeInputByteCount, RuntimeStateByteCount};
 use crate::error::{RunError, RuntimeInputError};
-use crate::program::RuntimeInputByteLimit;
-
-use super::budget::RuntimeBudgetState;
+use crate::limits::RuntimeInputByteLimit;
+use crate::runtime::budget::RuntimeBudgetState;
 
 /// Borrowed runtime input source at the validation boundary.
 ///

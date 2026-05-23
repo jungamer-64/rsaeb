@@ -5,7 +5,7 @@ use crate::allocation::{
 };
 use crate::bytes::{CompactByte, NonAsciiCodeByte, NonPrintableCodeByte};
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
-use crate::program::{CodeLineByteCount, CodeLineByteLimit};
+use crate::limits::{CodeLineByteCount, CodeLineByteLimit};
 use crate::source::{SourceLineNumber, SourcePosition};
 
 use super::location::{parse_allocation_error, source_column};

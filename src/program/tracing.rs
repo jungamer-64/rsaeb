@@ -1,10 +1,10 @@
 use crate::error::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
 use crate::execution::RunSession;
-use crate::runtime::RuntimeInput;
+use crate::input::RuntimeInput;
+use crate::limits::{RunLimits, TraceSnapshotLimits};
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
 use super::Program;
-use super::limits::{RunLimits, TraceSnapshotLimits};
 use super::result::RunResult;
 
 enum SnapshotTraceCallbackError<E> {

@@ -4,7 +4,8 @@ mod support;
 
 use rsaeb::inspect::{OnceRuleCount, RuleActionView, RuleAnchor, RuleRepeat};
 use rsaeb::limits::DEFAULT_PARSE_LIMITS;
-use rsaeb::{Program, ProgramSource};
+use rsaeb::program::Program;
+use rsaeb::source::ProgramSource;
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// # Errors

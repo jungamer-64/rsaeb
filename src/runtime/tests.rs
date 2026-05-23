@@ -1,20 +1,20 @@
 use super::budget::RuntimeBudgetState;
-use super::input::{InitialStateBytes, RuntimeInput, RuntimeInputSource};
 use super::matcher::{RuleSearch, find_next_match};
 use super::once::OnceStateSet;
 use super::rewrite::RewriteScratch;
 use super::state::State;
-use crate::RunLimits;
 use crate::bytes::{CompactByte, Payload, PayloadSyntax};
 use crate::error::{
     InternalInvariantError, LimitError, PayloadKind, RunError, RuntimeInputError, StateLimitContext,
 };
 use crate::execution::{FailedRun, RunSession, StepTransition};
+use crate::input::{InitialStateBytes, RuntimeInput, RuntimeInputSource};
 use crate::limits::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit, ReturnOutputByteCount,
-    RuntimeInputByteCount, RuntimeInputByteLimit, RuntimeStateByteCount, RuntimeStateByteLimit,
-    StepCount, StepLimit,
+    RunLimits, RuntimeInputByteCount, RuntimeInputByteLimit, RuntimeStateByteCount,
+    RuntimeStateByteLimit, StepCount, StepLimit,
 };
+use crate::program::RunOutcome;
 use crate::runtime::action::apply_matched_rule;
 use crate::test_support::{
     TestFailure, TestResult, ensure_eq, ensure_matches, parse_program, runtime_input,
@@ -301,7 +301,7 @@ fn return_action_bypasses_rewrite_state_mutation_path() -> TestResult {
             ensure_matches(
                 matches!(
                     result.outcome(),
-                    crate::RunOutcome::Return(output) if output.as_slice() == b"ok"
+                    RunOutcome::Return(output) if output.as_slice() == b"ok"
                 ),
                 "expected return output to bypass rewrite state limit",
             )
@@ -515,7 +515,7 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
     ensure_matches(
         matches!(
             result.outcome(),
-            crate::RunOutcome::Stable(output) if output.as_slice() == b"b=()# "
+            RunOutcome::Stable(output) if output.as_slice() == b"b=()# "
         ),
         "expected rewrite to leave runtime-only input bytes materialized but unmatched",
     )
@@ -541,7 +541,7 @@ fn once_rule_commit_proof_allows_only_one_successful_application() -> TestResult
     ensure_matches(
         matches!(
             result.outcome(),
-            crate::RunOutcome::Stable(output) if output.as_slice() == b"b"
+            RunOutcome::Stable(output) if output.as_slice() == b"b"
         ),
         "expected consumed once rule to give the later rule a chance",
     )
@@ -570,7 +570,7 @@ fn rewrite_action_variants_preserve_runtime_placement() -> TestResult {
         ensure_matches(
             matches!(
                 result.outcome(),
-                crate::RunOutcome::Stable(output) if output.as_slice() == expected
+                RunOutcome::Stable(output) if output.as_slice() == expected
             ),
             "expected rewrite action variant to preserve placement",
         )?;

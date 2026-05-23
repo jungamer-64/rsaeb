@@ -1,18 +1,19 @@
 //! Program-source boundary and source-position value types.
 //!
-//! A [`ProgramSource`] only labels bytes as source input; it does not validate
-//! A=B syntax. Validation belongs to [`Program::parse`](crate::Program::parse),
+//! A [`source::ProgramSource`] only labels bytes as source input; it does not validate
+//! A=B syntax. Validation belongs to [`program::Program::parse`](crate::program::Program::parse),
 //! which can then report parse failures with [`SourceLineNumber`],
 //! [`SourceColumn`], and [`SourcePosition`].
 //!
-//! Source is intentionally separate from [`RuntimeInput`](crate::RuntimeInput).
+//! Source is intentionally separate from [`input::RuntimeInput`](crate::input::RuntimeInput).
 //! Comments may contain arbitrary bytes, while executable source code is
 //! validated by the parser and runtime input is validated by the runtime-input
 //! boundary.
 //!
 //! ```
 //! use rsaeb::limits::DEFAULT_PARSE_LIMITS;
-//! use rsaeb::{Program, ProgramSource};
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let source = ProgramSource::from_bytes(b"a=b # arbitrary comment bytes: \xff");
@@ -27,7 +28,7 @@
 ///
 /// Program source remains a byte format because comments may contain arbitrary
 /// non-UTF-8 bytes. Constructing this value labels a byte slice as source
-/// input; syntax validation still happens in [`Program::parse`](crate::Program::parse).
+/// input; syntax validation still happens in [`program::Program::parse`](crate::program::Program::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgramSource<'source> {
     bytes: &'source [u8],
@@ -37,7 +38,7 @@ impl<'source> ProgramSource<'source> {
     /// Labels raw bytes as parser input.
     ///
     /// This constructor accepts any byte slice. Executable code bytes are
-    /// checked later by [`Program::parse`](crate::Program::parse); bytes after a
+    /// checked later by [`program::Program::parse`](crate::program::Program::parse); bytes after a
     /// line-comment marker remain part of the source byte stream but are not
     /// executable code.
     #[must_use]
@@ -48,7 +49,7 @@ impl<'source> ProgramSource<'source> {
     /// Labels a UTF-8 string as parser input.
     ///
     /// This is the ergonomic constructor for ordinary source literals. It is
-    /// equivalent to [`ProgramSource::from_bytes`] on `source.as_bytes()`.
+    /// equivalent to [`source::ProgramSource::from_bytes`] on `source.as_bytes()`.
     #[must_use]
     pub const fn from_text(source: &'source str) -> Self {
         Self {

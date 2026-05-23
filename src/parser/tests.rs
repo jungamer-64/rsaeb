@@ -1,8 +1,8 @@
-use crate::Program;
 use crate::error::{
     LeftModifierKind, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind,
 };
 use crate::inspect::{RuleActionView, RuleAnchor, RuleCount, RuleRepeat};
+use crate::program::Program;
 use crate::test_support::{
     TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_error_position,
     expect_parse_error, parse_program, parse_program_bytes, source_line_number,

@@ -3,9 +3,8 @@ use alloc::vec::Vec;
 use crate::allocation::{AllocationContext, AllocationError, try_push};
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
 use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePosition};
+use crate::limits::RuleLimit;
 use crate::rule::{OnceRuleCount, ParsedRule, Rule, RuleRepeatState, RuleRepeatSyntax};
-
-use super::RuleLimit;
 
 #[derive(Debug, PartialEq, Eq, Default)]
 pub(crate) struct RuleSet {

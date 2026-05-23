@@ -84,7 +84,7 @@ impl fmt::Display for CodeLineByteCount {
     }
 }
 
-/// Maximum source length accepted by [`Program::parse`](crate::Program::parse).
+/// Maximum source length accepted by [`program::Program::parse`](crate::program::Program::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceByteLimit {
     value: usize,
@@ -104,7 +104,7 @@ impl SourceByteLimit {
     }
 }
 
-/// Maximum executable code-line length accepted by [`Program::parse`](crate::Program::parse).
+/// Maximum executable code-line length accepted by [`program::Program::parse`](crate::program::Program::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CodeLineByteLimit {
     value: usize,
@@ -124,7 +124,7 @@ impl CodeLineByteLimit {
     }
 }
 
-/// Maximum parsed payload length accepted by [`Program::parse`](crate::Program::parse).
+/// Maximum parsed payload length accepted by [`program::Program::parse`](crate::program::Program::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PayloadByteLimit {
     value: usize,
@@ -144,7 +144,7 @@ impl PayloadByteLimit {
     }
 }
 
-/// Maximum executable rule count accepted by [`Program::parse`](crate::Program::parse).
+/// Maximum executable rule count accepted by [`program::Program::parse`](crate::program::Program::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleLimit {
     value: usize,
@@ -266,8 +266,8 @@ impl RuntimeStateByteLimit {
 
 /// Maximum runtime input length accepted before owned byte classification.
 ///
-/// This limit belongs to [`RuntimeInput::validate`](crate::RuntimeInput::validate),
-/// not to [`Program::run`](crate::Program::run). Runtime state limits are
+/// This limit belongs to [`input::RuntimeInput::validate`](crate::input::RuntimeInput::validate),
+/// not to [`program::Program::run`](crate::program::Program::run). Runtime state limits are
 /// checked separately when execution materializes the validated input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuntimeInputByteLimit {

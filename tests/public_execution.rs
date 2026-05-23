@@ -6,11 +6,12 @@ use rsaeb::error::LimitError;
 use rsaeb::execution::{
     AppliedStep, FailedRun, ReturnedRun, RunSession, StableRun, StepTransition,
 };
+use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit,
-    StepLimit,
+    RunLimits, StepLimit,
 };
-use rsaeb::{RunLimits, RunOutcome, RunResult, RuntimeInput, RuntimeInputSource};
+use rsaeb::program::{RunOutcome, RunResult};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns stable output bytes when they match `expected`.

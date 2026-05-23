@@ -5,7 +5,7 @@ use crate::bytes::{CompactByte, Payload, PayloadByteCount, PayloadSyntax};
 use crate::error::{
     LeftModifierKind, ParseError, ParseErrorKind, ParseLimitError, PayloadKind, RightActionKind,
 };
-use crate::program::PayloadByteLimit;
+use crate::limits::PayloadByteLimit;
 use crate::rule::{
     ParsedRule, RewriteAction, RuleAction, RuleAnchorSyntax, RuleBody, RuleHead, RuleRepeatSyntax,
 };

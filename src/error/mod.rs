@@ -22,7 +22,7 @@
 //! ```
 //! use rsaeb::error::RuntimeInputError;
 //! use rsaeb::limits::RuntimeInputByteLimit;
-//! use rsaeb::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //!
 //! fn validate(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
 //!     RuntimeInput::validate(

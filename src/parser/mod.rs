@@ -6,7 +6,8 @@ mod rule_line;
 mod tests;
 
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
-use crate::program::{ParseLimits, RuleSet, SourceByteCount};
+use crate::limits::{ParseLimits, SourceByteCount};
+use crate::program::RuleSet;
 use crate::source::{ProgramSource, SourceLineNumber};
 
 use line::RawSourceLine;

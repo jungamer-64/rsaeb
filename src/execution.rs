@@ -1,6 +1,6 @@
 //! Public stepwise run typestates.
 //!
-//! [`Program::start_run`](crate::Program::start_run) consumes validated
+//! [`Program::start_run`](crate::program::Program::start_run) consumes validated
 //! [`RuntimeInput`] and returns a [`RunSession`]. Calling
 //! [`RunSession::step`] consumes that value and returns a [`StepTransition`],
 //! so callers must handle the next state explicitly: continue with
@@ -13,15 +13,15 @@
 //! public API.
 
 use crate::error::{RunError, TracedRunError};
+use crate::input::{InitialStateBytes, RuntimeInput};
 use crate::inspect::RuleView;
-use crate::program::{Program, ReturnOutputView, RunLimits, RunResult, StepCount};
+use crate::limits::{RunLimits, StepCount};
+use crate::program::{Program, ReturnOutputView, RunResult};
 use crate::rule::Rule;
-use crate::runtime::RuntimeInput;
 use crate::runtime::action::{
     AppliedRule, AppliedRuleEffect, apply_matched_rule, materialize_return_output,
 };
 use crate::runtime::budget::RuntimeBudgetState;
-use crate::runtime::input::InitialStateBytes;
 use crate::runtime::matcher::{RuleSearch, find_next_match};
 use crate::runtime::once::OnceStateSet;
 use crate::runtime::rewrite::RewriteScratch;

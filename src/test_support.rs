@@ -2,14 +2,15 @@
 
 use std::string::{FromUtf8Error, String};
 
-use crate::Program;
 use crate::error::{
     AllocationError, ParseError, ParseErrorLocation, RunError, RuntimeInputError,
     TraceSnapshotRunError,
 };
+use crate::input::{RuntimeInput, RuntimeInputSource};
 use crate::limits::DEFAULT_MAX_INPUT_LEN;
-use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
-use crate::{ProgramSource, RuntimeInput, RuntimeInputSource, limits::DEFAULT_PARSE_LIMITS};
+use crate::limits::DEFAULT_PARSE_LIMITS;
+use crate::program::Program;
+use crate::source::{ProgramSource, SourceColumn, SourceLineNumber, SourcePosition};
 
 pub(crate) enum TestFailure {
     Message(String),

@@ -5,7 +5,7 @@ use crate::bytes::{
     NonAsciiInputByte, PayloadByteCount, ReturnOutputByteCount, RuntimeInputByteCount,
     RuntimeStateByteCount,
 };
-use crate::program::{
+use crate::limits::{
     ReturnByteLimit, RuntimeInputByteLimit, RuntimeStateByteLimit, StepCount, StepLimit,
 };
 
@@ -66,7 +66,7 @@ impl From<InternalInvariantError> for RunError {
 /// Runtime input boundary error.
 ///
 /// This error is produced before execution starts, while raw host bytes are
-/// being classified as [`RuntimeInput`](crate::RuntimeInput). It is intentionally
+/// being classified as [`input::RuntimeInput`](crate::input::RuntimeInput). It is intentionally
 /// separate from [`RunError`] so callers can report invalid input without
 /// treating it as a runtime failure.
 #[derive(Debug, Clone, PartialEq, Eq)]

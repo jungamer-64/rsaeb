@@ -2,11 +2,12 @@
 
 mod support;
 
+use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
-    RuntimeInputByteLimit,
+    RunLimits, RuntimeInputByteLimit,
 };
-use rsaeb::{RunLimits, RuntimeInput, RuntimeInputSource};
+use rsaeb::program::{RunOutcome, RunResult};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns stable output bytes when they match `expected`.
@@ -14,11 +15,11 @@ use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program}
 /// # Errors
 ///
 /// Returns `TestFailure` if the run result is not stable or stable bytes differ.
-fn expect_stable_bytes(result: &rsaeb::RunResult, expected: &[u8]) -> TestResult {
+fn expect_stable_bytes(result: &RunResult, expected: &[u8]) -> TestResult {
     match result.outcome() {
-        rsaeb::RunOutcome::Stable(output) if output.as_slice() == expected => Ok(()),
-        rsaeb::RunOutcome::Stable(_) => Err(TestFailure::message("stable output bytes differed")),
-        rsaeb::RunOutcome::Return(_) => Err(TestFailure::message("expected stable outcome")),
+        RunOutcome::Stable(output) if output.as_slice() == expected => Ok(()),
+        RunOutcome::Stable(_) => Err(TestFailure::message("stable output bytes differed")),
+        RunOutcome::Return(_) => Err(TestFailure::message("expected stable outcome")),
     }
 }
 

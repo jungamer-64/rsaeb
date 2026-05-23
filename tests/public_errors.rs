@@ -3,8 +3,8 @@
 mod support;
 
 use rsaeb::error::{ParseErrorKind, ParseErrorLocation, PayloadKind, RunError};
-use rsaeb::limits::DEFAULT_MAX_INPUT_LEN;
-use rsaeb::{RuntimeInput, RuntimeInputSource};
+use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, RunLimits};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns the expected runtime error.
@@ -110,7 +110,7 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
 
     let return_error = parse_program("a=(return)ok")?.run(
         runtime_input(b"a")?,
-        rsaeb::RunLimits::new(
+        RunLimits::new(
             rsaeb::limits::StepLimit::new(1),
             rsaeb::limits::DEFAULT_MAX_STATE_LEN,
             rsaeb::limits::ReturnByteLimit::new(1),

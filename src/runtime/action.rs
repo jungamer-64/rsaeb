@@ -1,7 +1,8 @@
 use crate::bytes::ReturnOutputByteCount;
 use crate::error::RunError;
 use crate::inspect::RuleView;
-use crate::program::{ReturnOutput, ReturnOutputView, StepCount};
+use crate::limits::StepCount;
+use crate::program::{ReturnOutput, ReturnOutputView};
 use crate::rule::RuleAction;
 
 use super::budget::RuntimeBudgetState;

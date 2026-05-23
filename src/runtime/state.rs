@@ -1,5 +1,4 @@
 use super::budget::RuntimeBudgetState;
-use super::input::InitialStateBytes;
 use super::rewrite::{PreparedRewrite, RewriteScratch};
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
@@ -9,6 +8,7 @@ use crate::bytes::{
     RuntimeStateByteCount,
 };
 use crate::error::{RunError, StateSizeError};
+use crate::input::InitialStateBytes;
 use crate::program::RuntimeStateSnapshot;
 use crate::rule::RewriteAction;
 use crate::trace::RuntimeStateView;

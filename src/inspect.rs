@@ -2,13 +2,14 @@
 //!
 //! Inspection exposes the parsed program structure without exposing the
 //! internal rule table or storing a second copy of source text. Rule and payload
-//! views borrow from [`Program`](crate::Program), so they are cheap to copy and
+//! views borrow from [`program::Program`](crate::program::Program), so they are cheap to copy and
 //! cannot outlive the parsed program they describe.
 //!
 //! ```
 //! use rsaeb::limits::DEFAULT_PARSE_LIMITS;
 //! use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
-//! use rsaeb::{Program, ProgramSource};
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text(
@@ -37,7 +38,7 @@ use core::fmt;
 
 use crate::allocation::{AllocationContext, AllocationError};
 use crate::bytes::{Payload, PayloadByteCount};
-use crate::program::SourceByteCount;
+use crate::limits::SourceByteCount;
 use crate::rule::Rule;
 use crate::source::SourceLineNumber;
 
@@ -174,8 +175,8 @@ impl Iterator for RulePositions {
 /// Rule repeat policy.
 ///
 /// Repeat policy is per runtime invocation. A `(once)` rule can be used again
-/// by a later call to [`Program::run`](crate::Program::run) or
-/// [`Program::start_run`](crate::Program::start_run).
+/// by a later call to [`program::Program::run`](crate::program::Program::run) or
+/// [`program::Program::start_run`](crate::program::Program::start_run).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleRepeat {
     /// The rule may apply every time it matches.

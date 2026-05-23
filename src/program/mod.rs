@@ -1,3 +1,13 @@
+//! Parsed program and run-to-completion result types.
+//!
+//! [`Program`] is the immutable parsed A=B rule table. Hosts parse typed
+//! [`ProgramSource`](crate::source::ProgramSource) under
+//! [`ParseLimits`](crate::limits::ParseLimits), then run with already validated
+//! [`RuntimeInput`](crate::input::RuntimeInput) under
+//! [`RunLimits`](crate::limits::RunLimits). Runtime budget and byte-count types
+//! live in [`limits`](crate::limits); runtime input lives in
+//! [`input`](crate::input).
+
 pub(crate) mod limits;
 mod result;
 mod rule_set;
@@ -5,11 +15,11 @@ mod tracing;
 
 use crate::error::{ParseError, RunError};
 use crate::execution::RunSession;
+use crate::input::RuntimeInput;
 use crate::inspect::{OnceRuleCount, RuleCount, RulePositions, RuleView};
+use crate::limits::{ParseLimits, RunLimits};
 use crate::parser::parse_rules_impl;
 use crate::rule::Rule;
-use crate::input::RuntimeInput;
-use crate::limits::{ParseLimits, RunLimits};
 use crate::source::ProgramSource;
 
 pub(crate) use rule_set::RuleSet;

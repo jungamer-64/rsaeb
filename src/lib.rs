@@ -5,8 +5,8 @@
 //! boundaries a host program should use.
 //!
 //! `rsaeb` is a `no_std + alloc` library crate. It parses compact A=B source
-//! into an immutable [`Program`] and runs that program against typed
-//! [`RuntimeInput`] validated before execution. The interpreter core does not
+//! into an immutable [`program::Program`] and runs that program against typed
+//! [`input::RuntimeInput`] validated before execution. The interpreter core does not
 //! read files, use process arguments, access environment variables, write
 //! stdout/stderr, or perform lossy byte-to-text display conversion.
 //!
@@ -14,19 +14,19 @@
 //!
 //! Use these public entry points according to the boundary being crossed:
 //!
-//! - [`ProgramSource::from_bytes`] and [`ProgramSource::from_text`] explicitly
+//! - [`source::ProgramSource::from_bytes`] and [`source::ProgramSource::from_text`] explicitly
 //!   label host bytes or strings as A=B source before parsing.
-//! - [`Program::parse`] validates source syntax under [`ParseLimits`] and
-//!   returns a reusable [`Program`].
-//! - [`RuntimeInputSource::from_bytes`] labels host input bytes, and
-//!   [`RuntimeInput::validate`] validates and owns them in the runtime input
+//! - [`program::Program::parse`] validates source syntax under [`limits::ParseLimits`] and
+//!   returns a reusable [`program::Program`].
+//! - [`input::RuntimeInputSource::from_bytes`] labels host input bytes, and
+//!   [`input::RuntimeInput::validate`] validates and owns them in the runtime input
 //!   byte domain until execution consumes the value.
-//! - [`RunLimits`] and [`limits::TraceSnapshotLimits`] keep runtime execution
+//! - [`limits::RunLimits`] and [`limits::TraceSnapshotLimits`] keep runtime execution
 //!   limits separate from trace snapshot materialization limits.
-//! - [`Program::run`] runs to completion, while [`Program::start_run`]
+//! - [`program::Program::run`] runs to completion, while [`program::Program::start_run`]
 //!   returns a typestate execution that can pause after each applied rule.
-//! - [`Program::run_with_borrowed_trace`] observes borrowed trace events without
-//!   per-event allocation; [`Program::run_with_trace_snapshots`] materializes
+//! - [`program::Program::run_with_borrowed_trace`] observes borrowed trace events without
+//!   per-event allocation; [`program::Program::run_with_trace_snapshots`] materializes
 //!   bounded owned trace events.
 //! - [`inspect`] exposes borrowed structured rule views, and [`error`] exposes
 //!   structured parse, input, runtime, and trace errors.
@@ -42,13 +42,16 @@
 //!
 //! # Basic execution
 //!
-//! Parse [`ProgramSource`] and [`RuntimeInput`] explicitly before running:
+//! Parse [`source::ProgramSource`] and [`input::RuntimeInput`] explicitly before running:
 //!
 //! ```
 //! use rsaeb::limits::{
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
 //! };
-//! use rsaeb::{Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::limits::RunLimits;
+//! use rsaeb::program::{Program, RunOutcome};
+//! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?;
@@ -64,17 +67,18 @@
 //! # }
 //! ```
 //!
-//! Parse [`Program`] once when the same rules should be reused. Per-run
+//! Parse [`program::Program`] once when the same rules should be reused. Per-run
 //! `(once)` state is owned by each runtime invocation, not by the parsed
 //! program:
 //!
 //! ```
 //! use rsaeb::limits::{
-//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
+//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
+//!     RunLimits, StepLimit,
 //! };
-//! use rsaeb::{
-//!     Program, ProgramSource, RunLimits, RunOutcome, RuntimeInput, RuntimeInputSource,
-//! };
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::program::{Program, RunOutcome};
+//! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("(once)a=b\na=c"), DEFAULT_PARSE_LIMITS)?;
@@ -100,7 +104,7 @@
 //!
 //! # Stepwise execution
 //!
-//! Use [`Program::start_run`] when a host wants to wait after each
+//! Use [`program::Program::start_run`] when a host wants to wait after each
 //! applied rule:
 //!
 //! ```
@@ -108,7 +112,10 @@
 //! use rsaeb::limits::{
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 //! };
-//! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::limits::RunLimits;
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("a=b\nb=c"), DEFAULT_PARSE_LIMITS)?;
@@ -160,7 +167,7 @@
 //!
 //! [`limits::RuntimeInputByteLimit`] bounds owned input classification before
 //! allocation.
-//! [`RunLimits`] carries the step budget and byte budgets for runtime states and
+//! [`limits::RunLimits`] carries the step budget and byte budgets for runtime states and
 //! `(return)` outputs. Trace snapshot materialization uses an explicit
 //! [`limits::TraceSnapshotByteLimit`]. Step limits are checked only when another
 //! matching rule would apply after the configured number of completed steps:
@@ -170,7 +177,10 @@
 //! use rsaeb::limits::{
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 //! };
-//! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::limits::RunLimits;
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let limits = RunLimits::new(StepLimit::new(0), DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_RETURN_LEN);
@@ -194,7 +204,8 @@
 //! ```
 //! use rsaeb::limits::DEFAULT_PARSE_LIMITS;
 //! use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
-//! use rsaeb::{Program, ProgramSource};
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("( once ) ( start ) a = ( end ) b # comment"), DEFAULT_PARSE_LIMITS)?;
@@ -230,7 +241,10 @@
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 //! };
 //! use rsaeb::trace::BorrowedTraceEvent;
-//! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::limits::RunLimits;
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("a=b\nb=(return)ok"), DEFAULT_PARSE_LIMITS)?;
@@ -264,7 +278,10 @@
 //!     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit, TraceSnapshotLimits,
 //! };
 //! use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
-//! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::limits::RunLimits;
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("a=b\nb=(return)ok"), DEFAULT_PARSE_LIMITS)?;
@@ -315,7 +332,7 @@
 //! ```
 //! use rsaeb::error::RuntimeInputError;
 //! use rsaeb::limits::RuntimeInputByteLimit;
-//! use rsaeb::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //!
 //! fn validate_host_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
 //!     RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), RuntimeInputByteLimit::new(4))

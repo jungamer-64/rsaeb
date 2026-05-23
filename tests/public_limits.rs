@@ -3,12 +3,14 @@
 mod support;
 
 use rsaeb::error::{LimitError, ParseErrorKind, ParseLimitError, RunError, StateLimitContext};
+use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 use rsaeb::limits::{
     CodeLineByteLimit, DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
-    DEFAULT_PARSE_LIMITS, ParseLimits, PayloadByteLimit, ReturnByteLimit, RuleLimit,
+    DEFAULT_PARSE_LIMITS, ParseLimits, PayloadByteLimit, ReturnByteLimit, RuleLimit, RunLimits,
     RuntimeStateByteLimit, SourceByteLimit, StepLimit,
 };
-use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput, RuntimeInputSource};
+use rsaeb::program::Program;
+use rsaeb::source::ProgramSource;
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns the expected runtime error.

@@ -15,7 +15,10 @@
 //!     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit, TraceSnapshotLimits,
 //! };
 //! use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
-//! use rsaeb::{Program, ProgramSource, RunLimits, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::limits::RunLimits;
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::parse(ProgramSource::from_text("a=b\nb=(return)ok"), DEFAULT_PARSE_LIMITS)?;
@@ -56,9 +59,8 @@ use crate::allocation::{
 use crate::bytes::{RuntimeByte, RuntimeStateByteCount, TraceSnapshotByteCount};
 use crate::error::TraceSnapshotError;
 use crate::inspect::RuleView;
-use crate::program::{
-    ReturnOutput, ReturnOutputView, RuntimeStateSnapshot, StepCount, TraceSnapshotByteLimit,
-};
+use crate::limits::{StepCount, TraceSnapshotByteLimit};
+use crate::program::{ReturnOutput, ReturnOutputView, RuntimeStateSnapshot};
 
 /// Borrowed view of runtime-state bytes.
 ///

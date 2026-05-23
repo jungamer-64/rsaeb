@@ -1,6 +1,6 @@
 use crate::bytes::{ReturnOutputByteCount, RuntimeStateByteCount};
 use crate::error::{LimitError, RunError, StateLimitContext};
-use crate::program::{RunLimits, RuntimeStateByteLimit, StepCount};
+use crate::limits::{RunLimits, RuntimeStateByteLimit, StepCount};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RuntimeBudgetState {

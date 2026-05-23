@@ -3,7 +3,7 @@ use core::error::Error;
 use crate::allocation::AllocationError;
 use crate::bytes::{NonAsciiCodeByte, NonPrintableCodeByte, PayloadByteCount, ReservedSyntaxByte};
 use crate::inspect::RuleCount;
-use crate::program::{
+use crate::limits::{
     CodeLineByteCount, CodeLineByteLimit, PayloadByteLimit, RuleLimit, SourceByteCount,
     SourceByteLimit,
 };
