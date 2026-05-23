@@ -22,12 +22,6 @@ pub(crate) struct AppliedRule<'program> {
     pub(crate) effect: AppliedRuleEffect<'program>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum PreparedAction<'program> {
-    Rewrite(PreparedRewrite),
-    Return(ReturnOutputView<'program>),
-}
-
 /// Materializes a return payload as public return output.
 ///
 /// # Errors
