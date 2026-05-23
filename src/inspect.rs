@@ -149,10 +149,8 @@ impl RulePosition {
     }
 
     /// Converts this checked public position into an internal table index.
-    pub(crate) fn table_index(self) -> RuleTableIndex {
-        RuleTableIndex {
-            zero_based: self.number.one_based - 1,
-        }
+    pub(crate) fn table_index(self) -> Option<RuleTableIndex> {
+        RuleTableIndex::from_rule_number(self.number)
     }
 
     /// Builds the first value.
@@ -179,6 +177,12 @@ impl RuleTableIndex {
     /// Builds a checked rule-table index from a primitive offset.
     pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
         RuleNumber::from_zero_based(zero_based)?;
+        Some(Self { zero_based })
+    }
+
+    /// Builds a rule-table index from a checked public rule number.
+    fn from_rule_number(number: RuleNumber) -> Option<Self> {
+        let zero_based = number.one_based.checked_sub(1)?;
         Some(Self { zero_based })
     }
 

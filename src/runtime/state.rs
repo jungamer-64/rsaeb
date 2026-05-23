@@ -367,6 +367,8 @@ struct StateSpanRange {
     start: StateIndex,
     /// Exclusive end index of the span.
     end: StateIndex,
+    /// Length of the payload matched by this span.
+    matched_len: PayloadByteCount,
     /// Runtime-state length this span was checked against.
     state_len: RuntimeStateByteCount,
 }
@@ -382,6 +384,7 @@ impl StateSpanRange {
         (start.get() <= state_len.get() && end.get() <= state_len.get()).then_some(Self {
             start,
             end,
+            matched_len,
             state_len,
         })
     }
@@ -398,10 +401,15 @@ impl StateSpanRange {
 
     /// Returns the typed byte count.
     fn byte_count(self) -> PayloadByteCount {
-        PayloadByteCount::new(self.end.get() - self.start.get())
+        self.matched_len
     }
 
     /// Ensures the span is being opened against the state length that created it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError::InternalInvariant` if this match span is opened
+    /// against a runtime state with a different length.
     fn ensure_matches_state_len(self, bytes: &[RuntimeByte]) -> Result<(), RunError> {
         if RuntimeStateByteCount::new(bytes.len()) == self.state_len {
             Ok(())

@@ -88,8 +88,8 @@ fn canonical_source_len(rule: &Rule) -> Result<usize, AllocationError> {
             .len()
             .checked_add(payload.byte_count().get())
             .ok_or_else(|| {
-            AllocationError::capacity_overflow(AllocationContext::CanonicalSource)
-        })?,
+                AllocationError::capacity_overflow(AllocationContext::CanonicalSource)
+            })?,
         CanonicalRightSide::Return(payload) => SyntaxToken::Return
             .len()
             .checked_add(payload.byte_count().get())

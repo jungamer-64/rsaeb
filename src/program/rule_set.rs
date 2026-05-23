@@ -33,7 +33,16 @@ struct RuleInsertionPermit {
 
 impl RuleInsertionPermit {
     /// Checks rule-count budget and table-position representability together.
-    fn new(current_len: usize, limit: RuleLimit, line_number: crate::source::SourceLineNumber) -> Result<Self, ParseError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if the next rule count overflows, exceeds the
+    /// parser rule budget, or cannot be represented as a checked rule position.
+    fn new(
+        current_len: usize,
+        limit: RuleLimit,
+        line_number: crate::source::SourceLineNumber,
+    ) -> Result<Self, ParseError> {
         let attempted_rule_count = current_len.checked_add(1).ok_or_else(|| {
             ParseError::at_line(
                 line_number,
