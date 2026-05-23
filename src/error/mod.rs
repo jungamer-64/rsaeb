@@ -8,8 +8,9 @@
 //!
 //! - [`ParseError`] for source syntax and parser allocation failures.
 //! - [`RuntimeInputError`] for raw input bytes rejected before execution.
-//! - [`RunError`] for execution-time allocation, state-size, and budget
-//!   failures.
+//! - [`RunError`] for execution-time allocation, state-size, budget failures,
+//!   and runtime invariant failures that public inputs should not be able to
+//!   construct.
 //! - [`AllocationError`] for explicit allocation boundaries such as view
 //!   materialization, canonical source construction, final output conversion,
 //!   and trace snapshots. [`AllocationContext`] names the failing boundary, and

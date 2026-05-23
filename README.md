@@ -445,6 +445,10 @@ reported as `RunError::Limit(LimitError::...)`. Trace snapshot byte limits are
 reported through `TraceSnapshotError`, not `RunError::Limit`, because snapshot
 materialization is outside runtime execution.
 
+Runtime metadata mismatches that should be unreachable through public inputs
+are reported as `RunError::InternalInvariant`. They indicate a broken internal
+parser/runtime invariant rather than invalid host source or input bytes.
+
 Filesystem failures are not part of the library error model. External I/O must
 be handled before bytes enter `ProgramSource::from_bytes`,
 `ProgramSource::from_text`, or `RuntimeInputSource::from_bytes`.

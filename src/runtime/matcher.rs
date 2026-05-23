@@ -109,7 +109,9 @@ fn matched_candidate_for_rule<'program>(
     once_states: &OnceStateSet,
     state: &State,
 ) -> Result<Option<MatchedRuleCandidate<'program>>, RunError> {
-    let state_match = find_match(state, rule)?;
+    let Some(state_match) = find_match(state, rule) else {
+        return Ok(None);
+    };
     match once_states.availability_for_rule(rule)? {
         OnceRuleAvailability::Available => {}
         OnceRuleAvailability::Consumed => return Ok(None),

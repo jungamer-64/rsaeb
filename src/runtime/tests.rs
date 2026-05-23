@@ -1,15 +1,21 @@
 use super::budget::RuntimeBudgetState;
 use super::input::{InitialStateBytes, RuntimeInput, RuntimeInputSource};
+use super::matcher::{RuleSearch, find_next_match};
+use super::once::OnceStateSet;
+use super::rewrite::RewriteScratch;
 use super::state::State;
 use crate::RunLimits;
 use crate::bytes::{CompactByte, Payload, PayloadSyntax};
-use crate::error::{LimitError, PayloadKind, RunError, RuntimeInputError, StateLimitContext};
+use crate::error::{
+    InternalInvariantError, LimitError, PayloadKind, RunError, RuntimeInputError, StateLimitContext,
+};
 use crate::execution::{FailedRun, RunSession, StepTransition};
 use crate::limits::{
     DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit, ReturnOutputByteCount,
     RuntimeInputByteCount, RuntimeInputByteLimit, RuntimeStateByteCount, RuntimeStateByteLimit,
     StepCount, StepLimit,
 };
+use crate::runtime::action::apply_matched_rule;
 use crate::test_support::{
     TestFailure, TestResult, ensure_eq, ensure_matches, parse_program, runtime_input,
     source_column, source_line_number,
@@ -54,9 +60,10 @@ fn expect_payload_byte(payload: &Payload, index: usize) -> Result<u8, TestFailur
 fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::Step { .. }) => Ok(error),
-        RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_) => {
-            Err(TestFailure::message("expected step limit error"))
-        }
+        RunError::Allocation(_)
+        | RunError::StateSize(_)
+        | RunError::Limit(_)
+        | RunError::InternalInvariant(_) => Err(TestFailure::message("expected step limit error")),
     }
 }
 
@@ -84,6 +91,19 @@ fn expect_step_transition(result: StepTransition<'_>) -> Result<StepTransition<'
         StepTransition::Failed(failed) => Err(TestFailure::from(failed.into_error())),
         transition => Ok(transition),
     }
+}
+
+/// Builds internal runtime state from validated input under the supplied limits.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if input validation fails or the input exceeds runtime
+/// state limits.
+fn state_from_input_bytes(input: &[u8], limits: RunLimits) -> Result<State, TestFailure> {
+    Ok(State::from_input(InitialStateBytes::from_runtime_input(
+        runtime_input(input)?,
+        RuntimeBudgetState::new(limits),
+    )?))
 }
 
 /// # Errors
@@ -259,6 +279,155 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
 
 /// # Errors
 ///
+/// Returns `TestFailure` if a return action enters rewrite state-limit
+/// accounting instead of the return-output path.
+#[test]
+fn return_action_bypasses_rewrite_state_mutation_path() -> TestResult {
+    let program = parse_program("a=(return)ok")?;
+    let session = RunSession::new(
+        &program,
+        runtime_input(b"a")?,
+        RunLimits::new(
+            StepLimit::new(1),
+            RuntimeStateByteLimit::new(1),
+            ReturnByteLimit::new(2),
+        ),
+    )?;
+
+    match expect_step_transition(session.step())? {
+        StepTransition::Returned(returned) => {
+            let result = returned.into_result()?;
+            ensure_eq!(result.steps().get(), 1)?;
+            ensure_matches(
+                matches!(
+                    result.outcome(),
+                    crate::RunOutcome::Return(output) if output.as_slice() == b"ok"
+                ),
+                "expected return output to bypass rewrite state limit",
+            )
+        }
+        StepTransition::Applied(_) | StepTransition::Stable(_) | StepTransition::Failed(_) => {
+            Err(TestFailure::message("expected return transition"))
+        }
+    }
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if a failed `(once)` rewrite commits the once slot.
+#[test]
+fn once_rewrite_limit_failure_does_not_commit_rule() -> TestResult {
+    let program = parse_program("(once)=aa")?;
+    let limits = RunLimits::new(
+        StepLimit::new(1),
+        RuntimeStateByteLimit::new(1),
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let mut state = state_from_input_bytes(b"a", limits)?;
+    let mut budget = RuntimeBudgetState::new(limits);
+    let mut scratch = RewriteScratch::new();
+    let mut once_states = OnceStateSet::new(program.once_slot_count())?;
+
+    let matched = match find_next_match(program.rule_slice(), &mut once_states, &state)? {
+        RuleSearch::Matched(matched) => matched,
+        RuleSearch::Stable => {
+            return Err(TestFailure::message("expected once rewrite to match"));
+        }
+    };
+
+    ensure_eq!(
+        apply_matched_rule(&mut state, &mut scratch, &mut budget, matched),
+        Err(RunError::Limit(LimitError::State {
+            context: StateLimitContext::Rewrite,
+            limit: RuntimeStateByteLimit::new(1),
+            attempted_len: RuntimeStateByteCount::new(3),
+        })),
+    )?;
+    ensure_eq!(budget.completed_steps(), StepCount::ZERO)?;
+    ensure_eq!(runtime_view_bytes(state.view()).as_slice(), b"a")?;
+
+    ensure_matches(
+        matches!(
+            find_next_match(program.rule_slice(), &mut once_states, &state)?,
+            RuleSearch::Matched(_)
+        ),
+        "expected failed once rewrite to remain available",
+    )
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if a failed `(once)` return commits the once slot.
+#[test]
+fn once_return_limit_failure_does_not_commit_rule() -> TestResult {
+    let program = parse_program("(once)a=(return)ok")?;
+    let limits = RunLimits::new(
+        StepLimit::new(1),
+        DEFAULT_MAX_STATE_LEN,
+        ReturnByteLimit::new(1),
+    );
+    let mut state = state_from_input_bytes(b"a", limits)?;
+    let mut budget = RuntimeBudgetState::new(limits);
+    let mut scratch = RewriteScratch::new();
+    let mut once_states = OnceStateSet::new(program.once_slot_count())?;
+
+    let matched = match find_next_match(program.rule_slice(), &mut once_states, &state)? {
+        RuleSearch::Matched(matched) => matched,
+        RuleSearch::Stable => {
+            return Err(TestFailure::message("expected once return to match"));
+        }
+    };
+
+    ensure_eq!(
+        apply_matched_rule(&mut state, &mut scratch, &mut budget, matched),
+        Err(RunError::Limit(LimitError::Return {
+            limit: ReturnByteLimit::new(1),
+            attempted_len: ReturnOutputByteCount::new(2),
+        })),
+    )?;
+    ensure_eq!(budget.completed_steps(), StepCount::ZERO)?;
+    ensure_eq!(runtime_view_bytes(state.view()).as_slice(), b"a")?;
+
+    ensure_matches(
+        matches!(
+            find_next_match(program.rule_slice(), &mut once_states, &state)?,
+            RuleSearch::Matched(_)
+        ),
+        "expected failed once return to remain available",
+    )
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if missing once-rule state is silently treated as a
+/// stable runtime state.
+#[test]
+fn missing_once_rule_state_is_an_internal_invariant_error() -> TestResult {
+    let program = parse_program("(once)a=b")?;
+    let state = state_from_input_bytes(
+        b"a",
+        RunLimits::new(
+            StepLimit::new(1),
+            DEFAULT_MAX_STATE_LEN,
+            DEFAULT_MAX_RETURN_LEN,
+        ),
+    )?;
+    let mut once_states = OnceStateSet::new(crate::rule::OnceRuleCount::default())?;
+
+    match find_next_match(program.rule_slice(), &mut once_states, &state) {
+        Err(RunError::InternalInvariant(InternalInvariantError::MissingOnceRuleState)) => {}
+        Ok(RuleSearch::Matched(_)) | Ok(RuleSearch::Stable) | Err(_) => {
+            return Err(TestFailure::message(
+                "expected missing once state invariant",
+            ));
+        }
+    }
+
+    ensure_eq!(runtime_view_bytes(state.view()).as_slice(), b"a")
+}
+
+/// # Errors
+///
 /// Returns `TestFailure` if runtime input errors lose structured boundary
 /// information.
 #[test]
@@ -274,6 +443,23 @@ fn runtime_input_error_is_structured_at_the_runtime_boundary() -> TestResult {
         error,
         RuntimeInputError::Limit {
             limit: RuntimeInputByteLimit::new(2),
+            attempted_len: RuntimeInputByteCount::new(3),
+        },
+    )?;
+
+    let Err(error) = RuntimeInput::validate(
+        RuntimeInputSource::from_bytes("a\u{80}".as_bytes()),
+        RuntimeInputByteLimit::new(1),
+    ) else {
+        return Err(TestFailure::message(
+            "expected input limit before byte error",
+        ));
+    };
+
+    ensure_eq!(
+        error,
+        RuntimeInputError::Limit {
+            limit: RuntimeInputByteLimit::new(1),
             attempted_len: RuntimeInputByteCount::new(3),
         },
     )?;

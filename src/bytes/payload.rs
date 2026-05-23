@@ -88,6 +88,8 @@ impl ValidatedPayloadSyntax<'_> {
     ///
     /// Returns `ParseError` if allocation fails while storing the payload.
     pub(crate) fn into_payload(self) -> Result<Payload, ParseError> {
+        // Allocation starts only after the full syntax pass, so syntax errors
+        // are not reordered behind storage failures.
         let mut bytes = Vec::new();
         try_reserve_total_exact(
             &mut bytes,
@@ -99,8 +101,7 @@ impl ValidatedPayloadSyntax<'_> {
         })?;
 
         for byte in self.syntax.bytes.iter().copied() {
-            let parsed =
-                ProgramByte::parse(byte, self.syntax.line_number, self.syntax.payload_kind)?;
+            let parsed = ProgramByte::from_validated_compact(byte);
             try_push(&mut bytes, parsed, AllocationContext::ProgramPayload).map_err(|error| {
                 ParseError::at_line(self.syntax.line_number, ParseErrorKind::Allocation(error))
             })?;

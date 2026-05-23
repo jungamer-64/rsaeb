@@ -73,6 +73,13 @@ impl<'input> ValidatedRuntimeInputSource<'input> {
     const fn byte_count(&self) -> RuntimeInputByteCount {
         self.byte_count
     }
+
+    fn runtime_input_bytes(&self) -> impl Iterator<Item = RuntimeInputByte> + 'input {
+        self.bytes()
+            .iter()
+            .copied()
+            .map(RuntimeInputByte::from_validated_ascii)
+    }
 }
 
 /// Runtime input after ASCII validation and byte-domain classification.
@@ -125,6 +132,9 @@ impl RuntimeInput {
     ) -> Result<Self, RuntimeInputError> {
         let input = ValidatedRuntimeInputSource::new(input, limit)?;
 
+        // Allocation starts only after the complete boundary validation pass;
+        // the iterator below consumes that witness instead of validating each
+        // byte a second time.
         let mut bytes = Vec::new();
         try_reserve_total_exact(
             &mut bytes,
@@ -132,8 +142,7 @@ impl RuntimeInput {
             AllocationContext::RuntimeInputValidation,
         )?;
 
-        for (zero_based_column, byte) in input.bytes().iter().copied().enumerate() {
-            let byte = RuntimeInputByte::validate(byte, zero_based_column)?;
+        for byte in input.runtime_input_bytes() {
             try_push(
                 &mut bytes,
                 byte.into_runtime_byte(),

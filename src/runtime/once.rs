@@ -128,10 +128,7 @@ impl OnceStateSet {
             .ok_or_else(|| InternalInvariantError::missing_once_rule_state().into())
     }
 
-    fn state_for_slot_mut(
-        &mut self,
-        slot: OnceRuleSlot,
-    ) -> Result<&mut OnceRuleState, RunError> {
+    fn state_for_slot_mut(&mut self, slot: OnceRuleSlot) -> Result<&mut OnceRuleState, RunError> {
         self.states
             .get_mut(slot.zero_based())
             .ok_or_else(|| InternalInvariantError::missing_once_rule_state().into())

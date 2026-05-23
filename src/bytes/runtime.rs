@@ -47,6 +47,11 @@ mod runtime_ascii {
             self.0
         }
 
+        pub(super) fn from_validated(byte: u8) -> Self {
+            debug_assert!(byte.is_ascii());
+            Self(byte)
+        }
+
         pub(crate) fn classify(self) -> ClassifiedAsciiByte {
             if let Some(byte) = ProgramByte::from_valid_raw(self.get()) {
                 ClassifiedAsciiByte::Program(byte)
@@ -84,6 +89,12 @@ impl RuntimeInputByte {
         Ok(Self {
             byte: AsciiByte::validate(byte, zero_based_column)?,
         })
+    }
+
+    pub(crate) fn from_validated_ascii(byte: u8) -> Self {
+        Self {
+            byte: AsciiByte::from_validated(byte),
+        }
     }
 
     pub(crate) fn into_runtime_byte(self) -> RuntimeByte {
