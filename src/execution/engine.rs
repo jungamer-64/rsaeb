@@ -55,6 +55,22 @@ pub(super) struct RuleCursor {
     next_rule_index: usize,
 }
 
+/// All data needed to commit one non-applying rule attempt.
+struct MissCommit<'attempt, 'program> {
+    /// Cursor to advance when the miss is not the final executable rule.
+    cursor: &'attempt mut RuleCursor,
+    /// Rule-attempt budget after the miss has been committed.
+    attempt_budget: &'attempt RuleAttemptBudgetState,
+    /// Runtime core observed by the attempted rule.
+    core: &'attempt RunCore,
+    /// Committed attempt count assigned to this miss.
+    attempt: RuleAttemptCount,
+    /// Total executable rule count in the parsed program.
+    rule_count: usize,
+    /// Non-applying rule selected by the current cursor.
+    missed: RuleAttemptMiss<'program>,
+}
+
 /// Program ownership shape used by the internal runtime session.
 pub(super) trait ProgramOwner {
     /// Borrows the parsed program.
@@ -344,9 +360,14 @@ fn attempt_current_rule(
     let attempt = attempt_budget.commit(permit);
 
     match attempted {
-        RuleAttempt::Missed(missed) => {
-            commit_miss(cursor, attempt_budget, core, attempt, rules.len(), missed)
-        }
+        RuleAttempt::Missed(missed) => commit_miss(MissCommit {
+            cursor,
+            attempt_budget,
+            core,
+            attempt,
+            rule_count: rules.len(),
+            missed,
+        }),
         RuleAttempt::Matched(matched) => {
             let applied = apply_matched_rule(
                 &mut core.state,
@@ -368,28 +389,24 @@ fn attempt_current_rule(
 ///
 /// Returns `RunError` if advancing the rule-attempt cursor would violate an
 /// internal representation invariant.
-fn commit_miss(
-    cursor: &mut RuleCursor,
-    attempt_budget: &RuleAttemptBudgetState,
-    core: &RunCore,
-    attempt: RuleAttemptCount,
-    rule_count: usize,
-    missed: RuleAttemptMiss<'_>,
-) -> Result<CoreRuleAttempt, RunError> {
-    let miss = RuleMiss::new(missed.rule().position(), missed.reason());
-    if cursor.is_final_rule(rule_count) {
+fn commit_miss(context: MissCommit<'_, '_>) -> Result<CoreRuleAttempt, RunError> {
+    let miss = RuleMiss::new(context.missed.rule().position(), context.missed.reason());
+    if context.cursor.is_final_rule(context.rule_count) {
         Ok(CoreRuleAttempt::Stable {
-            attempts: attempt_budget.completed_attempts(),
-            steps: core.completed_steps(),
+            attempts: context.attempt_budget.completed_attempts(),
+            steps: context.core.completed_steps(),
             stable_reason: RuleAttemptStableReason::FinalMiss(miss),
         })
     } else {
-        cursor
-            .advance_after_miss()
-            .ok_or(RunInvariantError::RuleAttemptCursorOverflow {
+        context.cursor.advance_after_miss().ok_or(
+            RunInvariantError::RuleAttemptCursorOverflow {
                 rule: miss.rule_position(),
-            })?;
-        Ok(CoreRuleAttempt::Missed { attempt, miss })
+            },
+        )?;
+        Ok(CoreRuleAttempt::Missed {
+            attempt: context.attempt,
+            miss,
+        })
     }
 }
 
