@@ -69,7 +69,7 @@ mod engine;
 
 use crate::error::{RunError, TracedRunError};
 use crate::input::RunSeed;
-use crate::inspect::{RuleSnapshot, RuleView};
+use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, RuleAttemptLimit, StepCount};
 use crate::program::{Program, ReturnOutput, RunResult};
 use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
@@ -135,24 +135,6 @@ pub enum BorrowedStepTransition<'program> {
     Returned(BorrowedReturnedRun<'program>),
     /// A matching rule failed before committing.
     Failed(BorrowedFailedRun<'program>),
-}
-
-/// Completed non-applying rule attempt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuleMiss<Rule> {
-    /// Rule witness for the consumed rule line.
-    rule: Rule,
-    /// Why the consumed rule did not apply.
-    reason: RuleMissReason,
-}
-
-/// Why a rule-attempt run reached stability.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuleAttemptStableReason<Rule> {
-    /// The parsed program contains no executable rules.
-    NoExecutableRules,
-    /// The final executable rule line was consumed without applying.
-    FinalMiss(RuleMiss<Rule>),
 }
 
 /// One committed non-terminal rule application in a borrowed session.
@@ -290,8 +272,8 @@ pub enum OwnedStepTransition {
 pub struct OwnedAppliedStep {
     /// Step number committed by this transition.
     step: StepCount,
-    /// Owned rewrite rule snapshot committed by this transition.
-    rule: RuleSnapshot,
+    /// Owned rewrite rule witness committed by this transition.
+    rule: OwnedCommittedRule,
     /// Continuation session after the committed rewrite.
     session: OwnedRunSession,
 }
@@ -310,8 +292,8 @@ pub struct OwnedStableRun {
 pub struct OwnedReturnedRun {
     /// Step number that executed the return action.
     step: StepCount,
-    /// Owned return rule snapshot committed by this transition.
-    rule: RuleSnapshot,
+    /// Owned return rule witness committed by this transition.
+    rule: OwnedCommittedRule,
     /// Parsed program retained by the terminal state.
     program: Program,
     /// Materialized return output produced by the committed return rule.
@@ -348,7 +330,7 @@ pub struct OwnedMissedRuleAttempt {
     /// Rule-attempt count committed by this transition.
     attempt: RuleAttemptCount,
     /// Non-applying rule information.
-    miss: RuleMiss<RuleSnapshot>,
+    miss: OwnedRuleMiss,
     /// Continuation session after consuming the rule line.
     session: OwnedRuleAttemptSession,
 }
@@ -359,8 +341,8 @@ pub struct OwnedRuleAttemptAppliedStep {
     attempt: RuleAttemptCount,
     /// Step number committed by this transition.
     step: StepCount,
-    /// Owned rewrite rule snapshot committed by this transition.
-    rule: RuleSnapshot,
+    /// Owned rewrite rule witness committed by this transition.
+    rule: OwnedCommittedRule,
     /// Continuation session after the committed rewrite.
     session: OwnedRuleAttemptSession,
 }
@@ -372,7 +354,7 @@ pub struct OwnedRuleAttemptStableRun {
     /// Number of committed rewrite steps before stability.
     steps: StepCount,
     /// Why the rule-attempt run reached stability.
-    stable_reason: RuleAttemptStableReason<RuleSnapshot>,
+    stable_reason: OwnedRuleAttemptStableReason,
     /// Parsed program retained by the owned terminal state.
     program: Program,
     /// Terminal runtime core containing the stable state.
@@ -385,8 +367,8 @@ pub struct OwnedRuleAttemptReturnedRun {
     attempt: RuleAttemptCount,
     /// Step number that executed the return action.
     step: StepCount,
-    /// Owned return rule snapshot committed by this transition.
-    rule: RuleSnapshot,
+    /// Owned return rule witness committed by this transition.
+    rule: OwnedCommittedRule,
     /// Parsed program retained by the terminal state.
     program: Program,
     /// Materialized return output produced by the committed return rule.

@@ -28,8 +28,6 @@ pub enum AllocationContext {
     RuntimeRewriteState,
     /// Materializing a payload view outside parser/runtime execution.
     PayloadView,
-    /// Materializing an owned parsed-rule snapshot for owned execution states.
-    RuleSnapshot,
     /// Materializing a borrowed runtime-state view outside trace snapshot APIs.
     RuntimeStateView,
     /// Materializing a stable final runtime state as public output bytes.

@@ -20,7 +20,6 @@ impl fmt::Display for AllocationContext {
             Self::RuntimeOnceRuleState => f.write_str("runtime once rule state"),
             Self::RuntimeRewriteState => f.write_str("runtime rewrite state"),
             Self::PayloadView => f.write_str("payload view"),
-            Self::RuleSnapshot => f.write_str("rule snapshot"),
             Self::RuntimeStateView => f.write_str("runtime state view"),
             Self::FinalOutput => f.write_str("final output"),
             Self::ReturnOutput => f.write_str("return output"),
