@@ -99,6 +99,11 @@ impl OnceStateSet {
     pub(super) fn rows_mut(&mut self) -> impl Iterator<Item = &mut RuleExecutionState> {
         self.states.iter_mut()
     }
+
+    /// Number of rule-aligned runtime state rows.
+    pub(super) fn row_count(&self) -> RuleCount {
+        RuleCount::new(self.states.len())
+    }
 }
 
 impl RuleExecutionState {

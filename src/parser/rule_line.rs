@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use crate::allocation::{AllocationContext, AllocationError, try_push};
+use crate::allocation::{AllocationContext, try_push};
 use crate::bytes::{CompactByte, Payload, PayloadByteCount, PayloadSyntax};
 use crate::error::{
     LeftModifierKind, ParseError, ParseErrorKind, ParseLimitError, PayloadKind, RightActionKind,
@@ -9,10 +9,8 @@ use crate::limits::PayloadByteLimit;
 use crate::rule::{
     ParsedRule, RewriteAction, RuleAction, RuleAnchorSyntax, RuleBody, RuleHead, RuleRepeatSyntax,
 };
-use crate::source::{SourceLineNumber, SourcePosition};
+use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
 use crate::syntax::SyntaxToken;
-
-use super::location::parse_allocation_error;
 
 /// Compact executable line split into left and right rule syntax.
 #[derive(Debug, PartialEq, Eq)]
@@ -96,6 +94,24 @@ struct CompactSyntax<'code> {
     bytes: &'code [CompactByte],
 }
 
+/// Result of matching a concrete syntax token prefix.
+#[derive(Clone, Copy)]
+struct MatchedSyntaxPrefix<'code> {
+    /// Source column of the matched token.
+    column: SourceColumn,
+    /// Remaining bytes after the matched token.
+    rest: CompactSyntax<'code>,
+}
+
+/// Matched token classified into a parser-domain kind.
+#[derive(Clone, Copy)]
+struct MatchedToken<T> {
+    /// Parser-domain token kind.
+    kind: T,
+    /// Source column where the token starts.
+    column: SourceColumn,
+}
+
 impl RuleSyntaxParts {
     /// Splits compact syntax into owned left and right domains.
     ///
@@ -166,30 +182,8 @@ impl<'code> CompactSyntax<'code> {
         self.bytes
     }
 
-    /// Returns the source column of the first compact byte.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError` if this compact syntax slice is empty. Callers use
-    /// this only after detecting a token prefix.
-    fn first_source_column(
-        self,
-        line_number: SourceLineNumber,
-    ) -> Result<crate::source::SourceColumn, ParseError> {
-        self.bytes
-            .first()
-            .copied()
-            .map(CompactByte::source_column)
-            .ok_or_else(|| {
-                parse_allocation_error(
-                    line_number,
-                    AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
-                )
-            })
-    }
-
     /// Removes a leading syntax token when it is present.
-    fn strip_token(self, token: SyntaxToken) -> Option<Self> {
+    fn strip_token(self, token: SyntaxToken) -> Option<MatchedSyntaxPrefix<'code>> {
         let token_bytes = token.bytes();
 
         if self.bytes.len() < token_bytes.len() {
@@ -205,17 +199,16 @@ impl<'code> CompactSyntax<'code> {
             .eq(token_bytes.iter().copied());
 
         if starts_with_token {
+            let column = self.bytes.first().copied()?.source_column();
             self.bytes
                 .get(token_bytes.len()..)
-                .map(|bytes| Self { bytes })
+                .map(|bytes| MatchedSyntaxPrefix {
+                    column,
+                    rest: Self { bytes },
+                })
         } else {
             None
         }
-    }
-
-    /// Whether this syntax slice begins with the given token.
-    fn starts_with_token(self, token: SyntaxToken) -> bool {
-        self.strip_token(token).is_some()
     }
 }
 
@@ -241,10 +234,10 @@ impl<'code> LeftSyntax<'code> {
 
     /// Classifies the optional `(once)` prefix.
     fn into_after_repeat(self) -> LeftAfterRepeat<'code> {
-        if let Some(rest) = self.bytes.strip_token(SyntaxToken::Once) {
+        if let Some(matched) = self.bytes.strip_token(SyntaxToken::Once) {
             LeftAfterRepeat {
                 line_number: self.line_number,
-                bytes: rest,
+                bytes: matched.rest,
                 repeat: RuleRepeatSyntax::Once,
             }
         } else {
@@ -286,19 +279,20 @@ impl<'code> LeftAfterRepeat<'code> {
     /// Returns `ParseError` when modifiers appear after the anchor/payload
     /// boundary or source-column lookup overflows.
     fn into_payload_syntax(self) -> Result<LeftPayloadSyntax<'code>, ParseError> {
-        let (anchor, bytes) = if let Some(rest) = self.bytes.strip_token(SyntaxToken::Start) {
-            (RuleAnchorSyntax::Start, rest)
-        } else if let Some(rest) = self.bytes.strip_token(SyntaxToken::End) {
-            (RuleAnchorSyntax::End, rest)
+        let (anchor, bytes) = if let Some(matched) = self.bytes.strip_token(SyntaxToken::Start) {
+            (RuleAnchorSyntax::Start, matched.rest)
+        } else if let Some(matched) = self.bytes.strip_token(SyntaxToken::End) {
+            (RuleAnchorSyntax::End, matched.rest)
         } else {
             (RuleAnchorSyntax::Anywhere, self.bytes)
         };
 
         if let Some(modifier) = left_modifier_kind(bytes) {
-            let column = bytes.first_source_column(self.line_number)?;
             return Err(ParseError::at_position(
-                SourcePosition::new(self.line_number, column),
-                ParseErrorKind::UnsupportedLeftModifierOrder { modifier },
+                SourcePosition::new(self.line_number, modifier.column),
+                ParseErrorKind::UnsupportedLeftModifierOrder {
+                    modifier: modifier.kind,
+                },
             ));
         }
 
@@ -368,22 +362,22 @@ impl<'code> RightSyntax<'code> {
     /// Returns `ParseError` if an action payload starts with another
     /// right-side action token.
     fn into_payload_syntax(self) -> Result<RightPayloadSyntax<'code>, ParseError> {
-        if let Some(rest) = self.bytes.strip_token(SyntaxToken::Start) {
+        if let Some(matched) = self.bytes.strip_token(SyntaxToken::Start) {
             return Ok(RightPayloadSyntax::Action(RightActionPayloadSyntax::new(
                 self.line_number,
-                rest,
+                matched.rest,
                 RightActionSyntax::MoveStart,
             )?));
-        } else if let Some(rest) = self.bytes.strip_token(SyntaxToken::End) {
+        } else if let Some(matched) = self.bytes.strip_token(SyntaxToken::End) {
             return Ok(RightPayloadSyntax::Action(RightActionPayloadSyntax::new(
                 self.line_number,
-                rest,
+                matched.rest,
                 RightActionSyntax::MoveEnd,
             )?));
-        } else if let Some(rest) = self.bytes.strip_token(SyntaxToken::Return) {
+        } else if let Some(matched) = self.bytes.strip_token(SyntaxToken::Return) {
             return Ok(RightPayloadSyntax::Action(RightActionPayloadSyntax::new(
                 self.line_number,
-                rest,
+                matched.rest,
                 RightActionSyntax::Return,
             )?));
         }
@@ -540,7 +534,7 @@ fn parse_payload(
 ) -> Result<Payload, ParseError> {
     let syntax = PayloadSyntax::new(bytes, line_number, payload_kind);
     ensure_payload_within_limit(line_number, syntax.byte_count(), limit)?;
-    syntax.validate()?.into_payload()
+    Ok(syntax.validate()?.into_payload())
 }
 
 /// Checks one parsed payload length against parser limits.
@@ -567,14 +561,17 @@ fn ensure_payload_within_limit(
 fn first_matching_token_kind<T: Copy>(
     input: CompactSyntax<'_>,
     mappings: &[(SyntaxToken, T)],
-) -> Option<T> {
-    mappings
-        .iter()
-        .find_map(|&(token, kind)| input.starts_with_token(token).then_some(kind))
+) -> Option<MatchedToken<T>> {
+    mappings.iter().find_map(|&(token, kind)| {
+        input.strip_token(token).map(|matched| MatchedToken {
+            kind,
+            column: matched.column,
+        })
+    })
 }
 
 /// Classifies a left-side modifier token at the current syntax boundary.
-fn left_modifier_kind(input: CompactSyntax<'_>) -> Option<LeftModifierKind> {
+fn left_modifier_kind(input: CompactSyntax<'_>) -> Option<MatchedToken<LeftModifierKind>> {
     first_matching_token_kind(
         input,
         &[
@@ -586,7 +583,7 @@ fn left_modifier_kind(input: CompactSyntax<'_>) -> Option<LeftModifierKind> {
 }
 
 /// Classifies a right-side action token at the current syntax boundary.
-fn right_action_kind(input: CompactSyntax<'_>) -> Option<RightActionKind> {
+fn right_action_kind(input: CompactSyntax<'_>) -> Option<MatchedToken<RightActionKind>> {
     first_matching_token_kind(
         input,
         &[
@@ -608,10 +605,11 @@ fn reject_nested_rhs_action(
     line_number: SourceLineNumber,
 ) -> Result<(), ParseError> {
     if let Some(action) = right_action_kind(input) {
-        let column = input.first_source_column(line_number)?;
         return Err(ParseError::at_position(
-            SourcePosition::new(line_number, column),
-            ParseErrorKind::UnsupportedRightActionSyntax { action },
+            SourcePosition::new(line_number, action.column),
+            ParseErrorKind::UnsupportedRightActionSyntax {
+                action: action.kind,
+            },
         ));
     }
 

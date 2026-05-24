@@ -387,8 +387,9 @@
 //! [`error::TracedRunError`].
 //! Allocation reservation failures include a typed
 //! [`error::RequestedCapacity`] instead of only a formatted string.
-//! Runtime metadata mismatches are made unrepresentable by construction rather
-//! than being exposed as a public error variant.
+//! Representation and internal-invariant failures are distinct structured
+//! domains, so parser/runtime witness contradictions do not become hidden
+//! panics or allocation errors.
 //!
 //! ```
 //! use rsaeb::error::RuntimeInputError;

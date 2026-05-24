@@ -6,11 +6,13 @@
 //!
 //! The main domains are:
 //!
-//! - [`ParseError`] for source syntax and parser allocation failures.
-//! - [`RuntimeInputError`] for raw input bytes rejected before execution.
+//! - [`ParseError`] for source syntax, parser allocation, parser
+//!   representation, and parser-invariant failures.
+//! - [`RuntimeInputError`] for raw input bytes rejected before execution and
+//!   runtime-input witness contradictions.
 //! - [`RunAdmissionError`] for validated input rejected as an initial runtime state.
-//! - [`RunError`] for execution-time allocation, state-size, and budget
-//!   failures.
+//! - [`RunError`] for execution-time allocation, internal-invariant,
+//!   state-size, and budget failures.
 //! - [`AllocationError`] for explicit allocation boundaries such as view
 //!   materialization, canonical source construction, final output conversion,
 //!   and trace snapshots. [`AllocationContext`] names the failing boundary, and
@@ -68,6 +70,6 @@ pub use parse::{
 };
 pub use run::{
     InputColumn, LimitError, RunAdmissionError, RunError, RunInvariantError, RuntimeInputError,
-    StateSizeError,
+    RuntimeInputInvariantError, StateSizeError,
 };
 pub use traced::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};

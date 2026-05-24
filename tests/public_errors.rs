@@ -4,7 +4,10 @@
 mod runtime_support;
 mod support;
 
-use rsaeb::error::{ParseErrorKind, ParseErrorLocation, PayloadKind, RunError};
+use rsaeb::error::{
+    ParseErrorKind, ParseErrorLocation, ParseInvariantError, ParseRepresentationError, PayloadKind,
+    RunError, RunInvariantError, RuntimeInputInvariantError,
+};
 use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
 use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, RuntimeInputLimits};
 use runtime_support::TestRunPolicy;
@@ -127,5 +130,36 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
             RunError::Limit(rsaeb::error::LimitError::Return { .. })
         ),
         "expected return limit error",
+    )
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if newly exposed invariant/representation error
+/// domains lose display output.
+#[test]
+fn errors_invariant_and_representation_subdomains_are_public() -> TestResult {
+    ensure_eq!(
+        ParseRepresentationError::RulePosition.to_string(),
+        "rule position could not be represented",
+    )?;
+    ensure_eq!(
+        ParseInvariantError::ValidatedPayloadWithoutBytes.to_string(),
+        "validated payload witness did not carry validated bytes",
+    )?;
+    ensure_eq!(
+        RuntimeInputInvariantError::MissingValidatedAsciiByte.to_string(),
+        "validated runtime-input witness contained a non-ASCII byte",
+    )?;
+
+    let rule_count = parse_program("a=b")?.rule_count();
+    let state_count = parse_program("")?.rule_count();
+    ensure_eq!(
+        RunInvariantError::RuleStateLengthMismatch {
+            rules: rule_count,
+            states: state_count,
+        }
+        .to_string(),
+        "runtime invariant failure: rule table length 1 did not match once-state length 0",
     )
 }

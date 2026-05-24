@@ -48,12 +48,10 @@ pub(crate) struct PayloadSyntax<'code> {
 }
 
 /// Payload syntax after every byte has been accepted as executable data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ValidatedPayloadSyntax<'code> {
-    /// Original syntax slice whose bytes passed validation.
-    syntax: PayloadSyntax<'code>,
-    /// Typed payload length used to reserve storage after validation.
-    byte_count: PayloadByteCount,
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ValidatedPayloadSyntax {
+    /// Program-domain bytes produced from the validated witness.
+    bytes: Vec<ProgramByte>,
 }
 
 impl<'code> PayloadSyntax<'code> {
@@ -80,46 +78,38 @@ impl<'code> PayloadSyntax<'code> {
     /// # Errors
     ///
     /// Returns `ParseError` if any byte is invalid executable payload data.
-    pub(crate) fn validate(self) -> Result<ValidatedPayloadSyntax<'code>, ParseError> {
+    pub(crate) fn validate(self) -> Result<ValidatedPayloadSyntax, ParseError> {
         for byte in self.bytes.iter().copied() {
             ProgramByte::parse(byte, self.line_number, self.payload_kind)?;
         }
 
-        Ok(ValidatedPayloadSyntax {
-            syntax: self,
-            byte_count: self.byte_count(),
-        })
-    }
-}
-
-impl ValidatedPayloadSyntax<'_> {
-    /// Stores executable payload bytes after the full syntax pass.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError` if allocation fails while storing the payload.
-    pub(crate) fn into_payload(self) -> Result<Payload, ParseError> {
-        // Allocation starts only after the full syntax pass, so syntax errors
-        // are not reordered behind storage failures.
         let mut bytes = Vec::new();
         try_reserve_total_exact(
             &mut bytes,
-            RequestedCapacity::from_payload_count(self.byte_count),
+            RequestedCapacity::from_payload_count(self.byte_count()),
             AllocationContext::ProgramPayload,
         )
         .map_err(|error| {
-            ParseError::at_line(self.syntax.line_number, ParseErrorKind::Allocation(error))
+            ParseError::at_line(self.line_number, ParseErrorKind::Allocation(error))
         })?;
 
-        for byte in self.syntax.bytes.iter().copied() {
-            let parsed =
-                ProgramByte::parse(byte, self.syntax.line_number, self.syntax.payload_kind)?;
+        for byte in self.bytes.iter().copied() {
+            let parsed = ProgramByte::from_validated_payload_byte(byte).map_err(|error| {
+                ParseError::at_line(self.line_number, ParseErrorKind::InternalInvariant(error))
+            })?;
             try_push(&mut bytes, parsed, AllocationContext::ProgramPayload).map_err(|error| {
-                ParseError::at_line(self.syntax.line_number, ParseErrorKind::Allocation(error))
+                ParseError::at_line(self.line_number, ParseErrorKind::Allocation(error))
             })?;
         }
 
-        Ok(Payload { bytes })
+        Ok(ValidatedPayloadSyntax { bytes })
+    }
+}
+
+impl ValidatedPayloadSyntax {
+    /// Moves executable payload bytes out of the validated witness.
+    pub(crate) fn into_payload(self) -> Payload {
+        Payload { bytes: self.bytes }
     }
 }
 

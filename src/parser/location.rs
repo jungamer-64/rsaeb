@@ -1,5 +1,5 @@
-use crate::allocation::{AllocationContext, AllocationError};
-use crate::error::{ParseError, ParseErrorKind};
+use crate::allocation::AllocationError;
+use crate::error::{ParseError, ParseErrorKind, ParseRepresentationError};
 use crate::source::{SourceColumn, SourceLineNumber};
 
 /// Converts an internal parser allocation failure into a source-line parse error.
@@ -17,9 +17,9 @@ pub(super) fn parse_allocation_error(
 /// Returns `ParseError` if the one-based source line cannot be represented.
 pub(super) fn source_line_number(zero_based_line: usize) -> Result<SourceLineNumber, ParseError> {
     SourceLineNumber::from_zero_based(zero_based_line).ok_or_else(|| {
-        parse_allocation_error(
+        ParseError::at_line(
             SourceLineNumber::MAX,
-            AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
+            ParseErrorKind::Representation(ParseRepresentationError::SourceLineNumber),
         )
     })
 }
@@ -34,9 +34,11 @@ pub(super) fn source_column(
     line_number: SourceLineNumber,
 ) -> Result<SourceColumn, ParseError> {
     SourceColumn::from_zero_based(zero_based_column).ok_or_else(|| {
-        parse_allocation_error(
+        ParseError::at_line(
             line_number,
-            AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
+            ParseErrorKind::Representation(ParseRepresentationError::SourceColumn {
+                line: line_number,
+            }),
         )
     })
 }

@@ -56,6 +56,7 @@ impl Error for RunError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Allocation(error) => Some(error),
+            Self::InternalInvariant(error) => Some(error),
             Self::StateSize(error) => Some(error),
             Self::Limit(error) => Some(error),
         }
@@ -65,6 +66,12 @@ impl Error for RunError {
 impl From<AllocationError> for RunError {
     fn from(value: AllocationError) -> Self {
         Self::Allocation(value)
+    }
+}
+
+impl From<RunInvariantError> for RunError {
+    fn from(value: RunInvariantError) -> Self {
+        Self::InternalInvariant(value)
     }
 }
 
@@ -104,6 +111,8 @@ pub enum RuntimeInputError {
         /// Runtime input length that would have been classified.
         attempted_len: RuntimeInputByteCount,
     },
+    /// Runtime-input validation witness flow violated a checked invariant.
+    InternalInvariant(RuntimeInputInvariantError),
     /// Storing validated runtime input failed.
     Allocation(AllocationError),
 }
@@ -129,12 +138,18 @@ impl RuntimeInputError {
             attempted_len,
         }
     }
+
+    /// Builds the internal invariant value.
+    pub(crate) const fn internal_invariant(error: RuntimeInputInvariantError) -> Self {
+        Self::InternalInvariant(error)
+    }
 }
 
 impl Error for RuntimeInputError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Allocation(error) => Some(error),
+            Self::InternalInvariant(error) => Some(error),
             Self::NonAscii { .. } | Self::ColumnOverflow | Self::InputLimit { .. } => None,
         }
     }
@@ -145,6 +160,18 @@ impl From<AllocationError> for RuntimeInputError {
         Self::Allocation(value)
     }
 }
+
+/// Runtime-input internal invariant failure.
+///
+/// This reports contradictions after raw input has already been validated as
+/// ASCII, without reclassifying the contradiction as ordinary user input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeInputInvariantError {
+    /// A byte from a validated runtime-input witness was no longer ASCII.
+    MissingValidatedAsciiByte,
+}
+
+impl Error for RuntimeInputInvariantError {}
 
 /// Run admission boundary error.
 ///

@@ -36,9 +36,10 @@ fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFail
 fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::Step { .. }) => Ok(error),
-        RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_) => {
-            Err(TestFailure::message("expected step limit error"))
-        }
+        RunError::Allocation(_)
+        | RunError::InternalInvariant(_)
+        | RunError::StateSize(_)
+        | RunError::Limit(_) => Err(TestFailure::message("expected step limit error")),
     }
 }
 
@@ -50,9 +51,10 @@ fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
 fn expect_state_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::State { .. }) => Ok(error),
-        RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_) => {
-            Err(TestFailure::message("expected state limit error"))
-        }
+        RunError::Allocation(_)
+        | RunError::InternalInvariant(_)
+        | RunError::StateSize(_)
+        | RunError::Limit(_) => Err(TestFailure::message("expected state limit error")),
     }
 }
 

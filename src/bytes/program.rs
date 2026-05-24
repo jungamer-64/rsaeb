@@ -1,4 +1,4 @@
-use crate::error::{ParseError, ParseErrorKind, PayloadKind};
+use crate::error::{ParseError, ParseErrorKind, ParseInvariantError, PayloadKind};
 use crate::source::{SourceLineNumber, SourcePosition};
 
 use super::compact::CompactByte;
@@ -25,6 +25,18 @@ impl ProgramByte {
         } else {
             None
         }
+    }
+
+    /// Rebuilds a program byte from a previously validated payload witness.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseInvariantError` if the validated witness no longer
+    /// satisfies executable payload byte rules.
+    pub(crate) fn from_validated_payload_byte(
+        byte: CompactByte,
+    ) -> Result<Self, ParseInvariantError> {
+        Self::from_valid_raw(byte.as_u8()).ok_or(ParseInvariantError::ValidatedPayloadWithoutBytes)
     }
 
     /// Parses a compact source byte as executable program payload data.

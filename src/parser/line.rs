@@ -1,10 +1,8 @@
 use alloc::vec::Vec;
 
-use crate::allocation::{
-    AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
-};
+use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
 use crate::bytes::{CompactByte, NonAsciiCodeByte, NonPrintableCodeByte};
-use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
+use crate::error::{ParseError, ParseErrorKind, ParseLimitError, ParseRepresentationError};
 use crate::limits::{CodeLineByteCount, CodeLineByteLimit};
 use crate::source::{SourceLineNumber, SourcePosition};
 
@@ -66,9 +64,11 @@ impl<'source> RawSourceLine<'source> {
             .find(|(_, byte)| !byte.is_ascii())
         {
             let rejected = NonAsciiCodeByte::parse(byte).ok_or_else(|| {
-                parse_allocation_error(
+                ParseError::at_line(
                     self.line_number,
-                    AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
+                    ParseErrorKind::InternalInvariant(
+                        crate::error::ParseInvariantError::RejectedNonAsciiCodeByteWithoutWitness,
+                    ),
                 )
             })?;
             return Err(ParseError::at_position(
@@ -194,9 +194,9 @@ impl CompactCodeByteCount {
     /// Returns `ParseError` if the compact byte count cannot be represented.
     fn checked_next(self, line_number: SourceLineNumber) -> Result<Self, ParseError> {
         let value = self.value.checked_add(1).ok_or_else(|| {
-            parse_allocation_error(
+            ParseError::at_line(
                 line_number,
-                AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
+                ParseErrorKind::Representation(ParseRepresentationError::CompactCodeByteCount),
             )
         })?;
         Ok(Self { value })

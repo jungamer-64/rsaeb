@@ -96,11 +96,10 @@ impl<'input> ValidatedRuntimeInputSource<'input> {
     fn runtime_input_bytes(
         &self,
     ) -> impl Iterator<Item = Result<RuntimeInputByte, RuntimeInputError>> + 'input {
-        self.bytes()
-            .iter()
-            .copied()
-            .enumerate()
-            .map(|(zero_based_column, byte)| RuntimeInputByte::validate(byte, zero_based_column))
+        self.bytes().iter().copied().map(|byte| {
+            RuntimeInputByte::from_validated_ascii(byte)
+                .map_err(RuntimeInputError::internal_invariant)
+        })
     }
 }
 

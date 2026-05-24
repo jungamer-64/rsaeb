@@ -1,5 +1,6 @@
 use super::once::{MatchedRuleCommit, OnceStateSet};
 use super::state::{State, StateMatch};
+use crate::error::{RunError, RunInvariantError};
 use crate::inspect::RuleView;
 use crate::rule::{Rule, RuleAnchorSyntax};
 
@@ -94,11 +95,26 @@ impl<'program> CommittedRule<'program> {
 }
 
 /// Finds the first currently available rule that matches `state`.
+///
+/// # Errors
+///
+/// Returns `RunError` if the parsed rule table and per-run `(once)` state
+/// table no longer have the same length.
 pub(crate) fn find_next_match<'program, 'once>(
     rules: &'program [Rule],
     once_states: &'once mut OnceStateSet,
     state: &State,
-) -> RuleSearch<'program, 'once> {
+) -> Result<RuleSearch<'program, 'once>, RunError> {
+    let rule_count = crate::inspect::RuleCount::new(rules.len());
+    let state_count = once_states.row_count();
+    if rule_count != state_count {
+        return Err(RunInvariantError::RuleStateLengthMismatch {
+            rules: rule_count,
+            states: state_count,
+        }
+        .into());
+    }
+
     for (rule, rule_state) in rules.iter().zip(once_states.rows_mut()) {
         let Some(commit) = rule_state.reserve_commit() else {
             continue;
@@ -107,10 +123,10 @@ pub(crate) fn find_next_match<'program, 'once>(
             continue;
         };
 
-        return RuleSearch::Matched(candidate.into_application(commit));
+        return Ok(RuleSearch::Matched(candidate.into_application(commit)));
     }
 
-    RuleSearch::Stable
+    Ok(RuleSearch::Stable)
 }
 
 /// Builds a committed-rule candidate for a single parsed rule.

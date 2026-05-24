@@ -250,7 +250,7 @@ impl RunCore {
         program: &'program Program,
     ) -> Result<CoreStep<'program>, RunError> {
         let matched =
-            match find_next_match(program.rule_slice(), &mut self.once_states, &self.state) {
+            match find_next_match(program.rule_slice(), &mut self.once_states, &self.state)? {
                 RuleSearch::Matched(matched) => matched,
                 RuleSearch::Stable => return Ok(CoreStep::Stable(self.budget.completed_steps())),
             };

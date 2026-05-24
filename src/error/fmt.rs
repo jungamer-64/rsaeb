@@ -4,7 +4,8 @@ use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind}
 
 use super::{
     InputColumn, LeftModifierKind, LimitError, ParseError, ParseErrorKind, ParseErrorLocation,
-    PayloadKind, RightActionKind, RunAdmissionError, RunError, RuntimeInputError, StateSizeError,
+    ParseInvariantError, ParseRepresentationError, PayloadKind, RightActionKind, RunAdmissionError,
+    RunError, RunInvariantError, RuntimeInputError, RuntimeInputInvariantError, StateSizeError,
     TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
 };
 
@@ -69,6 +70,8 @@ impl fmt::Display for ParseErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Allocation(error) => error.fmt(f),
+            Self::Representation(error) => error.fmt(f),
+            Self::InternalInvariant(error) => error.fmt(f),
             Self::Limit(error) => error.fmt(f),
             Self::NonAsciiInCode { byte } => {
                 write!(f, "non-ASCII byte 0x{:02x} in code", byte.get())
@@ -92,6 +95,41 @@ impl fmt::Display for ParseErrorKind {
                     f,
                     "nested or unsupported right-side action syntax at {action}"
                 )
+            }
+        }
+    }
+}
+
+impl fmt::Display for ParseRepresentationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SourceLineNumber => f.write_str("source line number could not be represented"),
+            Self::SourceColumn { line } => write!(
+                f,
+                "source column could not be represented at line {}",
+                line.get(),
+            ),
+            Self::RulePosition => f.write_str("rule position could not be represented"),
+            Self::RuleCount => f.write_str("rule count could not be represented"),
+            Self::OnceRuleCount => f.write_str("once-rule count could not be represented"),
+            Self::CompactCodeByteCount => {
+                f.write_str("compact code byte count could not be represented")
+            }
+        }
+    }
+}
+
+impl fmt::Display for ParseInvariantError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RejectedNonAsciiCodeByteWithoutWitness => {
+                f.write_str("non-ASCII code-byte detection did not carry a rejection witness")
+            }
+            Self::MatchedTokenWithoutColumn => {
+                f.write_str("matched syntax token did not carry a source column")
+            }
+            Self::ValidatedPayloadWithoutBytes => {
+                f.write_str("validated payload witness did not carry validated bytes")
             }
         }
     }
@@ -173,8 +211,31 @@ impl fmt::Display for RunError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Allocation(error) => error.fmt(f),
+            Self::InternalInvariant(error) => error.fmt(f),
             Self::StateSize(error) => error.fmt(f),
             Self::Limit(error) => error.fmt(f),
+        }
+    }
+}
+
+impl fmt::Display for RunInvariantError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RuleStateLengthMismatch { rules, states } => write!(
+                f,
+                "runtime invariant failure: rule table length {} did not match once-state length {}",
+                rules.get(),
+                states.get(),
+            ),
+            Self::InvalidStateMatchRange {
+                matched_state_len,
+                current_state_len,
+            } => write!(
+                f,
+                "runtime invariant failure: state match was built for {} bytes but used against {} bytes",
+                matched_state_len.get(),
+                current_state_len.get(),
+            ),
         }
     }
 }
@@ -238,7 +299,18 @@ impl fmt::Display for RuntimeInputError {
                 attempted_len.get(),
                 limit.get()
             ),
+            Self::InternalInvariant(error) => error.fmt(f),
             Self::Allocation(error) => error.fmt(f),
+        }
+    }
+}
+
+impl fmt::Display for RuntimeInputInvariantError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingValidatedAsciiByte => {
+                f.write_str("validated runtime-input witness contained a non-ASCII byte")
+            }
         }
     }
 }

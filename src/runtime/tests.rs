@@ -4,7 +4,7 @@ use super::once::OnceStateSet;
 use super::rewrite::RewriteScratch;
 use super::state::State;
 use crate::bytes::{CompactByte, Payload, PayloadSyntax};
-use crate::error::{LimitError, PayloadKind, RunError, RuntimeInputError};
+use crate::error::{LimitError, PayloadKind, RunError, RunInvariantError, RuntimeInputError};
 use crate::execution::{FailedRun, StepTransition};
 use crate::input::{RuntimeInput, RuntimeInputSource};
 use crate::limits::{
@@ -58,9 +58,10 @@ fn expect_payload_byte(payload: &Payload, index: usize) -> Result<u8, TestFailur
 fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::Step { .. }) => Ok(error),
-        RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_) => {
-            Err(TestFailure::message("expected step limit error"))
-        }
+        RunError::Allocation(_)
+        | RunError::InternalInvariant(_)
+        | RunError::StateSize(_)
+        | RunError::Limit(_) => Err(TestFailure::message("expected step limit error")),
     }
 }
 
@@ -307,7 +308,7 @@ fn once_rewrite_limit_failure_does_not_commit_rule() -> TestResult {
     let mut scratch = RewriteScratch::new();
     let mut once_states = OnceStateSet::new(program.rule_slice())?;
 
-    let matched = match find_next_match(program.rule_slice(), &mut once_states, &state) {
+    let matched = match find_next_match(program.rule_slice(), &mut once_states, &state)? {
         RuleSearch::Matched(matched) => matched,
         RuleSearch::Stable => {
             return Err(TestFailure::message("expected once rewrite to match"));
@@ -326,7 +327,7 @@ fn once_rewrite_limit_failure_does_not_commit_rule() -> TestResult {
 
     ensure_matches(
         matches!(
-            find_next_match(program.rule_slice(), &mut once_states, &state),
+            find_next_match(program.rule_slice(), &mut once_states, &state)?,
             RuleSearch::Matched(_)
         ),
         "expected failed once rewrite to remain available",
@@ -350,7 +351,7 @@ fn once_return_limit_failure_does_not_commit_rule() -> TestResult {
     let mut scratch = RewriteScratch::new();
     let mut once_states = OnceStateSet::new(program.rule_slice())?;
 
-    let matched = match find_next_match(program.rule_slice(), &mut once_states, &state) {
+    let matched = match find_next_match(program.rule_slice(), &mut once_states, &state)? {
         RuleSearch::Matched(matched) => matched,
         RuleSearch::Stable => {
             return Err(TestFailure::message("expected once return to match"));
@@ -369,7 +370,7 @@ fn once_return_limit_failure_does_not_commit_rule() -> TestResult {
 
     ensure_matches(
         matches!(
-            find_next_match(program.rule_slice(), &mut once_states, &state),
+            find_next_match(program.rule_slice(), &mut once_states, &state)?,
             RuleSearch::Matched(_)
         ),
         "expected failed once return to remain available",
@@ -396,10 +397,78 @@ fn once_state_set_is_constructed_from_the_rule_table() -> TestResult {
 
     ensure_matches(
         matches!(
-            find_next_match(program.rule_slice(), &mut once_states, &state),
+            find_next_match(program.rule_slice(), &mut once_states, &state)?,
             RuleSearch::Matched(_)
         ),
         "expected rule-aligned once state to keep the rule available",
+    )
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if rule-table and once-state length drift is treated
+/// as an ordinary stable run.
+#[test]
+fn rule_state_length_mismatch_is_runtime_invariant_error() -> TestResult {
+    let program = parse_program("(once)a=b")?;
+    let empty_rules: &[crate::rule::Rule] = &[];
+    let mut once_states = OnceStateSet::new(empty_rules)?;
+    let state = state_from_input_bytes(
+        b"a",
+        TestRunPolicy::new(
+            DEFAULT_MAX_INPUT_LEN,
+            StepLimit::new(1),
+            DEFAULT_MAX_STATE_LEN,
+            DEFAULT_MAX_RETURN_LEN,
+        ),
+    )?;
+
+    let error = find_next_match(program.rule_slice(), &mut once_states, &state);
+    ensure_matches(
+        matches!(
+            error,
+            Err(RunError::InternalInvariant(
+                RunInvariantError::RuleStateLengthMismatch { rules, states }
+            )) if rules.get() == 1 && states.get() == 0
+        ),
+        "expected rule/once-state length mismatch invariant error",
+    )
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if a match witness built for one state can be applied
+/// to another state without a structured invariant error.
+#[test]
+fn state_match_range_is_tied_to_the_source_state_length() -> TestResult {
+    let program = parse_program("a=b")?;
+    let limits = TestRunPolicy::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let matching_state = state_from_input_bytes(b"a", limits)?;
+    let mut rewritten_state = state_from_input_bytes(b"aa", limits)?;
+    let mut budget = RuntimeBudgetState::new(limits.execution());
+    let mut scratch = RewriteScratch::new();
+    let mut once_states = OnceStateSet::new(program.rule_slice())?;
+
+    let matched = match find_next_match(program.rule_slice(), &mut once_states, &matching_state)? {
+        RuleSearch::Matched(matched) => matched,
+        RuleSearch::Stable => {
+            return Err(TestFailure::message("expected rewrite rule to match"));
+        }
+    };
+
+    ensure_eq!(
+        apply_matched_rule(&mut rewritten_state, &mut scratch, &mut budget, matched),
+        Err(RunError::InternalInvariant(
+            RunInvariantError::InvalidStateMatchRange {
+                matched_state_len: RuntimeStateByteCount::new(1),
+                current_state_len: RuntimeStateByteCount::new(2),
+            },
+        )),
     )
 }
 
@@ -478,7 +547,7 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
     let compact = [CompactByte::new(b'a', source_column(1)?)];
     let payload = PayloadSyntax::new(&compact, source_line_number(1)?, PayloadKind::LeftSideData)
         .validate()?
-        .into_payload()?;
+        .into_payload();
     let limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10_000),

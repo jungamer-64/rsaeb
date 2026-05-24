@@ -465,15 +465,17 @@ distinguish failures while validating input, materializing state views,
 building canonical rule source, producing final output, or retaining trace
 snapshots without parsing display strings.
 
+Representation failures such as unrepresentable parser positions are separate
+from allocation failure and are reported as `ParseErrorKind::Representation`.
+Parser or runtime witness contradictions that should be unreachable through
+ordinary public inputs are reported as `InternalInvariant` variants instead of
+panicking or being folded into allocation errors.
+
 State length arithmetic overflow is separate from allocation failure and is
 reported as `RunError::StateSize`. Configured byte budgets and step budgets are
 reported as `RunError::Limit(LimitError::...)`. Trace snapshot byte limits are
 reported through `TraceSnapshotError`, not `RunError::Limit`, because snapshot
 materialization is outside runtime execution.
-
-Runtime metadata mismatches that should be unreachable through public inputs are
-made unrepresentable by construction rather than surfaced as public runtime
-errors.
 
 Filesystem failures are not part of the library error model. External I/O must
 be handled before bytes enter `ProgramSource::from_bytes`,

@@ -1,9 +1,7 @@
 use alloc::vec::Vec;
 
-use crate::allocation::{
-    AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
-};
-use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
+use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
+use crate::error::{ParseError, ParseErrorKind, ParseLimitError, ParseRepresentationError};
 use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePosition};
 use crate::limits::RuleLimit;
 use crate::rule::{OnceRuleCount, ParsedRule, Rule, RuleRepeatState, RuleRepeatSyntax};
@@ -48,9 +46,7 @@ impl RuleInsertionPermit {
         let attempted_rule_count = current_len.checked_add(1).ok_or_else(|| {
             ParseError::at_line(
                 line_number,
-                ParseErrorKind::Allocation(AllocationError::capacity_overflow(
-                    AllocationContext::ProgramRuleTable,
-                )),
+                ParseErrorKind::Representation(ParseRepresentationError::RuleCount),
             )
         })?;
         let attempted_rule_count = RuleCount::new(attempted_rule_count);
@@ -65,9 +61,7 @@ impl RuleInsertionPermit {
         let position = RulePosition::from_zero_based(current_len).ok_or_else(|| {
             ParseError::at_line(
                 line_number,
-                ParseErrorKind::Allocation(AllocationError::capacity_overflow(
-                    AllocationContext::ProgramRuleTable,
-                )),
+                ParseErrorKind::Representation(ParseRepresentationError::RulePosition),
             )
         })?;
 
@@ -106,9 +100,7 @@ impl PendingRuleInsertion {
                     current_once_rule_count.checked_next().ok_or_else(|| {
                         ParseError::at_line(
                             line_number,
-                            ParseErrorKind::Allocation(AllocationError::capacity_overflow(
-                                AllocationContext::ProgramRuleTable,
-                            )),
+                            ParseErrorKind::Representation(ParseRepresentationError::OnceRuleCount),
                         )
                     })?;
                 (RuleRepeatState::Once, next_once_rule_count)

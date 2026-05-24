@@ -1,4 +1,4 @@
-use crate::error::{InputColumn, RuntimeInputError};
+use crate::error::{InputColumn, RuntimeInputError, RuntimeInputInvariantError};
 
 use super::program::ProgramByte;
 use super::rejection::NonAsciiInputByte;
@@ -48,6 +48,15 @@ mod runtime_ascii {
             }
         }
 
+        /// Rebuilds an ASCII byte from a validated runtime-input witness.
+        pub(crate) const fn from_validated_raw(byte: u8) -> Option<Self> {
+            if byte.is_ascii() {
+                Some(Self(byte))
+            } else {
+                None
+            }
+        }
+
         /// Returns the primitive stored value.
         pub(crate) const fn get(self) -> u8 {
             self.0
@@ -92,6 +101,19 @@ impl RuntimeInputByte {
     pub(crate) fn validate(byte: u8, zero_based_column: usize) -> Result<Self, RuntimeInputError> {
         Ok(Self {
             byte: AsciiByte::validate(byte, zero_based_column)?,
+        })
+    }
+
+    /// Rebuilds a runtime-input byte from a previously validated witness.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RuntimeInputInvariantError` if the witness no longer satisfies
+    /// the runtime-input ASCII contract.
+    pub(crate) fn from_validated_ascii(byte: u8) -> Result<Self, RuntimeInputInvariantError> {
+        Ok(Self {
+            byte: AsciiByte::from_validated_raw(byte)
+                .ok_or(RuntimeInputInvariantError::MissingValidatedAsciiByte)?,
         })
     }
 

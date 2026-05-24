@@ -29,10 +29,7 @@ fn parse_payload_error(
     line_number: SourceLineNumber,
     payload_kind: PayloadKind,
 ) -> Result<ParseError, TestFailure> {
-    match PayloadSyntax::new(input, line_number, payload_kind)
-        .validate()
-        .and_then(super::payload::ValidatedPayloadSyntax::into_payload)
-    {
+    match PayloadSyntax::new(input, line_number, payload_kind).validate() {
         Ok(_) => Err(TestFailure::message("invalid payload bytes were accepted")),
         Err(error) => Ok(error),
     }
@@ -48,10 +45,9 @@ fn parse_payload(
     line_number: SourceLineNumber,
     payload_kind: PayloadKind,
 ) -> Result<Payload, TestFailure> {
-    PayloadSyntax::new(input, line_number, payload_kind)
+    Ok(PayloadSyntax::new(input, line_number, payload_kind)
         .validate()?
-        .into_payload()
-        .map_err(TestFailure::from)
+        .into_payload())
 }
 
 /// # Errors

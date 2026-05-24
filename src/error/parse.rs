@@ -65,6 +65,8 @@ impl Error for ParseError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match &self.kind {
             ParseErrorKind::Allocation(error) => Some(error),
+            ParseErrorKind::Representation(error) => Some(error),
+            ParseErrorKind::InternalInvariant(error) => Some(error),
             ParseErrorKind::Limit(error) => Some(error),
             ParseErrorKind::NonAsciiInCode { .. }
             | ParseErrorKind::NonPrintableAsciiInCode { .. }
@@ -145,18 +147,20 @@ pub enum ParseErrorKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseRepresentationError {
     /// A one-based source line number could not be represented.
-    SourceLineOverflow,
+    SourceLineNumber,
     /// A one-based source column could not be represented.
-    SourceColumnOverflow {
+    SourceColumn {
         /// Source line where column conversion failed.
         line: SourceLineNumber,
     },
     /// A rule-table position could not be represented.
-    RulePositionOverflow,
+    RulePosition,
+    /// A parsed rule count could not be represented.
+    RuleCount,
     /// A parsed `(once)` rule count could not be represented.
-    OnceRuleCountOverflow,
+    OnceRuleCount,
     /// A compact-code byte count could not be represented.
-    CompactCodeByteCountOverflow,
+    CompactCodeByteCount,
 }
 
 impl Error for ParseRepresentationError {}
@@ -167,10 +171,12 @@ impl Error for ParseRepresentationError {}
 /// parser witness flow that must be surfaced without panicking.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseInvariantError {
+    /// A non-ASCII code-byte rejection witness was not available after detection.
+    RejectedNonAsciiCodeByteWithoutWitness,
     /// A token match did not carry the source column needed for diagnostics.
-    MissingMatchedTokenColumn,
+    MatchedTokenWithoutColumn,
     /// A validated payload witness did not carry the validated bytes it proves.
-    MissingValidatedPayloadBytes,
+    ValidatedPayloadWithoutBytes,
 }
 
 impl Error for ParseInvariantError {}

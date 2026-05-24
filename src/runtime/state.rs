@@ -7,7 +7,7 @@ use crate::bytes::{
     NonEmptyPayloadNeedle, Payload, PayloadByteCount, PayloadNeedle, RuntimeByte,
     RuntimeStateByteCount,
 };
-use crate::error::{RunError, StateSizeError};
+use crate::error::{RunError, RunInvariantError, StateSizeError};
 use crate::input::InitialStateBytes;
 use crate::program::RuntimeStateSnapshot;
 use crate::rule::RewriteAction;
@@ -130,6 +130,7 @@ impl State {
         output: &mut RewriteScratch,
         budget: RuntimeBudgetState,
     ) -> Result<PreparedRewrite, RunError> {
+        let state_match = state_match.open(self.byte_count())?;
         self.prepare_replacement_buffer(state_match, action.payload(), output, budget)?;
         match action {
             RewriteAction::Replace(rhs) => {
@@ -159,7 +160,7 @@ impl State {
     /// cannot be represented as a runtime state byte count.
     fn replaced_byte_count(
         &self,
-        state_match: StateMatch,
+        state_match: CheckedStateMatch,
         rhs: &Payload,
     ) -> Result<RuntimeStateByteCount, StateSizeError> {
         let state_len = self.byte_count();
@@ -182,7 +183,7 @@ impl State {
     /// rewritten state exceeds limits, or scratch allocation fails.
     fn prepare_replacement_buffer(
         &self,
-        state_match: StateMatch,
+        state_match: CheckedStateMatch,
         rhs: &Payload,
         output: &mut RewriteScratch,
         budget: RuntimeBudgetState,
@@ -332,6 +333,8 @@ struct StateSpanRange {
     end: StateIndex,
     /// Length of the payload matched by this span.
     matched_len: PayloadByteCount,
+    /// Runtime state length against which this span was built.
+    state_len: RuntimeStateByteCount,
 }
 
 impl StateSpanRange {
@@ -346,6 +349,7 @@ impl StateSpanRange {
             start,
             end,
             matched_len,
+            state_len,
         })
     }
 
@@ -363,12 +367,24 @@ impl StateSpanRange {
     fn byte_count(self) -> PayloadByteCount {
         self.matched_len
     }
+
+    /// Runtime state length this range was checked against.
+    const fn state_len(self) -> RuntimeStateByteCount {
+        self.state_len
+    }
 }
 
 /// Typed runtime-state match span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StateMatch {
     /// Runtime-state range covered by the match.
+    range: StateSpanRange,
+}
+
+/// Match span reopened against the current runtime state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CheckedStateMatch {
+    /// Runtime-state range covered by the checked match.
     range: StateSpanRange,
 }
 
@@ -394,23 +410,43 @@ impl StateMatch {
         Some(Self { range })
     }
 
-    /// Returns the matched payload length.
-    pub(crate) fn matched_len(self) -> PayloadByteCount {
-        self.range.byte_count()
+    /// Opens this match witness against the current state length.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if the match witness was built for a different state
+    /// length than the state it is being used against.
+    fn open(self, current_state_len: RuntimeStateByteCount) -> Result<CheckedStateMatch, RunError> {
+        if self.range.state_len() == current_state_len {
+            Ok(CheckedStateMatch { range: self.range })
+        } else {
+            Err(RunInvariantError::InvalidStateMatchRange {
+                matched_state_len: self.range.state_len(),
+                current_state_len,
+            }
+            .into())
+        }
     }
 
-    /// Iterates over bytes before this match witness.
-    fn prefix_bytes(self, bytes: &[RuntimeByte]) -> impl Iterator<Item = RuntimeByte> + '_ {
-        bytes.iter().copied().take(self.range.start())
-    }
-
-    /// Iterates over the bytes covered by this match witness.
+    /// Iterates over bytes covered by this freshly built match witness.
     fn matched_bytes(self, bytes: &[RuntimeByte]) -> impl Iterator<Item = RuntimeByte> + '_ {
         bytes
             .iter()
             .copied()
             .skip(self.range.start())
             .take(self.range.byte_count().get())
+    }
+}
+
+impl CheckedStateMatch {
+    /// Returns the matched payload length.
+    fn matched_len(self) -> PayloadByteCount {
+        self.range.byte_count()
+    }
+
+    /// Iterates over bytes before this match witness.
+    fn prefix_bytes(self, bytes: &[RuntimeByte]) -> impl Iterator<Item = RuntimeByte> + '_ {
+        bytes.iter().copied().take(self.range.start())
     }
 
     /// Iterates over bytes after this match witness.
