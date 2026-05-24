@@ -123,12 +123,13 @@ fn ensure_owned_rule_witness(
         | (OwnedRuleAction::Return(payload), ExpectedOwnedRuleAction::Return(expected)) => {
             ensure_eq!(payload.as_slice(), expected)
         }
-        (OwnedRuleAction::MoveStart(_), _)
-        | (OwnedRuleAction::MoveEnd(_), _)
-        | (OwnedRuleAction::Replace(_), _)
-        | (OwnedRuleAction::Return(_), _) => {
-            Err(TestFailure::message("unexpected owned rule witness action"))
-        }
+        (
+            OwnedRuleAction::MoveStart(_)
+            | OwnedRuleAction::MoveEnd(_)
+            | OwnedRuleAction::Replace(_)
+            | OwnedRuleAction::Return(_),
+            _,
+        ) => Err(TestFailure::message("unexpected owned rule witness action")),
     }
 }
 
@@ -168,16 +169,12 @@ fn stable_signature(stable: &BorrowedStableRun<'_>) -> Result<StepSignature, Tes
 }
 
 /// Builds a comparable signature for a returned step.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if output bytes differ from the expected signature.
-fn returned_signature(returned: &BorrowedReturnedRun<'_>) -> Result<StepSignature, TestFailure> {
-    Ok(StepSignature::Return {
+fn returned_signature(returned: &BorrowedReturnedRun<'_>) -> StepSignature {
+    StepSignature::Return {
         step: returned.step().get(),
         rule_position: returned.rule().position().number().get(),
         output: returned.output().as_slice().to_vec(),
-    })
+    }
 }
 
 /// Runs stepwise execution and collects comparable transition signatures.
@@ -200,7 +197,7 @@ fn finish_step_signatures(
                 return Ok(signatures);
             }
             BorrowedStepTransition::Returned(returned) => {
-                signatures.push(returned_signature(&returned)?);
+                signatures.push(returned_signature(&returned));
                 return Ok(signatures);
             }
             BorrowedStepTransition::Failed(failed) => {
@@ -973,6 +970,16 @@ fn execution_owned_transitions_retain_rule_witnesses() -> TestResult {
         DEFAULT_MAX_RETURN_LEN,
     );
 
+    ensure_owned_run_witnesses(limits)?;
+    ensure_owned_rule_attempt_witnesses(limits)
+}
+
+/// Ensures owned stepwise run transitions retain owned rule witnesses.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if owned stepwise run witness metadata differs.
+fn ensure_owned_run_witnesses(limits: TestRunPolicy) -> TestResult {
     let execution = parse_program("a=b\nb=(return)ok")?.into_run(runtime_input(b"a", limits)?)?;
     let execution = match execution.step() {
         OwnedStepTransition::Applied(applied) => {
@@ -1005,8 +1012,15 @@ fn execution_owned_transitions_retain_rule_witnesses() -> TestResult {
         | OwnedStepTransition::Failed(_) => {
             Err(TestFailure::message("expected owned returned rule witness"))
         }
-    }?;
+    }
+}
 
+/// Ensures owned rule-attempt transitions retain owned rule witnesses.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if owned rule-attempt witness metadata differs.
+fn ensure_owned_rule_attempt_witnesses(limits: TestRunPolicy) -> TestResult {
     let attempt = parse_program("z=x\na=b")?.into_rule_attempt_run(RuleAttemptSeed::new(
         runtime_input(b"a", limits)?,
         RuleAttemptLimit::new(10),
@@ -1047,7 +1061,7 @@ fn execution_owned_transitions_retain_rule_witnesses() -> TestResult {
         | OwnedRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message("expected owned applied attempt"));
         }
-    };
+    }
 
     let final_attempt = parse_program("z=x")?.into_rule_attempt_run(RuleAttemptSeed::new(
         runtime_input(b"a", limits)?,
