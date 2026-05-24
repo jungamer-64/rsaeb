@@ -1,19 +1,9 @@
 //! Public stepwise run typestates.
 //!
 //! [`Program::into_run`](crate::program::Program::into_run) moves a parsed
-//! program into an [`RunSession`]. Borrowed run-to-completion remains an
-//! internal implementation path for [`Program::run`](crate::program::Program::run)
-//! and tracing, but public stepwise execution has one ownership model.
-//!
-//! Calling `step` consumes the current session and returns an exhaustive
-//! transition, so callers must handle the next state explicitly: continue with
-//! an applied step, finish a stable or returned run, or inspect and discard a
-//! failed run.
-//!
-//! The run session is the mutable runtime engine. It owns the current state,
-//! rewrite scratch, budgets, and per-run `(once)` state directly, so there is
-//! no second private typestate layer and no borrowed input copy behind the
-//! public API.
+//! program into a [`RunSession`]. Run-to-completion and tracing use the same
+//! internal session shape with a borrowed program owner. Public stepwise
+//! execution has one ownership model and no parallel borrowed typestate tree.
 
 use crate::error::{RunError, TracedRunError};
 use crate::input::RunSeed;
@@ -21,7 +11,7 @@ use crate::inspect::{RulePosition, RuleView};
 use crate::limits::StepCount;
 use crate::program::{Program, ReturnOutputView, RunResult};
 use crate::runtime::action::{
-    AppliedRule, AppliedRuleEffect, apply_matched_rule, materialize_return_output,
+    AppliedRule, CommittedReturnRule, apply_matched_rule, materialize_return_output,
 };
 use crate::runtime::budget::RuntimeBudgetState;
 use crate::runtime::matcher::{RuleSearch, find_next_match};
@@ -31,15 +21,9 @@ use crate::runtime::state::State;
 use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
 
 /// Stateful run session that owns its parsed program.
-///
-/// This is the only public stepwise execution state. It uses the same runtime
-/// core as borrowed run-to-completion while carrying the parsed program by
-/// value.
 pub struct RunSession {
-    /// Parsed program owned by this session for rule lookup and inspection.
-    program: Program,
-    /// Mutable execution state shared with borrowed sessions.
-    core: RunCore,
+    /// Internal session using the public owned program boundary.
+    session: Session<OwnedProgram>,
 }
 
 /// Mutable runtime state independent of program ownership mode.
@@ -53,6 +37,34 @@ struct RunCore {
     budget: RuntimeBudgetState,
     /// Per-run consumption state for `(once)` rules.
     once_states: OnceStateSet,
+}
+
+/// Runtime session parameterized by program ownership.
+struct Session<P> {
+    /// Borrowed or owned parsed program.
+    program: P,
+    /// Mutable execution state.
+    core: RunCore,
+}
+
+/// Program ownership shape used by the internal runtime session.
+trait ProgramOwner {
+    /// Borrows the parsed program.
+    fn program(&self) -> &Program;
+}
+
+/// Borrowed program owner for run-to-completion and tracing.
+#[derive(Debug, Clone, Copy)]
+struct BorrowedProgram<'program> {
+    /// Parsed program borrowed by this run.
+    program: &'program Program,
+}
+
+/// Owned program owner for public stepwise execution.
+#[derive(Debug)]
+struct OwnedProgram {
+    /// Parsed program owned by the public run session.
+    program: Program,
 }
 
 /// Result of advancing a run session once.
@@ -71,7 +83,7 @@ pub enum StepTransition {
 pub struct AppliedStep {
     /// Step number committed by this transition.
     step: StepCount,
-    /// Program-local rule position committed by this transition.
+    /// Program-local rewrite rule position committed by this transition.
     rule: RulePosition,
     /// Continuation session after the committed rewrite.
     session: RunSession,
@@ -103,6 +115,26 @@ pub struct FailedRun {
     error: RunError,
     /// Uncommitted owned session retained for diagnostic inspection.
     session: RunSession,
+}
+
+/// Internal non-error result of one core step attempt.
+enum CoreStep<'program> {
+    /// A rule committed and may have terminal side effects.
+    Applied(AppliedRule<'program>),
+    /// No rule matched the current runtime state.
+    Stable(StepCount),
+}
+
+impl ProgramOwner for BorrowedProgram<'_> {
+    fn program(&self) -> &Program {
+        self.program
+    }
+}
+
+impl ProgramOwner for OwnedProgram {
+    fn program(&self) -> &Program {
+        &self.program
+    }
 }
 
 impl core::fmt::Debug for RunSession {
@@ -213,7 +245,10 @@ impl RunCore {
     /// Returns `RunError` if rule matching detects an internal invariant
     /// failure or if applying the matched rule exceeds limits or allocation
     /// fails.
-    fn step(&mut self, program: &Program) -> Result<CoreStep, RunError> {
+    fn step<'program>(
+        &mut self,
+        program: &'program Program,
+    ) -> Result<CoreStep<'program>, RunError> {
         let matched =
             match find_next_match(program.rule_slice(), &mut self.once_states, &self.state)? {
                 RuleSearch::Matched(matched) => matched,
@@ -229,22 +264,166 @@ impl RunCore {
     }
 }
 
-/// Internal non-error result of one core step attempt.
-enum CoreStep {
-    /// A rule committed and may have terminal side effects.
-    Applied(AppliedRule),
-    /// No rule matched the current runtime state.
-    Stable(StepCount),
+impl<P: ProgramOwner> Session<P> {
+    /// Starts a new run session for a parsed program and admitted run seed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if allocating per-run rule state fails.
+    fn new(program: P, seed: RunSeed) -> Result<Self, RunError> {
+        let core = RunCore::new(program.program(), seed)?;
+        Ok(Self { program, core })
+    }
+
+    /// Borrows the parsed program.
+    fn program(&self) -> &Program {
+        self.program.program()
+    }
+
+    /// Number of rewrite steps that have already completed in this run.
+    const fn completed_steps(&self) -> StepCount {
+        self.core.completed_steps()
+    }
+
+    /// Borrow the current runtime state.
+    fn state(&self) -> RuntimeStateView<'_> {
+        self.core.state()
+    }
+
+    /// Advances this run by exactly one matching rule when possible.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if rule matching or rule application fails.
+    fn step(&mut self) -> Result<CoreStep<'_>, RunError> {
+        self.core.step(self.program.program())
+    }
 }
 
-/// Runs a borrowed program to completion without exposing borrowed stepwise typestates.
+impl<'program> Session<BorrowedProgram<'program>> {
+    /// Advances a borrowed-program session while keeping rule views tied to the
+    /// parsed program rather than to the mutable session borrow.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if rule matching or rule application fails.
+    fn step_borrowed(&mut self) -> Result<CoreStep<'program>, RunError> {
+        self.core.step(self.program.program)
+    }
+
+    /// Runs this borrowed session to completion.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` when a later matching rule would exceed configured
+    /// limits.
+    fn finish_borrowed(mut self) -> Result<RunResult, RunError> {
+        loop {
+            match self.step_borrowed()? {
+                CoreStep::Applied(AppliedRule::Rewrite(_)) => {}
+                CoreStep::Applied(AppliedRule::Return(committed)) => {
+                    return committed.into_result();
+                }
+                CoreStep::Stable(steps) => return self.core.into_stable_result(steps),
+            }
+        }
+    }
+
+    /// Runs to completion while emitting borrowed trace events.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TracedRunError::Trace` if the trace sink fails. Returns
+    /// `TracedRunError::Run` if runtime execution fails.
+    fn run_with_borrowed_trace<F, E>(mut self, mut trace: F) -> Result<RunResult, TracedRunError<E>>
+    where
+        F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
+    {
+        trace(BorrowedTraceEvent::Initial {
+            state: self.state(),
+        })
+        .map_err(TracedRunError::Trace)?;
+
+        loop {
+            match self.step_borrowed().map_err(TracedRunError::Run)? {
+                CoreStep::Applied(AppliedRule::Rewrite(committed)) => {
+                    Self::emit_step_trace(
+                        &mut trace,
+                        committed.step(),
+                        committed.rule(),
+                        BorrowedTraceEffect::Continue {
+                            state: self.state(),
+                        },
+                    )?;
+                }
+                CoreStep::Applied(AppliedRule::Return(committed)) => {
+                    Self::emit_step_trace(
+                        &mut trace,
+                        committed.step(),
+                        committed.rule(),
+                        BorrowedTraceEffect::Return {
+                            output: committed.output(),
+                        },
+                    )?;
+                    return committed.into_result().map_err(TracedRunError::Run);
+                }
+                CoreStep::Stable(steps) => {
+                    return self
+                        .core
+                        .into_stable_result(steps)
+                        .map_err(TracedRunError::Run);
+                }
+            }
+        }
+    }
+
+    /// Emits one borrowed step trace event.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TracedRunError::Trace` if the trace sink rejects the event.
+    fn emit_step_trace<F, E>(
+        trace: &mut F,
+        step: StepCount,
+        rule: RuleView<'program>,
+        effect: BorrowedTraceEffect<'program, '_>,
+    ) -> Result<(), TracedRunError<E>>
+    where
+        F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
+    {
+        trace(BorrowedTraceEvent::Step { step, rule, effect }).map_err(TracedRunError::Trace)
+    }
+}
+
+impl CommittedReturnRule<'_> {
+    /// Materializes this returned run as a run result.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if return output materialization cannot allocate.
+    fn into_result(self) -> Result<RunResult, RunError> {
+        Ok(RunResult::from_return(
+            materialize_return_output(self.output())?,
+            self.step(),
+        ))
+    }
+}
+
+impl Session<OwnedProgram> {
+    /// Splits an owned session into its program and mutable core.
+    fn into_program_core(self) -> (Program, RunCore) {
+        (self.program.program, self.core)
+    }
+}
+
+/// Runs a borrowed program to completion.
 ///
 /// # Errors
 ///
 /// Returns `RunError` when execution setup fails or a later matching rule would
 /// exceed configured limits.
 pub(crate) fn finish_borrowed_run(program: &Program, seed: RunSeed) -> Result<RunResult, RunError> {
-    BorrowedRunSession::new(program, seed)?.finish()
+    Session::new(BorrowedProgram { program }, seed)?.finish_borrowed()
 }
 
 /// Runs a borrowed program to completion while emitting borrowed trace events.
@@ -261,7 +440,7 @@ pub(crate) fn run_with_borrowed_trace<'program, F, E>(
 where
     F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
 {
-    BorrowedRunSession::new(program, seed)
+    Session::new(BorrowedProgram { program }, seed)
         .map_err(TracedRunError::Run)?
         .run_with_borrowed_trace(trace)
 }
@@ -273,38 +452,60 @@ impl RunSession {
     ///
     /// Returns `RunError` if allocating per-run rule state fails.
     pub(crate) fn new(program: Program, seed: RunSeed) -> Result<Self, RunError> {
-        let core = RunCore::new(&program, seed)?;
-        Ok(Self { program, core })
+        Ok(Self {
+            session: Session::new(OwnedProgram { program }, seed)?,
+        })
     }
 
     /// Number of rewrite steps that have already completed in this run.
     #[must_use]
     pub const fn completed_steps(&self) -> StepCount {
-        self.core.completed_steps()
+        self.session.completed_steps()
     }
 
     /// Borrow the parsed program owned by this session.
     #[must_use]
-    pub const fn program(&self) -> &Program {
-        &self.program
+    pub fn program(&self) -> &Program {
+        self.session.program()
     }
 
     /// Borrow the current runtime state.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
-        self.core.state()
+        self.session.state()
     }
 
     /// Advances this run by exactly one matching rule when possible.
     #[must_use]
     pub fn step(mut self) -> StepTransition {
-        match self.core.step(&self.program) {
-            Ok(CoreStep::Applied(applied)) => applied.into_transition(self),
-            Ok(CoreStep::Stable(steps)) => StepTransition::Stable(StableRun {
-                steps,
-                program: self.program,
-                core: self.core,
-            }),
+        match self.session.step() {
+            Ok(CoreStep::Applied(AppliedRule::Rewrite(committed))) => {
+                let step = committed.step();
+                let rule = committed.rule().position();
+                StepTransition::Applied(AppliedStep {
+                    step,
+                    rule,
+                    session: self,
+                })
+            }
+            Ok(CoreStep::Applied(AppliedRule::Return(committed))) => {
+                let step = committed.step();
+                let rule = committed.rule().position();
+                let (program, _core) = self.session.into_program_core();
+                StepTransition::Returned(ReturnedRun {
+                    step,
+                    rule,
+                    program,
+                })
+            }
+            Ok(CoreStep::Stable(steps)) => {
+                let (program, core) = self.session.into_program_core();
+                StepTransition::Stable(StableRun {
+                    steps,
+                    program,
+                    core,
+                })
+            }
             Err(error) => StepTransition::Failed(FailedRun::new(error, self)),
         }
     }
@@ -333,24 +534,6 @@ impl RunSession {
     }
 }
 
-impl AppliedRule {
-    /// Converts the internal applied rule into the public transition.
-    fn into_transition(self, session: RunSession) -> StepTransition {
-        match self.effect {
-            AppliedRuleEffect::Continue => StepTransition::Applied(AppliedStep {
-                step: self.step,
-                rule: self.rule,
-                session,
-            }),
-            AppliedRuleEffect::Return => StepTransition::Returned(ReturnedRun {
-                step: self.step,
-                rule: self.rule,
-                program: session.program,
-            }),
-        }
-    }
-}
-
 impl AppliedStep {
     /// One-based applied step count.
     #[must_use]
@@ -365,7 +548,7 @@ impl AppliedStep {
     /// Returns `RunError::InternalInvariant` if the committed rule position no
     /// longer resolves inside the owned parsed program.
     pub fn rule(&self) -> Result<RuleView<'_>, RunError> {
-        self.session.program.rule_view_at(self.rule)
+        self.session.program().rule_view_at(self.rule)
     }
 
     /// Runtime state after the applied rewrite step.
@@ -476,7 +659,7 @@ impl FailedRun {
 
     /// Borrow the parsed program owned by this failed session.
     #[must_use]
-    pub const fn program(&self) -> &Program {
+    pub fn program(&self) -> &Program {
         self.session.program()
     }
 

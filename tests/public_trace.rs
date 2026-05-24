@@ -5,6 +5,7 @@ mod runtime_support;
 mod support;
 
 use rsaeb::error::{RunError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
+use rsaeb::execution::StepTransition;
 use rsaeb::input::RunSeed;
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
@@ -76,6 +77,20 @@ fn traced_test_failure(error: TracedRunError<TestFailure>) -> TestFailure {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum CommittedStepSignature {
+    Continue {
+        step: usize,
+        rule: Vec<u8>,
+        state: Vec<u8>,
+    },
+    Return {
+        step: usize,
+        rule: Vec<u8>,
+        output: Vec<u8>,
+    },
+}
+
 /// Validates test bytes as runtime input.
 ///
 /// # Errors
@@ -83,6 +98,77 @@ fn traced_test_failure(error: TracedRunError<TestFailure>) -> TestFailure {
 /// Returns `RuntimeInputError` if the bytes are not valid runtime input.
 fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFailure> {
     runtime_support::run_seed(bytes, limits)
+}
+
+/// Collects committed step signatures from borrowed tracing.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if tracing or materialization fails.
+fn borrowed_trace_step_signatures(
+    program: &Program,
+    seed: RunSeed,
+) -> Result<Vec<CommittedStepSignature>, TestFailure> {
+    let mut signatures = Vec::new();
+    program
+        .run_with_borrowed_trace(seed, |event| {
+            if let BorrowedTraceEvent::Step { step, rule, effect } = event {
+                match effect {
+                    BorrowedTraceEffect::Continue { state } => {
+                        signatures.push(CommittedStepSignature::Continue {
+                            step: step.get(),
+                            rule: rule.canonical_source()?.into_raw_bytes(),
+                            state: state.materialize()?.into_raw_bytes(),
+                        });
+                    }
+                    BorrowedTraceEffect::Return { output } => {
+                        signatures.push(CommittedStepSignature::Return {
+                            step: step.get(),
+                            rule: rule.canonical_source()?.into_raw_bytes(),
+                            output: output.materialize()?.into_raw_bytes(),
+                        });
+                    }
+                }
+            }
+            Ok(())
+        })
+        .map_err(traced_test_failure)?;
+    Ok(signatures)
+}
+
+/// Collects committed step signatures from owned stepwise execution.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if stepping or materialization fails.
+fn owned_step_signatures(
+    program: Program,
+    seed: RunSeed,
+) -> Result<Vec<CommittedStepSignature>, TestFailure> {
+    let mut signatures = Vec::new();
+    let mut session = program.into_run(seed)?;
+    loop {
+        match session.step() {
+            StepTransition::Applied(applied) => {
+                signatures.push(CommittedStepSignature::Continue {
+                    step: applied.step().get(),
+                    rule: applied.rule()?.canonical_source()?.into_raw_bytes(),
+                    state: applied.state().materialize()?.into_raw_bytes(),
+                });
+                session = applied.into_session();
+            }
+            StepTransition::Returned(returned) => {
+                signatures.push(CommittedStepSignature::Return {
+                    step: returned.step().get(),
+                    rule: returned.rule()?.canonical_source()?.into_raw_bytes(),
+                    output: returned.output()?.materialize()?.into_raw_bytes(),
+                });
+                return Ok(signatures);
+            }
+            StepTransition::Stable(_) => return Ok(signatures),
+            StepTransition::Failed(failed) => return Err(TestFailure::from(failed.into_error())),
+        }
+    }
 }
 
 /// # Errors
@@ -126,6 +212,27 @@ fn trace_borrowed_events_are_emitted_without_snapshots() -> TestResult {
         seen.as_slice(),
         &[(1, b"a".to_vec()), (1, b"b".to_vec()), (2, b"ok".to_vec())],
     )
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if borrowed trace and owned stepwise execution report
+/// different committed rule effects.
+#[test]
+fn trace_borrowed_steps_match_owned_stepwise_commits() -> TestResult {
+    let source = "(once)a=b\nb=(return)ok";
+    let limits = TestRunPolicy::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+
+    let borrowed = parse_program(source)?;
+    let borrowed_steps = borrowed_trace_step_signatures(&borrowed, runtime_input(b"a", limits)?)?;
+    let owned_steps = owned_step_signatures(parse_program(source)?, runtime_input(b"a", limits)?)?;
+
+    ensure_eq!(borrowed_steps, owned_steps)
 }
 
 /// # Errors
