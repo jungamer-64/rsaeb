@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
-use crate::bytes::{CompactByte, NonAsciiCodeByte, NonPrintableCodeByte};
+use crate::bytes::{CompactByte, NonPrintableCodeByte};
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError, ParseRepresentationError};
 use crate::limits::{CodeLineByteCount, CodeLineByteLimit};
 use crate::source::{SourceLineNumber, SourcePosition};
@@ -57,20 +57,14 @@ impl<'source> RawSourceLine<'source> {
             ));
         }
 
-        if let Some((zero_based_column, byte)) = code_bytes
+        if let Some((zero_based_column, rejected)) = code_bytes
             .iter()
             .copied()
             .enumerate()
-            .find(|(_, byte)| !byte.is_ascii())
+            .find_map(|(column, byte)| {
+                crate::bytes::NonAsciiCodeByte::parse(byte).map(|rejected| (column, rejected))
+            })
         {
-            let rejected = NonAsciiCodeByte::parse(byte).ok_or_else(|| {
-                ParseError::at_line(
-                    self.line_number,
-                    ParseErrorKind::InternalInvariant(
-                        crate::error::ParseInvariantError::RejectedNonAsciiCodeByteWithoutWitness,
-                    ),
-                )
-            })?;
             return Err(ParseError::at_position(
                 SourcePosition::new(
                     self.line_number,

@@ -534,7 +534,7 @@ fn parse_payload(
 ) -> Result<Payload, ParseError> {
     let syntax = PayloadSyntax::new(bytes, line_number, payload_kind);
     ensure_payload_within_limit(line_number, syntax.byte_count(), limit)?;
-    Ok(syntax.validate()?.into_payload())
+    syntax.validate()
 }
 
 /// Checks one parsed payload length against parser limits.

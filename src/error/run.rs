@@ -132,7 +132,6 @@ impl RuntimeInputError {
             attempted_len,
         }
     }
-
 }
 
 impl Error for RuntimeInputError {

@@ -58,7 +58,7 @@ use core::fmt;
 use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeInputByte, RuntimeInputByteCount, RuntimeStateByteCount};
 use crate::error::{RunAdmissionError, RuntimeInputError};
-use crate::limits::{ExecutionLimits, RuntimeInputByteLimit, RuntimeInputLimits};
+use crate::limits::{ExecutionLimits, RuntimeInputLimits};
 use crate::runtime::budget::RuntimeBudgetState;
 
 /// Borrowed runtime input source at the validation boundary.
@@ -91,63 +91,6 @@ impl<'input> RuntimeInputSource<'input> {
     #[must_use]
     pub const fn is_empty(self) -> bool {
         self.bytes.is_empty()
-    }
-}
-
-/// Internal validated runtime input source.
-struct ValidatedRuntimeInputSource<'input> {
-    /// Source bytes after the complete validation pass has succeeded.
-    source: RuntimeInputSource<'input>,
-    /// Typed length checked against the input budget.
-    byte_count: RuntimeInputByteCount,
-}
-
-impl<'input> ValidatedRuntimeInputSource<'input> {
-    /// Validates raw host bytes before owned runtime-input allocation starts.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RuntimeInputError` if the input exceeds `limit`, if any input
-    /// byte is non-ASCII, or if its one-based column cannot be represented.
-    fn new(
-        source: RuntimeInputSource<'input>,
-        limit: RuntimeInputByteLimit,
-    ) -> Result<Self, RuntimeInputError> {
-        let byte_count = RuntimeInputByteCount::new(source.as_bytes().len());
-        if !limit.accepts(byte_count) {
-            return Err(RuntimeInputError::input_limit(limit, byte_count));
-        }
-
-        for (zero_based_column, byte) in source.as_bytes().iter().copied().enumerate() {
-            RuntimeInputByte::validate(byte, zero_based_column)?;
-        }
-
-        Ok(Self { source, byte_count })
-    }
-
-    /// Returns the stored bytes.
-    const fn bytes(&self) -> &'input [u8] {
-        self.source.as_bytes()
-    }
-
-    /// Returns the typed byte count.
-    const fn byte_count(&self) -> RuntimeInputByteCount {
-        self.byte_count
-    }
-
-    /// Reopens validated bytes through the checked runtime-input boundary.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RuntimeInputError` if the validated source no longer satisfies
-    /// the runtime-input byte contract while owned storage is being built.
-    fn runtime_input_bytes(
-        &self,
-    ) -> impl Iterator<Item = Result<RuntimeInputByte, RuntimeInputError>> + 'input {
-        self.bytes().iter().copied().map(|byte| {
-            RuntimeInputByte::from_validated_ascii(byte)
-                .map_err(RuntimeInputError::internal_invariant)
-        })
     }
 }
 
@@ -205,22 +148,25 @@ impl RuntimeInput {
         input: RuntimeInputSource<'_>,
         limits: RuntimeInputLimits,
     ) -> Result<Self, RuntimeInputError> {
-        let input = ValidatedRuntimeInputSource::new(input, limits.input_byte_limit())?;
+        let byte_count = RuntimeInputByteCount::new(input.as_bytes().len());
+        if !limits.input_byte_limit().accepts(byte_count) {
+            return Err(RuntimeInputError::input_limit(
+                limits.input_byte_limit(),
+                byte_count,
+            ));
+        }
 
-        // Allocation starts only after the complete boundary validation pass;
-        // the iterator below consumes that witness instead of validating each
-        // byte a second time.
         let mut bytes = Vec::new();
         try_reserve_total_exact(
             &mut bytes,
-            RequestedCapacity::from_runtime_input_count(input.byte_count()),
+            RequestedCapacity::from_runtime_input_count(byte_count),
             AllocationContext::RuntimeInputValidation,
         )?;
 
-        for byte in input.runtime_input_bytes() {
+        for (zero_based_column, byte) in input.as_bytes().iter().copied().enumerate() {
             try_push(
                 &mut bytes,
-                byte?.into_runtime_byte(),
+                RuntimeInputByte::validate(byte, zero_based_column)?.into_runtime_byte(),
                 AllocationContext::RuntimeInputValidation,
             )?;
         }

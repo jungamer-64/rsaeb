@@ -47,13 +47,6 @@ pub(crate) struct PayloadSyntax<'code> {
     payload_kind: PayloadKind,
 }
 
-/// Payload syntax after every byte has been accepted as executable data.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ValidatedPayloadSyntax {
-    /// Program-domain bytes produced from the validated witness.
-    bytes: Vec<ProgramByte>,
-}
-
 impl<'code> PayloadSyntax<'code> {
     /// Labels compact syntax bytes as the payload domain expected by the parser.
     pub(crate) const fn new(
@@ -73,16 +66,13 @@ impl<'code> PayloadSyntax<'code> {
         PayloadByteCount::new(self.bytes.len())
     }
 
-    /// Validates compact payload bytes before owned payload allocation.
+    /// Validates compact payload bytes into owned program-domain bytes.
     ///
     /// # Errors
     ///
-    /// Returns `ParseError` if any byte is invalid executable payload data.
-    pub(crate) fn validate(self) -> Result<ValidatedPayloadSyntax, ParseError> {
-        for byte in self.bytes.iter().copied() {
-            ProgramByte::parse(byte, self.line_number, self.payload_kind)?;
-        }
-
+    /// Returns `ParseError` if any byte is invalid executable payload data or
+    /// if storing the accepted payload fails.
+    pub(crate) fn validate(self) -> Result<Payload, ParseError> {
         let mut bytes = Vec::new();
         try_reserve_total_exact(
             &mut bytes,
@@ -94,22 +84,13 @@ impl<'code> PayloadSyntax<'code> {
         })?;
 
         for byte in self.bytes.iter().copied() {
-            let parsed = ProgramByte::from_validated_payload_byte(byte).map_err(|error| {
-                ParseError::at_line(self.line_number, ParseErrorKind::InternalInvariant(error))
-            })?;
+            let parsed = ProgramByte::parse(byte, self.line_number, self.payload_kind)?;
             try_push(&mut bytes, parsed, AllocationContext::ProgramPayload).map_err(|error| {
                 ParseError::at_line(self.line_number, ParseErrorKind::Allocation(error))
             })?;
         }
 
-        Ok(ValidatedPayloadSyntax { bytes })
-    }
-}
-
-impl ValidatedPayloadSyntax {
-    /// Moves executable payload bytes out of the validated witness.
-    pub(crate) fn into_payload(self) -> Payload {
-        Payload { bytes: self.bytes }
+        Ok(Payload { bytes })
     }
 }
 

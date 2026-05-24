@@ -5,8 +5,8 @@ mod runtime_support;
 mod support;
 
 use rsaeb::error::{
-    ParseErrorKind, ParseErrorLocation, ParseInvariantError, ParseRepresentationError, PayloadKind,
-    RunError, RunInvariantError, RuntimeInputInvariantError,
+    ParseErrorKind, ParseErrorLocation, ParseRepresentationError, PayloadKind, RunError,
+    RunInvariantError,
 };
 use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
 use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, RuntimeInputLimits};
@@ -135,21 +135,13 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if newly exposed invariant/representation error
+/// Returns `TestFailure` if exposed representation/runtime-invariant error
 /// domains lose display output.
 #[test]
-fn errors_invariant_and_representation_subdomains_are_public() -> TestResult {
+fn errors_representation_and_runtime_invariant_subdomains_are_public() -> TestResult {
     ensure_eq!(
         ParseRepresentationError::RulePosition.to_string(),
         "rule position could not be represented",
-    )?;
-    ensure_eq!(
-        ParseInvariantError::ValidatedPayloadWithoutBytes.to_string(),
-        "validated payload witness did not carry validated bytes",
-    )?;
-    ensure_eq!(
-        RuntimeInputInvariantError::MissingValidatedAsciiByte.to_string(),
-        "validated runtime-input witness contained a non-ASCII byte",
     )?;
 
     let once_program = parse_program("(once)a=b")?;

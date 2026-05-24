@@ -45,9 +45,7 @@ fn parse_payload(
     line_number: SourceLineNumber,
     payload_kind: PayloadKind,
 ) -> Result<Payload, TestFailure> {
-    Ok(PayloadSyntax::new(input, line_number, payload_kind)
-        .validate()?
-        .into_payload())
+    Ok(PayloadSyntax::new(input, line_number, payload_kind).validate()?)
 }
 
 /// # Errors

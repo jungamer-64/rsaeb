@@ -332,8 +332,6 @@ struct StateSpanRange {
     end: StateIndex,
     /// Length of the payload matched by this span.
     matched_len: PayloadByteCount,
-    /// Runtime state length against which this span was built.
-    state_len: RuntimeStateByteCount,
 }
 
 impl StateSpanRange {
@@ -348,7 +346,6 @@ impl StateSpanRange {
             start,
             end,
             matched_len,
-            state_len,
         })
     }
 
@@ -365,11 +362,6 @@ impl StateSpanRange {
     /// Returns the typed byte count.
     fn byte_count(self) -> PayloadByteCount {
         self.matched_len
-    }
-
-    /// Runtime state length this range was checked against.
-    const fn state_len(self) -> RuntimeStateByteCount {
-        self.state_len
     }
 }
 
