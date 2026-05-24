@@ -5,6 +5,6 @@ mod model;
 
 pub(crate) use canonical::canonical_source;
 pub(crate) use model::{
-    OnceRuleCount, ParsedRule, RewriteAction, Rule, RuleAction, RuleAnchorSyntax, RuleBody,
-    RuleHead, RuleRepeatState, RuleRepeatSyntax,
+    OnceRuleCount, ParsedRule, RewriteAction, Rule, RuleAction, RuleAnchorSyntax, RuleAvailability,
+    RuleBody, RuleHead, RuleRepeatSyntax,
 };

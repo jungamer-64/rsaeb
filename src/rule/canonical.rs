@@ -6,7 +6,7 @@ use crate::allocation::{
 use crate::bytes::Payload;
 use crate::syntax::SyntaxToken;
 
-use super::model::{CanonicalRightSide, Rule, RuleAnchorSyntax, RuleRepeatState};
+use super::model::{CanonicalRightSide, Rule, RuleAnchorSyntax, RuleAvailability};
 
 /// Materializes this rule's canonical source form.
 ///
@@ -22,7 +22,7 @@ pub(crate) fn canonical_source(rule: &Rule) -> Result<Vec<u8>, AllocationError> 
         AllocationContext::CanonicalSource,
     )?;
 
-    if matches!(rule.repeat_state(), RuleRepeatState::Once) {
+    if matches!(rule.availability(), RuleAvailability::Once(_)) {
         push_token(&mut output, SyntaxToken::Once)?;
     }
 
@@ -64,7 +64,7 @@ pub(crate) fn canonical_source(rule: &Rule) -> Result<Vec<u8>, AllocationError> 
 fn canonical_source_len(rule: &Rule) -> Result<usize, AllocationError> {
     let mut len = rule.lhs().byte_count().get();
 
-    if matches!(rule.repeat_state(), RuleRepeatState::Once) {
+    if matches!(rule.availability(), RuleAvailability::Once(_)) {
         len = len.checked_add(SyntaxToken::Once.len()).ok_or_else(|| {
             AllocationError::capacity_overflow(AllocationContext::CanonicalSource)
         })?;

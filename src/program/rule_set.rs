@@ -4,15 +4,22 @@ use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_rese
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError, ParseRepresentationError};
 use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePosition};
 use crate::limits::RuleLimit;
-use crate::rule::{OnceRuleCount, ParsedRule, Rule, RuleRepeatState, RuleRepeatSyntax};
+use crate::rule::{OnceRuleCount, ParsedRule, Rule, RuleAvailability, RuleRepeatSyntax};
 
 /// Immutable executable rule table built by the parser.
 #[derive(Debug, PartialEq, Eq, Default)]
 pub(crate) struct RuleSet {
     /// Parsed rules in execution order.
     rules: Vec<Rule>,
+}
+
+/// Parser-owned rule table builder.
+#[derive(Debug, PartialEq, Eq, Default)]
+pub(crate) struct RuleSetBuilder {
+    /// Parsed rules in execution order.
+    rules: Vec<Rule>,
     /// Number of once slots needed by one run.
-    once_rule_count: OnceRuleCount,
+    next_once_rule_count: OnceRuleCount,
 }
 
 /// Parsed rule after repeat-state assignment but before table insertion.
@@ -83,7 +90,7 @@ impl RuleInsertionPermit {
 }
 
 impl PendingRuleInsertion {
-    /// Assigns runtime repeat state to one parsed rule before storage.
+    /// Assigns runtime availability to one parsed rule before storage.
     ///
     /// # Errors
     ///
@@ -91,25 +98,25 @@ impl PendingRuleInsertion {
     fn from_parsed(
         position: RulePosition,
         parsed: ParsedRule,
-        current_once_rule_count: OnceRuleCount,
+        next_once_rule_count: OnceRuleCount,
     ) -> Result<Self, ParseError> {
         let line_number = parsed.line_number();
-        let (repeat, next_once_rule_count) = match parsed.repeat_syntax() {
+        let (availability, next_once_rule_count) = match parsed.repeat_syntax() {
             RuleRepeatSyntax::Once => {
-                let next_once_rule_count =
-                    current_once_rule_count.checked_next().ok_or_else(|| {
+                let (slot, next_once_rule_count) =
+                    next_once_rule_count.assign_next_slot().ok_or_else(|| {
                         ParseError::at_line(
                             line_number,
                             ParseErrorKind::Representation(ParseRepresentationError::OnceRuleCount),
                         )
                     })?;
-                (RuleRepeatState::Once, next_once_rule_count)
+                (RuleAvailability::Once(slot), next_once_rule_count)
             }
-            RuleRepeatSyntax::Always => (RuleRepeatState::Always, current_once_rule_count),
+            RuleRepeatSyntax::Always => (RuleAvailability::Always, next_once_rule_count),
         };
 
         Ok(Self {
-            rule: Rule::from_parsed(position, parsed, repeat),
+            rule: Rule::from_parsed(position, parsed, availability),
             next_once_rule_count,
         })
     }
@@ -120,7 +127,7 @@ impl PendingRuleInsertion {
     }
 }
 
-impl RuleSet {
+impl RuleSetBuilder {
     /// Starts an empty parsed rule table.
     pub(crate) fn new() -> Self {
         Self::default()
@@ -140,8 +147,11 @@ impl RuleSet {
         let line_number = parsed.line_number();
         let insertion = RuleInsertionPermit::new(self.rules.len(), limit, line_number)?;
 
-        let pending =
-            PendingRuleInsertion::from_parsed(insertion.position(), parsed, self.once_rule_count)?;
+        let pending = PendingRuleInsertion::from_parsed(
+            insertion.position(),
+            parsed,
+            self.next_once_rule_count,
+        )?;
 
         let pending_line_number = pending.line_number();
         try_reserve_total_exact(
@@ -160,10 +170,17 @@ impl RuleSet {
         .map_err(|error| {
             ParseError::at_line(pending_line_number, ParseErrorKind::Allocation(error))
         })?;
-        self.once_rule_count = pending.next_once_rule_count;
+        self.next_once_rule_count = pending.next_once_rule_count;
         Ok(())
     }
 
+    /// Finalizes parsed rules into an immutable executable table.
+    pub(crate) fn finish(self) -> RuleSet {
+        RuleSet { rules: self.rules }
+    }
+}
+
+impl RuleSet {
     /// Total executable rules in this table.
     pub(crate) fn rule_count(&self) -> RuleCount {
         RuleCount::new(self.rules.len())
@@ -171,7 +188,12 @@ impl RuleSet {
 
     /// Public count of parsed `(once)` rules.
     pub(crate) fn once_rule_count(&self) -> PublicOnceRuleCount {
-        PublicOnceRuleCount::new(self.once_rule_count.get())
+        PublicOnceRuleCount::new(
+            self.rules
+                .iter()
+                .filter(|rule| rule.availability().is_once())
+                .count(),
+        )
     }
 
     /// Borrows rules in execution order.

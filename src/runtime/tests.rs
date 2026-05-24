@@ -406,10 +406,10 @@ fn once_state_set_is_constructed_from_the_rule_table() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if rule-table and once-state length drift is treated
-/// as an ordinary stable run.
+/// Returns `TestFailure` if a parsed once slot missing from runtime state is
+/// treated as an ordinary stable run.
 #[test]
-fn rule_state_length_mismatch_is_runtime_invariant_error() -> TestResult {
+fn missing_once_rule_state_is_runtime_invariant_error() -> TestResult {
     let program = parse_program("(once)a=b")?;
     let empty_rules: &[crate::rule::Rule] = &[];
     let mut once_states = OnceStateSet::new(empty_rules)?;
@@ -428,10 +428,13 @@ fn rule_state_length_mismatch_is_runtime_invariant_error() -> TestResult {
         matches!(
             error,
             Err(RunError::InternalInvariant(
-                RunInvariantError::RuleStateLengthMismatch { rules, states }
-            )) if rules.get() == 1 && states.get() == 0
+                RunInvariantError::MissingOnceRuleState {
+                    rule,
+                    available_slots
+                }
+            )) if rule.number().get() == 1 && available_slots.get() == 0
         ),
-        "expected rule/once-state length mismatch invariant error",
+        "expected missing once-state slot invariant error",
     )
 }
 

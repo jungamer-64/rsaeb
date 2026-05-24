@@ -221,6 +221,15 @@ impl fmt::Display for RunError {
 impl fmt::Display for RunInvariantError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::MissingOnceRuleState {
+                rule,
+                available_slots,
+            } => write!(
+                f,
+                "runtime invariant failure: once rule {} had no state slot among {} available once slots",
+                rule.number().get(),
+                available_slots.get(),
+            ),
             Self::InvalidStateMatchRange {
                 matched_state_len,
                 current_state_len,

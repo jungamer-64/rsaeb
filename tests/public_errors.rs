@@ -152,14 +152,18 @@ fn errors_invariant_and_representation_subdomains_are_public() -> TestResult {
         "validated runtime-input witness contained a non-ASCII byte",
     )?;
 
-    let rule_count = parse_program("a=b")?.rule_count();
-    let state_count = parse_program("")?.rule_count();
+    let once_program = parse_program("(once)a=b")?;
+    let once_rule = once_program
+        .rules()
+        .next()
+        .ok_or(TestFailure::message("expected once rule"))?;
+    let available_slots = parse_program("")?.once_rule_count();
     ensure_eq!(
-        RunInvariantError::RuleStateLengthMismatch {
-            rules: rule_count,
-            states: state_count,
+        RunInvariantError::MissingOnceRuleState {
+            rule: once_rule.position(),
+            available_slots,
         }
         .to_string(),
-        "runtime invariant failure: rule table length 1 did not match once-state length 0",
+        "runtime invariant failure: once rule 1 had no state slot among 0 available once slots",
     )
 }

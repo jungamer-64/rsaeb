@@ -190,7 +190,19 @@ pub(crate) struct OnceRuleCount {
     value: usize,
 }
 
+/// Parser-assigned slot for one `(once)` rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OnceRuleSlot {
+    /// Zero-based index into the per-run once-state table.
+    zero_based: usize,
+}
+
 impl OnceRuleCount {
+    /// Builds a count from parser-owned once-slot state.
+    pub(crate) const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
     /// Number of per-run once slots required by the program.
     pub(crate) const fn get(self) -> usize {
         self.value
@@ -201,23 +213,49 @@ impl OnceRuleCount {
         let next = self.value.checked_add(1)?;
         Some(Self { value: next })
     }
+
+    /// Assigns the next contiguous slot for a parsed `(once)` rule.
+    pub(crate) fn assign_next_slot(self) -> Option<(OnceRuleSlot, Self)> {
+        let next_count = self.checked_next()?;
+        Some((
+            OnceRuleSlot {
+                zero_based: self.value,
+            },
+            next_count,
+        ))
+    }
 }
 
-/// Repeat policy after program-level rule construction.
+impl OnceRuleSlot {
+    /// Zero-based slot in the runtime once-state table.
+    pub(crate) const fn get(self) -> usize {
+        self.zero_based
+    }
+}
+
+/// Runtime availability assigned after program-level rule construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuleRepeatState {
+pub(crate) enum RuleAvailability {
     /// Rule can apply on every match.
     Always,
-    /// Rule can apply once per run.
-    Once,
+    /// Rule can apply once per run through the assigned runtime slot.
+    Once(OnceRuleSlot),
 }
 
-impl RuleRepeatState {
+impl RuleAvailability {
     /// Converts internal repeat state into the public inspection repeat.
     pub(crate) const fn public_repeat(self) -> RuleRepeat {
         match self {
             Self::Always => RuleRepeat::Always,
-            Self::Once => RuleRepeat::Once,
+            Self::Once(_) => RuleRepeat::Once,
+        }
+    }
+
+    /// Returns whether this availability owns a once slot.
+    pub(crate) const fn is_once(self) -> bool {
+        match self {
+            Self::Always => false,
+            Self::Once(_) => true,
         }
     }
 }
@@ -229,8 +267,8 @@ pub(crate) struct Rule {
     position: RulePosition,
     /// Original source line for diagnostics and inspection.
     line_number: SourceLineNumber,
-    /// Runtime repeat policy.
-    repeat: RuleRepeatState,
+    /// Runtime availability for this rule.
+    availability: RuleAvailability,
     /// Match anchor used by the runtime matcher.
     anchor: RuleAnchorSyntax,
     /// Left-side executable match payload.
@@ -244,12 +282,12 @@ impl Rule {
     pub(crate) fn from_parsed(
         position: RulePosition,
         parsed: ParsedRule,
-        repeat: RuleRepeatState,
+        availability: RuleAvailability,
     ) -> Self {
         Self {
             position,
             line_number: parsed.line_number,
-            repeat,
+            availability,
             anchor: parsed.head.anchor,
             lhs: parsed.head.lhs,
             action: parsed.body.action,
@@ -268,12 +306,12 @@ impl Rule {
 
     /// Public repeat policy for inspection.
     pub(crate) const fn repeat(&self) -> RuleRepeat {
-        self.repeat.public_repeat()
+        self.availability.public_repeat()
     }
 
-    /// Runtime repeat state used by the matcher.
-    pub(crate) const fn repeat_state(&self) -> RuleRepeatState {
-        self.repeat
+    /// Runtime availability used by the matcher.
+    pub(crate) const fn availability(&self) -> RuleAvailability {
+        self.availability
     }
 
     /// Match anchor used by the matcher.

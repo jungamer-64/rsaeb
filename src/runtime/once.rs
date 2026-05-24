@@ -3,9 +3,11 @@ use alloc::vec::Vec;
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
-use crate::rule::Rule;
+use crate::error::{RunError, RunInvariantError};
+use crate::inspect::OnceRuleCount as PublicOnceRuleCount;
+use crate::rule::{OnceRuleCount, Rule, RuleAvailability};
 
-/// Per-run execution state aligned with the parsed rule table.
+/// Per-run execution state for parsed `(once)` slots.
 #[derive(Debug)]
 pub(crate) struct OnceStateSet {
     /// One runtime state cell for each parsed `(once)` rule.
@@ -60,28 +62,97 @@ impl MatchedRuleCommit<'_> {
 }
 
 impl OnceStateSet {
-    /// Builds per-execution rule state directly from the parsed program rules.
+    /// Builds per-execution once-slot state directly from parsed rules.
     ///
     /// # Errors
     ///
-    /// Returns `AllocationError` if the per-execution rule-state table cannot
+    /// Returns `AllocationError` if the per-execution once-state table cannot
     /// be allocated.
     pub(crate) fn new(rules: &[Rule]) -> Result<Self, AllocationError> {
+        let once_rule_count = OnceRuleCount::new(
+            rules
+                .iter()
+                .filter(|rule| rule.availability().is_once())
+                .count(),
+        );
         let mut states = Vec::new();
         try_reserve_total_exact(
             &mut states,
-            RequestedCapacity::from_rule_count(RuleCount::new(rules.len())),
+            RequestedCapacity::from_once_rule_count(once_rule_count),
             AllocationContext::RuntimeOnceRuleState,
         )?;
 
-        for rule in rules {
+        for _ in 0..once_rule_count.get() {
             try_push(
                 &mut states,
-                RuleExecutionState::from_rule(rule),
+                OnceRuleState::Fresh,
                 AllocationContext::RuntimeOnceRuleState,
             )?;
         }
 
         Ok(Self { states })
+    }
+
+    /// Returns whether a rule can currently run according to once-state.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if a parsed `(once)` rule references a runtime slot
+    /// missing from this run's once-state table.
+    pub(super) fn is_available(&self, rule: &Rule) -> Result<bool, RunError> {
+        match rule.availability() {
+            RuleAvailability::Always => Ok(true),
+            RuleAvailability::Once(slot) => {
+                let available_slots = PublicOnceRuleCount::new(self.states.len());
+                let Some(state) = self.states.get(slot.get()) else {
+                    return Err(RunInvariantError::MissingOnceRuleState {
+                        rule: rule.position(),
+                        available_slots,
+                    }
+                    .into());
+                };
+
+                match state {
+                    OnceRuleState::Fresh => Ok(true),
+                    OnceRuleState::Consumed => Ok(false),
+                }
+            }
+        }
+    }
+
+    /// Reserves the commit side effect for a rule already proven available.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if a parsed `(once)` rule references a runtime slot
+    /// missing from this run's once-state table.
+    pub(super) fn reserve_available_commit(
+        &mut self,
+        rule: &Rule,
+    ) -> Result<MatchedRuleCommit<'_>, RunError> {
+        match rule.availability() {
+            RuleAvailability::Always => Ok(MatchedRuleCommit::Always),
+            RuleAvailability::Once(slot) => {
+                let available_slots = PublicOnceRuleCount::new(self.states.len());
+                let Some(state) = self.states.get_mut(slot.get()) else {
+                    return Err(RunInvariantError::MissingOnceRuleState {
+                        rule: rule.position(),
+                        available_slots,
+                    }
+                    .into());
+                };
+
+                match state {
+                    OnceRuleState::Fresh => {
+                        Ok(MatchedRuleCommit::Once(OnceMatchPermit::new(state)))
+                    }
+                    OnceRuleState::Consumed => Err(RunInvariantError::MissingOnceRuleState {
+                        rule: rule.position(),
+                        available_slots,
+                    }
+                    .into()),
+                }
+            }
+        }
     }
 }

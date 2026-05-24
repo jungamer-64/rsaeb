@@ -10,7 +10,7 @@ mod tests;
 
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
 use crate::limits::{ParseLimits, SourceByteCount};
-use crate::program::RuleSet;
+use crate::program::{RuleSet, RuleSetBuilder};
 use crate::source::{ProgramSource, SourceLineNumber};
 
 use line::RawSourceLine;
@@ -28,7 +28,7 @@ pub(crate) fn parse_rules_impl(
 ) -> Result<RuleSet, ParseError> {
     ensure_source_within_limit(source, limits)?;
 
-    let mut rule_set = RuleSet::new();
+    let mut rule_set = RuleSetBuilder::new();
 
     for (zero_based_line, raw_line) in source.as_bytes().split(|&byte| byte == b'\n').enumerate() {
         let line_number = source_line_number(zero_based_line)?;
@@ -47,7 +47,7 @@ pub(crate) fn parse_rules_impl(
         rule_set.push_parsed_rule(parsed_rule, limits.rule_limit())?;
     }
 
-    Ok(rule_set)
+    Ok(rule_set.finish())
 }
 
 /// Checks raw source length before line parsing starts.

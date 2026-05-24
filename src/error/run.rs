@@ -34,6 +34,13 @@ pub enum RunError {
 /// treating the run as stable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunInvariantError {
+    /// A parsed `(once)` rule referenced a slot missing from runtime state.
+    MissingOnceRuleState {
+        /// Program-local position of the parsed `(once)` rule.
+        rule: crate::inspect::RulePosition,
+        /// Number of runtime once-state slots available for this run.
+        available_slots: crate::inspect::OnceRuleCount,
+    },
     /// Runtime attempted to use a match range against a different state length.
     InvalidStateMatchRange {
         /// State length recorded when the match witness was built.

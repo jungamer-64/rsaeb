@@ -23,7 +23,7 @@ use crate::parser::parse_rules_impl;
 use crate::rule::Rule;
 use crate::source::ProgramSource;
 
-pub(crate) use rule_set::RuleSet;
+pub(crate) use rule_set::{RuleSet, RuleSetBuilder};
 
 pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeStateSnapshot};
 
