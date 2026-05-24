@@ -1,7 +1,7 @@
 //! Public stepwise run typestates.
 //!
 //! [`Program::start_run`](crate::program::Program::start_run) borrows a parsed
-//! program into a [`RunSession`]. [`Program::into_run`](crate::program::Program::into_run)
+//! program into a [`BorrowedRunSession`]. [`Program::into_run`](crate::program::Program::into_run)
 //! is the explicit owned variant for hosts that need a `'static` session.
 //! [`Program::run`](crate::program::Program::run) is the borrowed
 //! run-to-completion shortcut over the same admitted [`RunSeed`] boundary.
@@ -22,7 +22,7 @@
 //!
 //! ```
 //! use rsaeb::error::{LimitError, RunError};
-//! use rsaeb::execution::StepTransition;
+//! use rsaeb::execution::BorrowedStepTransition;
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
 //! use rsaeb::limits::{
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_PARSE_LIMITS, ExecutionLimits,
@@ -42,7 +42,7 @@
 //! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), input_limits)?;
 //! let session = program.start_run(RunSeed::admit(input, execution_limits)?)?;
 //!
-//! let StepTransition::Failed(failed) = session.step() else {
+//! let BorrowedStepTransition::Failed(failed) = session.step() else {
 //!     return Err("expected oversized rewrite to fail before commit".into());
 //! };
 //!
@@ -84,9 +84,9 @@ pub use crate::runtime::matcher::RuleMissReason;
 ///
 /// This is the stepwise form returned by
 /// [`Program::start_run`](crate::program::Program::start_run). It consumes
-/// itself on every step so callers must handle the returned [`StepTransition`]
+/// itself on every step so callers must handle the returned [`BorrowedStepTransition`]
 /// before they can continue.
-pub struct RunSession<'program> {
+pub struct BorrowedRunSession<'program> {
     /// Internal session using the public borrowed program boundary.
     session: Session<BorrowedProgram<'program>>,
 }
@@ -108,14 +108,14 @@ pub struct OwnedRunSession {
 /// A rule-attempt step consumes one executable rule line even when that rule
 /// does not apply. Ordinary rewrite steps still reset the rule cursor to the
 /// first executable rule.
-pub struct RuleAttemptSession<'program> {
+pub struct BorrowedRuleAttemptSession<'program> {
     /// Internal rule-attempt session using the public borrowed program boundary.
     session: AttemptSession<BorrowedProgram<'program>>,
 }
 
 /// Stateful run session that owns its parsed program and advances by rule attempt.
 ///
-/// This is the owned counterpart to [`RuleAttemptSession`].
+/// This is the owned counterpart to [`BorrowedRuleAttemptSession`].
 pub struct OwnedRuleAttemptSession {
     /// Internal rule-attempt session using the public owned program boundary.
     session: AttemptSession<OwnedProgram>,
@@ -183,17 +183,17 @@ struct OwnedProgram {
 
 /// Result of advancing a borrowed run session once.
 ///
-/// Only [`StepTransition::Applied`] carries a continuation session. Stable,
+/// Only [`BorrowedStepTransition::Applied`] carries a continuation session. Stable,
 /// returned, and failed transitions are terminal.
-pub enum StepTransition<'program> {
+pub enum BorrowedStepTransition<'program> {
     /// One ordinary rewrite rule was applied and execution can continue.
-    Applied(AppliedStep<'program>),
+    Applied(BorrowedAppliedStep<'program>),
     /// No rule matched the final runtime state.
-    Stable(StableRun<'program>),
+    Stable(BorrowedStableRun<'program>),
     /// A matched rule executed `(return)`.
-    Returned(ReturnedRun<'program>),
+    Returned(BorrowedReturnedRun<'program>),
     /// A matching rule failed before committing.
-    Failed(FailedRun<'program>),
+    Failed(BorrowedFailedRun<'program>),
 }
 
 /// Completed non-applying rule attempt.
@@ -206,17 +206,17 @@ pub struct RuleMiss {
 }
 
 /// One committed non-terminal rule application in a borrowed session.
-pub struct AppliedStep<'program> {
+pub struct BorrowedAppliedStep<'program> {
     /// Step number committed by this transition.
     step: StepCount,
     /// Program-local rewrite rule position committed by this transition.
     rule_position: RulePosition,
     /// Continuation session after the committed rewrite.
-    session: RunSession<'program>,
+    session: BorrowedRunSession<'program>,
 }
 
 /// Terminal borrowed run state reached by no matching rule.
-pub struct StableRun<'program> {
+pub struct BorrowedStableRun<'program> {
     /// Number of committed steps before no rule matched.
     steps: StepCount,
     /// Parsed program borrowed by the terminal state.
@@ -226,7 +226,7 @@ pub struct StableRun<'program> {
 }
 
 /// Terminal borrowed run state reached by `(return)`.
-pub struct ReturnedRun<'program> {
+pub struct BorrowedReturnedRun<'program> {
     /// Step number that executed the return action.
     step: StepCount,
     /// Program-local return rule position.
@@ -238,43 +238,43 @@ pub struct ReturnedRun<'program> {
 }
 
 /// Runtime failure that preserves uncommitted borrowed state for inspection.
-pub struct FailedRun<'program> {
+pub struct BorrowedFailedRun<'program> {
     /// Runtime error that stopped the candidate step before commit.
     error: RunError,
     /// Uncommitted borrowed session retained for diagnostic inspection.
-    session: RunSession<'program>,
+    session: BorrowedRunSession<'program>,
 }
 
 /// Result of advancing a borrowed rule-attempt session once.
 ///
-/// Only [`RuleAttemptTransition::Missed`] and [`RuleAttemptTransition::Applied`]
+/// Only [`BorrowedRuleAttemptTransition::Missed`] and [`BorrowedRuleAttemptTransition::Applied`]
 /// carry continuation sessions. Stable, returned, and failed transitions are
 /// terminal.
-pub enum RuleAttemptTransition<'program> {
+pub enum BorrowedRuleAttemptTransition<'program> {
     /// One executable rule line was consumed without applying.
-    Missed(MissedRuleAttempt<'program>),
+    Missed(BorrowedMissedRuleAttempt<'program>),
     /// One ordinary rewrite rule was applied and execution can continue.
-    Applied(RuleAttemptAppliedStep<'program>),
+    Applied(BorrowedRuleAttemptAppliedStep<'program>),
     /// The rule pass completed without a match.
-    Stable(RuleAttemptStableRun<'program>),
+    Stable(BorrowedRuleAttemptStableRun<'program>),
     /// A matched rule executed `(return)`.
-    Returned(RuleAttemptReturnedRun<'program>),
+    Returned(BorrowedRuleAttemptReturnedRun<'program>),
     /// A matching rule failed before committing runtime state.
-    Failed(RuleAttemptFailedRun<'program>),
+    Failed(BorrowedRuleAttemptFailedRun<'program>),
 }
 
 /// One consumed non-applying rule line in a borrowed rule-attempt session.
-pub struct MissedRuleAttempt<'program> {
+pub struct BorrowedMissedRuleAttempt<'program> {
     /// Rule-attempt count committed by this transition.
     attempt: RuleAttemptCount,
     /// Non-applying rule information.
     miss: RuleMiss,
     /// Continuation session after consuming the rule line.
-    session: RuleAttemptSession<'program>,
+    session: BorrowedRuleAttemptSession<'program>,
 }
 
 /// One committed non-terminal rule application in a borrowed rule-attempt session.
-pub struct RuleAttemptAppliedStep<'program> {
+pub struct BorrowedRuleAttemptAppliedStep<'program> {
     /// Rule-attempt count committed by this transition.
     attempt: RuleAttemptCount,
     /// Step number committed by this transition.
@@ -282,11 +282,11 @@ pub struct RuleAttemptAppliedStep<'program> {
     /// Program-local rewrite rule position committed by this transition.
     rule_position: RulePosition,
     /// Continuation session after the committed rewrite.
-    session: RuleAttemptSession<'program>,
+    session: BorrowedRuleAttemptSession<'program>,
 }
 
 /// Terminal borrowed rule-attempt run state reached by no matching rule.
-pub struct RuleAttemptStableRun<'program> {
+pub struct BorrowedRuleAttemptStableRun<'program> {
     /// Number of consumed rule attempts before stability.
     attempts: RuleAttemptCount,
     /// Number of committed rewrite steps before stability.
@@ -300,7 +300,7 @@ pub struct RuleAttemptStableRun<'program> {
 }
 
 /// Terminal borrowed rule-attempt run state reached by `(return)`.
-pub struct RuleAttemptReturnedRun<'program> {
+pub struct BorrowedRuleAttemptReturnedRun<'program> {
     /// Rule-attempt count committed by this transition.
     attempt: RuleAttemptCount,
     /// Step number that executed the return action.
@@ -314,16 +314,16 @@ pub struct RuleAttemptReturnedRun<'program> {
 }
 
 /// Runtime failure that preserves uncommitted borrowed rule-attempt state for inspection.
-pub struct RuleAttemptFailedRun<'program> {
+pub struct BorrowedRuleAttemptFailedRun<'program> {
     /// Runtime error that stopped the candidate attempt before commit.
     error: RunError,
     /// Uncommitted borrowed session retained for diagnostic inspection.
-    session: RuleAttemptSession<'program>,
+    session: BorrowedRuleAttemptSession<'program>,
 }
 
 /// Result of advancing an owned run session once.
 ///
-/// This mirrors [`StepTransition`] while preserving ownership of the parsed
+/// This mirrors [`BorrowedStepTransition`] while preserving ownership of the parsed
 /// program through owned terminal and failed states.
 pub enum OwnedStepTransition {
     /// One ordinary rewrite rule was applied and execution can continue.
@@ -378,7 +378,7 @@ pub struct OwnedFailedRun {
 
 /// Result of advancing an owned rule-attempt session once.
 ///
-/// This mirrors [`RuleAttemptTransition`] while preserving ownership of the
+/// This mirrors [`BorrowedRuleAttemptTransition`] while preserving ownership of the
 /// parsed program through owned terminal and failed states.
 pub enum OwnedRuleAttemptTransition {
     /// One executable rule line was consumed without applying.
@@ -498,10 +498,10 @@ impl ProgramOwner for OwnedProgram {
     }
 }
 
-impl core::fmt::Debug for RunSession<'_> {
+impl core::fmt::Debug for BorrowedRunSession<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("RunSession")
+            .debug_struct("BorrowedRunSession")
             .field("completed_steps", &self.completed_steps())
             .field("state", &self.state())
             .finish()
@@ -518,10 +518,10 @@ impl core::fmt::Debug for OwnedRunSession {
     }
 }
 
-impl core::fmt::Debug for RuleAttemptSession<'_> {
+impl core::fmt::Debug for BorrowedRuleAttemptSession<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("RuleAttemptSession")
+            .debug_struct("BorrowedRuleAttemptSession")
             .field("completed_attempts", &self.completed_attempts())
             .field("completed_steps", &self.completed_steps())
             .field("state", &self.state())
@@ -540,7 +540,7 @@ impl core::fmt::Debug for OwnedRuleAttemptSession {
     }
 }
 
-impl core::fmt::Debug for StepTransition<'_> {
+impl core::fmt::Debug for BorrowedStepTransition<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Applied(applied) => formatter.debug_tuple("Applied").field(applied).finish(),
@@ -562,7 +562,7 @@ impl core::fmt::Debug for OwnedStepTransition {
     }
 }
 
-impl core::fmt::Debug for RuleAttemptTransition<'_> {
+impl core::fmt::Debug for BorrowedRuleAttemptTransition<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Missed(missed) => formatter.debug_tuple("Missed").field(missed).finish(),
@@ -586,10 +586,10 @@ impl core::fmt::Debug for OwnedRuleAttemptTransition {
     }
 }
 
-impl core::fmt::Debug for AppliedStep<'_> {
+impl core::fmt::Debug for BorrowedAppliedStep<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("AppliedStep")
+            .debug_struct("BorrowedAppliedStep")
             .field("step", &self.step())
             .field("rule_position", &self.rule_position())
             .field("state", &self.state())
@@ -608,10 +608,10 @@ impl core::fmt::Debug for OwnedAppliedStep {
     }
 }
 
-impl core::fmt::Debug for MissedRuleAttempt<'_> {
+impl core::fmt::Debug for BorrowedMissedRuleAttempt<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("MissedRuleAttempt")
+            .debug_struct("BorrowedMissedRuleAttempt")
             .field("attempt", &self.attempt())
             .field("miss", &self.miss())
             .field("state", &self.state())
@@ -630,10 +630,10 @@ impl core::fmt::Debug for OwnedMissedRuleAttempt {
     }
 }
 
-impl core::fmt::Debug for StableRun<'_> {
+impl core::fmt::Debug for BorrowedStableRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("StableRun")
+            .debug_struct("BorrowedStableRun")
             .field("steps", &self.steps())
             .field("state", &self.state())
             .finish()
@@ -650,10 +650,10 @@ impl core::fmt::Debug for OwnedStableRun {
     }
 }
 
-impl core::fmt::Debug for RuleAttemptAppliedStep<'_> {
+impl core::fmt::Debug for BorrowedRuleAttemptAppliedStep<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("RuleAttemptAppliedStep")
+            .debug_struct("BorrowedRuleAttemptAppliedStep")
             .field("attempt", &self.attempt())
             .field("step", &self.step())
             .field("rule_position", &self.rule_position())
@@ -674,10 +674,10 @@ impl core::fmt::Debug for OwnedRuleAttemptAppliedStep {
     }
 }
 
-impl core::fmt::Debug for RuleAttemptStableRun<'_> {
+impl core::fmt::Debug for BorrowedRuleAttemptStableRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("RuleAttemptStableRun")
+            .debug_struct("BorrowedRuleAttemptStableRun")
             .field("attempts", &self.attempts())
             .field("steps", &self.steps())
             .field("terminal_miss", &self.terminal_miss())
@@ -698,10 +698,10 @@ impl core::fmt::Debug for OwnedRuleAttemptStableRun {
     }
 }
 
-impl core::fmt::Debug for ReturnedRun<'_> {
+impl core::fmt::Debug for BorrowedReturnedRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("ReturnedRun")
+            .debug_struct("BorrowedReturnedRun")
             .field("step", &self.step())
             .field("rule_position", &self.rule_position())
             .field("output", &self.output())
@@ -720,10 +720,10 @@ impl core::fmt::Debug for OwnedReturnedRun {
     }
 }
 
-impl core::fmt::Debug for RuleAttemptReturnedRun<'_> {
+impl core::fmt::Debug for BorrowedRuleAttemptReturnedRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("RuleAttemptReturnedRun")
+            .debug_struct("BorrowedRuleAttemptReturnedRun")
             .field("attempt", &self.attempt())
             .field("step", &self.step())
             .field("rule_position", &self.rule_position())
@@ -744,10 +744,10 @@ impl core::fmt::Debug for OwnedRuleAttemptReturnedRun {
     }
 }
 
-impl core::fmt::Debug for FailedRun<'_> {
+impl core::fmt::Debug for BorrowedFailedRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("FailedRun")
+            .debug_struct("BorrowedFailedRun")
             .field("error", &self.error())
             .field("completed_steps", &self.completed_steps())
             .field("state", &self.state())
@@ -766,10 +766,10 @@ impl core::fmt::Debug for OwnedFailedRun {
     }
 }
 
-impl core::fmt::Debug for RuleAttemptFailedRun<'_> {
+impl core::fmt::Debug for BorrowedRuleAttemptFailedRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("RuleAttemptFailedRun")
+            .debug_struct("BorrowedRuleAttemptFailedRun")
             .field("error", &self.error())
             .field("completed_attempts", &self.completed_attempts())
             .field("completed_steps", &self.completed_steps())
@@ -1230,7 +1230,7 @@ where
         .run_with_borrowed_trace(trace)
 }
 
-impl<'program> RunSession<'program> {
+impl<'program> BorrowedRunSession<'program> {
     /// Starts a new borrowed run session for a parsed program and admitted run
     /// seed.
     ///
@@ -1268,16 +1268,16 @@ impl<'program> RunSession<'program> {
 
     /// Advances this run by exactly one matching rule when possible.
     ///
-    /// Applying an ordinary rewrite returns [`StepTransition::Applied`] with a
+    /// Applying an ordinary rewrite returns [`BorrowedStepTransition::Applied`] with a
     /// continuation session. No match, `(return)`, and runtime failure all
     /// consume the session into terminal typestates.
     #[must_use]
-    pub fn step(mut self) -> StepTransition<'program> {
+    pub fn step(mut self) -> BorrowedStepTransition<'program> {
         match self.session.step_borrowed() {
             Ok(CoreStep::Applied(AppliedRule::Rewrite(committed))) => {
                 let step = committed.step();
                 let rule = committed.rule().position();
-                StepTransition::Applied(AppliedStep {
+                BorrowedStepTransition::Applied(BorrowedAppliedStep {
                     step,
                     rule_position: rule,
                     session: self,
@@ -1288,7 +1288,7 @@ impl<'program> RunSession<'program> {
                 let rule = committed.rule().position();
                 let output = committed.into_output();
                 let Session { program, core: _ } = self.session;
-                StepTransition::Returned(ReturnedRun {
+                BorrowedStepTransition::Returned(BorrowedReturnedRun {
                     step,
                     rule_position: rule,
                     program: program.program,
@@ -1297,13 +1297,13 @@ impl<'program> RunSession<'program> {
             }
             Ok(CoreStep::Stable(steps)) => {
                 let Session { program, core } = self.session;
-                StepTransition::Stable(StableRun {
+                BorrowedStepTransition::Stable(BorrowedStableRun {
                     steps,
                     program: program.program,
                     core,
                 })
             }
-            Err(error) => StepTransition::Failed(FailedRun::new(error, self)),
+            Err(error) => BorrowedStepTransition::Failed(BorrowedFailedRun::new(error, self)),
         }
     }
 
@@ -1316,22 +1316,22 @@ impl<'program> RunSession<'program> {
     pub fn finish(mut self) -> Result<RunResult, RunError> {
         loop {
             match self.step() {
-                StepTransition::Applied(applied) => {
+                BorrowedStepTransition::Applied(applied) => {
                     self = applied.into_session();
                 }
-                StepTransition::Stable(stable) => {
+                BorrowedStepTransition::Stable(stable) => {
                     return stable.into_result();
                 }
-                StepTransition::Returned(returned) => {
+                BorrowedStepTransition::Returned(returned) => {
                     return Ok(returned.into_result());
                 }
-                StepTransition::Failed(failed) => return Err(failed.into_error()),
+                BorrowedStepTransition::Failed(failed) => return Err(failed.into_error()),
             }
         }
     }
 }
 
-impl<'program> RuleAttemptSession<'program> {
+impl<'program> BorrowedRuleAttemptSession<'program> {
     /// Starts a new borrowed rule-attempt run session for a parsed program and admitted run seed.
     ///
     /// # Errors
@@ -1376,16 +1376,16 @@ impl<'program> RuleAttemptSession<'program> {
 
     /// Advances this run by exactly one executable rule line when possible.
     ///
-    /// Non-matching rules return [`RuleAttemptTransition::Missed`] with a
+    /// Non-matching rules return [`BorrowedRuleAttemptTransition::Missed`] with a
     /// continuation session. Matching rewrites return
-    /// [`RuleAttemptTransition::Applied`] and reset the next attempt to the
+    /// [`BorrowedRuleAttemptTransition::Applied`] and reset the next attempt to the
     /// first executable rule. No match across the whole pass, `(return)`, and
     /// runtime failure consume the session into terminal typestates.
     #[must_use]
-    pub fn step(mut self) -> RuleAttemptTransition<'program> {
+    pub fn step(mut self) -> BorrowedRuleAttemptTransition<'program> {
         match self.session.step_borrowed() {
             Ok(CoreRuleAttempt::Missed { attempt, miss }) => {
-                RuleAttemptTransition::Missed(MissedRuleAttempt {
+                BorrowedRuleAttemptTransition::Missed(BorrowedMissedRuleAttempt {
                     attempt,
                     miss,
                     session: self,
@@ -1397,7 +1397,7 @@ impl<'program> RuleAttemptSession<'program> {
             }) => {
                 let step = committed.step();
                 let rule = committed.rule().position();
-                RuleAttemptTransition::Applied(RuleAttemptAppliedStep {
+                BorrowedRuleAttemptTransition::Applied(BorrowedRuleAttemptAppliedStep {
                     attempt,
                     step,
                     rule_position: rule,
@@ -1417,7 +1417,7 @@ impl<'program> RuleAttemptSession<'program> {
                     cursor: _,
                     attempt_budget: _,
                 } = self.session;
-                RuleAttemptTransition::Returned(RuleAttemptReturnedRun {
+                BorrowedRuleAttemptTransition::Returned(BorrowedRuleAttemptReturnedRun {
                     attempt,
                     step,
                     rule_position: rule,
@@ -1436,7 +1436,7 @@ impl<'program> RuleAttemptSession<'program> {
                     cursor: _,
                     attempt_budget: _,
                 } = self.session;
-                RuleAttemptTransition::Stable(RuleAttemptStableRun {
+                BorrowedRuleAttemptTransition::Stable(BorrowedRuleAttemptStableRun {
                     attempts,
                     steps,
                     terminal_miss,
@@ -1444,7 +1444,9 @@ impl<'program> RuleAttemptSession<'program> {
                     core,
                 })
             }
-            Err(error) => RuleAttemptTransition::Failed(RuleAttemptFailedRun::new(error, self)),
+            Err(error) => BorrowedRuleAttemptTransition::Failed(BorrowedRuleAttemptFailedRun::new(
+                error, self,
+            )),
         }
     }
 }
@@ -1677,7 +1679,7 @@ impl OwnedRuleAttemptSession {
     }
 }
 
-impl<'program> AppliedStep<'program> {
+impl<'program> BorrowedAppliedStep<'program> {
     /// One-based applied step count.
     #[must_use]
     pub const fn step(&self) -> StepCount {
@@ -1700,7 +1702,7 @@ impl<'program> AppliedStep<'program> {
     ///
     /// This is the only borrowed transition that can resume execution.
     #[must_use]
-    pub fn into_session(self) -> RunSession<'program> {
+    pub fn into_session(self) -> BorrowedRunSession<'program> {
         self.session
     }
 }
@@ -1733,7 +1735,7 @@ impl OwnedAppliedStep {
     }
 }
 
-impl<'program> MissedRuleAttempt<'program> {
+impl<'program> BorrowedMissedRuleAttempt<'program> {
     /// One-based consumed rule-attempt count.
     #[must_use]
     pub const fn attempt(&self) -> RuleAttemptCount {
@@ -1766,7 +1768,7 @@ impl<'program> MissedRuleAttempt<'program> {
 
     /// Continue running after observing this missed rule attempt.
     #[must_use]
-    pub fn into_session(self) -> RuleAttemptSession<'program> {
+    pub fn into_session(self) -> BorrowedRuleAttemptSession<'program> {
         self.session
     }
 }
@@ -1809,7 +1811,7 @@ impl OwnedMissedRuleAttempt {
     }
 }
 
-impl<'program> RuleAttemptAppliedStep<'program> {
+impl<'program> BorrowedRuleAttemptAppliedStep<'program> {
     /// One-based consumed rule-attempt count.
     #[must_use]
     pub const fn attempt(&self) -> RuleAttemptCount {
@@ -1836,7 +1838,7 @@ impl<'program> RuleAttemptAppliedStep<'program> {
 
     /// Continue running after observing this applied rule attempt.
     #[must_use]
-    pub fn into_session(self) -> RuleAttemptSession<'program> {
+    pub fn into_session(self) -> BorrowedRuleAttemptSession<'program> {
         self.session
     }
 }
@@ -1873,7 +1875,7 @@ impl OwnedRuleAttemptAppliedStep {
     }
 }
 
-impl<'program> StableRun<'program> {
+impl<'program> BorrowedStableRun<'program> {
     /// Number of rewrite steps applied before reaching the stable state.
     #[must_use]
     pub const fn steps(&self) -> StepCount {
@@ -1940,7 +1942,7 @@ impl OwnedStableRun {
     }
 }
 
-impl<'program> RuleAttemptStableRun<'program> {
+impl<'program> BorrowedRuleAttemptStableRun<'program> {
     /// Number of rule attempts consumed before reaching the stable state.
     #[must_use]
     pub const fn attempts(&self) -> RuleAttemptCount {
@@ -2036,7 +2038,7 @@ impl OwnedRuleAttemptStableRun {
     }
 }
 
-impl<'program> ReturnedRun<'program> {
+impl<'program> BorrowedReturnedRun<'program> {
     /// One-based applied step count for the return rule.
     #[must_use]
     pub const fn step(&self) -> StepCount {
@@ -2110,7 +2112,7 @@ impl OwnedReturnedRun {
     }
 }
 
-impl<'program> RuleAttemptReturnedRun<'program> {
+impl<'program> BorrowedRuleAttemptReturnedRun<'program> {
     /// One-based consumed rule-attempt count.
     #[must_use]
     pub const fn attempt(&self) -> RuleAttemptCount {
@@ -2196,9 +2198,9 @@ impl OwnedRuleAttemptReturnedRun {
     }
 }
 
-impl<'program> FailedRun<'program> {
+impl<'program> BorrowedFailedRun<'program> {
     /// Captures a failed borrowed session without committing the attempted step.
-    fn new(error: RunError, session: RunSession<'program>) -> Self {
+    fn new(error: RunError, session: BorrowedRunSession<'program>) -> Self {
         Self { error, session }
     }
 
@@ -2236,21 +2238,21 @@ impl<'program> FailedRun<'program> {
     }
 }
 
-impl core::fmt::Display for FailedRun<'_> {
+impl core::fmt::Display for BorrowedFailedRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.error.fmt(formatter)
     }
 }
 
-impl core::error::Error for FailedRun<'_> {
+impl core::error::Error for BorrowedFailedRun<'_> {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         Some(&self.error)
     }
 }
 
-impl<'program> RuleAttemptFailedRun<'program> {
+impl<'program> BorrowedRuleAttemptFailedRun<'program> {
     /// Captures a failed borrowed rule-attempt session without committing runtime state.
-    fn new(error: RunError, session: RuleAttemptSession<'program>) -> Self {
+    fn new(error: RunError, session: BorrowedRuleAttemptSession<'program>) -> Self {
         Self { error, session }
     }
 
@@ -2291,13 +2293,13 @@ impl<'program> RuleAttemptFailedRun<'program> {
     }
 }
 
-impl core::fmt::Display for RuleAttemptFailedRun<'_> {
+impl core::fmt::Display for BorrowedRuleAttemptFailedRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.error.fmt(formatter)
     }
 }
 
-impl core::error::Error for RuleAttemptFailedRun<'_> {
+impl core::error::Error for BorrowedRuleAttemptFailedRun<'_> {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         Some(&self.error)
     }

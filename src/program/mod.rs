@@ -20,7 +20,9 @@ mod rule_set;
 mod tracing;
 
 use crate::error::{ParseError, RunError};
-use crate::execution::{OwnedRuleAttemptSession, OwnedRunSession, RuleAttemptSession, RunSession};
+use crate::execution::{
+    BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRuleAttemptSession, OwnedRunSession,
+};
 use crate::input::RunSeed;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::limits::{ParseLimits, RuleAttemptLimit};
@@ -118,8 +120,8 @@ impl Program {
     /// # Errors
     ///
     /// Returns `RunError` when allocating per-run execution state fails.
-    pub fn start_run(&self, seed: RunSeed) -> Result<RunSession<'_>, RunError> {
-        RunSession::new(self, seed)
+    pub fn start_run(&self, seed: RunSeed) -> Result<BorrowedRunSession<'_>, RunError> {
+        BorrowedRunSession::new(self, seed)
     }
 
     /// Starts a stateful run session that owns this parsed program.
@@ -149,8 +151,8 @@ impl Program {
         &self,
         seed: RunSeed,
         limit: RuleAttemptLimit,
-    ) -> Result<RuleAttemptSession<'_>, RunError> {
-        RuleAttemptSession::new(self, seed, limit)
+    ) -> Result<BorrowedRuleAttemptSession<'_>, RunError> {
+        BorrowedRuleAttemptSession::new(self, seed, limit)
     }
 
     /// Starts a stateful owned run session that advances by executable rule attempt.
