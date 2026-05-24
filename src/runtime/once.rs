@@ -3,14 +3,23 @@ use alloc::vec::Vec;
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
-use crate::error::{InternalInvariantError, RunError};
-use crate::rule::{OnceRuleCount, OnceRuleSlot, Rule, RuleRepeatState};
+use crate::inspect::RuleCount;
+use crate::rule::{Rule, RuleRepeatState};
 
-/// Per-run consumption table for parsed `(once)` rules.
+/// Per-run execution state aligned with the parsed rule table.
 #[derive(Debug)]
 pub(crate) struct OnceStateSet {
-    /// Consumption state indexed by parsed once-rule slots.
-    states: Vec<OnceRuleState>,
+    /// One runtime row for each parsed rule.
+    states: Vec<RuleExecutionState>,
+}
+
+/// Runtime state for one parsed rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RuleExecutionState {
+    /// Rule has no once-state side effect.
+    Always,
+    /// Rule has a once-state cell for this run.
+    Once(OnceRuleState),
 }
 
 /// Consumption state for one `(once)` rule during a single run.
@@ -31,44 +40,11 @@ pub(super) enum MatchedRuleCommit<'once> {
     Once(OnceMatchPermit<'once>),
 }
 
-/// Availability of a rule before matching work is attempted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum OnceRuleAvailability {
-    /// Rule may be considered by the matcher.
-    Available,
-    /// Rule has already committed in this run.
-    Consumed,
-}
-
 /// Unique mutable permit that consumes one fresh once-rule state on commit.
 #[derive(Debug)]
 pub(super) struct OnceMatchPermit<'once> {
     /// Fresh once-state cell reserved for the matched rule.
     state: &'once mut OnceRuleState,
-}
-
-/// Checked allocation shape for one run's `(once)` state table.
-#[derive(Clone, Copy)]
-struct OnceStateCapacity {
-    /// Number of once states to initialize.
-    count: OnceRuleCount,
-}
-
-impl OnceStateCapacity {
-    /// Captures the required once-state table shape.
-    const fn new(count: OnceRuleCount) -> Self {
-        Self { count }
-    }
-
-    /// Capacity requested for the once-state table.
-    const fn requested_capacity(self) -> RequestedCapacity {
-        RequestedCapacity::from_once_rule_count(self.count)
-    }
-
-    /// Iterator over the slots that must be initialized.
-    fn slots(self) -> core::ops::Range<usize> {
-        0..self.count.get()
-    }
 }
 
 impl<'once> OnceMatchPermit<'once> {
@@ -94,25 +70,24 @@ impl MatchedRuleCommit<'_> {
 }
 
 impl OnceStateSet {
-    /// Builds per-execution `(once)` state from parse-time rule slots.
+    /// Builds per-execution rule state directly from the parsed program rules.
     ///
     /// # Errors
     ///
-    /// Returns `AllocationError` if the per-execution once-state table cannot
+    /// Returns `AllocationError` if the per-execution rule-state table cannot
     /// be allocated.
-    pub(crate) fn new(once_rule_count: OnceRuleCount) -> Result<Self, AllocationError> {
-        let capacity = OnceStateCapacity::new(once_rule_count);
+    pub(crate) fn new(rules: &[Rule]) -> Result<Self, AllocationError> {
         let mut states = Vec::new();
         try_reserve_total_exact(
             &mut states,
-            capacity.requested_capacity(),
+            RequestedCapacity::from_rule_count(RuleCount::new(rules.len())),
             AllocationContext::RuntimeOnceRuleState,
         )?;
 
-        for _ in capacity.slots() {
+        for rule in rules {
             try_push(
                 &mut states,
-                OnceRuleState::Fresh,
+                RuleExecutionState::from_rule(rule),
                 AllocationContext::RuntimeOnceRuleState,
             )?;
         }
@@ -120,83 +95,29 @@ impl OnceStateSet {
         Ok(Self { states })
     }
 
-    /// Reports whether a parsed rule may currently be applied.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError::InternalInvariant` if a parsed `(once)` rule points
-    /// outside this run's once-state table.
-    pub(super) fn availability_for_rule(
-        &self,
-        rule: &Rule,
-    ) -> Result<OnceRuleAvailability, RunError> {
-        match rule.repeat_state() {
-            RuleRepeatState::Always => Ok(OnceRuleAvailability::Available),
-            RuleRepeatState::Once(slot) => {
-                let state = self.state_for_slot(slot)?;
-                if state.is_fresh() {
-                    Ok(OnceRuleAvailability::Available)
-                } else {
-                    Ok(OnceRuleAvailability::Consumed)
-                }
-            }
-        }
-    }
-
-    /// Returns the unique commit permit for a rule already selected as
-    /// available.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError::InternalInvariant` if the parsed rule points outside
-    /// this run's once-state table or if a consumed rule is committed without a
-    /// fresh availability check.
-    pub(super) fn commit_for_available_rule(
-        &mut self,
-        rule: &Rule,
-    ) -> Result<MatchedRuleCommit<'_>, RunError> {
-        match rule.repeat_state() {
-            RuleRepeatState::Always => Ok(MatchedRuleCommit::Always),
-            RuleRepeatState::Once(slot) => {
-                let state = self.state_for_slot_mut(slot)?;
-                if state.is_fresh() {
-                    Ok(MatchedRuleCommit::Once(OnceMatchPermit::new(state)))
-                } else {
-                    Err(InternalInvariantError::consumed_once_rule_commit().into())
-                }
-            }
-        }
-    }
-
-    /// Returns the current state for one once-rule slot.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError::InternalInvariant` if the slot is outside this run's
-    /// once-state table.
-    fn state_for_slot(&self, slot: OnceRuleSlot) -> Result<OnceRuleState, RunError> {
-        self.states
-            .get(slot.zero_based())
-            .copied()
-            .ok_or_else(|| InternalInvariantError::missing_once_rule_state().into())
-    }
-
-    /// Returns the mutable state for one once-rule slot.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError::InternalInvariant` if the slot is outside this run's
-    /// once-state table.
-    fn state_for_slot_mut(&mut self, slot: OnceRuleSlot) -> Result<&mut OnceRuleState, RunError> {
-        self.states
-            .get_mut(slot.zero_based())
-            .ok_or_else(|| InternalInvariantError::missing_once_rule_state().into())
+    /// Iterates over rule-aligned runtime state rows.
+    pub(super) fn rows_mut(&mut self) -> impl Iterator<Item = &mut RuleExecutionState> {
+        self.states.iter_mut()
     }
 }
 
-impl OnceRuleState {
-    /// Whether this once slot can still be matched.
-    const fn is_fresh(self) -> bool {
-        matches!(self, Self::Fresh)
+impl RuleExecutionState {
+    /// Builds the runtime row corresponding to one parsed rule.
+    fn from_rule(rule: &Rule) -> Self {
+        match rule.repeat_state() {
+            RuleRepeatState::Always => Self::Always,
+            RuleRepeatState::Once => Self::Once(OnceRuleState::Fresh),
+        }
+    }
+
+    /// Reserves the commit side effect for a rule that may currently run.
+    pub(super) fn reserve_commit(&mut self) -> Option<MatchedRuleCommit<'_>> {
+        match self {
+            Self::Always => Some(MatchedRuleCommit::Always),
+            Self::Once(state @ OnceRuleState::Fresh) => {
+                Some(MatchedRuleCommit::Once(OnceMatchPermit::new(state)))
+            }
+            Self::Once(OnceRuleState::Consumed) => None,
+        }
     }
 }

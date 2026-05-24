@@ -4,7 +4,7 @@ use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
-use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RuleTableIndex};
+use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePosition};
 use crate::limits::RuleLimit;
 use crate::rule::{OnceRuleCount, ParsedRule, Rule, RuleRepeatState, RuleRepeatSyntax};
 
@@ -29,6 +29,8 @@ struct PendingRuleInsertion {
 struct RuleInsertionPermit {
     /// Rule count after the permitted insertion.
     attempted_rule_count: RuleCount,
+    /// Execution-order position assigned to the accepted rule.
+    position: RulePosition,
 }
 
 impl RuleInsertionPermit {
@@ -60,25 +62,29 @@ impl RuleInsertionPermit {
             ));
         }
 
-        if RuleTableIndex::from_zero_based(current_len).is_none()
-            || crate::inspect::RulePosition::from_zero_based(current_len).is_none()
-        {
-            return Err(ParseError::at_line(
+        let position = RulePosition::from_zero_based(current_len).ok_or_else(|| {
+            ParseError::at_line(
                 line_number,
                 ParseErrorKind::Allocation(AllocationError::capacity_overflow(
                     AllocationContext::ProgramRuleTable,
                 )),
-            ));
-        }
+            )
+        })?;
 
         Ok(Self {
             attempted_rule_count,
+            position,
         })
     }
 
     /// Rule-table capacity required before insertion.
-    const fn requested_capacity(self) -> RequestedCapacity {
+    const fn requested_capacity(&self) -> RequestedCapacity {
         RequestedCapacity::from_rule_count(self.attempted_rule_count)
+    }
+
+    /// Execution-order position assigned to this insertion.
+    const fn position(&self) -> RulePosition {
+        self.position
     }
 }
 
@@ -89,14 +95,15 @@ impl PendingRuleInsertion {
     ///
     /// Returns `ParseError` if assigning the next `(once)` slot overflows.
     fn from_parsed(
+        position: RulePosition,
         parsed: ParsedRule,
         current_once_rule_count: OnceRuleCount,
     ) -> Result<Self, ParseError> {
         let line_number = parsed.line_number();
         let (repeat, next_once_rule_count) = match parsed.repeat_syntax() {
             RuleRepeatSyntax::Once => {
-                let (slot, next_once_rule_count) =
-                    current_once_rule_count.reserve_next_slot().ok_or_else(|| {
+                let next_once_rule_count =
+                    current_once_rule_count.checked_next().ok_or_else(|| {
                         ParseError::at_line(
                             line_number,
                             ParseErrorKind::Allocation(AllocationError::capacity_overflow(
@@ -104,13 +111,13 @@ impl PendingRuleInsertion {
                             )),
                         )
                     })?;
-                (RuleRepeatState::Once(slot), next_once_rule_count)
+                (RuleRepeatState::Once, next_once_rule_count)
             }
             RuleRepeatSyntax::Always => (RuleRepeatState::Always, current_once_rule_count),
         };
 
         Ok(Self {
-            rule: Rule::from_parsed(parsed, repeat),
+            rule: Rule::from_parsed(position, parsed, repeat),
             next_once_rule_count,
         })
     }
@@ -141,7 +148,8 @@ impl RuleSet {
         let line_number = parsed.line_number();
         let insertion = RuleInsertionPermit::new(self.rules.len(), limit, line_number)?;
 
-        let pending = PendingRuleInsertion::from_parsed(parsed, self.once_rule_count)?;
+        let pending =
+            PendingRuleInsertion::from_parsed(insertion.position(), parsed, self.once_rule_count)?;
 
         let pending_line_number = pending.line_number();
         try_reserve_total_exact(
@@ -172,11 +180,6 @@ impl RuleSet {
     /// Public count of parsed `(once)` rules.
     pub(crate) fn once_rule_count(&self) -> PublicOnceRuleCount {
         PublicOnceRuleCount::new(self.once_rule_count.get())
-    }
-
-    /// Internal once-slot count used to initialize per-run state.
-    pub(crate) const fn once_slot_count(&self) -> OnceRuleCount {
-        self.once_rule_count
     }
 
     /// Borrows rules in execution order.

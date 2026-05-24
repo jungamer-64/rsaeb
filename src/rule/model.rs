@@ -1,5 +1,5 @@
 use crate::bytes::Payload;
-use crate::inspect::{PayloadView, RuleActionView, RuleAnchor, RuleRepeat};
+use crate::inspect::{PayloadView, RuleActionView, RuleAnchor, RulePosition, RuleRepeat};
 use crate::source::SourceLineNumber;
 
 /// Parsed right-side action after syntax has been assigned a domain.
@@ -183,20 +183,6 @@ impl RuleAnchorSyntax {
     }
 }
 
-/// Internal once rule slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct OnceRuleSlot {
-    /// Zero-based index into per-run once state.
-    zero_based: usize,
-}
-
-impl OnceRuleSlot {
-    /// Index used by the runtime once-state table.
-    pub(crate) const fn zero_based(self) -> usize {
-        self.zero_based
-    }
-}
-
 /// Internal once rule count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct OnceRuleCount {
@@ -210,25 +196,20 @@ impl OnceRuleCount {
         self.value
     }
 
-    /// Reserves the next once slot while keeping assignment linear.
-    pub(crate) fn reserve_next_slot(self) -> Option<(OnceRuleSlot, Self)> {
+    /// Increments the count for one accepted `(once)` rule.
+    pub(crate) fn checked_next(self) -> Option<Self> {
         let next = self.value.checked_add(1)?;
-        Some((
-            OnceRuleSlot {
-                zero_based: self.value,
-            },
-            Self { value: next },
-        ))
+        Some(Self { value: next })
     }
 }
 
-/// Repeat policy after program-level once-slot assignment.
+/// Repeat policy after program-level rule construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuleRepeatState {
     /// Rule can apply on every match.
     Always,
-    /// Rule can apply once per run and owns this slot.
-    Once(OnceRuleSlot),
+    /// Rule can apply once per run.
+    Once,
 }
 
 impl RuleRepeatState {
@@ -236,7 +217,7 @@ impl RuleRepeatState {
     pub(crate) const fn public_repeat(self) -> RuleRepeat {
         match self {
             Self::Always => RuleRepeat::Always,
-            Self::Once(_) => RuleRepeat::Once,
+            Self::Once => RuleRepeat::Once,
         }
     }
 }
@@ -244,9 +225,11 @@ impl RuleRepeatState {
 /// Internal rule.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Rule {
+    /// Execution-order position assigned by the parsed program.
+    position: RulePosition,
     /// Original source line for diagnostics and inspection.
     line_number: SourceLineNumber,
-    /// Runtime repeat policy, including once-slot ownership.
+    /// Runtime repeat policy.
     repeat: RuleRepeatState,
     /// Match anchor used by the runtime matcher.
     anchor: RuleAnchorSyntax,
@@ -257,15 +240,25 @@ pub(crate) struct Rule {
 }
 
 impl Rule {
-    /// Assigns runtime repeat state to a parsed rule.
-    pub(crate) fn from_parsed(parsed: ParsedRule, repeat: RuleRepeatState) -> Self {
+    /// Assigns execution position and runtime repeat state to a parsed rule.
+    pub(crate) fn from_parsed(
+        position: RulePosition,
+        parsed: ParsedRule,
+        repeat: RuleRepeatState,
+    ) -> Self {
         Self {
+            position,
             line_number: parsed.line_number,
             repeat,
             anchor: parsed.head.anchor,
             lhs: parsed.head.lhs,
             action: parsed.body.action,
         }
+    }
+
+    /// Execution-order position assigned by the parsed program.
+    pub(crate) const fn position(&self) -> RulePosition {
+        self.position
     }
 
     /// Source line used for diagnostics and public inspection.

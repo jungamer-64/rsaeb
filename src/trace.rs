@@ -48,7 +48,9 @@
 //!     Ok::<(), core::convert::Infallible>(())
 //! })?;
 //!
-//! assert_eq!(retained, [b"a".to_vec(), b"b".to_vec(), b"ok".to_vec()]);
+//! if retained != [b"a".to_vec(), b"b".to_vec(), b"ok".to_vec()] {
+//!     return Err("unexpected trace snapshots".into());
+//! }
 //! # Ok(())
 //! # }
 //! ```

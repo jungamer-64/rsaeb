@@ -17,13 +17,23 @@
 //! ), DEFAULT_PARSE_LIMITS)?;
 //! let rule = program.rules().next().ok_or("missing rule")?;
 //!
-//! assert_eq!(rule.position().number().get(), 1);
-//! assert_eq!(rule.repeat(), RuleRepeat::Once);
-//! assert_eq!(rule.anchor(), RuleAnchor::Start);
-//! assert_eq!(rule.lhs().materialize()?.as_slice(), b"a");
+//! if rule.position().number().get() != 1 {
+//!     return Err("unexpected rule position".into());
+//! }
+//! if rule.repeat() != RuleRepeat::Once {
+//!     return Err("unexpected rule repeat".into());
+//! }
+//! if rule.anchor() != RuleAnchor::Start {
+//!     return Err("unexpected rule anchor".into());
+//! }
+//! if rule.lhs().materialize()?.as_slice() != b"a" {
+//!     return Err("unexpected left side".into());
+//! }
 //! match rule.action() {
 //!     RuleActionView::Return(output) => {
-//!         assert_eq!(output.materialize()?.as_slice(), b"done");
+//!         if output.materialize()?.as_slice() != b"done" {
+//!             return Err("unexpected return output".into());
+//!         }
 //!     }
 //!     RuleActionView::Replace(_) | RuleActionView::MoveStart(_) | RuleActionView::MoveEnd(_) => {
 //!         return Err("expected return action".into());
@@ -105,17 +115,6 @@ impl RuleNumber {
         Some(Self { one_based })
     }
 
-    /// Builds the first value.
-    const fn first() -> Self {
-        Self { one_based: 1 }
-    }
-
-    /// Advances to the next display rule number.
-    fn next(self) -> Option<Self> {
-        let one_based = self.one_based.checked_add(1)?;
-        Some(Self { one_based })
-    }
-
     /// One-based rule number as a primitive value.
     #[must_use]
     pub const fn get(self) -> usize {
@@ -134,13 +133,6 @@ pub struct RulePosition {
     number: RuleNumber,
 }
 
-/// Zero-based index into the internal rule table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct RuleTableIndex {
-    /// Zero-based rule-table offset.
-    zero_based: usize,
-}
-
 impl RulePosition {
     /// Builds an index from a zero-based offset.
     pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
@@ -148,72 +140,10 @@ impl RulePosition {
         Some(Self { number })
     }
 
-    /// Converts this checked public position into an internal table index.
-    pub(crate) fn table_index(self) -> Option<RuleTableIndex> {
-        RuleTableIndex::from_rule_number(self.number)
-    }
-
-    /// Builds the first value.
-    const fn first() -> Self {
-        Self {
-            number: RuleNumber::first(),
-        }
-    }
-
-    /// Advances to the next execution-order position.
-    fn next(self) -> Option<Self> {
-        let number = self.number.next()?;
-        Some(Self { number })
-    }
-
     /// One-based rule number for display.
     #[must_use]
     pub const fn number(self) -> RuleNumber {
         self.number
-    }
-}
-
-impl RuleTableIndex {
-    /// Builds a checked rule-table index from a primitive offset.
-    pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
-        RuleNumber::from_zero_based(zero_based)?;
-        Some(Self { zero_based })
-    }
-
-    /// Builds a rule-table index from a checked public rule number.
-    fn from_rule_number(number: RuleNumber) -> Option<Self> {
-        let zero_based = number.one_based.checked_sub(1)?;
-        Some(Self { zero_based })
-    }
-
-    /// Primitive offset used only at the slice-access boundary.
-    pub(crate) const fn get(self) -> usize {
-        self.zero_based
-    }
-}
-
-/// Internal rule positions.
-pub(crate) struct RulePositions {
-    /// Next execution-order position to yield.
-    next: Option<RulePosition>,
-}
-
-impl RulePositions {
-    /// Starts position assignment at the first parsed rule.
-    pub(crate) const fn new() -> Self {
-        Self {
-            next: Some(RulePosition::first()),
-        }
-    }
-}
-
-impl Iterator for RulePositions {
-    type Item = RulePosition;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let position = self.next?;
-        self.next = position.next();
-        Some(position)
     }
 }
 
@@ -409,8 +339,6 @@ pub enum RuleActionView<'program> {
 /// it is not stored as a second source of truth beside the parsed fields.
 #[derive(Clone, Copy)]
 pub struct RuleView<'program> {
-    /// Execution-order position assigned by the parsed program.
-    position: RulePosition,
     /// Parsed rule borrowed from the program rule table.
     rule: &'program Rule,
 }
@@ -443,15 +371,15 @@ impl PartialEq for RuleView<'_> {
 impl Eq for RuleView<'_> {}
 
 impl<'program> RuleView<'program> {
-    /// Pairs a parsed rule with its execution-order position.
-    pub(crate) const fn new(position: RulePosition, rule: &'program Rule) -> Self {
-        Self { position, rule }
+    /// Borrows a parsed rule with its stored execution-order position.
+    pub(crate) const fn new(rule: &'program Rule) -> Self {
+        Self { rule }
     }
 
     /// Program-local parsed-rule position.
     #[must_use]
     pub const fn position(self) -> RulePosition {
-        self.position
+        self.rule.position()
     }
 
     /// One-based source line number.

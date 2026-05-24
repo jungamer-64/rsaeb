@@ -81,12 +81,12 @@ fn traced_test_failure(error: TracedRunError<TestFailure>) -> TestFailure {
 enum CommittedStepSignature {
     Continue {
         step: usize,
-        rule: Vec<u8>,
+        rule_position: usize,
         state: Vec<u8>,
     },
     Return {
         step: usize,
-        rule: Vec<u8>,
+        rule_position: usize,
         output: Vec<u8>,
     },
 }
@@ -117,14 +117,14 @@ fn borrowed_trace_step_signatures(
                     BorrowedTraceEffect::Continue { state } => {
                         signatures.push(CommittedStepSignature::Continue {
                             step: step.get(),
-                            rule: rule.canonical_source()?.into_raw_bytes(),
+                            rule_position: rule.position().number().get(),
                             state: state.materialize()?.into_raw_bytes(),
                         });
                     }
                     BorrowedTraceEffect::Return { output } => {
                         signatures.push(CommittedStepSignature::Return {
                             step: step.get(),
-                            rule: rule.canonical_source()?.into_raw_bytes(),
+                            rule_position: rule.position().number().get(),
                             output: output.materialize()?.into_raw_bytes(),
                         });
                     }
@@ -152,7 +152,7 @@ fn owned_step_signatures(
             StepTransition::Applied(applied) => {
                 signatures.push(CommittedStepSignature::Continue {
                     step: applied.step().get(),
-                    rule: applied.rule()?.canonical_source()?.into_raw_bytes(),
+                    rule_position: applied.rule_position().number().get(),
                     state: applied.state().materialize()?.into_raw_bytes(),
                 });
                 session = applied.into_session();
@@ -160,8 +160,8 @@ fn owned_step_signatures(
             StepTransition::Returned(returned) => {
                 signatures.push(CommittedStepSignature::Return {
                     step: returned.step().get(),
-                    rule: returned.rule()?.canonical_source()?.into_raw_bytes(),
-                    output: returned.output()?.materialize()?.into_raw_bytes(),
+                    rule_position: returned.rule_position().number().get(),
+                    output: returned.output().as_slice().to_vec(),
                 });
                 return Ok(signatures);
             }

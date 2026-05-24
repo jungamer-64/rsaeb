@@ -14,13 +14,13 @@ mod rule_set;
 /// Program-level tracing entrypoints.
 mod tracing;
 
-use crate::error::{InternalInvariantError, ParseError, RunError};
+use crate::error::{ParseError, RunError};
 use crate::execution::RunSession;
 use crate::input::RunSeed;
-use crate::inspect::{OnceRuleCount, RuleCount, RulePositions, RuleView};
+use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::limits::ParseLimits;
 use crate::parser::parse_rules_impl;
-use crate::rule::{Rule, RuleAction};
+use crate::rule::Rule;
 use crate::source::ProgramSource;
 
 pub(crate) use rule_set::RuleSet;
@@ -93,73 +93,12 @@ impl Program {
     /// from a [`RuleView`] when needed, but source text is not stored as a
     /// second truth beside the parsed rule fields.
     pub fn rules(&self) -> impl Iterator<Item = RuleView<'_>> + '_ {
-        self.rule_set
-            .as_slice()
-            .iter()
-            .zip(RulePositions::new())
-            .map(|(rule, position)| RuleView::new(position, rule))
+        self.rule_set.as_slice().iter().map(RuleView::new)
     }
 
     /// Borrows the immutable rule table in execution order.
     pub(crate) fn rule_slice(&self) -> &[Rule] {
         self.rule_set.as_slice()
-    }
-
-    /// Resolves a committed rule position back to a borrowed rule view.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError::InternalInvariant` if the position no longer
-    /// resolves inside this parsed program.
-    pub(crate) fn rule_view_at(
-        &self,
-        position: crate::inspect::RulePosition,
-    ) -> Result<RuleView<'_>, RunError> {
-        let rule = self
-            .rule_set
-            .as_slice()
-            .get(
-                position
-                    .table_index()
-                    .ok_or_else(InternalInvariantError::missing_committed_rule)?
-                    .get(),
-            )
-            .ok_or_else(InternalInvariantError::missing_committed_rule)?;
-        Ok(RuleView::new(position, rule))
-    }
-
-    /// Resolves a committed return-rule position to its return-output view.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError::InternalInvariant` if the position no longer
-    /// resolves inside this parsed program or if it points at a non-return
-    /// rule.
-    pub(crate) fn return_output_at(
-        &self,
-        position: crate::inspect::RulePosition,
-    ) -> Result<ReturnOutputView<'_>, RunError> {
-        let rule = self
-            .rule_set
-            .as_slice()
-            .get(
-                position
-                    .table_index()
-                    .ok_or_else(InternalInvariantError::missing_committed_rule)?
-                    .get(),
-            )
-            .ok_or_else(InternalInvariantError::missing_committed_rule)?;
-        match rule.action() {
-            RuleAction::Return(output) => Ok(ReturnOutputView::new(output)),
-            RuleAction::Rewrite(_) => {
-                Err(InternalInvariantError::returned_rule_without_output().into())
-            }
-        }
-    }
-
-    /// Number of once slots required for each new run.
-    pub(crate) const fn once_slot_count(&self) -> crate::rule::OnceRuleCount {
-        self.rule_set.once_slot_count()
     }
 
     /// Starts a stateful run session that owns this parsed program.

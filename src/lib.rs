@@ -67,10 +67,12 @@
 //! let seed = RunSeed::admit(input, execution_limits)?;
 //! let result = program.run(seed)?;
 //!
-//! assert!(matches!(
+//! if !matches!(
 //!     result.outcome(),
 //!     RunOutcome::Stable(output) if output.as_slice() == b"b"
-//! ));
+//! ) {
+//!     return Err("unexpected stable output".into());
+//! }
 //! # Ok(())
 //! # }
 //! ```
@@ -103,14 +105,18 @@
 //! let first = program.run(RunSeed::admit(first_input, execution_limits)?)?;
 //! let second = program.run(RunSeed::admit(second_input, execution_limits)?)?;
 //!
-//! assert!(matches!(
+//! if !matches!(
 //!     first.outcome(),
 //!     RunOutcome::Stable(output) if output.as_slice() == b"bc"
-//! ));
-//! assert!(matches!(
+//! ) {
+//!     return Err("unexpected first output".into());
+//! }
+//! if !matches!(
 //!     second.outcome(),
 //!     RunOutcome::Stable(output) if output.as_slice() == b"bc"
-//! ));
+//! ) {
+//!     return Err("unexpected second output".into());
+//! }
 //! # Ok(())
 //! # }
 //! ```
@@ -145,7 +151,9 @@
 //!
 //! let execution = match execution.step() {
 //!     StepTransition::Applied(applied) => {
-//!         assert_eq!(applied.state().materialize()?.as_slice(), b"b");
+//!         if applied.state().materialize()?.as_slice() != b"b" {
+//!             return Err("unexpected first applied state".into());
+//!         }
 //!         applied.into_session()
 //!     }
 //!     StepTransition::Stable(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
@@ -155,7 +163,9 @@
 //!
 //! let execution = match execution.step() {
 //!     StepTransition::Applied(applied) => {
-//!         assert_eq!(applied.state().materialize()?.as_slice(), b"c");
+//!         if applied.state().materialize()?.as_slice() != b"c" {
+//!             return Err("unexpected second applied state".into());
+//!         }
 //!         applied.into_session()
 //!     }
 //!     StepTransition::Stable(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
@@ -165,8 +175,12 @@
 //!
 //! match execution.step() {
 //!     StepTransition::Stable(stable) => {
-//!         assert_eq!(stable.steps().get(), 2);
-//!         assert_eq!(stable.state().materialize()?.as_slice(), b"c");
+//!         if stable.steps().get() != 2 {
+//!             return Err("unexpected stable step count".into());
+//!         }
+//!         if stable.state().materialize()?.as_slice() != b"c" {
+//!             return Err("unexpected stable state".into());
+//!         }
 //!     }
 //!     StepTransition::Applied(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
 //!         return Err("expected stable completion".into());
@@ -211,11 +225,13 @@
 //! let seed = RunSeed::admit(input, execution_limits)?;
 //! let result = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?.run(seed);
 //!
-//! assert!(matches!(
+//! if !matches!(
 //!     result,
 //!     Err(RunError::Limit(LimitError::Step { completed_steps, .. }))
 //!         if completed_steps.get() == 0
-//! ));
+//! ) {
+//!     return Err("unexpected step-limit error".into());
+//! }
 //! # Ok(())
 //! # }
 //! ```
@@ -235,21 +251,28 @@
 //! let program = Program::parse(ProgramSource::from_text("( once ) ( start ) a = ( end ) b # comment"), DEFAULT_PARSE_LIMITS)?;
 //! let rule = program.rules().next().ok_or("missing parsed rule")?;
 //!
-//! assert_eq!(rule.repeat(), RuleRepeat::Once);
-//! assert_eq!(rule.anchor(), RuleAnchor::Start);
-//! assert_eq!(rule.lhs().materialize()?.as_slice(), b"a");
+//! if rule.repeat() != RuleRepeat::Once {
+//!     return Err("unexpected repeat".into());
+//! }
+//! if rule.anchor() != RuleAnchor::Start {
+//!     return Err("unexpected anchor".into());
+//! }
+//! if rule.lhs().materialize()?.as_slice() != b"a" {
+//!     return Err("unexpected left side".into());
+//! }
 //! match rule.action() {
 //!     RuleActionView::MoveEnd(payload) => {
-//!         assert_eq!(payload.materialize()?.as_slice(), b"b");
+//!         if payload.materialize()?.as_slice() != b"b" {
+//!             return Err("unexpected moved payload".into());
+//!         }
 //!     }
 //!     RuleActionView::Replace(_) | RuleActionView::MoveStart(_) | RuleActionView::Return(_) => {
 //!         return Err("expected move-end action".into());
 //!     }
 //! }
-//! assert_eq!(
-//!     rule.canonical_source()?.as_slice(),
-//!     b"(once)(start)a=(end)b",
-//! );
+//! if rule.canonical_source()?.as_slice() != b"(once)(start)a=(end)b" {
+//!     return Err("unexpected canonical source".into());
+//! }
 //! # Ok(())
 //! # }
 //! ```
@@ -294,7 +317,9 @@
 //!     },
 //! )?;
 //!
-//! assert_eq!(byte_counts, [1, 1, 2]);
+//! if byte_counts != [1, 1, 2] {
+//!     return Err("unexpected trace byte counts".into());
+//! }
 //! # Ok(())
 //! # }
 //! ```
@@ -342,8 +367,12 @@
 //!     Ok::<(), core::convert::Infallible>(())
 //! })?;
 //!
-//! assert_eq!(states, [b"a".to_vec(), b"b".to_vec()]);
-//! assert_eq!(returns, [b"ok".to_vec()]);
+//! if states != [b"a".to_vec(), b"b".to_vec()] {
+//!     return Err("unexpected trace states".into());
+//! }
+//! if returns != [b"ok".to_vec()] {
+//!     return Err("unexpected trace returns".into());
+//! }
 //! # Ok(())
 //! # }
 //! ```
@@ -358,8 +387,8 @@
 //! [`error::TracedRunError`].
 //! Allocation reservation failures include a typed
 //! [`error::RequestedCapacity`] instead of only a formatted string.
-//! Runtime metadata mismatches that should be unreachable through public inputs
-//! are reported as [`error::RunError::InternalInvariant`].
+//! Runtime metadata mismatches are made unrepresentable by construction rather
+//! than being exposed as a public error variant.
 //!
 //! ```
 //! use rsaeb::error::RuntimeInputError;
@@ -376,11 +405,13 @@
 //!     return Err("expected non-ASCII input to fail".into());
 //! };
 //!
-//! assert!(matches!(
+//! if !matches!(
 //!     error,
 //!     RuntimeInputError::NonAscii { column, byte }
 //!         if column.get() == 1 && byte.get() == 0xff
-//! ));
+//! ) {
+//!     return Err("unexpected input error".into());
+//! }
 //! # Ok(())
 //! # }
 //! ```

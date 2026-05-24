@@ -42,10 +42,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seed = RunSeed::admit(input, execution_limits)?;
     let result = program.run(seed)?;
 
-    assert!(matches!(
+    if !matches!(
         result.outcome(),
         RunOutcome::Stable(output) if output.as_slice() == b"b"
-    ));
+    ) {
+        return Err("unexpected stable output".into());
+    }
 
     Ok(())
 }
@@ -118,11 +120,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seed = RunSeed::admit(input, execution_limits)?;
     let result = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?.run(seed);
 
-    assert!(matches!(
+    if !matches!(
         result,
         Err(RunError::Limit(LimitError::Step { completed_steps, .. }))
             if completed_steps.get() == 0
-    ));
+    ) {
+        return Err("unexpected step-limit error".into());
+    }
 
     Ok(())
 }
@@ -467,9 +471,9 @@ reported as `RunError::Limit(LimitError::...)`. Trace snapshot byte limits are
 reported through `TraceSnapshotError`, not `RunError::Limit`, because snapshot
 materialization is outside runtime execution.
 
-Runtime metadata mismatches that should be unreachable through public inputs
-are reported as `RunError::InternalInvariant`. They indicate a broken internal
-parser/runtime invariant rather than invalid host source or input bytes.
+Runtime metadata mismatches that should be unreachable through public inputs are
+made unrepresentable by construction rather than surfaced as public runtime
+errors.
 
 Filesystem failures are not part of the library error model. External I/O must
 be handled before bytes enter `ProgramSource::from_bytes`,

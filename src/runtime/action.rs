@@ -11,7 +11,7 @@ use super::rewrite::RewriteScratch;
 use super::state::State;
 
 /// Committed rule application reported back to the session layer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum AppliedRule<'program> {
     /// One rewrite rule committed and execution may continue.
     Rewrite(CommittedRewriteRule<'program>),
@@ -29,41 +29,52 @@ pub(crate) struct CommittedRewriteRule<'program> {
 }
 
 /// Committed terminal return rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct CommittedReturnRule<'program> {
     /// Step number assigned by the runtime budget.
     step: StepCount,
     /// Rule view proven to describe the committed return rule.
     rule: RuleView<'program>,
     /// Return output borrowed directly from the committed return rule.
-    output: ReturnOutputView<'program>,
+    output_view: ReturnOutputView<'program>,
+    /// Materialized return output produced before committing the terminal step.
+    output: ReturnOutput,
 }
 
-impl<'program> CommittedRewriteRule<'program> {
+impl CommittedRewriteRule<'_> {
     /// Step number assigned by the runtime budget.
     pub(crate) const fn step(self) -> StepCount {
         self.step
     }
+}
 
+impl<'program> CommittedRewriteRule<'program> {
     /// Rule view proven to describe the committed rewrite rule.
     pub(crate) const fn rule(self) -> RuleView<'program> {
         self.rule
     }
 }
 
-impl<'program> CommittedReturnRule<'program> {
+impl CommittedReturnRule<'_> {
     /// Step number assigned by the runtime budget.
-    pub(crate) const fn step(self) -> StepCount {
+    pub(crate) const fn step(&self) -> StepCount {
         self.step
     }
+}
 
+impl<'program> CommittedReturnRule<'program> {
     /// Rule view proven to describe the committed return rule.
-    pub(crate) const fn rule(self) -> RuleView<'program> {
+    pub(crate) const fn rule(&self) -> RuleView<'program> {
         self.rule
     }
 
     /// Return output borrowed directly from the committed return rule.
-    pub(crate) const fn output(self) -> ReturnOutputView<'program> {
+    pub(crate) const fn output_view(&self) -> ReturnOutputView<'program> {
+        self.output_view
+    }
+
+    /// Consumes this committed return rule into its materialized output.
+    pub(crate) fn into_output(self) -> ReturnOutput {
         self.output
     }
 }
@@ -94,27 +105,28 @@ pub(crate) fn apply_matched_rule<'program>(
     let permit = budget.reserve_next_step(state.byte_count())?;
     match matched.rule().action() {
         RuleAction::Rewrite(action) => {
-            let rule = matched.rule();
             let rewrite = state.rewrite_into(matched.state_match(), action, scratch, *budget)?;
             let committed = matched.commit();
             let step = budget.commit(permit);
             state.commit_rewrite(rewrite, scratch);
             Ok(AppliedRule::Rewrite(CommittedRewriteRule {
                 step,
-                rule: RuleView::new(committed.position(), rule),
+                rule: committed.rule(),
             }))
         }
         RuleAction::Return(output) => {
-            let rule = matched.rule();
+            let output_view = ReturnOutputView::new(output);
             let output_len = ReturnOutputByteCount::from_payload_count(output.byte_count());
             (*budget).ensure_return_len(output_len)?;
+            let materialized_output = materialize_return_output(output_view)?;
 
             let committed = matched.commit();
             let step = budget.commit(permit);
             Ok(AppliedRule::Return(CommittedReturnRule {
                 step,
-                rule: RuleView::new(committed.position(), rule),
-                output: ReturnOutputView::new(output),
+                rule: committed.rule(),
+                output_view,
+                output: materialized_output,
             }))
         }
     }

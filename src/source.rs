@@ -19,7 +19,9 @@
 //! let source = ProgramSource::from_bytes(b"a=b # arbitrary comment bytes: \xff");
 //! let program = Program::parse(source, DEFAULT_PARSE_LIMITS)?;
 //!
-//! assert_eq!(program.rule_count().get(), 1);
+//! if program.rule_count().get() != 1 {
+//!     return Err("unexpected rule count".into());
+//! }
 //! # Ok(())
 //! # }
 //! ```

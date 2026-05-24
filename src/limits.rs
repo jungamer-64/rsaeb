@@ -14,6 +14,7 @@
 //!     RuntimeStateByteLimit, StepLimit, TraceSnapshotByteLimit,
 //! };
 //!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let input_limits = RuntimeInputLimits::new(RuntimeInputByteLimit::new(4096));
 //! let execution_limits = ExecutionLimits::new(
 //!     StepLimit::new(100),
@@ -21,9 +22,17 @@
 //!     ReturnByteLimit::new(1024),
 //! );
 //!
-//! assert_eq!(input_limits.input_byte_limit().get(), 4096);
-//! assert_eq!(execution_limits.step_limit().get(), 100);
-//! assert_eq!(TraceSnapshotByteLimit::new(2048).get(), 2048);
+//! if input_limits.input_byte_limit().get() != 4096 {
+//!     return Err("unexpected input limit".into());
+//! }
+//! if execution_limits.step_limit().get() != 100 {
+//!     return Err("unexpected step limit".into());
+//! }
+//! if TraceSnapshotByteLimit::new(2048).get() != 2048 {
+//!     return Err("unexpected trace limit".into());
+//! }
+//! # Ok(())
+//! # }
 //! ```
 
 pub use crate::bytes::{

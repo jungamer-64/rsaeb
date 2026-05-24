@@ -9,10 +9,8 @@ use crate::error::{RunError, TracedRunError};
 use crate::input::RunSeed;
 use crate::inspect::{RulePosition, RuleView};
 use crate::limits::StepCount;
-use crate::program::{Program, ReturnOutputView, RunResult};
-use crate::runtime::action::{
-    AppliedRule, CommittedReturnRule, apply_matched_rule, materialize_return_output,
-};
+use crate::program::{Program, ReturnOutput, RunResult};
+use crate::runtime::action::{AppliedRule, CommittedReturnRule, apply_matched_rule};
 use crate::runtime::budget::RuntimeBudgetState;
 use crate::runtime::matcher::{RuleSearch, find_next_match};
 use crate::runtime::once::OnceStateSet;
@@ -84,7 +82,7 @@ pub struct AppliedStep {
     /// Step number committed by this transition.
     step: StepCount,
     /// Program-local rewrite rule position committed by this transition.
-    rule: RulePosition,
+    rule_position: RulePosition,
     /// Continuation session after the committed rewrite.
     session: RunSession,
 }
@@ -104,9 +102,11 @@ pub struct ReturnedRun {
     /// Step number that executed the return action.
     step: StepCount,
     /// Program-local return rule position.
-    rule: RulePosition,
-    /// Parsed program used to borrow the return payload.
+    rule_position: RulePosition,
+    /// Parsed program retained by the terminal state.
     program: Program,
+    /// Materialized return output produced by the committed return rule.
+    output: ReturnOutput,
 }
 
 /// Runtime failure that preserves uncommitted state for inspection.
@@ -163,7 +163,7 @@ impl core::fmt::Debug for AppliedStep {
         formatter
             .debug_struct("AppliedStep")
             .field("step", &self.step())
-            .field("rule", &self.rule())
+            .field("rule_position", &self.rule_position())
             .field("state", &self.state())
             .finish()
     }
@@ -184,7 +184,7 @@ impl core::fmt::Debug for ReturnedRun {
         formatter
             .debug_struct("ReturnedRun")
             .field("step", &self.step())
-            .field("rule", &self.rule())
+            .field("rule_position", &self.rule_position())
             .field("output", &self.output())
             .finish()
     }
@@ -210,7 +210,7 @@ impl RunCore {
     fn new(program: &Program, seed: RunSeed) -> Result<Self, RunError> {
         let (input, budget) = seed.into_runtime_parts();
         let state = State::from_input(input);
-        let once_states = OnceStateSet::new(program.once_slot_count())?;
+        let once_states = OnceStateSet::new(program.rule_slice())?;
         Ok(Self {
             state,
             scratch: RewriteScratch::new(),
@@ -250,7 +250,7 @@ impl RunCore {
         program: &'program Program,
     ) -> Result<CoreStep<'program>, RunError> {
         let matched =
-            match find_next_match(program.rule_slice(), &mut self.once_states, &self.state)? {
+            match find_next_match(program.rule_slice(), &mut self.once_states, &self.state) {
                 RuleSearch::Matched(matched) => matched,
                 RuleSearch::Stable => return Ok(CoreStep::Stable(self.budget.completed_steps())),
             };
@@ -322,7 +322,7 @@ impl<'program> Session<BorrowedProgram<'program>> {
             match self.step_borrowed()? {
                 CoreStep::Applied(AppliedRule::Rewrite(_)) => {}
                 CoreStep::Applied(AppliedRule::Return(committed)) => {
-                    return committed.into_result();
+                    return Ok(committed.into_result());
                 }
                 CoreStep::Stable(steps) => return self.core.into_stable_result(steps),
             }
@@ -357,15 +357,16 @@ impl<'program> Session<BorrowedProgram<'program>> {
                     )?;
                 }
                 CoreStep::Applied(AppliedRule::Return(committed)) => {
+                    let step = committed.step();
+                    let rule = committed.rule();
+                    let output = committed.output_view();
                     Self::emit_step_trace(
                         &mut trace,
-                        committed.step(),
-                        committed.rule(),
-                        BorrowedTraceEffect::Return {
-                            output: committed.output(),
-                        },
+                        step,
+                        rule,
+                        BorrowedTraceEffect::Return { output },
                     )?;
-                    return committed.into_result().map_err(TracedRunError::Run);
+                    return Ok(committed.into_result());
                 }
                 CoreStep::Stable(steps) => {
                     return self
@@ -397,15 +398,9 @@ impl<'program> Session<BorrowedProgram<'program>> {
 
 impl CommittedReturnRule<'_> {
     /// Materializes this returned run as a run result.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` if return output materialization cannot allocate.
-    fn into_result(self) -> Result<RunResult, RunError> {
-        Ok(RunResult::from_return(
-            materialize_return_output(self.output())?,
-            self.step(),
-        ))
+    fn into_result(self) -> RunResult {
+        let step = self.step();
+        RunResult::from_return(self.into_output(), step)
     }
 }
 
@@ -484,18 +479,20 @@ impl RunSession {
                 let rule = committed.rule().position();
                 StepTransition::Applied(AppliedStep {
                     step,
-                    rule,
+                    rule_position: rule,
                     session: self,
                 })
             }
             Ok(CoreStep::Applied(AppliedRule::Return(committed))) => {
                 let step = committed.step();
                 let rule = committed.rule().position();
+                let output = committed.into_output();
                 let (program, _core) = self.session.into_program_core();
                 StepTransition::Returned(ReturnedRun {
                     step,
-                    rule,
+                    rule_position: rule,
                     program,
+                    output,
                 })
             }
             Ok(CoreStep::Stable(steps)) => {
@@ -526,7 +523,7 @@ impl RunSession {
                     return stable.into_result();
                 }
                 StepTransition::Returned(returned) => {
-                    return returned.into_result();
+                    return Ok(returned.into_result());
                 }
                 StepTransition::Failed(failed) => return Err(failed.into_error()),
             }
@@ -541,14 +538,10 @@ impl AppliedStep {
         self.step
     }
 
-    /// Structured view of the applied rule.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError::InternalInvariant` if the committed rule position no
-    /// longer resolves inside the owned parsed program.
-    pub fn rule(&self) -> Result<RuleView<'_>, RunError> {
-        self.session.program().rule_view_at(self.rule)
+    /// Program-local position of the applied rule.
+    #[must_use]
+    pub const fn rule_position(&self) -> RulePosition {
+        self.rule_position
     }
 
     /// Runtime state after the applied rewrite step.
@@ -606,36 +599,22 @@ impl ReturnedRun {
         &self.program
     }
 
-    /// Structured view of the return rule.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError::InternalInvariant` if the committed rule position no
-    /// longer resolves inside the owned parsed program.
-    pub fn rule(&self) -> Result<RuleView<'_>, RunError> {
-        self.program.rule_view_at(self.rule)
+    /// Program-local position of the return rule.
+    #[must_use]
+    pub const fn rule_position(&self) -> RulePosition {
+        self.rule_position
     }
 
-    /// Borrowed return output from runtime execution.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError::InternalInvariant` if the committed return rule no
-    /// longer resolves to a `(return)` action.
-    pub fn output(&self) -> Result<ReturnOutputView<'_>, RunError> {
-        self.program.return_output_at(self.rule)
+    /// Materialized return output from runtime execution.
+    #[must_use]
+    pub const fn output(&self) -> &ReturnOutput {
+        &self.output
     }
 
     /// Materializes this returned run as a run result.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` if return output materialization cannot allocate.
-    pub fn into_result(self) -> Result<RunResult, RunError> {
-        Ok(RunResult::from_return(
-            materialize_return_output(self.output()?)?,
-            self.step,
-        ))
+    #[must_use]
+    pub fn into_result(self) -> RunResult {
+        RunResult::from_return(self.output, self.step)
     }
 }
 

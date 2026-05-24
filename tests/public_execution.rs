@@ -43,7 +43,7 @@ fn runtime_view_bytes(state: rsaeb::trace::RuntimeStateView<'_>) -> Result<Vec<u
 enum StepSignature {
     Applied {
         step: usize,
-        rule: Vec<u8>,
+        rule_position: usize,
         state: Vec<u8>,
     },
     Stable {
@@ -52,7 +52,7 @@ enum StepSignature {
     },
     Return {
         step: usize,
-        rule: Vec<u8>,
+        rule_position: usize,
         output: Vec<u8>,
     },
 }
@@ -61,11 +61,11 @@ enum StepSignature {
 ///
 /// # Errors
 ///
-/// Returns `TestFailure` if canonical rule source materialization fails.
+/// Returns `TestFailure` if state materialization fails.
 fn applied_signature(applied: &AppliedStep) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Applied {
         step: applied.step().get(),
-        rule: applied.rule()?.canonical_source()?.into_raw_bytes(),
+        rule_position: applied.rule_position().number().get(),
         state: runtime_view_bytes(applied.state())?,
     })
 }
@@ -86,13 +86,12 @@ fn stable_signature(stable: &StableRun) -> Result<StepSignature, TestFailure> {
 ///
 /// # Errors
 ///
-/// Returns `TestFailure` if canonical rule source or return output
-/// materialization fails.
+/// Returns `TestFailure` if output bytes differ from the expected signature.
 fn returned_signature(returned: &ReturnedRun) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Return {
         step: returned.step().get(),
-        rule: returned.rule()?.canonical_source()?.into_raw_bytes(),
-        output: returned.output()?.materialize()?.into_raw_bytes(),
+        rule_position: returned.rule_position().number().get(),
+        output: returned.output().as_slice().to_vec(),
     })
 }
 
@@ -215,10 +214,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
     let execution = match expect_step_transition(execution.step())? {
         StepTransition::Applied(applied) => {
             ensure_eq!(applied.step().get(), 1)?;
-            ensure_eq!(
-                applied.rule()?.canonical_source()?.as_slice(),
-                b"a=b".as_slice()
-            )?;
+            ensure_eq!(applied.rule_position().number().get(), 1)?;
             ensure_eq!(
                 runtime_view_bytes(applied.state())?.as_slice(),
                 b"b".as_slice()
@@ -234,10 +230,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
     let execution = match expect_step_transition(execution.step())? {
         StepTransition::Applied(applied) => {
             ensure_eq!(applied.step().get(), 2)?;
-            ensure_eq!(
-                applied.rule()?.canonical_source()?.as_slice(),
-                b"b=c".as_slice()
-            )?;
+            ensure_eq!(applied.rule_position().number().get(), 2)?;
             ensure_eq!(
                 runtime_view_bytes(applied.state())?.as_slice(),
                 b"c".as_slice()
@@ -325,12 +318,12 @@ fn execution_consumes_runtime_input_without_session_leakage() -> TestResult {
         [
             StepSignature::Applied {
                 step: 1,
-                rule: b"(once)a=b".to_vec(),
+                rule_position: 1,
                 state: b"ba".to_vec(),
             },
             StepSignature::Applied {
                 step: 2,
-                rule: b"a=c".to_vec(),
+                rule_position: 2,
                 state: b"bc".to_vec(),
             },
             StepSignature::Stable {

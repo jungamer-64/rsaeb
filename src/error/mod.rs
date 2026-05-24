@@ -36,11 +36,13 @@
 //!     return Err("expected invalid input".into());
 //! };
 //!
-//! assert!(matches!(
+//! if !matches!(
 //!     error,
 //!     RuntimeInputError::NonAscii { column, byte }
 //!         if column.get() == 2 && byte.get() == 0xff
-//! ));
+//! ) {
+//!     return Err("unexpected input error".into());
+//! }
 //! # Ok(())
 //! # }
 //! ```
