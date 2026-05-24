@@ -1,4 +1,4 @@
-use super::once::{MatchedRuleCommit, OnceStateSet};
+use super::once::{MatchedRuleCommit, OnceRuleAvailability, OnceStateSet};
 use super::state::{State, StateMatch};
 use crate::error::RunError;
 use crate::inspect::RuleView;
@@ -13,6 +13,24 @@ pub(crate) enum RuleSearch<'program, 'once> {
     Stable,
 }
 
+/// Outcome of evaluating one executable rule line against the current state.
+#[derive(Debug)]
+pub(crate) enum RuleAttempt<'program, 'once> {
+    /// The rule matched and carries the commit permit needed after success.
+    Matched(MatchedRuleApplication<'program, 'once>),
+    /// The rule was consumed by the attempt but did not apply.
+    Missed(RuleAttemptMiss<'program>),
+}
+
+/// Reason a consumed executable rule line did not apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleMissReason {
+    /// The rule is available, but its left side does not match the current state.
+    StateMismatch,
+    /// The rule is a `(once)` rule that has already committed in this run.
+    OnceConsumed,
+}
+
 /// Matched rule plus the state range and commit action needed to apply it.
 #[derive(Debug)]
 pub(crate) struct MatchedRuleApplication<'program, 'once> {
@@ -24,6 +42,15 @@ pub(crate) struct MatchedRuleApplication<'program, 'once> {
     state_match: StateMatch,
 }
 
+/// Non-applying rule consumed by a rule-attempt step.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RuleAttemptMiss<'program> {
+    /// Parsed rule selected as the attempted rule line.
+    rule: &'program Rule,
+    /// Reason the attempted rule did not apply.
+    reason: RuleMissReason,
+}
+
 /// Rule candidate before a linear commit permit has been reserved.
 struct MatchedRuleCandidate<'program> {
     /// Parsed rule selected as a candidate.
@@ -32,11 +59,36 @@ struct MatchedRuleCandidate<'program> {
     state_match: StateMatch,
 }
 
+/// Applicability of one executable rule before a once commit permit is reserved.
+enum RuleInspection<'program> {
+    /// The rule matched runtime state and can reserve a commit permit.
+    Candidate(MatchedRuleCandidate<'program>),
+    /// The rule did not apply.
+    Missed(RuleAttemptMiss<'program>),
+}
+
 /// Rule view after all runtime side effects have committed.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CommittedRule<'program> {
     /// Structured view of the committed parsed rule.
     rule: RuleView<'program>,
+}
+
+impl<'program> RuleAttemptMiss<'program> {
+    /// Captures a consumed non-applying rule line.
+    const fn new(rule: &'program Rule, reason: RuleMissReason) -> Self {
+        Self { rule, reason }
+    }
+
+    /// Parsed rule selected as the attempted rule line.
+    pub(crate) const fn rule(self) -> &'program Rule {
+        self.rule
+    }
+
+    /// Reason the attempted rule did not apply.
+    pub(crate) const fn reason(self) -> RuleMissReason {
+        self.reason
+    }
 }
 
 impl<'program> MatchedRuleCandidate<'program> {
@@ -106,18 +158,67 @@ pub(crate) fn find_next_match<'program, 'once>(
     state: &State,
 ) -> Result<RuleSearch<'program, 'once>, RunError> {
     for rule in rules {
-        if !once_states.is_available(rule)? {
-            continue;
+        match inspect_rule(rule, once_states, state)? {
+            RuleInspection::Candidate(candidate) => {
+                let commit = once_states.reserve_available_commit(rule)?;
+                return Ok(RuleSearch::Matched(candidate.into_application(commit)));
+            }
+            RuleInspection::Missed(_) => {}
         }
-        let Some(candidate) = matched_candidate_for_rule(rule, state) else {
-            continue;
-        };
-        let commit = once_states.reserve_available_commit(rule)?;
-
-        return Ok(RuleSearch::Matched(candidate.into_application(commit)));
     }
 
     Ok(RuleSearch::Stable)
+}
+
+/// Evaluates exactly one parsed rule line against the current runtime state.
+///
+/// # Errors
+///
+/// Returns `RunError` if a parsed `(once)` rule references a missing runtime
+/// once-state slot.
+pub(crate) fn attempt_rule<'program, 'once>(
+    rule: &'program Rule,
+    once_states: &'once mut OnceStateSet,
+    state: &State,
+) -> Result<RuleAttempt<'program, 'once>, RunError> {
+    match inspect_rule(rule, once_states, state)? {
+        RuleInspection::Candidate(candidate) => {
+            let commit = once_states.reserve_available_commit(rule)?;
+            Ok(RuleAttempt::Matched(candidate.into_application(commit)))
+        }
+        RuleInspection::Missed(missed) => Ok(RuleAttempt::Missed(missed)),
+    }
+}
+
+/// Inspects exactly one parsed rule line without reserving a commit permit.
+///
+/// # Errors
+///
+/// Returns `RunError` if a parsed `(once)` rule references a missing runtime
+/// once-state slot.
+fn inspect_rule<'program>(
+    rule: &'program Rule,
+    once_states: &OnceStateSet,
+    state: &State,
+) -> Result<RuleInspection<'program>, RunError> {
+    if matches!(
+        once_states.availability(rule)?,
+        OnceRuleAvailability::Consumed
+    ) {
+        return Ok(RuleInspection::Missed(RuleAttemptMiss::new(
+            rule,
+            RuleMissReason::OnceConsumed,
+        )));
+    }
+
+    let Some(candidate) = matched_candidate_for_rule(rule, state) else {
+        return Ok(RuleInspection::Missed(RuleAttemptMiss::new(
+            rule,
+            RuleMissReason::StateMismatch,
+        )));
+    };
+
+    Ok(RuleInspection::Candidate(candidate))
 }
 
 /// Builds a committed-rule candidate for a single parsed rule.

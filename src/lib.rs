@@ -36,8 +36,9 @@
 //!   and [`limits::TraceSnapshotByteLimit`] bounds trace snapshot materialization.
 //! - [`program::Program::run`] runs to completion while borrowing the parsed
 //!   program, [`program::Program::start_run`] returns a borrowed typestate
-//!   execution, and [`program::Program::into_run`] returns the explicit owned
-//!   typestate execution.
+//!   execution, [`program::Program::start_rule_attempt_run`] returns a borrowed
+//!   rule-line attempt typestate execution, and the `into_*` variants return
+//!   explicit owned typestate executions.
 //! - [`program::Program::run_with_borrowed_trace`] observes borrowed trace events without
 //!   per-event allocation; [`program::Program::run_with_trace_snapshots`] materializes
 //!   bounded owned trace events.
@@ -216,12 +217,72 @@
 //! the runtime error plus the uncommitted owned session so hosts can recover the
 //! parsed program when ownership matters.
 //!
+//! Use [`program::Program::start_rule_attempt_run`] when the host needs to
+//! observe every executable rule line, including lines that do not apply to the
+//! current runtime state:
+//!
+//! ```
+//! use rsaeb::execution::{RuleAttemptTransition, RuleMissReason};
+//! use rsaeb::limits::{
+//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
+//!     RuleAttemptLimit, StepLimit,
+//! };
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::RunSeed;
+//! use rsaeb::limits::{ExecutionLimits, RuntimeInputLimits};
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let program = Program::parse(ProgramSource::from_text("z=x\na=b"), DEFAULT_PARSE_LIMITS)?;
+//! let input_limits = RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN);
+//! let execution_limits = ExecutionLimits::new(
+//!     StepLimit::new(10),
+//!     DEFAULT_MAX_STATE_LEN,
+//!     DEFAULT_MAX_RETURN_LEN,
+//! );
+//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), input_limits)?;
+//! let seed = RunSeed::admit(input, execution_limits)?;
+//! let execution = program.start_rule_attempt_run(seed, RuleAttemptLimit::new(10))?;
+//!
+//! let execution = match execution.step() {
+//!     RuleAttemptTransition::Missed(missed) => {
+//!         if missed.reason() != RuleMissReason::StateMismatch {
+//!             return Err("unexpected miss reason".into());
+//!         }
+//!         if missed.rule_position().number().get() != 1 {
+//!             return Err("unexpected missed rule".into());
+//!         }
+//!         missed.into_session()
+//!     }
+//!     RuleAttemptTransition::Applied(_)
+//!     | RuleAttemptTransition::Stable(_)
+//!     | RuleAttemptTransition::Returned(_)
+//!     | RuleAttemptTransition::Failed(_) => return Err("expected first rule to miss".into()),
+//! };
+//!
+//! match execution.step() {
+//!     RuleAttemptTransition::Applied(applied) => {
+//!         if applied.step().get() != 1 || applied.rule_position().number().get() != 2 {
+//!             return Err("unexpected applied rule attempt".into());
+//!         }
+//!     }
+//!     RuleAttemptTransition::Missed(_)
+//!     | RuleAttemptTransition::Stable(_)
+//!     | RuleAttemptTransition::Returned(_)
+//!     | RuleAttemptTransition::Failed(_) => return Err("expected second rule to apply".into()),
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Limits
 //!
 //! [`limits::RuntimeInputLimits`] carries input-byte validation policy.
 //! [`limits::ExecutionLimits`] carries initial runtime-state admission, the step
-//! budget, and byte budgets for rewrite states and `(return)` outputs. Trace
-//! snapshot materialization uses an explicit
+//! budget, and byte budgets for rewrite states and `(return)` outputs.
+//! [`limits::RuleAttemptLimit`] bounds the separate rule-line attempt mode.
+//! Trace snapshot materialization uses an explicit
 //! [`limits::TraceSnapshotByteLimit`]. Step limits are checked only when another
 //! matching rule would apply after the configured number of completed steps:
 //!

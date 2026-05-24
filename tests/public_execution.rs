@@ -6,12 +6,13 @@ mod support;
 
 use rsaeb::error::LimitError;
 use rsaeb::execution::{
-    AppliedStep, FailedRun, OwnedStepTransition, ReturnedRun, RunSession, StableRun, StepTransition,
+    AppliedStep, FailedRun, OwnedRuleAttemptTransition, OwnedStepTransition, ReturnedRun,
+    RuleAttemptTransition, RuleMissReason, RunSession, StableRun, StepTransition,
 };
 use rsaeb::input::RunSeed;
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit,
-    StepLimit,
+    RuleAttemptLimit, StepLimit,
 };
 use rsaeb::program::{RunOutcome, RunResult};
 use runtime_support::TestRunPolicy;
@@ -162,6 +163,39 @@ fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFai
     runtime_support::run_seed(bytes, limits)
 }
 
+/// Returns the expected successful rule-attempt transition.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if stepping fails.
+fn expect_rule_attempt_transition<'program>(
+    result: RuleAttemptTransition<'program>,
+) -> Result<RuleAttemptTransition<'program>, TestFailure> {
+    match result {
+        RuleAttemptTransition::Failed(failed) => Err(TestFailure::from(failed.into_error())),
+        transition => Ok(transition),
+    }
+}
+
+/// Returns the expected failed rule-attempt transition.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if stepping does not fail.
+fn expect_failed_rule_attempt<'program>(
+    result: RuleAttemptTransition<'program>,
+) -> Result<rsaeb::execution::RuleAttemptFailedRun<'program>, TestFailure> {
+    match result {
+        RuleAttemptTransition::Failed(failed) => Ok(failed),
+        RuleAttemptTransition::Missed(_)
+        | RuleAttemptTransition::Applied(_)
+        | RuleAttemptTransition::Stable(_)
+        | RuleAttemptTransition::Returned(_) => {
+            Err(TestFailure::message("expected failed rule attempt"))
+        }
+    }
+}
+
 /// # Errors
 ///
 /// Returns `TestFailure` if rewrite order, anchors, once rules, or runtime-only
@@ -261,6 +295,267 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
         }
     }
     Ok(())
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if rule-attempt execution does not pause on
+/// non-matching executable rule lines or reset the rule cursor after matches.
+#[test]
+fn execution_rule_attempt_surface_reports_misses_and_resets_after_apply() -> TestResult {
+    let limits = TestRunPolicy::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let program = parse_program("z=x\na=b\nb=c")?;
+    let input = runtime_input(b"a", limits)?;
+    let execution = program.start_rule_attempt_run(input, RuleAttemptLimit::new(20))?;
+
+    let execution = match expect_rule_attempt_transition(execution.step())? {
+        RuleAttemptTransition::Missed(missed) => {
+            ensure_eq!(missed.attempt().get(), 1)?;
+            ensure_eq!(missed.rule_position().number().get(), 1)?;
+            ensure_eq!(missed.reason(), RuleMissReason::StateMismatch)?;
+            ensure_eq!(
+                runtime_view_bytes(missed.state())?.as_slice(),
+                b"a".as_slice(),
+            )?;
+            missed.into_session()
+        }
+        RuleAttemptTransition::Applied(_)
+        | RuleAttemptTransition::Stable(_)
+        | RuleAttemptTransition::Returned(_)
+        | RuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message("expected first missed rule attempt"));
+        }
+    };
+
+    let execution = match expect_rule_attempt_transition(execution.step())? {
+        RuleAttemptTransition::Applied(applied) => {
+            ensure_eq!(applied.attempt().get(), 2)?;
+            ensure_eq!(applied.step().get(), 1)?;
+            ensure_eq!(applied.rule_position().number().get(), 2)?;
+            ensure_eq!(
+                runtime_view_bytes(applied.state())?.as_slice(),
+                b"b".as_slice(),
+            )?;
+            applied.into_session()
+        }
+        RuleAttemptTransition::Missed(_)
+        | RuleAttemptTransition::Stable(_)
+        | RuleAttemptTransition::Returned(_)
+        | RuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message("expected applied rule attempt"));
+        }
+    };
+
+    let execution = match expect_rule_attempt_transition(execution.step())? {
+        RuleAttemptTransition::Missed(missed) => {
+            ensure_eq!(missed.attempt().get(), 3)?;
+            ensure_eq!(missed.rule_position().number().get(), 1)?;
+            ensure_eq!(missed.reason(), RuleMissReason::StateMismatch)?;
+            missed.into_session()
+        }
+        RuleAttemptTransition::Applied(_)
+        | RuleAttemptTransition::Stable(_)
+        | RuleAttemptTransition::Returned(_)
+        | RuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message(
+                "expected cursor reset to first rule after apply",
+            ));
+        }
+    };
+
+    let execution = match expect_rule_attempt_transition(execution.step())? {
+        RuleAttemptTransition::Missed(missed) => {
+            ensure_eq!(missed.attempt().get(), 4)?;
+            ensure_eq!(missed.rule_position().number().get(), 2)?;
+            ensure_eq!(missed.reason(), RuleMissReason::StateMismatch)?;
+            missed.into_session()
+        }
+        RuleAttemptTransition::Applied(_)
+        | RuleAttemptTransition::Stable(_)
+        | RuleAttemptTransition::Returned(_)
+        | RuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message("expected second miss after reset"));
+        }
+    };
+
+    match expect_rule_attempt_transition(execution.step())? {
+        RuleAttemptTransition::Applied(applied) => {
+            ensure_eq!(applied.attempt().get(), 5)?;
+            ensure_eq!(applied.step().get(), 2)?;
+            ensure_eq!(applied.rule_position().number().get(), 3)?;
+            ensure_eq!(
+                runtime_view_bytes(applied.state())?.as_slice(),
+                b"c".as_slice(),
+            )?;
+        }
+        RuleAttemptTransition::Missed(_)
+        | RuleAttemptTransition::Stable(_)
+        | RuleAttemptTransition::Returned(_)
+        | RuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message("expected later applied rule attempt"));
+        }
+    }
+    Ok(())
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if the final non-matching rule attempt requires an
+/// extra call before reporting stable completion.
+#[test]
+fn execution_rule_attempt_final_miss_is_stable_immediately() -> TestResult {
+    let limits = TestRunPolicy::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let program = parse_program("a=b")?;
+    let input = runtime_input(b"z", limits)?;
+    let execution = program.start_rule_attempt_run(input, RuleAttemptLimit::new(10))?;
+
+    match expect_rule_attempt_transition(execution.step())? {
+        RuleAttemptTransition::Stable(stable) => {
+            ensure_eq!(stable.attempts().get(), 1)?;
+            ensure_eq!(stable.steps().get(), 0)?;
+            let terminal_miss = stable
+                .terminal_miss()
+                .ok_or(TestFailure::message("expected terminal miss"))?;
+            ensure_eq!(terminal_miss.rule_position().number().get(), 1)?;
+            ensure_eq!(terminal_miss.reason(), RuleMissReason::StateMismatch)?;
+            ensure_eq!(
+                runtime_view_bytes(stable.state())?.as_slice(),
+                b"z".as_slice(),
+            )?;
+        }
+        RuleAttemptTransition::Missed(_)
+        | RuleAttemptTransition::Applied(_)
+        | RuleAttemptTransition::Returned(_)
+        | RuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message("expected immediate stable terminal"));
+        }
+    }
+    Ok(())
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if consumed `(once)` rules are hidden instead of
+/// reported as typed rule-attempt misses.
+#[test]
+fn execution_rule_attempt_reports_consumed_once_rule_before_later_match() -> TestResult {
+    let limits = TestRunPolicy::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let program = parse_program("(once)a=b\nb=c")?;
+    let input = runtime_input(b"ab", limits)?;
+    let execution = program.start_rule_attempt_run(input, RuleAttemptLimit::new(10))?;
+
+    let execution = match expect_rule_attempt_transition(execution.step())? {
+        RuleAttemptTransition::Applied(applied) => {
+            ensure_eq!(applied.attempt().get(), 1)?;
+            ensure_eq!(applied.step().get(), 1)?;
+            ensure_eq!(applied.rule_position().number().get(), 1)?;
+            applied.into_session()
+        }
+        RuleAttemptTransition::Missed(_)
+        | RuleAttemptTransition::Stable(_)
+        | RuleAttemptTransition::Returned(_)
+        | RuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message("expected once rule to apply first"));
+        }
+    };
+
+    let execution = match expect_rule_attempt_transition(execution.step())? {
+        RuleAttemptTransition::Missed(missed) => {
+            ensure_eq!(missed.attempt().get(), 2)?;
+            ensure_eq!(missed.rule_position().number().get(), 1)?;
+            ensure_eq!(missed.reason(), RuleMissReason::OnceConsumed)?;
+            missed.into_session()
+        }
+        RuleAttemptTransition::Applied(_)
+        | RuleAttemptTransition::Stable(_)
+        | RuleAttemptTransition::Returned(_)
+        | RuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message("expected consumed once miss"));
+        }
+    };
+
+    match expect_rule_attempt_transition(execution.step())? {
+        RuleAttemptTransition::Applied(applied) => {
+            ensure_eq!(applied.attempt().get(), 3)?;
+            ensure_eq!(applied.step().get(), 2)?;
+            ensure_eq!(applied.rule_position().number().get(), 2)?;
+        }
+        RuleAttemptTransition::Missed(_)
+        | RuleAttemptTransition::Stable(_)
+        | RuleAttemptTransition::Returned(_)
+        | RuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message(
+                "expected later rule to match after once miss",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if rule-attempt budget is folded into rewrite step
+/// budget or fails to report typed details.
+#[test]
+fn execution_rule_attempt_limit_is_independent_from_step_limit() -> TestResult {
+    let limits = TestRunPolicy::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(0),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let program = parse_program("x=y\na=b")?;
+    let input = runtime_input(b"a", limits)?;
+    let execution = program.start_rule_attempt_run(input, RuleAttemptLimit::new(1))?;
+
+    let execution = match expect_rule_attempt_transition(execution.step())? {
+        RuleAttemptTransition::Missed(missed) => {
+            ensure_eq!(missed.attempt().get(), 1)?;
+            ensure_eq!(missed.rule_position().number().get(), 1)?;
+            ensure_eq!(missed.reason(), RuleMissReason::StateMismatch)?;
+            missed.into_session()
+        }
+        RuleAttemptTransition::Applied(_)
+        | RuleAttemptTransition::Stable(_)
+        | RuleAttemptTransition::Returned(_)
+        | RuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message(
+                "expected miss despite zero rewrite step limit",
+            ));
+        }
+    };
+
+    let failed = expect_failed_rule_attempt(execution.step())?;
+    ensure_eq!(failed.completed_attempts().get(), 1)?;
+    ensure_eq!(failed.completed_steps().get(), 0)?;
+    ensure_matches(
+        matches!(
+            failed.into_error(),
+            rsaeb::error::RunError::Limit(LimitError::RuleAttempt {
+                max_attempts,
+                completed_attempts,
+                state_len,
+            }) if max_attempts == RuleAttemptLimit::new(1)
+                && completed_attempts.get() == 1
+                && state_len.get() == 1
+        ),
+        "expected rule-attempt limit details",
+    )
 }
 
 /// # Errors
@@ -438,6 +733,48 @@ fn execution_owned_terminals_can_return_program() -> TestResult {
         "expected owned return limit failure",
     )?;
     ensure_eq!(failed_session.into_program().rule_count().get(), 1)
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if owned rule-attempt terminal states cannot return
+/// the parsed program to the caller.
+#[test]
+fn execution_owned_rule_attempt_terminals_can_return_program() -> TestResult {
+    let limits = TestRunPolicy::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+
+    let stable_program = match parse_program("a=b")?
+        .into_rule_attempt_run(runtime_input(b"z", limits)?, RuleAttemptLimit::new(10))?
+        .step()
+    {
+        OwnedRuleAttemptTransition::Stable(stable) => stable.into_program(),
+        OwnedRuleAttemptTransition::Missed(_)
+        | OwnedRuleAttemptTransition::Applied(_)
+        | OwnedRuleAttemptTransition::Returned(_)
+        | OwnedRuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message("expected owned rule-attempt stable"));
+        }
+    };
+    ensure_eq!(stable_program.rule_count().get(), 1)?;
+
+    let returned_program = match parse_program("a=(return)ok")?
+        .into_rule_attempt_run(runtime_input(b"a", limits)?, RuleAttemptLimit::new(10))?
+        .step()
+    {
+        OwnedRuleAttemptTransition::Returned(returned) => returned.into_program(),
+        OwnedRuleAttemptTransition::Missed(_)
+        | OwnedRuleAttemptTransition::Applied(_)
+        | OwnedRuleAttemptTransition::Stable(_)
+        | OwnedRuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message("expected owned rule-attempt return"));
+        }
+    };
+    ensure_eq!(returned_program.rule_count().get(), 1)
 }
 
 /// # Errors

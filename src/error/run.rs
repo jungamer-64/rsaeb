@@ -51,6 +51,11 @@ pub enum RunInvariantError {
         /// Current state length at rewrite/open time.
         current_state_len: RuntimeStateByteCount,
     },
+    /// Rule-attempt cursor could not advance to the next executable rule.
+    RuleAttemptCursorOverflow {
+        /// Program-local position of the rule that had just been consumed.
+        rule: crate::inspect::RulePosition,
+    },
 }
 
 impl Error for RunInvariantError {}

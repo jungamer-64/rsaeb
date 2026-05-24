@@ -3,10 +3,11 @@
 //! Parser limits, runtime input limits, execution limits, and trace snapshot limits are separate
 //! domains. Parser limits bound source ingestion and parsed program size;
 //! runtime input limits bind raw input validation; execution limits decide
-//! whether execution may allocate or continue; trace snapshot limits decide
-//! whether a borrowed trace event may be materialized as owned bytes. Count
-//! types report measured lengths without erasing those domains into plain
-//! `usize` values.
+//! whether execution may allocate or continue; rule-attempt limits decide how
+//! many executable rule lines a rule-attempt session may consume; trace
+//! snapshot limits decide whether a borrowed trace event may be materialized as
+//! owned bytes. Count types report measured lengths without erasing those
+//! domains into plain `usize` values.
 //!
 //! Limits are policy values supplied by the host. Count values are observations
 //! produced by parser, input, execution, or trace code. Keeping those roles in
@@ -17,7 +18,7 @@
 //! ```
 //! use rsaeb::limits::{
 //!     ExecutionLimits, ReturnByteLimit, RuntimeInputByteLimit, RuntimeInputLimits,
-//!     RuntimeStateByteLimit, StepLimit, TraceSnapshotByteLimit,
+//!     RuleAttemptLimit, RuntimeStateByteLimit, StepLimit, TraceSnapshotByteLimit,
 //! };
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -34,6 +35,9 @@
 //! if execution_limits.step_limit().get() != 100 {
 //!     return Err("unexpected step limit".into());
 //! }
+//! if RuleAttemptLimit::new(500).get() != 500 {
+//!     return Err("unexpected rule-attempt limit".into());
+//! }
 //! if TraceSnapshotByteLimit::new(2048).get() != 2048 {
 //!     return Err("unexpected trace limit".into());
 //! }
@@ -47,8 +51,8 @@ pub use crate::bytes::{
 };
 pub use crate::program::limits::{
     CodeLineByteCount, CodeLineByteLimit, DEFAULT_MAX_CODE_LINE_LEN, DEFAULT_MAX_INPUT_LEN,
-    DEFAULT_MAX_PAYLOAD_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_RULE_ATTEMPTS,
-    DEFAULT_MAX_RULES, DEFAULT_MAX_SOURCE_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
+    DEFAULT_MAX_PAYLOAD_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_RULE_ATTEMPTS, DEFAULT_MAX_RULES,
+    DEFAULT_MAX_SOURCE_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, DEFAULT_PARSE_LIMITS, ExecutionLimits, ParseLimits,
     PayloadByteLimit, ReturnByteLimit, RuleAttemptCount, RuleAttemptLimit, RuleLimit,
     RuntimeInputByteLimit, RuntimeInputLimits, RuntimeStateByteLimit, SourceByteCount,

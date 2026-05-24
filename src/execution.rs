@@ -5,6 +5,10 @@
 //! is the explicit owned variant for hosts that need a `'static` session.
 //! [`Program::run`](crate::program::Program::run) is the borrowed
 //! run-to-completion shortcut over the same admitted [`RunSeed`] boundary.
+//! [`Program::start_rule_attempt_run`](crate::program::Program::start_rule_attempt_run)
+//! and [`Program::into_rule_attempt_run`](crate::program::Program::into_rule_attempt_run)
+//! use a separate rule-attempt typestate that can pause after non-matching
+//! executable rule lines.
 //!
 //! A step transition is a typestate value, not a status flag. Applied steps
 //! carry the continuation session. Stable and returned states are terminal.
@@ -12,6 +16,9 @@
 //! uncommitted state for diagnostics and then let the caller discard the run
 //! into its [`RunError`]. Owned failed states additionally let the caller
 //! recover the uncommitted owned session or split it from the error.
+//! Rule-attempt transitions additionally expose typed miss reasons through
+//! [`RuleMissReason`] and consume [`RuleAttemptLimit`]
+//! instead of treating non-matches as rewrite steps.
 //!
 //! ```
 //! use rsaeb::error::{LimitError, RunError};
@@ -56,18 +63,22 @@
 //! # }
 //! ```
 
-use crate::error::{RunError, TracedRunError};
+use crate::error::{RunError, RunInvariantError, TracedRunError};
 use crate::input::RunSeed;
 use crate::inspect::{RulePosition, RuleView};
-use crate::limits::StepCount;
+use crate::limits::{RuleAttemptCount, RuleAttemptLimit, StepCount};
 use crate::program::{Program, ReturnOutput, RunResult};
 use crate::runtime::action::{AppliedRule, CommittedReturnRule, apply_matched_rule};
-use crate::runtime::budget::RuntimeBudgetState;
-use crate::runtime::matcher::{RuleSearch, find_next_match};
+use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
+use crate::runtime::matcher::{
+    RuleAttempt, RuleAttemptMiss, RuleSearch, attempt_rule, find_next_match,
+};
 use crate::runtime::once::OnceStateSet;
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
 use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
+
+pub use crate::runtime::matcher::RuleMissReason;
 
 /// Stateful run session that borrows a reusable parsed program.
 ///
@@ -92,6 +103,24 @@ pub struct OwnedRunSession {
     session: Session<OwnedProgram>,
 }
 
+/// Stateful run session that borrows a reusable parsed program and advances by rule attempt.
+///
+/// A rule-attempt step consumes one executable rule line even when that rule
+/// does not apply. Ordinary rewrite steps still reset the rule cursor to the
+/// first executable rule.
+pub struct RuleAttemptSession<'program> {
+    /// Internal rule-attempt session using the public borrowed program boundary.
+    session: AttemptSession<BorrowedProgram<'program>>,
+}
+
+/// Stateful run session that owns its parsed program and advances by rule attempt.
+///
+/// This is the owned counterpart to [`RuleAttemptSession`].
+pub struct OwnedRuleAttemptSession {
+    /// Internal rule-attempt session using the public owned program boundary.
+    session: AttemptSession<OwnedProgram>,
+}
+
 /// Mutable runtime state independent of program ownership mode.
 #[derive(Debug)]
 struct RunCore {
@@ -111,6 +140,25 @@ struct Session<P> {
     program: P,
     /// Mutable execution state.
     core: RunCore,
+}
+
+/// Runtime rule-attempt session parameterized by program ownership.
+struct AttemptSession<P> {
+    /// Borrowed or owned parsed program.
+    program: P,
+    /// Mutable execution state.
+    core: RunCore,
+    /// Next executable rule line to evaluate.
+    cursor: RuleCursor,
+    /// Rule-attempt budget and consumed-attempt count.
+    attempt_budget: RuleAttemptBudgetState,
+}
+
+/// Cursor pointing to the next executable rule line in one rule-attempt run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuleCursor {
+    /// Zero-based rule index to evaluate next.
+    next_rule_index: usize,
 }
 
 /// Program ownership shape used by the internal runtime session.
@@ -146,6 +194,15 @@ pub enum StepTransition<'program> {
     Returned(ReturnedRun<'program>),
     /// A matching rule failed before committing.
     Failed(FailedRun<'program>),
+}
+
+/// Completed non-applying rule attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuleMiss {
+    /// Program-local position of the consumed rule line.
+    rule_position: RulePosition,
+    /// Why the consumed rule did not apply.
+    reason: RuleMissReason,
 }
 
 /// One committed non-terminal rule application in a borrowed session.
@@ -186,6 +243,82 @@ pub struct FailedRun<'program> {
     error: RunError,
     /// Uncommitted borrowed session retained for diagnostic inspection.
     session: RunSession<'program>,
+}
+
+/// Result of advancing a borrowed rule-attempt session once.
+///
+/// Only [`RuleAttemptTransition::Missed`] and [`RuleAttemptTransition::Applied`]
+/// carry continuation sessions. Stable, returned, and failed transitions are
+/// terminal.
+pub enum RuleAttemptTransition<'program> {
+    /// One executable rule line was consumed without applying.
+    Missed(MissedRuleAttempt<'program>),
+    /// One ordinary rewrite rule was applied and execution can continue.
+    Applied(RuleAttemptAppliedStep<'program>),
+    /// The rule pass completed without a match.
+    Stable(RuleAttemptStableRun<'program>),
+    /// A matched rule executed `(return)`.
+    Returned(RuleAttemptReturnedRun<'program>),
+    /// A matching rule failed before committing runtime state.
+    Failed(RuleAttemptFailedRun<'program>),
+}
+
+/// One consumed non-applying rule line in a borrowed rule-attempt session.
+pub struct MissedRuleAttempt<'program> {
+    /// Rule-attempt count committed by this transition.
+    attempt: RuleAttemptCount,
+    /// Non-applying rule information.
+    miss: RuleMiss,
+    /// Continuation session after consuming the rule line.
+    session: RuleAttemptSession<'program>,
+}
+
+/// One committed non-terminal rule application in a borrowed rule-attempt session.
+pub struct RuleAttemptAppliedStep<'program> {
+    /// Rule-attempt count committed by this transition.
+    attempt: RuleAttemptCount,
+    /// Step number committed by this transition.
+    step: StepCount,
+    /// Program-local rewrite rule position committed by this transition.
+    rule_position: RulePosition,
+    /// Continuation session after the committed rewrite.
+    session: RuleAttemptSession<'program>,
+}
+
+/// Terminal borrowed rule-attempt run state reached by no matching rule.
+pub struct RuleAttemptStableRun<'program> {
+    /// Number of consumed rule attempts before stability.
+    attempts: RuleAttemptCount,
+    /// Number of committed rewrite steps before stability.
+    steps: StepCount,
+    /// Final consumed non-applying rule, absent when the parsed program has no executable rules.
+    terminal_miss: Option<RuleMiss>,
+    /// Parsed program borrowed by the terminal state.
+    program: &'program Program,
+    /// Terminal runtime core containing the stable state.
+    core: RunCore,
+}
+
+/// Terminal borrowed rule-attempt run state reached by `(return)`.
+pub struct RuleAttemptReturnedRun<'program> {
+    /// Rule-attempt count committed by this transition.
+    attempt: RuleAttemptCount,
+    /// Step number that executed the return action.
+    step: StepCount,
+    /// Program-local return rule position.
+    rule_position: RulePosition,
+    /// Parsed program borrowed by the terminal state.
+    program: &'program Program,
+    /// Materialized return output produced by the committed return rule.
+    output: ReturnOutput,
+}
+
+/// Runtime failure that preserves uncommitted borrowed rule-attempt state for inspection.
+pub struct RuleAttemptFailedRun<'program> {
+    /// Runtime error that stopped the candidate attempt before commit.
+    error: RunError,
+    /// Uncommitted borrowed session retained for diagnostic inspection.
+    session: RuleAttemptSession<'program>,
 }
 
 /// Result of advancing an owned run session once.
@@ -243,12 +376,114 @@ pub struct OwnedFailedRun {
     session: OwnedRunSession,
 }
 
+/// Result of advancing an owned rule-attempt session once.
+///
+/// This mirrors [`RuleAttemptTransition`] while preserving ownership of the
+/// parsed program through owned terminal and failed states.
+pub enum OwnedRuleAttemptTransition {
+    /// One executable rule line was consumed without applying.
+    Missed(OwnedMissedRuleAttempt),
+    /// One ordinary rewrite rule was applied and execution can continue.
+    Applied(OwnedRuleAttemptAppliedStep),
+    /// The rule pass completed without a match.
+    Stable(OwnedRuleAttemptStableRun),
+    /// A matched rule executed `(return)`.
+    Returned(OwnedRuleAttemptReturnedRun),
+    /// A matching rule failed before committing runtime state.
+    Failed(OwnedRuleAttemptFailedRun),
+}
+
+/// One consumed non-applying rule line.
+pub struct OwnedMissedRuleAttempt {
+    /// Rule-attempt count committed by this transition.
+    attempt: RuleAttemptCount,
+    /// Non-applying rule information.
+    miss: RuleMiss,
+    /// Continuation session after consuming the rule line.
+    session: OwnedRuleAttemptSession,
+}
+
+/// One committed non-terminal rule application.
+pub struct OwnedRuleAttemptAppliedStep {
+    /// Rule-attempt count committed by this transition.
+    attempt: RuleAttemptCount,
+    /// Step number committed by this transition.
+    step: StepCount,
+    /// Program-local rewrite rule position committed by this transition.
+    rule_position: RulePosition,
+    /// Continuation session after the committed rewrite.
+    session: OwnedRuleAttemptSession,
+}
+
+/// Terminal owned rule-attempt run state reached by no matching rule.
+pub struct OwnedRuleAttemptStableRun {
+    /// Number of consumed rule attempts before stability.
+    attempts: RuleAttemptCount,
+    /// Number of committed rewrite steps before stability.
+    steps: StepCount,
+    /// Final consumed non-applying rule, absent when the parsed program has no executable rules.
+    terminal_miss: Option<RuleMiss>,
+    /// Parsed program retained by the owned terminal state.
+    program: Program,
+    /// Terminal runtime core containing the stable state.
+    core: RunCore,
+}
+
+/// Terminal owned rule-attempt run state reached by `(return)`.
+pub struct OwnedRuleAttemptReturnedRun {
+    /// Rule-attempt count committed by this transition.
+    attempt: RuleAttemptCount,
+    /// Step number that executed the return action.
+    step: StepCount,
+    /// Program-local return rule position.
+    rule_position: RulePosition,
+    /// Parsed program retained by the terminal state.
+    program: Program,
+    /// Materialized return output produced by the committed return rule.
+    output: ReturnOutput,
+}
+
+/// Runtime failure that preserves uncommitted owned rule-attempt state for inspection.
+pub struct OwnedRuleAttemptFailedRun {
+    /// Runtime error that stopped the candidate attempt before commit.
+    error: RunError,
+    /// Uncommitted owned session retained for diagnostic inspection.
+    session: OwnedRuleAttemptSession,
+}
+
 /// Internal non-error result of one core step attempt.
 enum CoreStep<'program> {
     /// A rule committed and may have terminal side effects.
     Applied(AppliedRule<'program>),
     /// No rule matched the current runtime state.
     Stable(StepCount),
+}
+
+/// Internal non-error result of one rule-attempt step.
+enum CoreRuleAttempt<'program> {
+    /// A rule line was consumed without applying.
+    Missed {
+        /// Rule-attempt count committed by this transition.
+        attempt: RuleAttemptCount,
+        /// Non-applying rule information.
+        miss: RuleMiss,
+    },
+    /// A rule committed and may have terminal side effects.
+    Applied {
+        /// Rule-attempt count committed by this transition.
+        attempt: RuleAttemptCount,
+        /// Applied rule effect.
+        applied: AppliedRule<'program>,
+    },
+    /// No rule in the current pass matched the current runtime state.
+    Stable {
+        /// Rule attempts consumed before stability.
+        attempts: RuleAttemptCount,
+        /// Rewrite steps committed before stability.
+        steps: StepCount,
+        /// Final consumed non-applying rule, absent for an empty parsed program.
+        terminal_miss: Option<RuleMiss>,
+    },
 }
 
 impl ProgramOwner for BorrowedProgram<'_> {
@@ -283,6 +518,28 @@ impl core::fmt::Debug for OwnedRunSession {
     }
 }
 
+impl core::fmt::Debug for RuleAttemptSession<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("RuleAttemptSession")
+            .field("completed_attempts", &self.completed_attempts())
+            .field("completed_steps", &self.completed_steps())
+            .field("state", &self.state())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for OwnedRuleAttemptSession {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("OwnedRuleAttemptSession")
+            .field("completed_attempts", &self.completed_attempts())
+            .field("completed_steps", &self.completed_steps())
+            .field("state", &self.state())
+            .finish()
+    }
+}
+
 impl core::fmt::Debug for StepTransition<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -297,6 +554,30 @@ impl core::fmt::Debug for StepTransition<'_> {
 impl core::fmt::Debug for OwnedStepTransition {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Applied(applied) => formatter.debug_tuple("Applied").field(applied).finish(),
+            Self::Stable(stable) => formatter.debug_tuple("Stable").field(stable).finish(),
+            Self::Returned(returned) => formatter.debug_tuple("Returned").field(returned).finish(),
+            Self::Failed(failed) => formatter.debug_tuple("Failed").field(failed).finish(),
+        }
+    }
+}
+
+impl core::fmt::Debug for RuleAttemptTransition<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Missed(missed) => formatter.debug_tuple("Missed").field(missed).finish(),
+            Self::Applied(applied) => formatter.debug_tuple("Applied").field(applied).finish(),
+            Self::Stable(stable) => formatter.debug_tuple("Stable").field(stable).finish(),
+            Self::Returned(returned) => formatter.debug_tuple("Returned").field(returned).finish(),
+            Self::Failed(failed) => formatter.debug_tuple("Failed").field(failed).finish(),
+        }
+    }
+}
+
+impl core::fmt::Debug for OwnedRuleAttemptTransition {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Missed(missed) => formatter.debug_tuple("Missed").field(missed).finish(),
             Self::Applied(applied) => formatter.debug_tuple("Applied").field(applied).finish(),
             Self::Stable(stable) => formatter.debug_tuple("Stable").field(stable).finish(),
             Self::Returned(returned) => formatter.debug_tuple("Returned").field(returned).finish(),
@@ -327,6 +608,28 @@ impl core::fmt::Debug for OwnedAppliedStep {
     }
 }
 
+impl core::fmt::Debug for MissedRuleAttempt<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("MissedRuleAttempt")
+            .field("attempt", &self.attempt())
+            .field("miss", &self.miss())
+            .field("state", &self.state())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for OwnedMissedRuleAttempt {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("OwnedMissedRuleAttempt")
+            .field("attempt", &self.attempt())
+            .field("miss", &self.miss())
+            .field("state", &self.state())
+            .finish()
+    }
+}
+
 impl core::fmt::Debug for StableRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -342,6 +645,54 @@ impl core::fmt::Debug for OwnedStableRun {
         formatter
             .debug_struct("OwnedStableRun")
             .field("steps", &self.steps())
+            .field("state", &self.state())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for RuleAttemptAppliedStep<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("RuleAttemptAppliedStep")
+            .field("attempt", &self.attempt())
+            .field("step", &self.step())
+            .field("rule_position", &self.rule_position())
+            .field("state", &self.state())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for OwnedRuleAttemptAppliedStep {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("OwnedRuleAttemptAppliedStep")
+            .field("attempt", &self.attempt())
+            .field("step", &self.step())
+            .field("rule_position", &self.rule_position())
+            .field("state", &self.state())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for RuleAttemptStableRun<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("RuleAttemptStableRun")
+            .field("attempts", &self.attempts())
+            .field("steps", &self.steps())
+            .field("terminal_miss", &self.terminal_miss())
+            .field("state", &self.state())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for OwnedRuleAttemptStableRun {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("OwnedRuleAttemptStableRun")
+            .field("attempts", &self.attempts())
+            .field("steps", &self.steps())
+            .field("terminal_miss", &self.terminal_miss())
             .field("state", &self.state())
             .finish()
     }
@@ -369,6 +720,30 @@ impl core::fmt::Debug for OwnedReturnedRun {
     }
 }
 
+impl core::fmt::Debug for RuleAttemptReturnedRun<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("RuleAttemptReturnedRun")
+            .field("attempt", &self.attempt())
+            .field("step", &self.step())
+            .field("rule_position", &self.rule_position())
+            .field("output", &self.output())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for OwnedRuleAttemptReturnedRun {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("OwnedRuleAttemptReturnedRun")
+            .field("attempt", &self.attempt())
+            .field("step", &self.step())
+            .field("rule_position", &self.rule_position())
+            .field("output", &self.output())
+            .finish()
+    }
+}
+
 impl core::fmt::Debug for FailedRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -385,6 +760,30 @@ impl core::fmt::Debug for OwnedFailedRun {
         formatter
             .debug_struct("OwnedFailedRun")
             .field("error", &self.error())
+            .field("completed_steps", &self.completed_steps())
+            .field("state", &self.state())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for RuleAttemptFailedRun<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("RuleAttemptFailedRun")
+            .field("error", &self.error())
+            .field("completed_attempts", &self.completed_attempts())
+            .field("completed_steps", &self.completed_steps())
+            .field("state", &self.state())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for OwnedRuleAttemptFailedRun {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("OwnedRuleAttemptFailedRun")
+            .field("error", &self.error())
+            .field("completed_attempts", &self.completed_attempts())
             .field("completed_steps", &self.completed_steps())
             .field("state", &self.state())
             .finish()
@@ -454,6 +853,53 @@ impl RunCore {
     }
 }
 
+impl RuleMiss {
+    /// Captures the rule and reason for one consumed non-applying rule line.
+    const fn new(rule_position: RulePosition, reason: RuleMissReason) -> Self {
+        Self {
+            rule_position,
+            reason,
+        }
+    }
+
+    /// Program-local position of the consumed rule line.
+    #[must_use]
+    pub const fn rule_position(self) -> RulePosition {
+        self.rule_position
+    }
+
+    /// Why the consumed rule did not apply.
+    #[must_use]
+    pub const fn reason(self) -> RuleMissReason {
+        self.reason
+    }
+}
+
+impl RuleCursor {
+    /// Starts rule-attempt execution at the first executable rule.
+    const fn first() -> Self {
+        Self { next_rule_index: 0 }
+    }
+
+    /// Whether this cursor points at the final executable rule.
+    fn is_final_rule(self, rule_count: usize) -> bool {
+        self.next_rule_index
+            .checked_add(1)
+            .is_none_or(|next_index| next_index >= rule_count)
+    }
+
+    /// Advances to the next executable rule after a non-final miss.
+    fn advance_after_miss(&mut self) -> Option<()> {
+        self.next_rule_index = self.next_rule_index.checked_add(1)?;
+        Some(())
+    }
+
+    /// Resets to the first executable rule after a committed match.
+    const fn reset_to_first(&mut self) {
+        self.next_rule_index = 0;
+    }
+}
+
 impl<P: ProgramOwner> Session<P> {
     /// Starts a new run session for a parsed program and admitted run seed.
     ///
@@ -487,6 +933,134 @@ impl<P: ProgramOwner> Session<P> {
     /// Returns `RunError` if rule matching or rule application fails.
     fn step(&mut self) -> Result<CoreStep<'_>, RunError> {
         self.core.step(self.program.program())
+    }
+}
+
+impl<P: ProgramOwner> AttemptSession<P> {
+    /// Starts a new rule-attempt session for a parsed program and admitted run seed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if allocating per-run rule state fails.
+    fn new(program: P, seed: RunSeed, limit: RuleAttemptLimit) -> Result<Self, RunError> {
+        let core = RunCore::new(program.program(), seed)?;
+        Ok(Self {
+            program,
+            core,
+            cursor: RuleCursor::first(),
+            attempt_budget: RuleAttemptBudgetState::new(limit),
+        })
+    }
+
+    /// Borrows the parsed program.
+    fn program(&self) -> &Program {
+        self.program.program()
+    }
+
+    /// Number of rewrite steps that have already completed in this run.
+    const fn completed_steps(&self) -> StepCount {
+        self.core.completed_steps()
+    }
+
+    /// Number of executable rule-line attempts consumed so far.
+    const fn completed_attempts(&self) -> RuleAttemptCount {
+        self.attempt_budget.completed_attempts()
+    }
+
+    /// Borrow the current runtime state.
+    fn state(&self) -> RuntimeStateView<'_> {
+        self.core.state()
+    }
+
+    /// Advances this run by exactly one executable rule line when possible.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if rule-attempt, rule matching, or rule application
+    /// fails.
+    fn step(&mut self) -> Result<CoreRuleAttempt<'_>, RunError> {
+        let Self {
+            program,
+            core,
+            cursor,
+            attempt_budget,
+        } = self;
+        attempt_current_rule(program.program(), core, cursor, attempt_budget)
+    }
+}
+
+/// Evaluates the current cursor against a parsed program.
+///
+/// # Errors
+///
+/// Returns `RunError` if rule-attempt, rule matching, or rule application
+/// fails.
+fn attempt_current_rule<'program>(
+    program: &'program Program,
+    core: &mut RunCore,
+    cursor: &mut RuleCursor,
+    attempt_budget: &mut RuleAttemptBudgetState,
+) -> Result<CoreRuleAttempt<'program>, RunError> {
+    let rules = program.rule_slice();
+    let Some(rule) = rules.get(cursor.next_rule_index) else {
+        return Ok(CoreRuleAttempt::Stable {
+            attempts: attempt_budget.completed_attempts(),
+            steps: core.completed_steps(),
+            terminal_miss: None,
+        });
+    };
+
+    let permit = attempt_budget.reserve_next_attempt(core.state.byte_count())?;
+    let attempted = attempt_rule(rule, &mut core.once_states, &core.state)?;
+    let attempt = attempt_budget.commit(permit);
+
+    match attempted {
+        RuleAttempt::Missed(missed) => {
+            commit_miss(cursor, attempt_budget, core, attempt, rules.len(), missed)
+        }
+        RuleAttempt::Matched(matched) => {
+            let applied = apply_matched_rule(
+                &mut core.state,
+                &mut core.scratch,
+                &mut core.budget,
+                matched,
+            )?;
+            if matches!(applied, AppliedRule::Rewrite(_)) {
+                cursor.reset_to_first();
+            }
+            Ok(CoreRuleAttempt::Applied { attempt, applied })
+        }
+    }
+}
+
+/// Commits a non-applying rule attempt and decides whether the run is stable.
+///
+/// # Errors
+///
+/// Returns `RunError` if advancing the rule-attempt cursor would violate an
+/// internal representation invariant.
+fn commit_miss<'program>(
+    cursor: &mut RuleCursor,
+    attempt_budget: &RuleAttemptBudgetState,
+    core: &RunCore,
+    attempt: RuleAttemptCount,
+    rule_count: usize,
+    missed: RuleAttemptMiss<'program>,
+) -> Result<CoreRuleAttempt<'program>, RunError> {
+    let miss = RuleMiss::new(missed.rule().position(), missed.reason());
+    if cursor.is_final_rule(rule_count) {
+        Ok(CoreRuleAttempt::Stable {
+            attempts: attempt_budget.completed_attempts(),
+            steps: core.completed_steps(),
+            terminal_miss: Some(miss),
+        })
+    } else {
+        cursor
+            .advance_after_miss()
+            .ok_or(RunInvariantError::RuleAttemptCursorOverflow {
+                rule: miss.rule_position(),
+            })?;
+        Ok(CoreRuleAttempt::Missed { attempt, miss })
     }
 }
 
@@ -586,6 +1160,25 @@ impl<'program> Session<BorrowedProgram<'program>> {
     }
 }
 
+impl<'program> AttemptSession<BorrowedProgram<'program>> {
+    /// Advances a borrowed-program rule-attempt session while keeping rule views
+    /// tied to the parsed program rather than to the mutable session borrow.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if rule-attempt, rule matching, or rule application
+    /// fails.
+    fn step_borrowed(&mut self) -> Result<CoreRuleAttempt<'program>, RunError> {
+        let Self {
+            program,
+            core,
+            cursor,
+            attempt_budget,
+        } = self;
+        attempt_current_rule(program.program, core, cursor, attempt_budget)
+    }
+}
+
 impl CommittedReturnRule<'_> {
     /// Materializes this returned run as a run result.
     fn into_result(self) -> RunResult {
@@ -596,6 +1189,13 @@ impl CommittedReturnRule<'_> {
 
 impl Session<OwnedProgram> {
     /// Splits an owned session into its program and mutable core.
+    fn into_program_core(self) -> (Program, RunCore) {
+        (self.program.program, self.core)
+    }
+}
+
+impl AttemptSession<OwnedProgram> {
+    /// Splits an owned rule-attempt session into its program and mutable core.
     fn into_program_core(self) -> (Program, RunCore) {
         (self.program.program, self.core)
     }
@@ -731,6 +1331,124 @@ impl<'program> RunSession<'program> {
     }
 }
 
+impl<'program> RuleAttemptSession<'program> {
+    /// Starts a new borrowed rule-attempt run session for a parsed program and admitted run seed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if allocating per-run rule state fails.
+    pub(crate) fn new(
+        program: &'program Program,
+        seed: RunSeed,
+        limit: RuleAttemptLimit,
+    ) -> Result<Self, RunError> {
+        Ok(Self {
+            session: AttemptSession::new(BorrowedProgram { program }, seed, limit)?,
+        })
+    }
+
+    /// Number of rewrite steps that have already completed in this run.
+    #[must_use]
+    pub const fn completed_steps(&self) -> StepCount {
+        self.session.completed_steps()
+    }
+
+    /// Number of executable rule-line attempts consumed so far.
+    #[must_use]
+    pub const fn completed_attempts(&self) -> RuleAttemptCount {
+        self.session.completed_attempts()
+    }
+
+    /// Borrow the parsed program used by this session.
+    #[must_use]
+    pub fn program(&self) -> &'program Program {
+        self.session.program.program
+    }
+
+    /// Borrow the current runtime state.
+    ///
+    /// The returned view borrows only for this observation. Materializing it is
+    /// an explicit allocation boundary.
+    #[must_use]
+    pub fn state(&self) -> RuntimeStateView<'_> {
+        self.session.state()
+    }
+
+    /// Advances this run by exactly one executable rule line when possible.
+    ///
+    /// Non-matching rules return [`RuleAttemptTransition::Missed`] with a
+    /// continuation session. Matching rewrites return
+    /// [`RuleAttemptTransition::Applied`] and reset the next attempt to the
+    /// first executable rule. No match across the whole pass, `(return)`, and
+    /// runtime failure consume the session into terminal typestates.
+    #[must_use]
+    pub fn step(mut self) -> RuleAttemptTransition<'program> {
+        match self.session.step_borrowed() {
+            Ok(CoreRuleAttempt::Missed { attempt, miss }) => {
+                RuleAttemptTransition::Missed(MissedRuleAttempt {
+                    attempt,
+                    miss,
+                    session: self,
+                })
+            }
+            Ok(CoreRuleAttempt::Applied {
+                attempt,
+                applied: AppliedRule::Rewrite(committed),
+            }) => {
+                let step = committed.step();
+                let rule = committed.rule().position();
+                RuleAttemptTransition::Applied(RuleAttemptAppliedStep {
+                    attempt,
+                    step,
+                    rule_position: rule,
+                    session: self,
+                })
+            }
+            Ok(CoreRuleAttempt::Applied {
+                attempt,
+                applied: AppliedRule::Return(committed),
+            }) => {
+                let step = committed.step();
+                let rule = committed.rule().position();
+                let output = committed.into_output();
+                let AttemptSession {
+                    program,
+                    core: _,
+                    cursor: _,
+                    attempt_budget: _,
+                } = self.session;
+                RuleAttemptTransition::Returned(RuleAttemptReturnedRun {
+                    attempt,
+                    step,
+                    rule_position: rule,
+                    program: program.program,
+                    output,
+                })
+            }
+            Ok(CoreRuleAttempt::Stable {
+                attempts,
+                steps,
+                terminal_miss,
+            }) => {
+                let AttemptSession {
+                    program,
+                    core,
+                    cursor: _,
+                    attempt_budget: _,
+                } = self.session;
+                RuleAttemptTransition::Stable(RuleAttemptStableRun {
+                    attempts,
+                    steps,
+                    terminal_miss,
+                    program: program.program,
+                    core,
+                })
+            }
+            Err(error) => RuleAttemptTransition::Failed(RuleAttemptFailedRun::new(error, self)),
+        }
+    }
+}
+
 impl OwnedRunSession {
     /// Starts a new owned run session for a parsed program and admitted run seed.
     ///
@@ -839,6 +1557,126 @@ impl OwnedRunSession {
     }
 }
 
+impl OwnedRuleAttemptSession {
+    /// Starts a new owned rule-attempt run session for a parsed program and admitted run seed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if allocating per-run rule state fails.
+    pub(crate) fn new(
+        program: Program,
+        seed: RunSeed,
+        limit: RuleAttemptLimit,
+    ) -> Result<Self, RunError> {
+        Ok(Self {
+            session: AttemptSession::new(OwnedProgram { program }, seed, limit)?,
+        })
+    }
+
+    /// Number of rewrite steps that have already completed in this run.
+    #[must_use]
+    pub const fn completed_steps(&self) -> StepCount {
+        self.session.completed_steps()
+    }
+
+    /// Number of executable rule-line attempts consumed so far.
+    #[must_use]
+    pub const fn completed_attempts(&self) -> RuleAttemptCount {
+        self.session.completed_attempts()
+    }
+
+    /// Borrow the parsed program owned by this session.
+    #[must_use]
+    pub fn program(&self) -> &Program {
+        self.session.program()
+    }
+
+    /// Discards the current run state and recovers the owned parsed program.
+    ///
+    /// This intentionally drops the in-progress runtime state; it is for
+    /// ownership recovery, not for retrying the same admitted run.
+    #[must_use]
+    pub fn into_program(self) -> Program {
+        let (program, _core) = self.session.into_program_core();
+        program
+    }
+
+    /// Borrow the current runtime state.
+    ///
+    /// The returned view borrows only for this observation. Materializing it is
+    /// an explicit allocation boundary.
+    #[must_use]
+    pub fn state(&self) -> RuntimeStateView<'_> {
+        self.session.state()
+    }
+
+    /// Advances this run by exactly one executable rule line when possible.
+    ///
+    /// Non-matching rules return [`OwnedRuleAttemptTransition::Missed`] with a
+    /// continuation session. Matching rewrites return
+    /// [`OwnedRuleAttemptTransition::Applied`] and reset the next attempt to
+    /// the first executable rule. Owned terminal and failed states keep the
+    /// parsed program recoverable.
+    #[must_use]
+    pub fn step(mut self) -> OwnedRuleAttemptTransition {
+        match self.session.step() {
+            Ok(CoreRuleAttempt::Missed { attempt, miss }) => {
+                OwnedRuleAttemptTransition::Missed(OwnedMissedRuleAttempt {
+                    attempt,
+                    miss,
+                    session: self,
+                })
+            }
+            Ok(CoreRuleAttempt::Applied {
+                attempt,
+                applied: AppliedRule::Rewrite(committed),
+            }) => {
+                let step = committed.step();
+                let rule = committed.rule().position();
+                OwnedRuleAttemptTransition::Applied(OwnedRuleAttemptAppliedStep {
+                    attempt,
+                    step,
+                    rule_position: rule,
+                    session: self,
+                })
+            }
+            Ok(CoreRuleAttempt::Applied {
+                attempt,
+                applied: AppliedRule::Return(committed),
+            }) => {
+                let step = committed.step();
+                let rule = committed.rule().position();
+                let output = committed.into_output();
+                let (program, _core) = self.session.into_program_core();
+                OwnedRuleAttemptTransition::Returned(OwnedRuleAttemptReturnedRun {
+                    attempt,
+                    step,
+                    rule_position: rule,
+                    program,
+                    output,
+                })
+            }
+            Ok(CoreRuleAttempt::Stable {
+                attempts,
+                steps,
+                terminal_miss,
+            }) => {
+                let (program, core) = self.session.into_program_core();
+                OwnedRuleAttemptTransition::Stable(OwnedRuleAttemptStableRun {
+                    attempts,
+                    steps,
+                    terminal_miss,
+                    program,
+                    core,
+                })
+            }
+            Err(error) => {
+                OwnedRuleAttemptTransition::Failed(OwnedRuleAttemptFailedRun::new(error, self))
+            }
+        }
+    }
+}
+
 impl<'program> AppliedStep<'program> {
     /// One-based applied step count.
     #[must_use]
@@ -895,6 +1733,146 @@ impl OwnedAppliedStep {
     }
 }
 
+impl<'program> MissedRuleAttempt<'program> {
+    /// One-based consumed rule-attempt count.
+    #[must_use]
+    pub const fn attempt(&self) -> RuleAttemptCount {
+        self.attempt
+    }
+
+    /// Non-applying rule information.
+    #[must_use]
+    pub const fn miss(&self) -> RuleMiss {
+        self.miss
+    }
+
+    /// Program-local position of the consumed non-applying rule.
+    #[must_use]
+    pub const fn rule_position(&self) -> RulePosition {
+        self.miss.rule_position()
+    }
+
+    /// Why the consumed rule did not apply.
+    #[must_use]
+    pub const fn reason(&self) -> RuleMissReason {
+        self.miss.reason()
+    }
+
+    /// Runtime state after the non-applying rule attempt.
+    #[must_use]
+    pub fn state(&self) -> RuntimeStateView<'_> {
+        self.session.state()
+    }
+
+    /// Continue running after observing this missed rule attempt.
+    #[must_use]
+    pub fn into_session(self) -> RuleAttemptSession<'program> {
+        self.session
+    }
+}
+
+impl OwnedMissedRuleAttempt {
+    /// One-based consumed rule-attempt count.
+    #[must_use]
+    pub const fn attempt(&self) -> RuleAttemptCount {
+        self.attempt
+    }
+
+    /// Non-applying rule information.
+    #[must_use]
+    pub const fn miss(&self) -> RuleMiss {
+        self.miss
+    }
+
+    /// Program-local position of the consumed non-applying rule.
+    #[must_use]
+    pub const fn rule_position(&self) -> RulePosition {
+        self.miss.rule_position()
+    }
+
+    /// Why the consumed rule did not apply.
+    #[must_use]
+    pub const fn reason(&self) -> RuleMissReason {
+        self.miss.reason()
+    }
+
+    /// Runtime state after the non-applying rule attempt.
+    #[must_use]
+    pub fn state(&self) -> RuntimeStateView<'_> {
+        self.session.state()
+    }
+
+    /// Continue running after observing this missed rule attempt.
+    #[must_use]
+    pub fn into_session(self) -> OwnedRuleAttemptSession {
+        self.session
+    }
+}
+
+impl<'program> RuleAttemptAppliedStep<'program> {
+    /// One-based consumed rule-attempt count.
+    #[must_use]
+    pub const fn attempt(&self) -> RuleAttemptCount {
+        self.attempt
+    }
+
+    /// One-based applied step count.
+    #[must_use]
+    pub const fn step(&self) -> StepCount {
+        self.step
+    }
+
+    /// Program-local position of the applied rule.
+    #[must_use]
+    pub const fn rule_position(&self) -> RulePosition {
+        self.rule_position
+    }
+
+    /// Runtime state after the applied rewrite step.
+    #[must_use]
+    pub fn state(&self) -> RuntimeStateView<'_> {
+        self.session.state()
+    }
+
+    /// Continue running after observing this applied rule attempt.
+    #[must_use]
+    pub fn into_session(self) -> RuleAttemptSession<'program> {
+        self.session
+    }
+}
+
+impl OwnedRuleAttemptAppliedStep {
+    /// One-based consumed rule-attempt count.
+    #[must_use]
+    pub const fn attempt(&self) -> RuleAttemptCount {
+        self.attempt
+    }
+
+    /// One-based applied step count.
+    #[must_use]
+    pub const fn step(&self) -> StepCount {
+        self.step
+    }
+
+    /// Program-local position of the applied rule.
+    #[must_use]
+    pub const fn rule_position(&self) -> RulePosition {
+        self.rule_position
+    }
+
+    /// Runtime state after the applied rewrite step.
+    #[must_use]
+    pub fn state(&self) -> RuntimeStateView<'_> {
+        self.session.state()
+    }
+
+    /// Continue running after observing this applied rule attempt.
+    #[must_use]
+    pub fn into_session(self) -> OwnedRuleAttemptSession {
+        self.session
+    }
+}
+
 impl<'program> StableRun<'program> {
     /// Number of rewrite steps applied before reaching the stable state.
     #[must_use]
@@ -941,6 +1919,102 @@ impl OwnedStableRun {
     ///
     /// This drops the stable runtime state. Use [`OwnedStableRun::into_result`]
     /// when the final state bytes are the desired output.
+    #[must_use]
+    pub fn into_program(self) -> Program {
+        self.program
+    }
+
+    /// Borrowed final runtime state.
+    #[must_use]
+    pub fn state(&self) -> RuntimeStateView<'_> {
+        self.core.state()
+    }
+
+    /// Materializes this stable run as a run result.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if final state materialization cannot allocate.
+    pub fn into_result(self) -> Result<RunResult, RunError> {
+        self.core.into_stable_result(self.steps)
+    }
+}
+
+impl<'program> RuleAttemptStableRun<'program> {
+    /// Number of rule attempts consumed before reaching the stable state.
+    #[must_use]
+    pub const fn attempts(&self) -> RuleAttemptCount {
+        self.attempts
+    }
+
+    /// Number of rewrite steps applied before reaching the stable state.
+    #[must_use]
+    pub const fn steps(&self) -> StepCount {
+        self.steps
+    }
+
+    /// Final consumed non-applying rule for this stable pass.
+    ///
+    /// Returns `None` only when the parsed program has no executable rules.
+    #[must_use]
+    pub const fn terminal_miss(&self) -> Option<RuleMiss> {
+        self.terminal_miss
+    }
+
+    /// Borrow the parsed program used by this terminal state.
+    #[must_use]
+    pub const fn program(&self) -> &'program Program {
+        self.program
+    }
+
+    /// Borrowed final runtime state.
+    #[must_use]
+    pub fn state(&self) -> RuntimeStateView<'_> {
+        self.core.state()
+    }
+
+    /// Materializes this stable run as a run result.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if final state materialization cannot allocate.
+    pub fn into_result(self) -> Result<RunResult, RunError> {
+        self.core.into_stable_result(self.steps)
+    }
+}
+
+impl OwnedRuleAttemptStableRun {
+    /// Number of rule attempts consumed before reaching the stable state.
+    #[must_use]
+    pub const fn attempts(&self) -> RuleAttemptCount {
+        self.attempts
+    }
+
+    /// Number of rewrite steps applied before reaching the stable state.
+    #[must_use]
+    pub const fn steps(&self) -> StepCount {
+        self.steps
+    }
+
+    /// Final consumed non-applying rule for this stable pass.
+    ///
+    /// Returns `None` only when the parsed program has no executable rules.
+    #[must_use]
+    pub const fn terminal_miss(&self) -> Option<RuleMiss> {
+        self.terminal_miss
+    }
+
+    /// Borrow the parsed program owned by this terminal state.
+    #[must_use]
+    pub const fn program(&self) -> &Program {
+        &self.program
+    }
+
+    /// Discards the terminal state and recovers the owned parsed program.
+    ///
+    /// This drops the stable runtime state. Use
+    /// [`OwnedRuleAttemptStableRun::into_result`] when the final state bytes
+    /// are the desired output.
     #[must_use]
     pub fn into_program(self) -> Program {
         self.program
@@ -1036,6 +2110,92 @@ impl OwnedReturnedRun {
     }
 }
 
+impl<'program> RuleAttemptReturnedRun<'program> {
+    /// One-based consumed rule-attempt count.
+    #[must_use]
+    pub const fn attempt(&self) -> RuleAttemptCount {
+        self.attempt
+    }
+
+    /// One-based applied step count for the return rule.
+    #[must_use]
+    pub const fn step(&self) -> StepCount {
+        self.step
+    }
+
+    /// Borrow the parsed program used by this terminal state.
+    #[must_use]
+    pub const fn program(&self) -> &'program Program {
+        self.program
+    }
+
+    /// Program-local position of the return rule.
+    #[must_use]
+    pub const fn rule_position(&self) -> RulePosition {
+        self.rule_position
+    }
+
+    /// Materialized return output from runtime execution.
+    #[must_use]
+    pub const fn output(&self) -> &ReturnOutput {
+        &self.output
+    }
+
+    /// Materializes this returned run as a run result.
+    #[must_use]
+    pub fn into_result(self) -> RunResult {
+        RunResult::from_return(self.output, self.step)
+    }
+}
+
+impl OwnedRuleAttemptReturnedRun {
+    /// One-based consumed rule-attempt count.
+    #[must_use]
+    pub const fn attempt(&self) -> RuleAttemptCount {
+        self.attempt
+    }
+
+    /// One-based applied step count for the return rule.
+    #[must_use]
+    pub const fn step(&self) -> StepCount {
+        self.step
+    }
+
+    /// Borrow the parsed program owned by this terminal state.
+    #[must_use]
+    pub const fn program(&self) -> &Program {
+        &self.program
+    }
+
+    /// Discards the return output and recovers the owned parsed program.
+    ///
+    /// This drops the terminal `(return)` output. Use
+    /// [`OwnedRuleAttemptReturnedRun::into_result`] when the output bytes are
+    /// the desired result.
+    #[must_use]
+    pub fn into_program(self) -> Program {
+        self.program
+    }
+
+    /// Program-local position of the return rule.
+    #[must_use]
+    pub const fn rule_position(&self) -> RulePosition {
+        self.rule_position
+    }
+
+    /// Materialized return output from runtime execution.
+    #[must_use]
+    pub const fn output(&self) -> &ReturnOutput {
+        &self.output
+    }
+
+    /// Materializes this returned run as a run result.
+    #[must_use]
+    pub fn into_result(self) -> RunResult {
+        RunResult::from_return(self.output, self.step)
+    }
+}
+
 impl<'program> FailedRun<'program> {
     /// Captures a failed borrowed session without committing the attempted step.
     fn new(error: RunError, session: RunSession<'program>) -> Self {
@@ -1083,6 +2243,61 @@ impl core::fmt::Display for FailedRun<'_> {
 }
 
 impl core::error::Error for FailedRun<'_> {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
+impl<'program> RuleAttemptFailedRun<'program> {
+    /// Captures a failed borrowed rule-attempt session without committing runtime state.
+    fn new(error: RunError, session: RuleAttemptSession<'program>) -> Self {
+        Self { error, session }
+    }
+
+    /// Runtime error that prevented the rule attempt from completing.
+    #[must_use]
+    pub const fn error(&self) -> &RunError {
+        &self.error
+    }
+
+    /// Number of rule attempts consumed before the failure was reported.
+    #[must_use]
+    pub const fn completed_attempts(&self) -> RuleAttemptCount {
+        self.session.completed_attempts()
+    }
+
+    /// Number of rewrite steps that completed before the failed rule attempt.
+    #[must_use]
+    pub const fn completed_steps(&self) -> StepCount {
+        self.session.completed_steps()
+    }
+
+    /// Borrow the parsed program used by this failed session.
+    #[must_use]
+    pub fn program(&self) -> &'program Program {
+        self.session.program()
+    }
+
+    /// Borrow the uncommitted runtime state preserved by this error.
+    #[must_use]
+    pub fn state(&self) -> RuntimeStateView<'_> {
+        self.session.state()
+    }
+
+    /// Discard the uncommitted run session and return the runtime error.
+    #[must_use]
+    pub fn into_error(self) -> RunError {
+        self.error
+    }
+}
+
+impl core::fmt::Display for RuleAttemptFailedRun<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.error.fmt(formatter)
+    }
+}
+
+impl core::error::Error for RuleAttemptFailedRun<'_> {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         Some(&self.error)
     }
@@ -1138,6 +2353,77 @@ impl OwnedFailedRun {
     #[must_use]
     pub fn into_parts(self) -> (RunError, OwnedRunSession) {
         (self.error, self.session)
+    }
+}
+
+impl OwnedRuleAttemptFailedRun {
+    /// Captures a failed owned rule-attempt session without committing runtime state.
+    fn new(error: RunError, session: OwnedRuleAttemptSession) -> Self {
+        Self { error, session }
+    }
+
+    /// Runtime error that prevented the rule attempt from completing.
+    #[must_use]
+    pub const fn error(&self) -> &RunError {
+        &self.error
+    }
+
+    /// Number of rule attempts consumed before the failure was reported.
+    #[must_use]
+    pub const fn completed_attempts(&self) -> RuleAttemptCount {
+        self.session.completed_attempts()
+    }
+
+    /// Number of rewrite steps that completed before the failed rule attempt.
+    #[must_use]
+    pub const fn completed_steps(&self) -> StepCount {
+        self.session.completed_steps()
+    }
+
+    /// Borrow the parsed program owned by this failed session.
+    #[must_use]
+    pub fn program(&self) -> &Program {
+        self.session.program()
+    }
+
+    /// Borrow the uncommitted runtime state preserved by this error.
+    #[must_use]
+    pub fn state(&self) -> RuntimeStateView<'_> {
+        self.session.state()
+    }
+
+    /// Discard the uncommitted run session and return the runtime error.
+    #[must_use]
+    pub fn into_error(self) -> RunError {
+        self.error
+    }
+
+    /// Discards the runtime error and recovers the uncommitted owned session.
+    ///
+    /// This preserves ownership for hosts that need to recover the parsed
+    /// program, but the caller is also choosing to drop the structured error.
+    #[must_use]
+    pub fn into_session(self) -> OwnedRuleAttemptSession {
+        self.session
+    }
+
+    /// Splits this failed transition into its runtime error and uncommitted
+    /// owned session.
+    #[must_use]
+    pub fn into_parts(self) -> (RunError, OwnedRuleAttemptSession) {
+        (self.error, self.session)
+    }
+}
+
+impl core::fmt::Display for OwnedRuleAttemptFailedRun {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.error.fmt(formatter)
+    }
+}
+
+impl core::error::Error for OwnedRuleAttemptFailedRun {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        Some(&self.error)
     }
 }
 

@@ -239,6 +239,11 @@ impl fmt::Display for RunInvariantError {
                 matched_state_len.get(),
                 current_state_len.get(),
             ),
+            Self::RuleAttemptCursorOverflow { rule } => write!(
+                f,
+                "runtime invariant failure: rule-attempt cursor could not advance after rule {}",
+                rule.number().get(),
+            ),
         }
     }
 }

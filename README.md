@@ -67,7 +67,8 @@ The primary execution path is:
 2. Parse it with `Program::parse`.
 3. Label host bytes with `RuntimeInputSource::from_bytes` and validate them with `RuntimeInput::validate`.
 4. Admit `RuntimeInput` with `RunSeed::admit`, then execute with
-   `Program::run`, `Program::start_run`, or `Program::into_run`.
+   `Program::run`, `Program::start_run`, `Program::start_rule_attempt_run`,
+   or the owned `into_*` session variants.
 
 The crate intentionally contains no filesystem, process, stdout/stderr,
 argument parsing, environment access, or lossy display boundary. Hosts should
@@ -96,6 +97,12 @@ session when the host needs to recover the parsed program.
 
 The docs.rs crate page contains a complete doctested stepwise example.
 
+Use `Program::start_rule_attempt_run` when a host needs debugger-style control
+over every executable rule line. It reports `RuleAttemptTransition::Missed`
+for non-applying rules with a typed `RuleMissReason`, consumes a separate
+`RuleAttemptLimit`, and keeps `StepLimit` reserved for committed rewrite steps.
+The owned counterpart is `Program::into_rule_attempt_run`.
+
 ### Resource Limits
 
 `ParseLimits` is the parser contract. It bounds source bytes, executable
@@ -109,6 +116,8 @@ initial runtime-state size during admission, then carries the step,
 rewrite-state, and return-output budgets through the run. Step count alone is
 not enough for a rewrite system because a short run can still expand state
 aggressively.
+`RuleAttemptLimit` belongs only to rule-attempt sessions and counts consumed
+executable rule lines, including misses.
 
 ```rust
 use rsaeb::error::{LimitError, RunError};
@@ -505,14 +514,16 @@ type import paths.
 - `rsaeb::program`: `Program`, `RunResult`, `RunOutcome`,
   `RuntimeStateSnapshot`, `ReturnOutput`, and `ReturnOutputView`
 - `rsaeb::limits`: `ParseLimits`, `SourceByteLimit`, `CodeLineByteLimit`,
-  `PayloadByteLimit`, `RuleLimit`, `StepLimit`, `RuntimeInputByteLimit`,
-  `RuntimeStateByteLimit`, `ReturnByteLimit`, `TraceSnapshotByteLimit`,
+  `PayloadByteLimit`, `RuleLimit`, `StepLimit`, `RuleAttemptLimit`,
+  `RuntimeInputByteLimit`, `RuntimeStateByteLimit`, `ReturnByteLimit`,
+  `TraceSnapshotByteLimit`,
   `RuntimeInputLimits`, `ExecutionLimits`, parser/runtime byte-count value
-  types, `StepCount`, and default budget constants
+  types, `StepCount`, `RuleAttemptCount`, and default budget constants
 - `rsaeb::execution`: borrowed stepwise run typestates (`RunSession`,
   `StepTransition`, `AppliedStep`, `StableRun`, `ReturnedRun`, `FailedRun`) and
   explicit owned typestates (`OwnedRunSession`, `OwnedStepTransition`,
-  `OwnedAppliedStep`, `OwnedStableRun`, `OwnedReturnedRun`, `OwnedFailedRun`)
+  `OwnedAppliedStep`, `OwnedStableRun`, `OwnedReturnedRun`, `OwnedFailedRun`),
+  plus borrowed and owned rule-attempt typestates with `RuleMissReason`
 - `rsaeb::inspect`: `RuleView`, `RuleActionView`, `PayloadView`,
   `PayloadBytes`, `CanonicalRuleSource`, rule position/count types,
   `OnceRuleCount`, `RuleRepeat`, and `RuleAnchor`
