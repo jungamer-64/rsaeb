@@ -5,7 +5,7 @@ mod runtime_support;
 mod support;
 
 use rsaeb::error::{RunError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
-use rsaeb::execution::StepTransition;
+use rsaeb::execution::OwnedStepTransition;
 use rsaeb::input::RunSeed;
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
@@ -149,7 +149,7 @@ fn owned_step_signatures(
     let mut session = program.into_run(seed)?;
     loop {
         match session.step() {
-            StepTransition::Applied(applied) => {
+            OwnedStepTransition::Applied(applied) => {
                 signatures.push(CommittedStepSignature::Continue {
                     step: applied.step().get(),
                     rule_position: applied.rule_position().number().get(),
@@ -157,7 +157,7 @@ fn owned_step_signatures(
                 });
                 session = applied.into_session();
             }
-            StepTransition::Returned(returned) => {
+            OwnedStepTransition::Returned(returned) => {
                 signatures.push(CommittedStepSignature::Return {
                     step: returned.step().get(),
                     rule_position: returned.rule_position().number().get(),
@@ -165,8 +165,10 @@ fn owned_step_signatures(
                 });
                 return Ok(signatures);
             }
-            StepTransition::Stable(_) => return Ok(signatures),
-            StepTransition::Failed(failed) => return Err(TestFailure::from(failed.into_error())),
+            OwnedStepTransition::Stable(_) => return Ok(signatures),
+            OwnedStepTransition::Failed(failed) => {
+                return Err(TestFailure::from(failed.into_error()));
+            }
         }
     }
 }

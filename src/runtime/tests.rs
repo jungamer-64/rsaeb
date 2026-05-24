@@ -70,7 +70,9 @@ fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping succeeds.
-fn expect_step_error(result: StepTransition) -> Result<FailedRun, TestFailure> {
+fn expect_step_error<'program>(
+    result: StepTransition<'program>,
+) -> Result<FailedRun<'program>, TestFailure> {
     match result {
         StepTransition::Failed(failed) => Ok(failed),
         StepTransition::Applied(_) | StepTransition::Stable(_) | StepTransition::Returned(_) => {
@@ -84,7 +86,9 @@ fn expect_step_error(result: StepTransition) -> Result<FailedRun, TestFailure> {
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping fails.
-fn expect_step_transition(result: StepTransition) -> Result<StepTransition, TestFailure> {
+fn expect_step_transition<'program>(
+    result: StepTransition<'program>,
+) -> Result<StepTransition<'program>, TestFailure> {
     match result {
         StepTransition::Failed(failed) => Err(TestFailure::from(failed.into_error())),
         transition => Ok(transition),
@@ -116,7 +120,7 @@ fn once_rule_failure_preserves_state_before_step_commit() -> TestResult {
         ReturnByteLimit::new(1),
     );
     let input = run_seed(b"a", limits)?;
-    let runtime = program.into_run(input)?;
+    let runtime = program.start_run(input)?;
     let error = expect_step_error(runtime.step())?;
     ensure_eq!(
         error.error(),
@@ -147,7 +151,7 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
         DEFAULT_MAX_RETURN_LEN,
     );
     let no_match_input = run_seed(b"x", limits)?;
-    let no_match = program.into_run(no_match_input)?;
+    let no_match = program.start_run(no_match_input)?;
     match expect_step_transition(no_match.step())? {
         StepTransition::Stable(stable) => {
             ensure_eq!(stable.steps().get(), 0)?;
@@ -163,7 +167,7 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
 
     let program = parse_program("a=b")?;
     let would_match_input = run_seed(b"a", limits)?;
-    let would_match = program.into_run(would_match_input)?;
+    let would_match = program.start_run(would_match_input)?;
     let error = expect_step_error(would_match.step())?;
     ensure_eq!(
         expect_step_limit(error.into_error())?,
@@ -174,7 +178,7 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
         },
     )?;
     let program = parse_program("a=b")?;
-    let would_match = program.into_run(run_seed(b"a", limits)?)?;
+    let would_match = program.start_run(run_seed(b"a", limits)?)?;
     let error = expect_step_error(would_match.step())?;
     ensure_eq!(error.completed_steps(), StepCount::ZERO)?;
     ensure_eq!(
@@ -205,7 +209,7 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     );
     let state_program = parse_program("=a")?;
     let state_input = run_seed(b"aa", state_limits)?;
-    let state_limited = state_program.into_run(state_input)?;
+    let state_limited = state_program.start_run(state_input)?;
     let state_error = expect_step_error(state_limited.step())?;
     ensure_eq!(
         state_error.error(),
@@ -235,7 +239,7 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     );
     let return_program = parse_program("a=(return)ok")?;
     let return_input = run_seed(b"a", return_limits)?;
-    let return_limited = return_program.into_run(return_input)?;
+    let return_limited = return_program.start_run(return_input)?;
     let return_error = expect_step_error(return_limited.step())?;
     ensure_eq!(
         return_error.error(),
@@ -271,7 +275,7 @@ fn return_action_bypasses_rewrite_state_mutation_path() -> TestResult {
         RuntimeStateByteLimit::new(1),
         ReturnByteLimit::new(2),
     );
-    let session = program.into_run(run_seed(b"a", limits)?)?;
+    let session = program.start_run(run_seed(b"a", limits)?)?;
 
     match expect_step_transition(session.step())? {
         StepTransition::Returned(returned) => {
@@ -651,7 +655,7 @@ fn empty_payload_matches_keep_anchor_specific_span_placement() -> TestResult {
             DEFAULT_MAX_STATE_LEN,
             DEFAULT_MAX_RETURN_LEN,
         );
-        let session = program.into_run(run_seed(b"ab", limits)?)?;
+        let session = program.start_run(run_seed(b"ab", limits)?)?;
 
         match expect_step_transition(session.step())? {
             StepTransition::Applied(applied) => {

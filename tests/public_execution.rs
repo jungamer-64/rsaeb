@@ -6,7 +6,7 @@ mod support;
 
 use rsaeb::error::LimitError;
 use rsaeb::execution::{
-    AppliedStep, FailedRun, ReturnedRun, RunSession, StableRun, StepTransition,
+    AppliedStep, FailedRun, OwnedStepTransition, ReturnedRun, RunSession, StableRun, StepTransition,
 };
 use rsaeb::input::RunSeed;
 use rsaeb::limits::{
@@ -62,7 +62,7 @@ enum StepSignature {
 /// # Errors
 ///
 /// Returns `TestFailure` if state materialization fails.
-fn applied_signature(applied: &AppliedStep) -> Result<StepSignature, TestFailure> {
+fn applied_signature(applied: &AppliedStep<'_>) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Applied {
         step: applied.step().get(),
         rule_position: applied.rule_position().number().get(),
@@ -75,7 +75,7 @@ fn applied_signature(applied: &AppliedStep) -> Result<StepSignature, TestFailure
 /// # Errors
 ///
 /// Returns `TestFailure` if stable-state materialization fails.
-fn stable_signature(stable: &StableRun) -> Result<StepSignature, TestFailure> {
+fn stable_signature(stable: &StableRun<'_>) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Stable {
         steps: stable.steps().get(),
         state: runtime_view_bytes(stable.state())?,
@@ -87,7 +87,7 @@ fn stable_signature(stable: &StableRun) -> Result<StepSignature, TestFailure> {
 /// # Errors
 ///
 /// Returns `TestFailure` if output bytes differ from the expected signature.
-fn returned_signature(returned: &ReturnedRun) -> Result<StepSignature, TestFailure> {
+fn returned_signature(returned: &ReturnedRun<'_>) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Return {
         step: returned.step().get(),
         rule_position: returned.rule_position().number().get(),
@@ -100,7 +100,9 @@ fn returned_signature(returned: &ReturnedRun) -> Result<StepSignature, TestFailu
 /// # Errors
 ///
 /// Returns `TestFailure` if a step fails or transition materialization fails.
-fn finish_step_signatures(mut execution: RunSession) -> Result<Vec<StepSignature>, TestFailure> {
+fn finish_step_signatures(
+    mut execution: RunSession<'_>,
+) -> Result<Vec<StepSignature>, TestFailure> {
     let mut signatures = Vec::new();
     loop {
         match expect_step_transition(execution.step())? {
@@ -126,7 +128,9 @@ fn finish_step_signatures(mut execution: RunSession) -> Result<Vec<StepSignature
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping fails.
-fn expect_step_transition(result: StepTransition) -> Result<StepTransition, TestFailure> {
+fn expect_step_transition<'program>(
+    result: StepTransition<'program>,
+) -> Result<StepTransition<'program>, TestFailure> {
     match result {
         StepTransition::Failed(failed) => Err(TestFailure::from(failed.into_error())),
         transition => Ok(transition),
@@ -138,7 +142,9 @@ fn expect_step_transition(result: StepTransition) -> Result<StepTransition, Test
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping does not fail.
-fn expect_failed_transition(result: StepTransition) -> Result<FailedRun, TestFailure> {
+fn expect_failed_transition<'program>(
+    result: StepTransition<'program>,
+) -> Result<FailedRun<'program>, TestFailure> {
     match result {
         StepTransition::Failed(failed) => Ok(failed),
         StepTransition::Applied(_) | StepTransition::Stable(_) | StepTransition::Returned(_) => {
@@ -208,7 +214,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
     );
     let program = parse_program("a=b\nb=c")?;
     let input = runtime_input(b"a", limits)?;
-    let execution = program.into_run(input)?;
+    let execution = program.start_run(input)?;
     ensure_eq!(execution.completed_steps().get(), 0)?;
 
     let execution = match expect_step_transition(execution.step())? {
@@ -271,7 +277,7 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
     );
     let program = parse_program("a=b")?;
     let input = runtime_input(b"a", limits)?;
-    let execution = program.into_run(input)?;
+    let execution = program.start_run(input)?;
 
     ensure_eq!(
         runtime_view_bytes(execution.state())?.as_slice(),
@@ -299,8 +305,8 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if repeated stepwise executions from separately
-/// validated equivalent input diverge.
+/// Returns `TestFailure` if repeated stepwise executions from one parsed
+/// program diverge.
 #[test]
 fn execution_consumes_runtime_input_without_session_leakage() -> TestResult {
     let limits = TestRunPolicy::new(
@@ -310,8 +316,10 @@ fn execution_consumes_runtime_input_without_session_leakage() -> TestResult {
         DEFAULT_MAX_RETURN_LEN,
     );
     let source = "(once)a=b\na=c";
-    let first = parse_program(source)?.into_run(runtime_input(b"aa", limits)?)?;
-    let second = parse_program(source)?.into_run(runtime_input(b"aa", limits)?)?;
+    let program = parse_program(source)?;
+    let first = program.start_run(runtime_input(b"aa", limits)?)?;
+    let second = program.start_run(runtime_input(b"aa", limits)?)?;
+    let third = program.start_run(runtime_input(b"aa", limits)?)?;
 
     ensure_eq!(
         finish_step_signatures(first)?,
@@ -334,7 +342,7 @@ fn execution_consumes_runtime_input_without_session_leakage() -> TestResult {
     )?;
     ensure_eq!(
         finish_step_signatures(second)?,
-        finish_step_signatures(parse_program(source)?.into_run(runtime_input(b"aa", limits)?)?)?,
+        finish_step_signatures(third)?,
     )
 }
 
@@ -362,6 +370,78 @@ fn execution_borrowed_run_and_owned_session_share_contract() -> TestResult {
 
 /// # Errors
 ///
+/// Returns `TestFailure` if owned stepwise terminal states cannot return the
+/// parsed program to the caller.
+#[test]
+fn execution_owned_terminals_can_return_program() -> TestResult {
+    let limits = TestRunPolicy::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+
+    let stable_session = parse_program("a=b")?.into_run(runtime_input(b"a", limits)?)?;
+    let stable_session = match stable_session.step() {
+        OwnedStepTransition::Applied(applied) => applied.into_session(),
+        OwnedStepTransition::Stable(_)
+        | OwnedStepTransition::Returned(_)
+        | OwnedStepTransition::Failed(_) => {
+            return Err(TestFailure::message("expected applied owned step"));
+        }
+    };
+    let stable_program = match stable_session.step() {
+        OwnedStepTransition::Stable(stable) => stable.into_program(),
+        OwnedStepTransition::Applied(_)
+        | OwnedStepTransition::Returned(_)
+        | OwnedStepTransition::Failed(_) => {
+            return Err(TestFailure::message("expected owned stable terminal"));
+        }
+    };
+    ensure_eq!(stable_program.rule_count().get(), 1)?;
+
+    let returned_program = match parse_program("a=(return)ok")?
+        .into_run(runtime_input(b"a", limits)?)?
+        .step()
+    {
+        OwnedStepTransition::Returned(returned) => returned.into_program(),
+        OwnedStepTransition::Applied(_)
+        | OwnedStepTransition::Stable(_)
+        | OwnedStepTransition::Failed(_) => {
+            return Err(TestFailure::message("expected owned return terminal"));
+        }
+    };
+    ensure_eq!(returned_program.rule_count().get(), 1)?;
+
+    let failed_limits = TestRunPolicy::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(1),
+        DEFAULT_MAX_STATE_LEN,
+        ReturnByteLimit::new(1),
+    );
+    let (error, failed_session) = match parse_program("a=(return)ok")?
+        .into_run(runtime_input(b"a", failed_limits)?)?
+        .step()
+    {
+        OwnedStepTransition::Failed(failed) => failed.into_parts(),
+        OwnedStepTransition::Applied(_)
+        | OwnedStepTransition::Stable(_)
+        | OwnedStepTransition::Returned(_) => {
+            return Err(TestFailure::message("expected owned failed terminal"));
+        }
+    };
+    ensure_matches(
+        matches!(
+            error,
+            rsaeb::error::RunError::Limit(LimitError::Return { .. })
+        ),
+        "expected owned return limit failure",
+    )?;
+    ensure_eq!(failed_session.into_program().rule_count().get(), 1)
+}
+
+/// # Errors
+///
 /// Returns `TestFailure` if a failed step does not preserve the uncommitted
 /// state as a terminal transition.
 #[test]
@@ -373,7 +453,7 @@ fn execution_step_failure_is_terminal_transition() -> TestResult {
         DEFAULT_MAX_STATE_LEN,
         ReturnByteLimit::new(1),
     );
-    let execution = program.into_run(runtime_input(b"a", limits)?)?;
+    let execution = program.start_run(runtime_input(b"a", limits)?)?;
 
     let failed = expect_failed_transition(execution.step())?;
     ensure_eq!(failed.completed_steps().get(), 0)?;
@@ -387,7 +467,7 @@ fn execution_step_failure_is_terminal_transition() -> TestResult {
             rsaeb::error::RunError::Limit(LimitError::Return {
                 limit,
                 attempted_len,
-            }) if *limit == ReturnByteLimit::new(1) && attempted_len.get() == 2
+            }) if limit == &ReturnByteLimit::new(1) && attempted_len.get() == 2
         ),
         "expected return limit failure",
     )
@@ -406,7 +486,7 @@ fn execution_step_failure_preserves_current_progress() -> TestResult {
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
-    let execution = program.into_run(runtime_input(b"a", limits)?)?;
+    let execution = program.start_run(runtime_input(b"a", limits)?)?;
 
     let running = match expect_step_transition(execution.step())? {
         StepTransition::Applied(applied) => applied.into_session(),

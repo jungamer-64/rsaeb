@@ -15,7 +15,7 @@ mod rule_set;
 mod tracing;
 
 use crate::error::{ParseError, RunError};
-use crate::execution::OwnedRunSession;
+use crate::execution::{OwnedRunSession, RunSession};
 use crate::input::RunSeed;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::limits::ParseLimits;
@@ -101,10 +101,24 @@ impl Program {
         self.rule_set.as_slice()
     }
 
+    /// Starts a stateful run session that borrows this parsed program.
+    ///
+    /// The parsed rule table stays reusable while per-run state lives in the
+    /// returned execution session.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` when allocating per-run execution state fails.
+    pub fn start_run(&self, seed: RunSeed) -> Result<RunSession<'_>, RunError> {
+        RunSession::new(self, seed)
+    }
+
     /// Starts a stateful run session that owns this parsed program.
     ///
-    /// This consumes `self` so hosts move the parsed rule table into the
-    /// execution typestate instead of keeping a separate program borrow alive.
+    /// Use this when the execution session must carry the parsed program with
+    /// it, for example across a `'static` task boundary. Use
+    /// [`Program::start_run`] when the host keeps the reusable parsed program
+    /// separately.
     ///
     /// # Errors
     ///
@@ -115,8 +129,9 @@ impl Program {
 
     /// Runs this program with admitted runtime seed.
     ///
-    /// This is the borrowed run-to-completion API. Use [`Program::into_run`]
-    /// when the host needs owned stepwise control after each committed rule.
+    /// This is the borrowed run-to-completion API. Use [`Program::start_run`]
+    /// when the host needs stepwise control while keeping this parsed program
+    /// reusable.
     ///
     /// # Errors
     ///
