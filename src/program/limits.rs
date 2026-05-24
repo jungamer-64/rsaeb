@@ -460,7 +460,9 @@ impl RuntimeInputLimits {
 /// The interpreter checks these limits before allocating oversized runtime
 /// states or return outputs. Step limits alone are not enough for a rewriting
 /// system because a tiny number of steps can still expand into a very large
-/// state.
+/// state. Initial state admission is checked by
+/// [`input::RunSeed::admit`](crate::input::RunSeed::admit); later rewrite and
+/// return checks use the same policy after execution starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionLimits {
     /// Budget for committed rewrite steps.

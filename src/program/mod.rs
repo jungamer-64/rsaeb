@@ -4,6 +4,11 @@
 //! [`ProgramSource`] under [`ParseLimits`], then run with an admitted
 //! [`RunSeed`]. Runtime budget and byte-count types live in
 //! [`limits`](crate::limits); runtime input lives in [`input`](crate::input).
+//!
+//! A parsed program owns syntax and rule metadata only. Per-run `(once)` state,
+//! runtime bytes, completed-step counts, and execution budgets are created from
+//! a [`RunSeed`] each time execution starts. This keeps parsed source reuse
+//! separate from mutable runtime progress.
 
 /// Parser limit value types and defaults.
 pub(crate) mod limits;
@@ -31,7 +36,9 @@ pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeS
 ///
 /// A parsed program is immutable and reusable. Per-run `(once)` state lives in
 /// the runtime invocation, not in this value, so repeated runs with the same
-/// [`Program`] start from fresh rule availability.
+/// [`Program`] start from fresh rule availability. Running a program requires
+/// an already admitted [`RunSeed`], so parsing never accepts raw runtime input
+/// or detached execution limits.
 pub struct Program {
     /// Immutable rule table plus parsed `(once)` metadata.
     rule_set: RuleSet,
@@ -104,7 +111,9 @@ impl Program {
     /// Starts a stateful run session that borrows this parsed program.
     ///
     /// The parsed rule table stays reusable while per-run state lives in the
-    /// returned execution session.
+    /// returned execution session. Use this when the caller can keep the parsed
+    /// program outside the session and wants to inspect or pause after each
+    /// applied step.
     ///
     /// # Errors
     ///
@@ -131,7 +140,8 @@ impl Program {
     ///
     /// This is the borrowed run-to-completion API. Use [`Program::start_run`]
     /// when the host needs stepwise control while keeping this parsed program
-    /// reusable.
+    /// reusable. Use [`Program::into_run`] when the session must own the parsed
+    /// program.
     ///
     /// # Errors
     ///

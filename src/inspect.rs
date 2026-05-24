@@ -5,6 +5,12 @@
 //! views borrow from [`program::Program`](crate::program::Program), so they are cheap to copy and
 //! cannot outlive the parsed program they describe.
 //!
+//! Materializing payload or canonical-source bytes is explicit because it can
+//! allocate. Inspection views are the cheap borrowed contract; owned bytes are
+//! produced only when the caller asks for them and receives an
+//! [`error::AllocationError`](crate::error::AllocationError) if that boundary
+//! cannot allocate.
+//!
 //! ```
 //! use rsaeb::limits::DEFAULT_PARSE_LIMITS;
 //! use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};

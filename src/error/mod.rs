@@ -3,6 +3,10 @@
 //! The interpreter reports errors as structured data first. Human-readable text
 //! is kept in formatting implementations, so parser and runtime code construct
 //! typed reasons instead of scattering presentation strings across the core.
+//! Each public error type belongs to one phase boundary; callers should not
+//! collapse them into one catch-all type unless their own boundary no longer
+//! needs to distinguish user source, user input, run admission, runtime
+//! execution, snapshot materialization, and callback failures.
 //!
 //! The main domains are:
 //!

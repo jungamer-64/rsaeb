@@ -20,6 +20,9 @@ impl Program {
     /// This API materializes bounded `Vec<u8>` snapshots for the initial state
     /// and every committed step. Use [`Program::run_with_borrowed_trace`] when
     /// the trace sink only needs to inspect each event during the callback.
+    /// Snapshot limits are evaluated per event; a too-large event is reported
+    /// as a snapshot failure before the user callback receives a truncated
+    /// value.
     ///
     /// # Errors
     ///
@@ -60,7 +63,9 @@ impl Program {
     ///
     /// The callback borrows event bytes only for the duration of each call. A
     /// sink that wants to keep bytes must copy them explicitly or use
-    /// [`Program::run_with_trace_snapshots`].
+    /// [`Program::run_with_trace_snapshots`]. Runtime failures and callback
+    /// failures stay separate in [`TracedRunError`], so callback control flow
+    /// cannot be mistaken for interpreter failure.
     ///
     /// # Errors
     ///

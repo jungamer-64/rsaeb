@@ -12,6 +12,14 @@
 //! environment variables, write stdout/stderr, or perform lossy byte-to-text
 //! display conversion.
 //!
+//! The public API is intentionally arranged as boundary types rather than root
+//! re-exports. A host should move data through the domains in this order:
+//! source bytes become a parsed program, raw input bytes become validated
+//! runtime input, validated input becomes an admitted run seed, and only then
+//! can execution or tracing start. That ordering keeps parse errors, input
+//! validation errors, run-admission errors, runtime failures, and trace-sink
+//! failures separate in both type signatures and diagnostics.
+//!
 //! # API map
 //!
 //! Use these public entry points according to the boundary being crossed:
@@ -44,6 +52,12 @@
 //! that are reserved syntax in program source. Construct both explicitly before
 //! execution so parsing, input validation, and runtime failures remain
 //! distinguishable in the type system.
+//!
+//! [`input::RunSeed`] is the admission witness for one run. It consumes a
+//! validated [`input::RuntimeInput`] together with
+//! [`limits::ExecutionLimits`], checks the initial runtime-state budget, and
+//! prevents a later execution API from receiving raw bytes or detached budget
+//! values.
 //!
 //! # Basic execution
 //!

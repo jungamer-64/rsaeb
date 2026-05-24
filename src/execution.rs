@@ -3,6 +3,58 @@
 //! [`Program::start_run`](crate::program::Program::start_run) borrows a parsed
 //! program into a [`RunSession`]. [`Program::into_run`](crate::program::Program::into_run)
 //! is the explicit owned variant for hosts that need a `'static` session.
+//! [`Program::run`](crate::program::Program::run) is the borrowed
+//! run-to-completion shortcut over the same admitted [`RunSeed`] boundary.
+//!
+//! A step transition is a typestate value, not a status flag. Applied steps
+//! carry the continuation session. Stable and returned states are terminal.
+//! Failed states are also terminal for the borrowed API: they preserve the
+//! uncommitted state for diagnostics and then let the caller discard the run
+//! into its [`RunError`]. Owned failed states additionally let the caller
+//! recover the uncommitted owned session or split it from the error.
+//!
+//! ```
+//! use rsaeb::error::{LimitError, RunError};
+//! use rsaeb::execution::StepTransition;
+//! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::limits::{
+//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_PARSE_LIMITS, ExecutionLimits,
+//!     RuntimeInputLimits, RuntimeStateByteLimit, StepLimit,
+//! };
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let program = Program::parse(ProgramSource::from_text("a=aaaa"), DEFAULT_PARSE_LIMITS)?;
+//! let input_limits = RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN);
+//! let execution_limits = ExecutionLimits::new(
+//!     StepLimit::new(10),
+//!     RuntimeStateByteLimit::new(1),
+//!     DEFAULT_MAX_RETURN_LEN,
+//! );
+//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), input_limits)?;
+//! let session = program.start_run(RunSeed::admit(input, execution_limits)?)?;
+//!
+//! let StepTransition::Failed(failed) = session.step() else {
+//!     return Err("expected oversized rewrite to fail before commit".into());
+//! };
+//!
+//! if failed.completed_steps().get() != 0 {
+//!     return Err("failed step must not commit progress".into());
+//! }
+//! if failed.state().materialize()?.as_slice() != b"a" {
+//!     return Err("failed step must expose the uncommitted state".into());
+//! }
+//! if !matches!(
+//!     failed.error(),
+//!     RunError::Limit(LimitError::State { attempted_len, .. })
+//!         if attempted_len.get() == 4
+//! ) {
+//!     return Err("unexpected failed-step error".into());
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 use crate::error::{RunError, TracedRunError};
 use crate::input::RunSeed;
@@ -18,12 +70,23 @@ use crate::runtime::state::State;
 use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
 
 /// Stateful run session that borrows a reusable parsed program.
+///
+/// This is the stepwise form returned by
+/// [`Program::start_run`](crate::program::Program::start_run). It consumes
+/// itself on every step so callers must handle the returned [`StepTransition`]
+/// before they can continue.
 pub struct RunSession<'program> {
     /// Internal session using the public borrowed program boundary.
     session: Session<BorrowedProgram<'program>>,
 }
 
 /// Stateful run session that owns its parsed program.
+///
+/// This is the stepwise form returned by
+/// [`Program::into_run`](crate::program::Program::into_run). It is useful when
+/// the session must move independently of a borrowed [`Program`]. Owned
+/// terminal and failed states retain a way to recover the parsed program
+/// instead of leaking ownership through a parallel API.
 pub struct OwnedRunSession {
     /// Internal session using the public owned program boundary.
     session: Session<OwnedProgram>,
@@ -71,6 +134,9 @@ struct OwnedProgram {
 }
 
 /// Result of advancing a borrowed run session once.
+///
+/// Only [`StepTransition::Applied`] carries a continuation session. Stable,
+/// returned, and failed transitions are terminal.
 pub enum StepTransition<'program> {
     /// One ordinary rewrite rule was applied and execution can continue.
     Applied(AppliedStep<'program>),
@@ -123,6 +189,9 @@ pub struct FailedRun<'program> {
 }
 
 /// Result of advancing an owned run session once.
+///
+/// This mirrors [`StepTransition`] while preserving ownership of the parsed
+/// program through owned terminal and failed states.
 pub enum OwnedStepTransition {
     /// One ordinary rewrite rule was applied and execution can continue.
     Applied(OwnedAppliedStep),
@@ -575,6 +644,8 @@ impl<'program> RunSession<'program> {
     }
 
     /// Number of rewrite steps that have already completed in this run.
+    ///
+    /// Failed candidate steps are not counted because they never commit.
     #[must_use]
     pub const fn completed_steps(&self) -> StepCount {
         self.session.completed_steps()
@@ -587,12 +658,19 @@ impl<'program> RunSession<'program> {
     }
 
     /// Borrow the current runtime state.
+    ///
+    /// The returned view borrows only for this observation. Materializing it is
+    /// an explicit allocation boundary.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
         self.session.state()
     }
 
     /// Advances this run by exactly one matching rule when possible.
+    ///
+    /// Applying an ordinary rewrite returns [`StepTransition::Applied`] with a
+    /// continuation session. No match, `(return)`, and runtime failure all
+    /// consume the session into terminal typestates.
     #[must_use]
     pub fn step(mut self) -> StepTransition<'program> {
         match self.session.step_borrowed() {
@@ -678,6 +756,9 @@ impl OwnedRunSession {
     }
 
     /// Discards the current run state and recovers the owned parsed program.
+    ///
+    /// This intentionally drops the in-progress runtime state; it is for
+    /// ownership recovery, not for retrying the same admitted run.
     #[must_use]
     pub fn into_program(self) -> Program {
         let (program, _core) = self.session.into_program_core();
@@ -685,12 +766,19 @@ impl OwnedRunSession {
     }
 
     /// Borrow the current runtime state.
+    ///
+    /// The returned view borrows only for this observation. Materializing it is
+    /// an explicit allocation boundary.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
         self.session.state()
     }
 
     /// Advances this run by exactly one matching rule when possible.
+    ///
+    /// Applying an ordinary rewrite returns [`OwnedStepTransition::Applied`]
+    /// with a continuation session. Owned terminal and failed states keep the
+    /// parsed program recoverable.
     #[must_use]
     pub fn step(mut self) -> OwnedStepTransition {
         match self.session.step() {
@@ -771,6 +859,8 @@ impl<'program> AppliedStep<'program> {
     }
 
     /// Continue running after observing this applied step.
+    ///
+    /// This is the only borrowed transition that can resume execution.
     #[must_use]
     pub fn into_session(self) -> RunSession<'program> {
         self.session
@@ -797,6 +887,8 @@ impl OwnedAppliedStep {
     }
 
     /// Continue running after observing this applied step.
+    ///
+    /// This is the only owned transition that can resume execution.
     #[must_use]
     pub fn into_session(self) -> OwnedRunSession {
         self.session
@@ -846,6 +938,9 @@ impl OwnedStableRun {
     }
 
     /// Discards the terminal state and recovers the owned parsed program.
+    ///
+    /// This drops the stable runtime state. Use [`OwnedStableRun::into_result`]
+    /// when the final state bytes are the desired output.
     #[must_use]
     pub fn into_program(self) -> Program {
         self.program
@@ -913,6 +1008,10 @@ impl OwnedReturnedRun {
     }
 
     /// Discards the return output and recovers the owned parsed program.
+    ///
+    /// This drops the terminal `(return)` output. Use
+    /// [`OwnedReturnedRun::into_result`] when the output bytes are the desired
+    /// result.
     #[must_use]
     pub fn into_program(self) -> Program {
         self.program
@@ -968,6 +1067,9 @@ impl<'program> FailedRun<'program> {
     }
 
     /// Discard the uncommitted run session and return the runtime error.
+    ///
+    /// Borrowed failed runs are terminal; there is no retryable borrowed
+    /// continuation after an uncommitted failure.
     #[must_use]
     pub fn into_error(self) -> RunError {
         self.error
@@ -1023,6 +1125,9 @@ impl OwnedFailedRun {
     }
 
     /// Discards the runtime error and recovers the uncommitted owned session.
+    ///
+    /// This preserves ownership for hosts that need to recover the parsed
+    /// program, but the caller is also choosing to drop the structured error.
     #[must_use]
     pub fn into_session(self) -> OwnedRunSession {
         self.session

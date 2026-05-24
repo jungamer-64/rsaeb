@@ -5,6 +5,52 @@
 //! owned runtime-domain bytes. Execution consumes a [`RunSeed`] admitted from
 //! validated input and execution limits, so input validation and execution
 //! budgets cannot be conflated.
+//!
+//! The three public values in this module represent three different states:
+//!
+//! - [`RuntimeInputSource`] is a borrowed label for raw host bytes. It has not
+//!   proven ASCII validity and it owns nothing.
+//! - [`RuntimeInput`] owns bytes after the runtime-input contract has been
+//!   checked. It still has no step, state, or return-output budget.
+//! - [`RunSeed`] consumes validated input with execution limits and proves that
+//!   the initial runtime state may be created for exactly one execution.
+//!
+//! Admission is deliberately separate from validation. Input construction can
+//! fail because the raw bytes are not acceptable runtime input; admission can
+//! fail because acceptable input is too large to become the initial state under
+//! this run's execution policy.
+//!
+//! ```
+//! use rsaeb::error::RunAdmissionError;
+//! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::limits::{
+//!     ExecutionLimits, ReturnByteLimit, RuntimeInputByteLimit, RuntimeInputLimits,
+//!     RuntimeStateByteLimit, StepLimit,
+//! };
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let input_limits = RuntimeInputLimits::new(RuntimeInputByteLimit::new(8));
+//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"abcd"), input_limits)?;
+//! let execution_limits = ExecutionLimits::new(
+//!     StepLimit::new(10),
+//!     RuntimeStateByteLimit::new(3),
+//!     ReturnByteLimit::new(8),
+//! );
+//!
+//! let Err(error) = RunSeed::admit(input, execution_limits) else {
+//!     return Err("expected run admission to reject the initial state".into());
+//! };
+//!
+//! if !matches!(
+//!     error,
+//!     RunAdmissionError::InitialStateTooLarge { attempted_len, .. }
+//!         if attempted_len.get() == 4
+//! ) {
+//!     return Err("unexpected admission error".into());
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 use alloc::vec::Vec;
 use core::fmt;
@@ -19,7 +65,9 @@ use crate::runtime::budget::RuntimeBudgetState;
 ///
 /// Constructing this value labels host bytes as runtime input bytes. It does
 /// not validate ASCII or classify bytes into the runtime domain; that ownership
-/// belongs to [`RuntimeInput::validate`].
+/// belongs to [`RuntimeInput::validate`]. The source may be copied freely
+/// because it is only a borrowed boundary marker; copying it never duplicates
+/// validated runtime state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeInputSource<'input> {
     /// Raw host bytes awaiting runtime-input validation.
@@ -108,7 +156,9 @@ impl<'input> ValidatedRuntimeInputSource<'input> {
 /// Runtime input is a separate byte domain from program source. It may contain
 /// ASCII whitespace, control bytes, and reserved syntax bytes, but it cannot
 /// contain non-ASCII bytes. This value owns validated bytes only; execution
-/// budgets are admitted later by [`RunSeed`].
+/// budgets are admitted later by [`RunSeed`]. Reusing equivalent bytes for
+/// another run means validating another [`RuntimeInputSource`], not cloning a
+/// previously admitted execution state.
 #[derive(PartialEq, Eq)]
 pub struct RuntimeInput {
     /// Owned bytes classified for mutable runtime state.
@@ -141,7 +191,10 @@ impl RuntimeInput {
     ///
     /// Runtime input accepts all ASCII bytes, including bytes that would be
     /// reserved syntax in program source. Non-ASCII bytes are rejected with a
-    /// structured input column before execution starts.
+    /// structured input column before execution starts. Owned storage is
+    /// reserved only after the full validation pass succeeds, so
+    /// [`RuntimeInputLimits`] bounds raw input classification before allocation
+    /// grows runtime-domain bytes.
     ///
     /// # Errors
     ///
@@ -199,6 +252,11 @@ impl RuntimeInput {
 }
 
 /// Run-start witness tying checked input to execution limits.
+///
+/// A seed is the only public value accepted by execution entrypoints. It
+/// carries both the initial runtime-state bytes and the already checked budget
+/// state, so `Program::run`, `Program::start_run`, and `Program::into_run` do
+/// not need to reinterpret raw input or detached execution limits.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RunSeed {
     /// Runtime-domain bytes admitted as the initial execution state.
@@ -209,6 +267,9 @@ pub struct RunSeed {
 
 impl RunSeed {
     /// Admits validated runtime input for execution under execution limits.
+    ///
+    /// This consumes the validated input. A successful seed represents one
+    /// admitted execution start; it is not a reusable input buffer.
     ///
     /// # Errors
     ///

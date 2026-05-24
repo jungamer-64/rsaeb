@@ -13,7 +13,9 @@ use crate::limits::{
 ///
 /// This error is returned after parsing and runtime input validation have
 /// already succeeded. It covers allocation failures inside execution,
-/// unrepresentable rewrite sizes, and configured runtime budget failures.
+/// unrepresentable rewrite sizes, and configured runtime budget failures. It
+/// does not report invalid raw runtime input or initial-state admission
+/// failures; those belong to [`RuntimeInputError`] and [`RunAdmissionError`].
 #[derive(Debug, PartialEq, Eq)]
 pub enum RunError {
     /// A fallible allocation failed during runtime execution.
@@ -177,7 +179,8 @@ impl Error for RuntimeInputInvariantError {}
 ///
 /// This error is produced after runtime input validation and before execution
 /// starts, while validated input is admitted as the initial runtime state under
-/// execution limits.
+/// execution limits. It means the input bytes were valid runtime input, but the
+/// execution policy rejected them as the initial state for this run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunAdmissionError {
     /// Runtime input exceeded the initial runtime-state budget for this run.

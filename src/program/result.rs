@@ -10,7 +10,9 @@ use super::limits::StepCount;
 /// Structured result category for one completed run.
 ///
 /// Stable completion and `(return)` completion are distinct outcomes rather
-/// than a byte buffer plus a boolean flag.
+/// than a byte buffer plus a boolean flag. Stable bytes are the final runtime
+/// state after rule search finds no match; return bytes are the payload of the
+/// committed `(return)` rule.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RunOutcome {
     /// No rule matched the final runtime state.
@@ -22,7 +24,8 @@ pub enum RunOutcome {
 /// Materialized final runtime state for a run that ended without `(return)`.
 ///
 /// This value owns public raw bytes. It is produced only after runtime-state
-/// bytes have been materialized successfully.
+/// bytes have been materialized successfully, and it is governed by runtime
+/// state limits rather than return-output limits.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RuntimeStateSnapshot {
     /// Owned bytes tagged as a stable runtime-state snapshot.
@@ -64,7 +67,9 @@ impl RuntimeStateSnapshot {
 
 /// Materialized final output from a matched `(return)` rule.
 ///
-/// This value owns public raw bytes from the return payload.
+/// This value owns public raw bytes from the return payload. It is not a
+/// runtime state snapshot; it comes from the parsed right-side return payload
+/// after the return rule commits.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ReturnOutput {
     /// Owned bytes tagged as `(return)` output.
@@ -168,7 +173,8 @@ impl core::fmt::Debug for ReturnOutputView<'_> {
 /// Result of one program execution.
 ///
 /// The result records the number of committed rewrite steps and the terminal
-/// outcome reached by the run.
+/// outcome reached by the run. A failed run never produces this type; failures
+/// remain in [`crate::error::RunError`] or traced-run error domains.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RunResult {
     /// Number of committed rewrite steps in this run.

@@ -8,6 +8,8 @@
 //!
 //! Use borrowed events when a sink can decide immediately, and snapshot events
 //! when a sink must retain state/output bytes after the callback returns.
+//! Snapshot materialization is its own failure domain and its byte limit is
+//! checked per event.
 //!
 //! ```
 //! use rsaeb::limits::{
@@ -54,6 +56,47 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! ```
+//! use core::convert::Infallible;
+//! use rsaeb::error::{TraceSnapshotError, TraceSnapshotRunError};
+//! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::limits::{
+//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_PARSE_LIMITS,
+//!     ExecutionLimits, RuntimeInputLimits, StepLimit, TraceSnapshotByteLimit,
+//! };
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let program = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?;
+//! let input_limits = RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN);
+//! let execution_limits = ExecutionLimits::new(
+//!     StepLimit::new(10),
+//!     DEFAULT_MAX_STATE_LEN,
+//!     DEFAULT_MAX_RETURN_LEN,
+//! );
+//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), input_limits)?;
+//! let seed = RunSeed::admit(input, execution_limits)?;
+//!
+//! let result = program.run_with_trace_snapshots(
+//!     seed,
+//!     TraceSnapshotByteLimit::new(0),
+//!     |_event| Ok::<(), Infallible>(()),
+//! );
+//!
+//! if !matches!(
+//!     result,
+//!     Err(TraceSnapshotRunError::Snapshot(TraceSnapshotError::Limit {
+//!         attempted_len,
+//!         ..
+//!     })) if attempted_len.get() == 1
+//! ) {
+//!     return Err("unexpected trace snapshot limit error".into());
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 use alloc::vec::Vec;
 
@@ -72,7 +115,8 @@ use crate::program::{ReturnOutput, ReturnOutputView, RuntimeStateSnapshot};
 /// `Vec<u8>` for every event. Internally the runtime state is not stored as raw
 /// `u8`, so public byte access is an iterator/materialization boundary. The
 /// view is valid only while the runtime state it borrows is held by the current
-/// execution or trace callback.
+/// execution or trace callback. Retaining bytes after that boundary requires
+/// [`RuntimeStateView::materialize`] or snapshot tracing.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeStateView<'run> {
     /// Runtime-domain bytes borrowed from the current execution state.
@@ -253,7 +297,9 @@ pub enum TraceEvent<'program, State, Effect> {
 /// The event borrows runtime bytes only for the duration of the callback. This
 /// API does not materialize owned event snapshots; snapshot tracing is derived
 /// from it by materializing snapshots under an explicit
-/// [`TraceSnapshotByteLimit`].
+/// [`TraceSnapshotByteLimit`]. The event also borrows parsed rule views from
+/// the parsed program, so it cannot become a retained log record without an
+/// explicit copy.
 pub type BorrowedTraceEvent<'program, 'run> =
     TraceEvent<'program, RuntimeStateView<'run>, BorrowedTraceEffect<'program, 'run>>;
 
@@ -261,7 +307,9 @@ pub type BorrowedTraceEvent<'program, 'run> =
 ///
 /// State and return-output bytes are materialized as owned `Vec<u8>` snapshots.
 /// Return steps cannot be confused with ordinary continuation steps by
-/// forgetting to inspect a boolean flag.
+/// forgetting to inspect a boolean flag. Parsed rule views still borrow from
+/// the program so callers retain bytes, not an independent copy of rule
+/// metadata.
 pub type TraceSnapshotEvent<'program> =
     TraceEvent<'program, RuntimeStateSnapshot, TraceSnapshotEffect>;
 

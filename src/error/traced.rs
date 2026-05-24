@@ -9,7 +9,9 @@ use super::RunError;
 /// Error returned by fallible borrowed tracing APIs.
 ///
 /// Borrowed tracing itself does not materialize snapshots, so the only domains
-/// are runtime execution and the user-provided trace sink.
+/// are runtime execution and the user-provided trace sink. If retained event
+/// bytes are needed, use the snapshot API so snapshot materialization failures
+/// are represented explicitly.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TracedRunError<E> {
     /// Runtime execution failed.
@@ -71,7 +73,8 @@ impl From<AllocationError> for TraceSnapshotError {
 /// Error returned by trace-snapshot APIs.
 ///
 /// Runtime execution, snapshot materialization, and caller callback failures
-/// remain separate domains.
+/// remain separate domains. Snapshot errors happen before the user callback is
+/// called for the offending event.
 #[derive(Debug, PartialEq, Eq)]
 pub enum TraceSnapshotRunError<E> {
     /// Runtime execution failed.

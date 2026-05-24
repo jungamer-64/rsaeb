@@ -8,6 +8,12 @@
 //! types report measured lengths without erasing those domains into plain
 //! `usize` values.
 //!
+//! Limits are policy values supplied by the host. Count values are observations
+//! produced by parser, input, execution, or trace code. Keeping those roles in
+//! distinct types prevents a source length, runtime input length, runtime state
+//! length, return-output length, or trace-snapshot length from crossing into
+//! the wrong budget by accident.
+//!
 //! ```
 //! use rsaeb::limits::{
 //!     ExecutionLimits, ReturnByteLimit, RuntimeInputByteLimit, RuntimeInputLimits,
