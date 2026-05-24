@@ -27,12 +27,6 @@ impl ProgramByte {
         }
     }
 
-    /// Rebuilds the program-byte witness after compact payload validation.
-    pub(crate) fn from_validated_compact(byte: CompactByte) -> Self {
-        debug_assert!(Self::is_valid_raw(byte.as_u8()));
-        Self(byte.as_u8())
-    }
-
     /// Parses a compact source byte as executable program payload data.
     ///
     /// # Errors

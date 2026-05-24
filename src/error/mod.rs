@@ -62,8 +62,8 @@ pub use crate::bytes::{
     NonAsciiCodeByte, NonAsciiInputByte, NonPrintableCodeByte, ReservedSyntaxByte,
 };
 pub use parse::{
-    LeftModifierKind, ParseError, ParseErrorKind, ParseErrorLocation, ParseInvariantError,
-    ParseLimitError, PayloadKind, RightActionKind,
+    LeftModifierKind, ParseError, ParseErrorKind, ParseErrorLocation, ParseLimitError, PayloadKind,
+    RightActionKind,
 };
 pub use run::{
     InputColumn, InternalInvariantError, LimitError, RunAdmissionError, RunError,

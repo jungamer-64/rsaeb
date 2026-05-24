@@ -245,9 +245,6 @@ pub enum InternalInvariantError {
     MissingCommittedRule,
     /// A committed return transition pointed at a non-return rule.
     ReturnedRuleWithoutOutput,
-    /// A previously validated runtime-state match no longer resolved inside
-    /// the current execution state.
-    InvalidStateMatchRange,
 }
 
 impl InternalInvariantError {
@@ -271,10 +268,6 @@ impl InternalInvariantError {
         Self::ReturnedRuleWithoutOutput
     }
 
-    /// Builds the invalid state match range value.
-    pub(crate) const fn invalid_state_match_range() -> Self {
-        Self::InvalidStateMatchRange
-    }
 }
 
 impl Error for InternalInvariantError {}

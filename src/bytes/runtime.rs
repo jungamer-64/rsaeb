@@ -53,12 +53,6 @@ mod runtime_ascii {
             self.0
         }
 
-        /// Rebuilds the witness after a prior ASCII validation pass.
-        pub(super) fn from_validated(byte: u8) -> Self {
-            debug_assert!(byte.is_ascii());
-            Self(byte)
-        }
-
         /// Separates executable payload bytes from runtime-only bytes.
         pub(crate) fn classify(self) -> ClassifiedAsciiByte {
             if let Some(byte) = ProgramByte::from_valid_raw(self.get()) {
@@ -99,13 +93,6 @@ impl RuntimeInputByte {
         Ok(Self {
             byte: AsciiByte::validate(byte, zero_based_column)?,
         })
-    }
-
-    /// Rebuilds a runtime-input witness from bytes validated as ASCII earlier.
-    pub(crate) fn from_validated_ascii(byte: u8) -> Self {
-        Self {
-            byte: AsciiByte::from_validated(byte),
-        }
     }
 
     /// Classifies this input byte for storage in mutable runtime state.
