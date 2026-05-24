@@ -1,7 +1,7 @@
 //! Public stepwise run typestates.
 //!
 //! [`Program::into_run`](crate::program::Program::into_run) moves a parsed
-//! program into a [`RunSession`]. Run-to-completion and tracing use the same
+//! program into a [`OwnedRunSession`]. Run-to-completion and tracing use the same
 //! internal session shape with a borrowed program owner. Public stepwise
 //! execution has one ownership model and no parallel borrowed typestate tree.
 
@@ -19,7 +19,7 @@ use crate::runtime::state::State;
 use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
 
 /// Stateful run session that owns its parsed program.
-pub struct RunSession {
+pub struct OwnedRunSession {
     /// Internal session using the public owned program boundary.
     session: Session<OwnedProgram>,
 }
@@ -66,29 +66,29 @@ struct OwnedProgram {
 }
 
 /// Result of advancing a run session once.
-pub enum StepTransition {
+pub enum OwnedStepTransition {
     /// One ordinary rewrite rule was applied and execution can continue.
-    Applied(AppliedStep),
+    Applied(OwnedAppliedStep),
     /// No rule matched the final runtime state.
-    Stable(StableRun),
+    Stable(OwnedStableRun),
     /// A matched rule executed `(return)`.
-    Returned(ReturnedRun),
+    Returned(OwnedReturnedRun),
     /// A matching rule failed before committing.
-    Failed(FailedRun),
+    Failed(OwnedFailedRun),
 }
 
 /// One committed non-terminal rule application.
-pub struct AppliedStep {
+pub struct OwnedAppliedStep {
     /// Step number committed by this transition.
     step: StepCount,
     /// Program-local rewrite rule position committed by this transition.
     rule_position: RulePosition,
     /// Continuation session after the committed rewrite.
-    session: RunSession,
+    session: OwnedRunSession,
 }
 
 /// Terminal run state reached by no matching rule.
-pub struct StableRun {
+pub struct OwnedStableRun {
     /// Number of committed steps before no rule matched.
     steps: StepCount,
     /// Parsed program retained by the owned terminal state.
@@ -98,7 +98,7 @@ pub struct StableRun {
 }
 
 /// Terminal run state reached by `(return)`.
-pub struct ReturnedRun {
+pub struct OwnedReturnedRun {
     /// Step number that executed the return action.
     step: StepCount,
     /// Program-local return rule position.
@@ -110,11 +110,11 @@ pub struct ReturnedRun {
 }
 
 /// Runtime failure that preserves uncommitted state for inspection.
-pub struct FailedRun {
+pub struct OwnedFailedRun {
     /// Runtime error that stopped the candidate step before commit.
     error: RunError,
     /// Uncommitted owned session retained for diagnostic inspection.
-    session: RunSession,
+    session: OwnedRunSession,
 }
 
 /// Internal non-error result of one core step attempt.
@@ -137,17 +137,17 @@ impl ProgramOwner for OwnedProgram {
     }
 }
 
-impl core::fmt::Debug for RunSession {
+impl core::fmt::Debug for OwnedRunSession {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("RunSession")
+            .debug_struct("OwnedRunSession")
             .field("completed_steps", &self.completed_steps())
             .field("state", &self.state())
             .finish()
     }
 }
 
-impl core::fmt::Debug for StepTransition {
+impl core::fmt::Debug for OwnedStepTransition {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Applied(applied) => formatter.debug_tuple("Applied").field(applied).finish(),
@@ -158,10 +158,10 @@ impl core::fmt::Debug for StepTransition {
     }
 }
 
-impl core::fmt::Debug for AppliedStep {
+impl core::fmt::Debug for OwnedAppliedStep {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("AppliedStep")
+            .debug_struct("OwnedAppliedStep")
             .field("step", &self.step())
             .field("rule_position", &self.rule_position())
             .field("state", &self.state())
@@ -169,20 +169,20 @@ impl core::fmt::Debug for AppliedStep {
     }
 }
 
-impl core::fmt::Debug for StableRun {
+impl core::fmt::Debug for OwnedStableRun {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("StableRun")
+            .debug_struct("OwnedStableRun")
             .field("steps", &self.steps())
             .field("state", &self.state())
             .finish()
     }
 }
 
-impl core::fmt::Debug for ReturnedRun {
+impl core::fmt::Debug for OwnedReturnedRun {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("ReturnedRun")
+            .debug_struct("OwnedReturnedRun")
             .field("step", &self.step())
             .field("rule_position", &self.rule_position())
             .field("output", &self.output())
@@ -190,10 +190,10 @@ impl core::fmt::Debug for ReturnedRun {
     }
 }
 
-impl core::fmt::Debug for FailedRun {
+impl core::fmt::Debug for OwnedFailedRun {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("FailedRun")
+            .debug_struct("OwnedFailedRun")
             .field("error", &self.error())
             .field("completed_steps", &self.completed_steps())
             .field("state", &self.state())
@@ -440,7 +440,7 @@ where
         .run_with_borrowed_trace(trace)
 }
 
-impl RunSession {
+impl OwnedRunSession {
     /// Starts a new owned run session for a parsed program and admitted run seed.
     ///
     /// # Errors
@@ -472,12 +472,12 @@ impl RunSession {
 
     /// Advances this run by exactly one matching rule when possible.
     #[must_use]
-    pub fn step(mut self) -> StepTransition {
+    pub fn step(mut self) -> OwnedStepTransition {
         match self.session.step() {
             Ok(CoreStep::Applied(AppliedRule::Rewrite(committed))) => {
                 let step = committed.step();
                 let rule = committed.rule().position();
-                StepTransition::Applied(AppliedStep {
+                OwnedStepTransition::Applied(OwnedAppliedStep {
                     step,
                     rule_position: rule,
                     session: self,
@@ -488,7 +488,7 @@ impl RunSession {
                 let rule = committed.rule().position();
                 let output = committed.into_output();
                 let (program, _core) = self.session.into_program_core();
-                StepTransition::Returned(ReturnedRun {
+                OwnedStepTransition::Returned(OwnedReturnedRun {
                     step,
                     rule_position: rule,
                     program,
@@ -497,13 +497,13 @@ impl RunSession {
             }
             Ok(CoreStep::Stable(steps)) => {
                 let (program, core) = self.session.into_program_core();
-                StepTransition::Stable(StableRun {
+                OwnedStepTransition::Stable(OwnedStableRun {
                     steps,
                     program,
                     core,
                 })
             }
-            Err(error) => StepTransition::Failed(FailedRun::new(error, self)),
+            Err(error) => OwnedStepTransition::Failed(OwnedFailedRun::new(error, self)),
         }
     }
 
@@ -516,22 +516,22 @@ impl RunSession {
     pub fn finish(mut self) -> Result<RunResult, RunError> {
         loop {
             match self.step() {
-                StepTransition::Applied(applied) => {
+                OwnedStepTransition::Applied(applied) => {
                     self = applied.into_session();
                 }
-                StepTransition::Stable(stable) => {
+                OwnedStepTransition::Stable(stable) => {
                     return stable.into_result();
                 }
-                StepTransition::Returned(returned) => {
+                OwnedStepTransition::Returned(returned) => {
                     return Ok(returned.into_result());
                 }
-                StepTransition::Failed(failed) => return Err(failed.into_error()),
+                OwnedStepTransition::Failed(failed) => return Err(failed.into_error()),
             }
         }
     }
 }
 
-impl AppliedStep {
+impl OwnedAppliedStep {
     /// One-based applied step count.
     #[must_use]
     pub const fn step(&self) -> StepCount {
@@ -552,12 +552,12 @@ impl AppliedStep {
 
     /// Continue running after observing this applied step.
     #[must_use]
-    pub fn into_session(self) -> RunSession {
+    pub fn into_session(self) -> OwnedRunSession {
         self.session
     }
 }
 
-impl StableRun {
+impl OwnedStableRun {
     /// Number of rewrite steps applied before reaching the stable state.
     #[must_use]
     pub const fn steps(&self) -> StepCount {
@@ -586,7 +586,7 @@ impl StableRun {
     }
 }
 
-impl ReturnedRun {
+impl OwnedReturnedRun {
     /// One-based applied step count for the return rule.
     #[must_use]
     pub const fn step(&self) -> StepCount {
@@ -618,9 +618,9 @@ impl ReturnedRun {
     }
 }
 
-impl FailedRun {
+impl OwnedFailedRun {
     /// Captures a failed owned session without committing the attempted step.
-    fn new(error: RunError, session: RunSession) -> Self {
+    fn new(error: RunError, session: OwnedRunSession) -> Self {
         Self { error, session }
     }
 
@@ -655,13 +655,13 @@ impl FailedRun {
     }
 }
 
-impl core::fmt::Display for FailedRun {
+impl core::fmt::Display for OwnedFailedRun {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.error.fmt(formatter)
     }
 }
 
-impl core::error::Error for FailedRun {
+impl core::error::Error for OwnedFailedRun {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         Some(&self.error)
     }

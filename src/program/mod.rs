@@ -15,7 +15,7 @@ mod rule_set;
 mod tracing;
 
 use crate::error::{ParseError, RunError};
-use crate::execution::RunSession;
+use crate::execution::OwnedRunSession;
 use crate::input::RunSeed;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::limits::ParseLimits;
@@ -109,8 +109,8 @@ impl Program {
     /// # Errors
     ///
     /// Returns `RunError` when allocating per-run execution state fails.
-    pub fn into_run(self, seed: RunSeed) -> Result<RunSession, RunError> {
-        RunSession::new(self, seed)
+    pub fn into_run(self, seed: RunSeed) -> Result<OwnedRunSession, RunError> {
+        OwnedRunSession::new(self, seed)
     }
 
     /// Runs this program with admitted runtime seed.
