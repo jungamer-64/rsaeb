@@ -48,12 +48,29 @@ pub(super) struct OnceMatchPermit {
     rule: crate::inspect::RulePosition,
     /// Fresh once-state slot reserved for the matched rule.
     slot: OnceRuleSlot,
+    /// Non-copy token that keeps the permit linear even though its witnesses are copyable.
+    linearity: OnceMatchPermitLinearity,
+}
+
+/// Non-copy marker carried by once-rule commit permits.
+#[derive(Debug)]
+struct OnceMatchPermitLinearity;
+
+impl OnceMatchPermitLinearity {
+    /// Creates the linearity marker for one permit.
+    const fn new() -> Self {
+        Self
+    }
 }
 
 impl OnceMatchPermit {
     /// Creates the commit permit after availability has been checked.
     const fn new(rule: crate::inspect::RulePosition, slot: OnceRuleSlot) -> Self {
-        Self { rule, slot }
+        Self {
+            rule,
+            slot,
+            linearity: OnceMatchPermitLinearity::new(),
+        }
     }
 }
 
@@ -134,7 +151,11 @@ impl OnceStateSet {
     /// Returns `RunError` if the permit points at a missing runtime once-state
     /// slot.
     fn commit_once(&mut self, permit: OnceMatchPermit) -> Result<(), RunError> {
-        let OnceMatchPermit { rule, slot } = permit;
+        let OnceMatchPermit {
+            rule,
+            slot,
+            linearity: _linearity,
+        } = permit;
         let available_slots = PublicOnceRuleCount::new(self.states.len());
         let Some(state) = self.states.get_mut(slot.get()) else {
             return Err(RunInvariantError::MissingOnceRuleState {
