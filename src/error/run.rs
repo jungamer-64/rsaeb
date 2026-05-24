@@ -34,13 +34,6 @@ pub enum RunError {
 /// treating the run as stable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunInvariantError {
-    /// The parsed rule table and per-run `(once)` state table had different lengths.
-    RuleStateLengthMismatch {
-        /// Number of parsed executable rules.
-        rules: crate::inspect::RuleCount,
-        /// Number of per-run state rows.
-        states: crate::inspect::RuleCount,
-    },
     /// Runtime attempted to use a match range against a different state length.
     InvalidStateMatchRange {
         /// State length recorded when the match witness was built.

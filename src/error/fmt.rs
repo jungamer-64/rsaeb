@@ -221,12 +221,6 @@ impl fmt::Display for RunError {
 impl fmt::Display for RunInvariantError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::RuleStateLengthMismatch { rules, states } => write!(
-                f,
-                "runtime invariant failure: rule table length {} did not match once-state length {}",
-                rules.get(),
-                states.get(),
-            ),
             Self::InvalidStateMatchRange {
                 matched_state_len,
                 current_state_len,

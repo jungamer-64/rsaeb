@@ -3,23 +3,13 @@ use alloc::vec::Vec;
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
-use crate::inspect::RuleCount;
-use crate::rule::{Rule, RuleRepeatState};
+use crate::rule::Rule;
 
 /// Per-run execution state aligned with the parsed rule table.
 #[derive(Debug)]
 pub(crate) struct OnceStateSet {
-    /// One runtime row for each parsed rule.
-    states: Vec<RuleExecutionState>,
-}
-
-/// Runtime state for one parsed rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RuleExecutionState {
-    /// Rule has no once-state side effect.
-    Always,
-    /// Rule has a once-state cell for this run.
-    Once(OnceRuleState),
+    /// One runtime state cell for each parsed `(once)` rule.
+    states: Vec<OnceRuleState>,
 }
 
 /// Consumption state for one `(once)` rule during a single run.
@@ -93,36 +83,5 @@ impl OnceStateSet {
         }
 
         Ok(Self { states })
-    }
-
-    /// Iterates over rule-aligned runtime state rows.
-    pub(super) fn rows_mut(&mut self) -> impl Iterator<Item = &mut RuleExecutionState> {
-        self.states.iter_mut()
-    }
-
-    /// Number of rule-aligned runtime state rows.
-    pub(super) fn row_count(&self) -> RuleCount {
-        RuleCount::new(self.states.len())
-    }
-}
-
-impl RuleExecutionState {
-    /// Builds the runtime row corresponding to one parsed rule.
-    fn from_rule(rule: &Rule) -> Self {
-        match rule.repeat_state() {
-            RuleRepeatState::Always => Self::Always,
-            RuleRepeatState::Once => Self::Once(OnceRuleState::Fresh),
-        }
-    }
-
-    /// Reserves the commit side effect for a rule that may currently run.
-    pub(super) fn reserve_commit(&mut self) -> Option<MatchedRuleCommit<'_>> {
-        match self {
-            Self::Always => Some(MatchedRuleCommit::Always),
-            Self::Once(state @ OnceRuleState::Fresh) => {
-                Some(MatchedRuleCommit::Once(OnceMatchPermit::new(state)))
-            }
-            Self::Once(OnceRuleState::Consumed) => None,
-        }
     }
 }
