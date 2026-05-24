@@ -5,10 +5,12 @@
 //! boundaries a host program should use.
 //!
 //! `rsaeb` is a `no_std + alloc` library crate. It parses compact A=B source
-//! into an immutable [`program::Program`] and runs that program against typed
-//! [`input::RuntimeInput`] validated before execution. The interpreter core does not
-//! read files, use process arguments, access environment variables, write
-//! stdout/stderr, or perform lossy byte-to-text display conversion.
+//! into an immutable [`program::Program`], validates host bytes as
+//! [`input::RuntimeInput`], admits that input into a one-run [`input::RunSeed`],
+//! and executes only after [`limits::ExecutionLimits`] are attached. The
+//! interpreter core does not read files, use process arguments, access
+//! environment variables, write stdout/stderr, or perform lossy byte-to-text
+//! display conversion.
 //!
 //! # API map
 //!
@@ -44,7 +46,8 @@
 //!
 //! # Basic execution
 //!
-//! Parse [`source::ProgramSource`] and [`input::RuntimeInput`] explicitly before running:
+//! Parse [`source::ProgramSource`], validate [`input::RuntimeInput`], then
+//! admit an [`input::RunSeed`] before running:
 //!
 //! ```
 //! use rsaeb::limits::{

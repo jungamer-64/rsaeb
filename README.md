@@ -95,9 +95,13 @@ The docs.rs crate page contains a complete doctested stepwise example.
 code-line bytes, parsed payload bytes, and executable rule count before the
 parser accepts host-provided source into the program domain.
 
-`RuntimeInputLimits` is the raw input validation contract. `ExecutionLimits` is the run admission and execution contract: it validates initial runtime-state size through `RunSeed::admit`, then carries the step, rewrite-state, and return-output budgets through the run. Step count
-alone is not enough for a rewrite system because a short run can still expand
-state aggressively.
+`RuntimeInputLimits` is the raw input validation contract. `RunSeed::admit`
+is the boundary that ties one validated input to one `ExecutionLimits` value.
+`ExecutionLimits` is the run admission and execution contract: it validates
+initial runtime-state size during admission, then carries the step,
+rewrite-state, and return-output budgets through the run. Step count alone is
+not enough for a rewrite system because a short run can still expand state
+aggressively.
 
 ```rust
 use rsaeb::error::{LimitError, RunError};
@@ -136,9 +140,10 @@ Execution may succeed exactly at the step limit. The step limit becomes an
 error only when another rule would still apply after the configured number of
 completed steps.
 
-Runtime input validation is bounded by `RuntimeInputLimits`; initial state admission is bounded by `ExecutionLimits` before the interpreter creates an execution session. Trace snapshot
-materialization has its own `TraceSnapshotByteLimit` because tracing is outside
-runtime execution.
+Runtime input validation is bounded by `RuntimeInputLimits`; initial state
+admission is bounded by `ExecutionLimits` before the interpreter creates an
+execution session. Trace snapshot materialization has its own
+`TraceSnapshotByteLimit` because tracing is outside runtime execution.
 
 ### Tracing
 
@@ -489,14 +494,14 @@ type import paths.
 
 - `rsaeb::source`: `ProgramSource` and source-position value types used by
   parser diagnostics
-- `rsaeb::input`: `RuntimeInputSource` and `RuntimeInput`
+- `rsaeb::input`: `RuntimeInputSource`, `RuntimeInput`, and `RunSeed`
 - `rsaeb::program`: `Program`, `RunResult`, `RunOutcome`,
   `RuntimeStateSnapshot`, `ReturnOutput`, and `ReturnOutputView`
 - `rsaeb::limits`: `ParseLimits`, `SourceByteLimit`, `CodeLineByteLimit`,
   `PayloadByteLimit`, `RuleLimit`, `StepLimit`, `RuntimeInputByteLimit`,
   `RuntimeStateByteLimit`, `ReturnByteLimit`, `TraceSnapshotByteLimit`,
-  parser/runtime byte-count value types, `StepCount`, and default budget
-  constants
+  `RuntimeInputLimits`, `ExecutionLimits`, parser/runtime byte-count value
+  types, `StepCount`, and default budget constants
 - `rsaeb::execution`: owned stepwise run typestates (`RunSession`,
   `StepTransition`, `AppliedStep`, `StableRun`, `ReturnedRun`, `FailedRun`)
 - `rsaeb::inspect`: `RuleView`, `RuleActionView`, `PayloadView`,
