@@ -85,11 +85,11 @@ pub(crate) fn materialize_return_output(
 ///
 /// Returns `RunError` if the next step exceeds limits, the rewrite would
 /// exceed state limits, return output exceeds limits, or allocation fails.
-pub(crate) fn apply_matched_rule<'program, 'once>(
+pub(crate) fn apply_matched_rule<'program>(
     state: &mut State,
     scratch: &mut RewriteScratch,
     budget: &mut RuntimeBudgetState,
-    matched: MatchedRuleApplication<'program, 'once>,
+    matched: MatchedRuleApplication<'program, '_>,
 ) -> Result<AppliedRule<'program>, RunError> {
     let permit = budget.reserve_next_step(state.byte_count())?;
     match matched.rule().action() {
