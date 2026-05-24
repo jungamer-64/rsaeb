@@ -9,9 +9,8 @@
 //! - [`ParseError`] for source syntax and parser allocation failures.
 //! - [`RuntimeInputError`] for raw input bytes rejected before execution.
 //! - [`RunAdmissionError`] for validated input rejected as an initial runtime state.
-//! - [`RunError`] for execution-time allocation, state-size, budget failures,
-//!   and runtime invariant failures that public inputs should not be able to
-//!   construct.
+//! - [`RunError`] for execution-time allocation, state-size, and budget
+//!   failures.
 //! - [`AllocationError`] for explicit allocation boundaries such as view
 //!   materialization, canonical source construction, final output conversion,
 //!   and trace snapshots. [`AllocationContext`] names the failing boundary, and
@@ -66,7 +65,6 @@ pub use parse::{
     RightActionKind,
 };
 pub use run::{
-    InputColumn, InternalInvariantError, LimitError, RunAdmissionError, RunError,
-    RuntimeInputError, StateSizeError,
+    InputColumn, LimitError, RunAdmissionError, RunError, RuntimeInputError, StateSizeError,
 };
 pub use traced::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};

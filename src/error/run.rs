@@ -13,9 +13,7 @@ use crate::limits::{
 ///
 /// This error is returned after parsing and runtime input validation have
 /// already succeeded. It covers allocation failures inside execution,
-/// unrepresentable rewrite sizes, configured runtime budget failures, and
-/// broken parser/runtime invariants that should be unreachable through the
-/// public API.
+/// unrepresentable rewrite sizes, and configured runtime budget failures.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RunError {
     /// A fallible allocation failed during runtime execution.
@@ -24,8 +22,6 @@ pub enum RunError {
     StateSize(StateSizeError),
     /// A configured runtime budget would be exceeded.
     Limit(LimitError),
-    /// Parsed program metadata and runtime-owned state no longer agree.
-    InternalInvariant(InternalInvariantError),
 }
 
 impl Error for RunError {
@@ -34,7 +30,6 @@ impl Error for RunError {
             Self::Allocation(error) => Some(error),
             Self::StateSize(error) => Some(error),
             Self::Limit(error) => Some(error),
-            Self::InternalInvariant(error) => Some(error),
         }
     }
 }
@@ -54,12 +49,6 @@ impl From<StateSizeError> for RunError {
 impl From<LimitError> for RunError {
     fn from(value: LimitError) -> Self {
         Self::Limit(value)
-    }
-}
-
-impl From<InternalInvariantError> for RunError {
-    fn from(value: InternalInvariantError) -> Self {
-        Self::InternalInvariant(value)
     }
 }
 
@@ -232,44 +221,6 @@ impl StateSizeError {
 }
 
 impl Error for StateSizeError {}
-
-/// Runtime invariant violation that should be unrepresentable from public
-/// inputs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InternalInvariantError {
-    /// A parsed `(once)` rule referenced no runtime state slot.
-    MissingOnceRuleState,
-    /// Runtime attempted to commit a `(once)` rule without a fresh slot permit.
-    ConsumedOnceRuleCommit,
-    /// A committed rule position did not resolve inside its originating program.
-    MissingCommittedRule,
-    /// A committed return transition pointed at a non-return rule.
-    ReturnedRuleWithoutOutput,
-}
-
-impl InternalInvariantError {
-    /// Builds the missing once rule state value.
-    pub(crate) const fn missing_once_rule_state() -> Self {
-        Self::MissingOnceRuleState
-    }
-
-    /// Builds the consumed once rule commit value.
-    pub(crate) const fn consumed_once_rule_commit() -> Self {
-        Self::ConsumedOnceRuleCommit
-    }
-
-    /// Builds the missing committed rule value.
-    pub(crate) const fn missing_committed_rule() -> Self {
-        Self::MissingCommittedRule
-    }
-
-    /// Builds the returned rule without output value.
-    pub(crate) const fn returned_rule_without_output() -> Self {
-        Self::ReturnedRuleWithoutOutput
-    }
-}
-
-impl Error for InternalInvariantError {}
 
 /// Configured runtime budget failure.
 ///
