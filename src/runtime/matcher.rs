@@ -157,7 +157,7 @@ pub(crate) fn find_next_match<'program>(
                 return Ok(RuleSearch::Matched(candidate.into_application(commit)));
             }
             OnceRuleReadiness::Consumed => {}
-        };
+        }
     }
 
     Ok(RuleSearch::Stable)

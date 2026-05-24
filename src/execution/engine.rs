@@ -318,15 +318,12 @@ impl RuleCursor {
             return RuleCursorAfterMiss::Stable;
         }
 
-        match next_rule_index.checked_add(1) {
-            Some(next_rule_index) => {
-                self.state = RuleCursorState::At { next_rule_index };
-                RuleCursorAfterMiss::Advanced
-            }
-            None => {
-                self.state = RuleCursorState::Exhausted;
-                RuleCursorAfterMiss::Stable
-            }
+        if let Some(next_rule_index) = next_rule_index.checked_add(1) {
+            self.state = RuleCursorState::At { next_rule_index };
+            RuleCursorAfterMiss::Advanced
+        } else {
+            self.state = RuleCursorState::Exhausted;
+            RuleCursorAfterMiss::Stable
         }
     }
 

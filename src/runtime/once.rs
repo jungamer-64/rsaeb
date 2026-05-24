@@ -140,10 +140,11 @@ impl OnceStateSet {
     /// Returns `RunError` if the permit points at a missing runtime once-state
     /// slot.
     fn commit_once(&mut self, permit: OnceMatchPermit) -> Result<(), RunError> {
+        let OnceMatchPermit { rule, slot } = permit;
         let available_slots = PublicOnceRuleCount::new(self.states.len());
-        let Some(state) = self.states.get_mut(permit.slot.get()) else {
+        let Some(state) = self.states.get_mut(slot.get()) else {
             return Err(RunInvariantError::MissingOnceRuleState {
-                rule: permit.rule,
+                rule,
                 available_slots,
             }
             .into());
