@@ -7,7 +7,7 @@ use crate::bytes::{
     NonEmptyPayloadNeedle, Payload, PayloadByteCount, PayloadNeedle, RuntimeByte,
     RuntimeStateByteCount,
 };
-use crate::error::{InternalInvariantError, RunError, StateSizeError};
+use crate::error::{RunError, StateSizeError};
 use crate::input::InitialStateBytes;
 use crate::program::RuntimeStateSnapshot;
 use crate::rule::RewriteAction;
@@ -50,65 +50,37 @@ impl State {
     }
 
     /// Finds a match at the start of the current state.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError::InternalInvariant` if a derived match range no longer
-    /// resolves inside this runtime state.
-    pub(crate) fn starts_with_payload(
-        &self,
-        payload: &Payload,
-    ) -> Result<Option<StateMatch>, RunError> {
+    pub(crate) fn starts_with_payload(&self, payload: &Payload) -> Option<StateMatch> {
         match payload.needle() {
             PayloadNeedle::Empty(needle) => {
-                Ok(StateMatch::at_start(needle.byte_count(), self.byte_count()))
+                StateMatch::at_start(needle.byte_count(), self.byte_count())
             }
             PayloadNeedle::NonEmpty(needle) => self.matches_payload_at(StateIndex::start(), needle),
         }
     }
 
     /// Finds a match at the end of the current state.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError::InternalInvariant` if a derived match range no longer
-    /// resolves inside this runtime state.
-    pub(crate) fn ends_with_payload(
-        &self,
-        payload: &Payload,
-    ) -> Result<Option<StateMatch>, RunError> {
+    pub(crate) fn ends_with_payload(&self, payload: &Payload) -> Option<StateMatch> {
         match payload.needle() {
             PayloadNeedle::Empty(needle) => {
-                Ok(StateMatch::at_end(needle.byte_count(), self.byte_count()))
+                StateMatch::at_end(needle.byte_count(), self.byte_count())
             }
             PayloadNeedle::NonEmpty(needle) => {
-                let Some(start) =
-                    StateIndex::ending_match_start(self.byte_count(), needle.byte_count())
-                else {
-                    return Ok(None);
-                };
+                let start = StateIndex::ending_match_start(self.byte_count(), needle.byte_count())?;
                 self.matches_payload_at(start, needle)
             }
         }
     }
 
     /// Finds the leftmost match in the current state.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError::InternalInvariant` if a derived match range no longer
-    /// resolves inside this runtime state.
-    pub(crate) fn find_payload(&self, payload: &Payload) -> Result<Option<StateMatch>, RunError> {
+    pub(crate) fn find_payload(&self, payload: &Payload) -> Option<StateMatch> {
         match payload.needle() {
             PayloadNeedle::Empty(needle) => {
-                Ok(StateMatch::at_start(needle.byte_count(), self.byte_count()))
+                StateMatch::at_start(needle.byte_count(), self.byte_count())
             }
             PayloadNeedle::NonEmpty(needle) => {
-                let Some(last_start) =
-                    StateIndex::ending_match_start(self.byte_count(), needle.byte_count())
-                else {
-                    return Ok(None);
-                };
+                let last_start =
+                    StateIndex::ending_match_start(self.byte_count(), needle.byte_count())?;
 
                 for position in StateSearchRange::from_start_to(last_start) {
                     let first_byte_matches = self
@@ -121,36 +93,28 @@ impl State {
                         continue;
                     }
 
-                    if let Some(state_match) = self.matches_payload_at(position, needle)? {
-                        return Ok(Some(state_match));
+                    if let Some(state_match) = self.matches_payload_at(position, needle) {
+                        return Some(state_match);
                     }
                 }
-                Ok(None)
+                None
             }
         }
     }
 
     /// Checks whether a non-empty payload matches at a concrete state index.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError::InternalInvariant` if the derived match range no
-    /// longer resolves inside this runtime state.
     fn matches_payload_at(
         &self,
         position: StateIndex,
         needle: NonEmptyPayloadNeedle<'_>,
-    ) -> Result<Option<StateMatch>, RunError> {
-        let Some(state_match) =
-            StateMatch::at_position(position, needle.byte_count(), self.byte_count())
-        else {
-            return Ok(None);
-        };
+    ) -> Option<StateMatch> {
+        let state_match =
+            StateMatch::at_position(position, needle.byte_count(), self.byte_count())?;
         let matches = state_match
-            .matched_bytes(&self.bytes)?
+            .matched_bytes(&self.bytes)
             .zip(needle.program_bytes().iter().copied())
             .all(|(actual, expected)| actual.program_byte() == Some(expected));
-        Ok(matches.then_some(state_match))
+        matches.then_some(state_match)
     }
 
     /// Rewrites this state into scratch storage according to `request`.
@@ -167,21 +131,20 @@ impl State {
         budget: RuntimeBudgetState,
     ) -> Result<PreparedRewrite, RunError> {
         self.prepare_replacement_buffer(state_match, action.payload(), output, budget)?;
-        let slices = state_match.slices(&self.bytes)?;
         match action {
             RewriteAction::Replace(rhs) => {
-                output.push_existing(slices.prefix().iter().copied())?;
+                output.push_existing(state_match.prefix_bytes(&self.bytes))?;
                 output.push_payload(rhs)?;
-                output.push_existing(slices.suffix().iter().copied())?;
+                output.push_existing(state_match.suffix_bytes(&self.bytes))?;
             }
             RewriteAction::MoveStart(rhs) => {
                 output.push_payload(rhs)?;
-                output.push_existing(slices.prefix().iter().copied())?;
-                output.push_existing(slices.suffix().iter().copied())?;
+                output.push_existing(state_match.prefix_bytes(&self.bytes))?;
+                output.push_existing(state_match.suffix_bytes(&self.bytes))?;
             }
             RewriteAction::MoveEnd(rhs) => {
-                output.push_existing(slices.prefix().iter().copied())?;
-                output.push_existing(slices.suffix().iter().copied())?;
+                output.push_existing(state_match.prefix_bytes(&self.bytes))?;
+                output.push_existing(state_match.suffix_bytes(&self.bytes))?;
                 output.push_payload(rhs)?;
             }
         }
@@ -265,7 +228,7 @@ impl State {
 
 /// Zero-based index into runtime state bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct StateIndex {
+struct StateIndex {
     /// Zero-based state byte position.
     zero_based: usize,
 }
@@ -369,8 +332,6 @@ struct StateSpanRange {
     end: StateIndex,
     /// Length of the payload matched by this span.
     matched_len: PayloadByteCount,
-    /// Runtime-state length this span was checked against.
-    state_len: RuntimeStateByteCount,
 }
 
 impl StateSpanRange {
@@ -385,7 +346,6 @@ impl StateSpanRange {
             start,
             end,
             matched_len,
-            state_len,
         })
     }
 
@@ -403,20 +363,6 @@ impl StateSpanRange {
     fn byte_count(self) -> PayloadByteCount {
         self.matched_len
     }
-
-    /// Ensures the span is being opened against the state length that created it.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError::InternalInvariant` if this match span is opened
-    /// against a runtime state with a different length.
-    fn ensure_matches_state_len(self, bytes: &[RuntimeByte]) -> Result<(), RunError> {
-        if RuntimeStateByteCount::new(bytes.len()) == self.state_len {
-            Ok(())
-        } else {
-            Err(InternalInvariantError::invalid_state_match_range().into())
-        }
-    }
 }
 
 /// Typed runtime-state match span.
@@ -428,18 +374,12 @@ pub(crate) struct StateMatch {
 
 impl StateMatch {
     /// Builds a start-anchored match span.
-    pub(crate) fn at_start(
-        matched_len: PayloadByteCount,
-        state_len: RuntimeStateByteCount,
-    ) -> Option<Self> {
+    fn at_start(matched_len: PayloadByteCount, state_len: RuntimeStateByteCount) -> Option<Self> {
         Self::at_position(StateIndex::start(), matched_len, state_len)
     }
 
     /// Builds an end-anchored match span.
-    pub(crate) fn at_end(
-        matched_len: PayloadByteCount,
-        state_len: RuntimeStateByteCount,
-    ) -> Option<Self> {
+    fn at_end(matched_len: PayloadByteCount, state_len: RuntimeStateByteCount) -> Option<Self> {
         let start = state_len.get().checked_sub(matched_len.get())?;
         Self::at_position(StateIndex::from_zero_based(start), matched_len, state_len)
     }
@@ -459,68 +399,22 @@ impl StateMatch {
         self.range.byte_count()
     }
 
+    /// Iterates over bytes before this match witness.
+    fn prefix_bytes(self, bytes: &[RuntimeByte]) -> impl Iterator<Item = RuntimeByte> + '_ {
+        bytes.iter().copied().take(self.range.start())
+    }
+
     /// Iterates over the bytes covered by this match witness.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError::InternalInvariant` if the match range no longer
-    /// resolves inside the supplied runtime state bytes.
-    fn matched_bytes(
-        self,
-        bytes: &[RuntimeByte],
-    ) -> Result<impl Iterator<Item = RuntimeByte> + '_, RunError> {
-        Ok(self.slices(bytes)?.matched().iter().copied())
+    fn matched_bytes(self, bytes: &[RuntimeByte]) -> impl Iterator<Item = RuntimeByte> + '_ {
+        bytes
+            .iter()
+            .copied()
+            .skip(self.range.start())
+            .take(self.range.byte_count().get())
     }
 
-    /// Splits runtime state bytes around this match witness.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError::InternalInvariant` if the match range no longer
-    /// resolves inside the supplied runtime state bytes.
-    fn slices(self, bytes: &[RuntimeByte]) -> Result<MatchedStateSlices<'_>, RunError> {
-        self.range.ensure_matches_state_len(bytes)?;
-        let prefix = bytes
-            .get(..self.range.start())
-            .ok_or_else(InternalInvariantError::invalid_state_match_range)?;
-        let matched = bytes
-            .get(self.range.start()..self.range.end())
-            .ok_or_else(InternalInvariantError::invalid_state_match_range)?;
-        let suffix = bytes
-            .get(self.range.end()..)
-            .ok_or_else(InternalInvariantError::invalid_state_match_range)?;
-        Ok(MatchedStateSlices {
-            prefix,
-            matched,
-            suffix,
-        })
-    }
-}
-
-/// Borrowed split of runtime state around a match.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct MatchedStateSlices<'state> {
-    /// Bytes before the matched span.
-    prefix: &'state [RuntimeByte],
-    /// Bytes inside the matched span.
-    matched: &'state [RuntimeByte],
-    /// Bytes after the matched span.
-    suffix: &'state [RuntimeByte],
-}
-
-impl<'state> MatchedStateSlices<'state> {
-    /// Returns bytes before the matched span.
-    const fn prefix(self) -> &'state [RuntimeByte] {
-        self.prefix
-    }
-
-    /// Returns bytes inside the matched span.
-    const fn matched(self) -> &'state [RuntimeByte] {
-        self.matched
-    }
-
-    /// Returns bytes after the matched span.
-    const fn suffix(self) -> &'state [RuntimeByte] {
-        self.suffix
+    /// Iterates over bytes after this match witness.
+    fn suffix_bytes(self, bytes: &[RuntimeByte]) -> impl Iterator<Item = RuntimeByte> + '_ {
+        bytes.iter().copied().skip(self.range.end())
     }
 }

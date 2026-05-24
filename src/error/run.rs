@@ -267,7 +267,6 @@ impl InternalInvariantError {
     pub(crate) const fn returned_rule_without_output() -> Self {
         Self::ReturnedRuleWithoutOutput
     }
-
 }
 
 impl Error for InternalInvariantError {}

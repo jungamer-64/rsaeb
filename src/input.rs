@@ -87,12 +87,20 @@ impl<'input> ValidatedRuntimeInputSource<'input> {
         self.byte_count
     }
 
-    /// Replays validated bytes as typed runtime-input bytes for allocation.
-    fn runtime_input_bytes(&self) -> impl Iterator<Item = RuntimeInputByte> + 'input {
+    /// Reopens validated bytes through the checked runtime-input boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RuntimeInputError` if the validated source no longer satisfies
+    /// the runtime-input byte contract while owned storage is being built.
+    fn runtime_input_bytes(
+        &self,
+    ) -> impl Iterator<Item = Result<RuntimeInputByte, RuntimeInputError>> + 'input {
         self.bytes()
             .iter()
             .copied()
-            .map(RuntimeInputByte::from_validated_ascii)
+            .enumerate()
+            .map(|(zero_based_column, byte)| RuntimeInputByte::validate(byte, zero_based_column))
     }
 }
 
@@ -160,7 +168,7 @@ impl RuntimeInput {
         for byte in input.runtime_input_bytes() {
             try_push(
                 &mut bytes,
-                byte.into_runtime_byte(),
+                byte?.into_runtime_byte(),
                 AllocationContext::RuntimeInputValidation,
             )?;
         }

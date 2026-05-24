@@ -1,10 +1,9 @@
 use alloc::vec::Vec;
 
-use crate::allocation::{AllocationContext, AllocationError};
+use crate::allocation::{AllocationContext, AllocationError, try_push};
 use crate::bytes::{CompactByte, Payload, PayloadByteCount, PayloadSyntax};
 use crate::error::{
-    LeftModifierKind, ParseError, ParseErrorKind, ParseInvariantError, ParseLimitError,
-    PayloadKind, RightActionKind,
+    LeftModifierKind, ParseError, ParseErrorKind, ParseLimitError, PayloadKind, RightActionKind,
 };
 use crate::limits::PayloadByteLimit;
 use crate::rule::{
@@ -20,10 +19,10 @@ use super::location::parse_allocation_error;
 pub(super) struct RuleSyntaxLine {
     /// Original source line for diagnostics.
     line_number: SourceLineNumber,
-    /// Compact executable bytes for the whole rule line.
-    bytes: Vec<CompactByte>,
-    /// Proven separator indexes for left and right sides.
-    sides: RuleSides,
+    /// Left-side syntax before `=`.
+    left: OwnedCompactSyntax,
+    /// Right-side syntax after `=`.
+    right: OwnedCompactSyntax,
 }
 
 impl RuleSyntaxLine {
@@ -31,18 +30,17 @@ impl RuleSyntaxLine {
     ///
     /// # Errors
     ///
-    /// Returns `ParseError` if the line has no `=`, multiple `=` bytes,
-    /// allocation fails, or separator arithmetic overflows.
+    /// Returns `ParseError` if the line has no `=`, multiple `=` bytes, or a
+    /// rule-side buffer cannot be allocated.
     pub(super) fn new(
         line_number: SourceLineNumber,
         bytes: Vec<CompactByte>,
     ) -> Result<Self, ParseError> {
-        let separator = RuleSeparator::find(line_number, &bytes)?;
-        let sides = RuleSides::new(line_number, &bytes, separator)?;
+        let parts = RuleSyntaxParts::split(line_number, bytes)?;
         Ok(Self {
             line_number,
-            bytes,
-            sides,
+            left: parts.left,
+            right: parts.right,
         })
     }
 
@@ -53,7 +51,7 @@ impl RuleSyntaxLine {
     /// Returns `ParseError` if either rule side contains invalid modifier,
     /// action, or payload syntax.
     pub(super) fn parse(&self, payload_limit: PayloadByteLimit) -> Result<ParsedRule, ParseError> {
-        let (left, right) = self.syntax_parts()?;
+        let (left, right) = self.syntax_parts();
         let head = left.parse(payload_limit)?;
         let body = right.parse(payload_limit)?;
 
@@ -61,33 +59,34 @@ impl RuleSyntaxLine {
     }
 
     /// Borrows the compact line as left and right syntax slices.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError::InternalInvariant` if the stored rule-side witness
-    /// no longer resolves inside this compact line.
-    fn syntax_parts(&self) -> Result<(LeftSyntax<'_>, RightSyntax<'_>), ParseError> {
-        let slices = self.sides.slices(self.line_number, &self.bytes)?;
-        Ok((
+    fn syntax_parts(&self) -> (LeftSyntax<'_>, RightSyntax<'_>) {
+        (
             LeftSyntax {
                 line_number: self.line_number,
-                bytes: slices.left,
+                bytes: self.left.as_syntax(),
             },
             RightSyntax {
                 line_number: self.line_number,
-                bytes: slices.right,
+                bytes: self.right.as_syntax(),
             },
-        ))
+        )
     }
 }
 
-/// Borrowed left and right syntax slices resolved from a separator witness.
-#[derive(Clone, Copy)]
-struct RuleSideSlices<'code> {
+/// Owned syntax split around the single rule separator.
+#[derive(Debug, PartialEq, Eq)]
+struct RuleSyntaxParts {
     /// Left-side syntax before `=`.
-    left: CompactSyntax<'code>,
+    left: OwnedCompactSyntax,
     /// Right-side syntax after `=`.
-    right: CompactSyntax<'code>,
+    right: OwnedCompactSyntax,
+}
+
+/// Owned compact syntax bytes for one rule side.
+#[derive(Debug, PartialEq, Eq)]
+struct OwnedCompactSyntax {
+    /// Compact bytes in the current syntax domain.
+    bytes: Vec<CompactByte>,
 }
 
 /// Borrowed compact syntax bytes for one parser phase.
@@ -97,62 +96,71 @@ struct CompactSyntax<'code> {
     bytes: &'code [CompactByte],
 }
 
-/// Index into a compact executable line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CompactLineIndex {
-    /// Zero-based byte index in compact syntax.
-    zero_based: usize,
-}
-
-/// Location of the single rule separator and right-side start.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct RuleSeparator {
-    /// Index of the `=` separator.
-    equals: CompactLineIndex,
-    /// First compact byte after the `=` separator.
-    right_start: CompactLineIndex,
-}
-
-/// Witness that one compact line has valid rule-side ranges.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct RuleSides {
-    /// Separator indexes checked against the compact line.
-    separator: RuleSeparator,
-}
-
-impl CompactLineIndex {
-    /// Builds an index from a zero-based offset.
-    const fn from_zero_based(zero_based: usize) -> Self {
-        Self { zero_based }
-    }
-
-    /// Returns the following compact-line index.
+impl RuleSyntaxParts {
+    /// Splits compact syntax into owned left and right domains.
     ///
     /// # Errors
     ///
-    /// Returns `ParseError` if advancing the index would overflow.
-    fn checked_next(self, line_number: SourceLineNumber) -> Result<Self, ParseError> {
-        let zero_based = self.zero_based.checked_add(1).ok_or_else(|| {
-            parse_allocation_error(
+    /// Returns `ParseError` if the line has no `=`, multiple `=` bytes, or a
+    /// side buffer cannot be allocated.
+    fn split(line_number: SourceLineNumber, bytes: Vec<CompactByte>) -> Result<Self, ParseError> {
+        let mut left = OwnedCompactSyntax::new();
+        let mut right = OwnedCompactSyntax::new();
+        let mut seen_separator = false;
+
+        for byte in bytes {
+            if byte.as_u8() == b'=' {
+                if seen_separator {
+                    return Err(ParseError::at_position(
+                        SourcePosition::new(line_number, byte.source_column()),
+                        ParseErrorKind::MultipleEquals,
+                    ));
+                }
+                seen_separator = true;
+                continue;
+            }
+
+            if seen_separator {
+                right.push(byte, line_number)?;
+            } else {
+                left.push(byte, line_number)?;
+            }
+        }
+
+        if seen_separator {
+            Ok(Self { left, right })
+        } else {
+            Err(ParseError::at_line(
                 line_number,
-                AllocationError::capacity_overflow(AllocationContext::ProgramCodeLine),
-            )
-        })?;
-        Ok(Self { zero_based })
+                ParseErrorKind::MissingEquals,
+            ))
+        }
+    }
+}
+
+impl OwnedCompactSyntax {
+    /// Starts an empty owned syntax side.
+    const fn new() -> Self {
+        Self { bytes: Vec::new() }
     }
 
-    /// Returns the primitive stored value.
-    const fn get(self) -> usize {
-        self.zero_based
+    /// Adds one compact byte to this side.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if storing the side byte fails.
+    fn push(&mut self, byte: CompactByte, line_number: SourceLineNumber) -> Result<(), ParseError> {
+        try_push(&mut self.bytes, byte, AllocationContext::ProgramCodeLine)
+            .map_err(|error| ParseError::at_line(line_number, ParseErrorKind::Allocation(error)))
+    }
+
+    /// Borrows this owned syntax side.
+    fn as_syntax(&self) -> CompactSyntax<'_> {
+        CompactSyntax { bytes: &self.bytes }
     }
 }
 
 impl<'code> CompactSyntax<'code> {
-    /// Borrows compact bytes as a syntax slice.
-    const fn new(bytes: &'code [CompactByte]) -> Self {
-        Self { bytes }
-    }
-
     /// Returns the compact bytes in this syntax domain.
     const fn as_slice(self) -> &'code [CompactByte] {
         self.bytes
@@ -163,8 +171,7 @@ impl<'code> CompactSyntax<'code> {
     /// # Errors
     ///
     /// Returns `ParseError` if this compact syntax slice is empty. Callers use
-    /// this only after detecting a token prefix, so an empty slice here
-    /// indicates an invariant failure at the syntax boundary.
+    /// this only after detecting a token prefix.
     fn first_source_column(
         self,
         line_number: SourceLineNumber,
@@ -198,7 +205,9 @@ impl<'code> CompactSyntax<'code> {
             .eq(token_bytes.iter().copied());
 
         if starts_with_token {
-            self.bytes.get(token_bytes.len()..).map(Self::new)
+            self.bytes
+                .get(token_bytes.len()..)
+                .map(|bytes| Self { bytes })
         } else {
             None
         }
@@ -208,101 +217,6 @@ impl<'code> CompactSyntax<'code> {
     fn starts_with_token(self, token: SyntaxToken) -> bool {
         self.strip_token(token).is_some()
     }
-}
-
-impl RuleSeparator {
-    /// Finds the single rule separator in a compact source line.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError` if the line has no `=`, more than one `=`, or the
-    /// right-side start index cannot be represented.
-    fn find(line_number: SourceLineNumber, bytes: &[CompactByte]) -> Result<Self, ParseError> {
-        let mut found = None;
-
-        for (index, byte) in bytes.iter().copied().enumerate() {
-            if byte.as_u8() != b'=' {
-                continue;
-            }
-
-            let equals = CompactLineIndex::from_zero_based(index);
-            let right_start = equals.checked_next(line_number)?;
-            if found
-                .replace(Self {
-                    equals,
-                    right_start,
-                })
-                .is_some()
-            {
-                return Err(ParseError::at_position(
-                    SourcePosition::new(line_number, byte.source_column()),
-                    ParseErrorKind::MultipleEquals,
-                ));
-            }
-        }
-
-        found.ok_or_else(|| ParseError::at_line(line_number, ParseErrorKind::MissingEquals))
-    }
-
-    /// Index of the `=` separator.
-    const fn equals(self) -> CompactLineIndex {
-        self.equals
-    }
-
-    /// Index where right-side syntax begins.
-    const fn right_start(self) -> CompactLineIndex {
-        self.right_start
-    }
-}
-
-impl RuleSides {
-    /// Creates rule-side witnesses and validates them against the compact line.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError` if the separator indexes do not describe valid
-    /// side slices for this compact line.
-    fn new(
-        line_number: SourceLineNumber,
-        bytes: &[CompactByte],
-        separator: RuleSeparator,
-    ) -> Result<Self, ParseError> {
-        let sides = Self { separator };
-        sides.slices(line_number, bytes)?;
-        Ok(sides)
-    }
-
-    /// Borrows the proven left and right slices from compact line bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError::InternalInvariant` if the separator witness no
-    /// longer resolves inside the compact line bytes.
-    fn slices(
-        self,
-        line_number: SourceLineNumber,
-        bytes: &[CompactByte],
-    ) -> Result<RuleSideSlices<'_>, ParseError> {
-        let left = bytes
-            .get(..self.separator.equals().get())
-            .ok_or_else(|| invalid_rule_side_range(line_number))?;
-        let right = bytes
-            .get(self.separator.right_start().get()..)
-            .ok_or_else(|| invalid_rule_side_range(line_number))?;
-
-        Ok(RuleSideSlices {
-            left: CompactSyntax::new(left),
-            right: CompactSyntax::new(right),
-        })
-    }
-}
-
-/// Builds the invariant error for stale rule-side indexes.
-fn invalid_rule_side_range(line_number: SourceLineNumber) -> ParseError {
-    ParseError::at_line(
-        line_number,
-        ParseErrorKind::InternalInvariant(ParseInvariantError::invalid_rule_side_range()),
-    )
 }
 
 /// Left-side syntax before repeat and anchor classification.
@@ -702,44 +616,4 @@ fn reject_nested_rhs_action(
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod invariant_tests {
-    use super::*;
-    use crate::test_support::{TestFailure, ensure_matches, source_column, source_line_number};
-
-    type TestResult = Result<(), TestFailure>;
-
-    /// # Errors
-    ///
-    /// Returns `TestFailure` if invalid rule-side witnesses are not reported as
-    /// structured parser invariants.
-    #[test]
-    fn rule_side_witness_rechecks_compact_line_range() -> TestResult {
-        let line_number = source_line_number(1)?;
-        let bytes = [
-            CompactByte::new(b'a', source_column(1)?),
-            CompactByte::new(b'=', source_column(2)?),
-            CompactByte::new(b'b', source_column(3)?),
-        ];
-        let sides = RuleSides {
-            separator: RuleSeparator {
-                equals: CompactLineIndex::from_zero_based(3),
-                right_start: CompactLineIndex::from_zero_based(4),
-            },
-        };
-
-        let Err(error) = sides.slices(line_number, &bytes) else {
-            return Err(TestFailure::message("expected invalid rule-side range"));
-        };
-
-        ensure_matches(
-            matches!(
-                error.kind(),
-                ParseErrorKind::InternalInvariant(ParseInvariantError::InvalidRuleSideRange)
-            ),
-            "expected rule-side range invariant",
-        )
-    }
 }

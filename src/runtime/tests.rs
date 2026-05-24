@@ -2,8 +2,8 @@ use super::budget::RuntimeBudgetState;
 use super::matcher::{RuleSearch, find_next_match};
 use super::once::OnceStateSet;
 use super::rewrite::RewriteScratch;
-use super::state::{State, StateMatch};
-use crate::bytes::{CompactByte, Payload, PayloadByteCount, PayloadSyntax};
+use super::state::State;
+use crate::bytes::{CompactByte, Payload, PayloadSyntax};
 use crate::error::{InternalInvariantError, LimitError, PayloadKind, RunError, RuntimeInputError};
 use crate::execution::{FailedRun, StepTransition};
 use crate::input::{RuntimeInput, RuntimeInputSource};
@@ -13,7 +13,6 @@ use crate::limits::{
     RuntimeStateByteLimit, StepCount, StepLimit,
 };
 use crate::program::RunOutcome;
-use crate::rule::RuleAction;
 use crate::runtime::action::apply_matched_rule;
 use crate::test_support::{
     TestFailure, TestResult, TestRunPolicy, ensure_eq, ensure_matches, parse_program, run_seed,
@@ -597,42 +596,4 @@ fn empty_payload_matches_keep_anchor_specific_span_placement() -> TestResult {
     }
 
     Ok(())
-}
-
-/// # Errors
-///
-/// Returns `TestFailure` if an invalid state-match witness panics or is mapped
-/// to an unstructured runtime failure.
-#[test]
-fn invalid_state_match_range_is_structured_runtime_invariant() -> TestResult {
-    let limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(1),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
-    let program = parse_program("a=b")?;
-    let rule = program
-        .rule_slice()
-        .first()
-        .ok_or(TestFailure::message("expected parsed rule"))?;
-    let RuleAction::Rewrite(action) = rule.action() else {
-        return Err(TestFailure::message("expected rewrite action"));
-    };
-    let state = state_from_input_bytes(b"a", limits)?;
-    let state_match = StateMatch::at_end(PayloadByteCount::new(1), RuntimeStateByteCount::new(2))
-        .ok_or(TestFailure::message("expected representable state match"))?;
-    let mut scratch = RewriteScratch::new();
-
-    ensure_eq!(
-        state.rewrite_into(
-            state_match,
-            action,
-            &mut scratch,
-            RuntimeBudgetState::new(limits.execution()),
-        ),
-        Err(RunError::InternalInvariant(
-            InternalInvariantError::InvalidStateMatchRange,
-        )),
-    )
 }

@@ -108,8 +108,8 @@ impl CommittedRule {
 ///
 /// # Errors
 ///
-/// Returns `RunError::InternalInvariant` if once-rule metadata or state-match
-/// ranges no longer resolve against their owning runtime structures.
+/// Returns `RunError::InternalInvariant` if once-rule metadata no longer
+/// resolves against its owning runtime structure.
 pub(crate) fn find_next_match<'program, 'once>(
     rules: &'program [Rule],
     once_states: &'once mut OnceStateSet,
@@ -140,7 +140,7 @@ fn matched_candidate_for_rule<'program>(
     once_states: &OnceStateSet,
     state: &State,
 ) -> Result<Option<MatchedRuleCandidate<'program>>, RunError> {
-    let Some(state_match) = find_match(state, rule)? else {
+    let Some(state_match) = find_match(state, rule) else {
         return Ok(None);
     };
     match once_states.availability_for_rule(rule)? {
@@ -154,9 +154,7 @@ fn matched_candidate_for_rule<'program>(
 ///
 /// # Errors
 ///
-/// Returns `RunError::InternalInvariant` if a derived state-match range no
-/// longer resolves inside the current runtime state.
-fn find_match(state: &State, rule: &Rule) -> Result<Option<StateMatch>, RunError> {
+fn find_match(state: &State, rule: &Rule) -> Option<StateMatch> {
     match rule.anchor() {
         RuleAnchorSyntax::Anywhere => state.find_payload(rule.lhs()),
         RuleAnchorSyntax::Start => state.starts_with_payload(rule.lhs()),
