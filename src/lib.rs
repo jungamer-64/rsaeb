@@ -59,6 +59,8 @@
 //! [`limits::ExecutionLimits`], checks the initial runtime-state budget, and
 //! prevents a later execution API from receiving raw bytes or detached budget
 //! values.
+//! [`execution::RuleAttemptSeed`] extends that admission witness with a
+//! [`limits::RuleAttemptLimit`] when a host needs rule-line attempt stepping.
 //!
 //! # Basic execution
 //!
@@ -224,15 +226,15 @@
 //! transitions are terminal; recovering the program never recovers a retryable
 //! session. Borrowed applied and returned transitions carry
 //! [`inspect::RuleView`] witnesses; owned transitions retain
-//! [`inspect::RuleSnapshot`] values so rule metadata remains available after
-//! ownership moves.
+//! [`execution::OwnedRuleWitness`] values so rule metadata remains available
+//! after ownership moves.
 //!
 //! Use [`program::Program::start_rule_attempt_run`] when the host needs to
 //! observe every executable rule line, including lines that do not apply to the
 //! current runtime state:
 //!
 //! ```
-//! use rsaeb::execution::{BorrowedRuleAttemptTransition, RuleMissReason};
+//! use rsaeb::execution::{BorrowedRuleAttemptTransition, RuleAttemptSeed, RuleMissReason};
 //! use rsaeb::limits::{
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
 //!     RuleAttemptLimit, StepLimit,
@@ -253,7 +255,8 @@
 //! );
 //! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), input_limits)?;
 //! let seed = RunSeed::admit(input, execution_limits)?;
-//! let execution = program.start_rule_attempt_run(seed, RuleAttemptLimit::new(10))?;
+//! let attempt_seed = RuleAttemptSeed::new(seed, RuleAttemptLimit::new(10));
+//! let execution = program.start_rule_attempt_run(attempt_seed)?;
 //!
 //! let execution = match execution.step() {
 //!     BorrowedRuleAttemptTransition::Missed(missed) => {
@@ -291,7 +294,8 @@
 //! [`limits::RuntimeInputLimits`] carries input-byte validation policy.
 //! [`limits::ExecutionLimits`] carries initial runtime-state admission, the step
 //! budget, and byte budgets for rewrite states and `(return)` outputs.
-//! [`limits::RuleAttemptLimit`] bounds the separate rule-line attempt mode.
+//! [`execution::RuleAttemptSeed`] binds one run seed to the
+//! [`limits::RuleAttemptLimit`] for the separate rule-line attempt mode.
 //! Trace snapshot materialization uses an explicit
 //! [`limits::TraceSnapshotByteLimit`]. Step limits are checked only when another
 //! matching rule would apply after the configured number of completed steps:

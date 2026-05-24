@@ -95,20 +95,21 @@ An owned failed step returns `OwnedStepTransition::Failed`; it exposes the same
 diagnostics and can also split the runtime error from the owned parsed program.
 Failed transitions are terminal for both ownership modes; recovering ownership
 does not recover a retryable session. Borrowed applied and returned transitions
-carry `RuleView` witnesses. Owned transitions retain `RuleSnapshot` values so
-rule metadata remains available after the parsed program moves with the
+carry `RuleView` witnesses. Owned transitions retain `OwnedRuleWitness` values
+so rule metadata remains available after the parsed program moves with the
 session.
 
 The docs.rs crate page contains a complete doctested stepwise example.
 
 Use `Program::start_rule_attempt_run` when a host needs debugger-style control
 over every executable rule line. It reports `BorrowedRuleAttemptTransition::Missed`
-for non-applying rules as a `RuleMiss` whose `rule()` is the rule witness and
-whose `reason()` is a typed `RuleMissReason`. It consumes a separate
-`RuleAttemptLimit` and keeps `StepLimit` reserved for committed rewrite steps.
-Stable rule-attempt terminals carry `RuleAttemptStableReason`, so an empty
-program is distinct from a final non-matching rule. The owned counterpart is
-`Program::into_rule_attempt_run`.
+for non-applying rules as a `BorrowedRuleMiss` whose `rule()` is the borrowed
+rule witness and whose `reason()` is a typed `RuleMissReason`. It consumes
+`RuleAttemptSeed`, which binds the admitted `RunSeed` to a `RuleAttemptLimit`
+while keeping `StepLimit` reserved for committed rewrite steps. Stable
+rule-attempt terminals carry `BorrowedRuleAttemptStableReason`; the owned
+counterpart exposes `OwnedRuleMiss`, `OwnedRuleWitness`, and
+`OwnedRuleAttemptStableReason` through `Program::into_rule_attempt_run`.
 
 ### Resource Limits
 
@@ -123,8 +124,9 @@ initial runtime-state size during admission, then carries the step,
 rewrite-state, and return-output budgets through the run. Step count alone is
 not enough for a rewrite system because a short run can still expand state
 aggressively.
-`RuleAttemptLimit` belongs only to rule-attempt sessions and counts consumed
-executable rule lines, including misses.
+`RuleAttemptSeed` belongs only to rule-attempt sessions and binds the admitted
+run seed to a `RuleAttemptLimit`. The limit counts consumed executable rule
+lines, including misses.
 
 ```rust
 use rsaeb::error::{LimitError, RunError};
@@ -531,11 +533,12 @@ type import paths.
   `BorrowedReturnedRun`, `BorrowedFailedRun`) and explicit owned typestates
   (`OwnedRunSession`, `OwnedStepTransition`, `OwnedAppliedStep`,
   `OwnedStableRun`, `OwnedReturnedRun`, `OwnedFailedRun`), plus borrowed and
-  owned rule-attempt typestates with `RuleMissReason` and
-  `RuleAttemptStableReason`
-- `rsaeb::inspect`: `RuleView`, `RuleSnapshot`, `RuleActionView`,
-  `RuleActionSnapshot`, `PayloadView`, `PayloadBytes`, `CanonicalRuleSource`,
-  rule position/count types, `OnceRuleCount`, `RuleRepeat`, and `RuleAnchor`
+  owned rule-attempt typestates with `RuleAttemptSeed`, `RuleMissReason`,
+  borrowed/owned miss types, borrowed/owned stable-reason types, and
+  `OwnedRuleWitness`
+- `rsaeb::inspect`: `RuleView`, `RuleActionView`, `PayloadView`,
+  `PayloadBytes`, `CanonicalRuleSource`, rule position/count types,
+  `OnceRuleCount`, `RuleRepeat`, and `RuleAnchor`
 - `rsaeb::trace`: `TraceEvent`, `TraceEffect`, borrowed trace aliases,
   snapshot trace aliases, and `RuntimeStateView`
 - `rsaeb::error`: parse, input, runtime, allocation, limit, and trace error

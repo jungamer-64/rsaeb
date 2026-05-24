@@ -20,6 +20,7 @@ impl fmt::Display for AllocationContext {
             Self::RuntimeOnceRuleState => f.write_str("runtime once rule state"),
             Self::RuntimeRewriteState => f.write_str("runtime rewrite state"),
             Self::PayloadView => f.write_str("payload view"),
+            Self::OwnedRuleWitness => f.write_str("owned execution rule witness"),
             Self::RuntimeStateView => f.write_str("runtime state view"),
             Self::FinalOutput => f.write_str("final output"),
             Self::ReturnOutput => f.write_str("return output"),
@@ -212,6 +213,15 @@ impl fmt::Display for RunInvariantError {
                 "runtime invariant failure: once rule {} had no state slot among {} available once slots",
                 rule.number().get(),
                 available_slots.get(),
+            ),
+            Self::MissingRuleCursorTarget {
+                rule,
+                available_rules,
+            } => write!(
+                f,
+                "runtime invariant failure: rule-attempt cursor requested rule {} among {} executable rules",
+                rule.number().get(),
+                available_rules.get(),
             ),
         }
     }

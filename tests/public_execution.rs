@@ -6,12 +6,14 @@ mod support;
 
 use rsaeb::error::LimitError;
 use rsaeb::execution::{
-    BorrowedAppliedStep, BorrowedFailedRun, BorrowedReturnedRun, BorrowedRuleAttemptTransition,
-    BorrowedRunSession, BorrowedStableRun, BorrowedStepTransition, OwnedRuleAttemptSession,
-    OwnedRuleAttemptTransition, OwnedStepTransition, RuleAttemptStableReason, RuleMissReason,
+    BorrowedAppliedStep, BorrowedFailedRun, BorrowedReturnedRun, BorrowedRuleAttemptStableReason,
+    BorrowedRuleAttemptTransition, BorrowedRunSession, BorrowedStableRun, BorrowedStepTransition,
+    OwnedRuleAction, OwnedRuleAttemptSession, OwnedRuleAttemptStableReason,
+    OwnedRuleAttemptTransition, OwnedRuleWitness, OwnedStepTransition, RuleAttemptSeed,
+    RuleMissReason,
 };
 use rsaeb::input::RunSeed;
-use rsaeb::inspect::{RuleActionSnapshot, RuleAnchor, RuleRepeat, RuleSnapshot};
+use rsaeb::inspect::{RuleAnchor, RuleRepeat};
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit,
     RuleAttemptLimit, StepLimit,
@@ -94,7 +96,7 @@ enum StableReasonSignature {
     },
 }
 
-enum ExpectedSnapshotAction<'expected> {
+enum ExpectedOwnedRuleAction<'expected> {
     Replace(&'expected [u8]),
     Return(&'expected [u8]),
 }
@@ -103,13 +105,13 @@ enum ExpectedSnapshotAction<'expected> {
 ///
 /// # Errors
 ///
-/// Returns `TestFailure` if the snapshot metadata or materialized payloads differ.
-fn ensure_rule_snapshot(
-    rule: &RuleSnapshot,
+/// Returns `TestFailure` if the witness metadata or materialized payloads differ.
+fn ensure_owned_rule_witness(
+    rule: &OwnedRuleWitness,
     position: usize,
     line_number: usize,
     lhs: &[u8],
-    action: ExpectedSnapshotAction<'_>,
+    action: ExpectedOwnedRuleAction<'_>,
 ) -> TestResult {
     ensure_eq!(rule.position().number().get(), position)?;
     ensure_eq!(rule.line_number().get(), line_number)?;
@@ -117,27 +119,24 @@ fn ensure_rule_snapshot(
     ensure_eq!(rule.anchor(), RuleAnchor::Anywhere)?;
     ensure_eq!(rule.lhs().as_slice(), lhs)?;
     match (rule.action(), action) {
-        (RuleActionSnapshot::Replace(payload), ExpectedSnapshotAction::Replace(expected))
-        | (RuleActionSnapshot::Return(payload), ExpectedSnapshotAction::Return(expected)) => {
+        (OwnedRuleAction::Replace(payload), ExpectedOwnedRuleAction::Replace(expected))
+        | (OwnedRuleAction::Return(payload), ExpectedOwnedRuleAction::Return(expected)) => {
             ensure_eq!(payload.as_slice(), expected)
         }
-        (RuleActionSnapshot::MoveStart(_), _)
-        | (RuleActionSnapshot::MoveEnd(_), _)
-        | (RuleActionSnapshot::Replace(_), _)
-        | (RuleActionSnapshot::Return(_), _) => {
-            Err(TestFailure::message("unexpected rule snapshot action"))
+        (OwnedRuleAction::MoveStart(_), _)
+        | (OwnedRuleAction::MoveEnd(_), _)
+        | (OwnedRuleAction::Replace(_), _)
+        | (OwnedRuleAction::Return(_), _) => {
+            Err(TestFailure::message("unexpected owned rule witness action"))
         }
     }
 }
 
-fn stable_reason_signature<Rule>(
-    reason: RuleAttemptStableReason<Rule>,
-    position: impl Fn(&Rule) -> usize,
-) -> StableReasonSignature {
+fn owned_stable_reason_signature(reason: &OwnedRuleAttemptStableReason) -> StableReasonSignature {
     match reason {
-        RuleAttemptStableReason::NoExecutableRules => StableReasonSignature::NoExecutableRules,
-        RuleAttemptStableReason::FinalMiss(miss) => StableReasonSignature::FinalMiss {
-            rule_position: position(miss.rule()),
+        OwnedRuleAttemptStableReason::NoExecutableRules => StableReasonSignature::NoExecutableRules,
+        OwnedRuleAttemptStableReason::FinalMiss(miss) => StableReasonSignature::FinalMiss {
+            rule_position: miss.rule().position().number().get(),
             reason: miss.reason(),
         },
     }
@@ -242,9 +241,7 @@ fn finish_owned_rule_attempt_signatures(
                 signatures.push(OwnedRuleAttemptSignature::Stable {
                     attempts: stable.attempts().get(),
                     steps: stable.steps().get(),
-                    stable_reason: stable_reason_signature(stable.stable_reason(), |rule| {
-                        rule.position().number().get()
-                    }),
+                    stable_reason: owned_stable_reason_signature(stable.stable_reason()),
                 });
                 return Ok(signatures);
             }
@@ -459,7 +456,8 @@ fn execution_rule_attempt_surface_reports_misses_and_resets_after_apply() -> Tes
     );
     let program = parse_program("z=x\na=b\nb=c")?;
     let input = runtime_input(b"a", limits)?;
-    let execution = program.start_rule_attempt_run(input, RuleAttemptLimit::new(20))?;
+    let execution =
+        program.start_rule_attempt_run(RuleAttemptSeed::new(input, RuleAttemptLimit::new(20)))?;
 
     let execution = match expect_rule_attempt_transition(execution.step())? {
         BorrowedRuleAttemptTransition::Missed(missed) => {
@@ -563,8 +561,9 @@ fn execution_owned_rule_attempt_surface_reports_misses_resets_and_returns() -> T
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
-    let execution = parse_program("z=x\na=b\nb=(return)ok")?
-        .into_rule_attempt_run(runtime_input(b"a", limits)?, RuleAttemptLimit::new(20))?;
+    let execution = parse_program("z=x\na=b\nb=(return)ok")?.into_rule_attempt_run(
+        RuleAttemptSeed::new(runtime_input(b"a", limits)?, RuleAttemptLimit::new(20)),
+    )?;
     ensure_eq!(
         finish_owned_rule_attempt_signatures(execution)?,
         [
@@ -612,13 +611,15 @@ fn execution_rule_attempt_stable_reason_is_typed() -> TestResult {
     );
     let program = parse_program("a=b")?;
     let input = runtime_input(b"z", limits)?;
-    let execution = program.start_rule_attempt_run(input, RuleAttemptLimit::new(10))?;
+    let execution =
+        program.start_rule_attempt_run(RuleAttemptSeed::new(input, RuleAttemptLimit::new(10)))?;
 
     match expect_rule_attempt_transition(execution.step())? {
         BorrowedRuleAttemptTransition::Stable(stable) => {
             ensure_eq!(stable.attempts().get(), 1)?;
             ensure_eq!(stable.steps().get(), 0)?;
-            let RuleAttemptStableReason::FinalMiss(final_miss) = stable.stable_reason() else {
+            let BorrowedRuleAttemptStableReason::FinalMiss(final_miss) = stable.stable_reason()
+            else {
                 return Err(TestFailure::message("expected terminal miss"));
             };
             ensure_eq!(final_miss.rule().position().number().get(), 1)?;
@@ -636,8 +637,10 @@ fn execution_rule_attempt_stable_reason_is_typed() -> TestResult {
         }
     }
     let program = parse_program("# no executable rules")?;
-    let execution =
-        program.start_rule_attempt_run(runtime_input(b"z", limits)?, RuleAttemptLimit::new(10))?;
+    let execution = program.start_rule_attempt_run(RuleAttemptSeed::new(
+        runtime_input(b"z", limits)?,
+        RuleAttemptLimit::new(10),
+    ))?;
 
     match expect_rule_attempt_transition(execution.step())? {
         BorrowedRuleAttemptTransition::Stable(stable) => {
@@ -645,7 +648,7 @@ fn execution_rule_attempt_stable_reason_is_typed() -> TestResult {
             ensure_eq!(stable.steps().get(), 0)?;
             ensure_eq!(
                 stable.stable_reason(),
-                RuleAttemptStableReason::NoExecutableRules
+                BorrowedRuleAttemptStableReason::NoExecutableRules
             )?;
             ensure_eq!(
                 runtime_view_bytes(stable.state())?.as_slice(),
@@ -675,7 +678,8 @@ fn execution_rule_attempt_reports_consumed_once_rule_before_later_match() -> Tes
     );
     let program = parse_program("(once)a=b\nb=c")?;
     let input = runtime_input(b"ab", limits)?;
-    let execution = program.start_rule_attempt_run(input, RuleAttemptLimit::new(10))?;
+    let execution =
+        program.start_rule_attempt_run(RuleAttemptSeed::new(input, RuleAttemptLimit::new(10)))?;
 
     let execution = match expect_rule_attempt_transition(execution.step())? {
         BorrowedRuleAttemptTransition::Applied(applied) => {
@@ -739,7 +743,8 @@ fn execution_rule_attempt_limit_is_independent_from_step_limit() -> TestResult {
     );
     let program = parse_program("x=y\na=b")?;
     let input = runtime_input(b"a", limits)?;
-    let execution = program.start_rule_attempt_run(input, RuleAttemptLimit::new(1))?;
+    let execution =
+        program.start_rule_attempt_run(RuleAttemptSeed::new(input, RuleAttemptLimit::new(1)))?;
 
     let execution = match expect_rule_attempt_transition(execution.step())? {
         BorrowedRuleAttemptTransition::Missed(missed) => {
@@ -958,9 +963,9 @@ fn execution_owned_terminals_can_return_program() -> TestResult {
 /// # Errors
 ///
 /// Returns `TestFailure` if owned execution transitions do not retain owned
-/// rule metadata snapshots at every public rule-witness boundary.
+/// rule witnesses at every public rule-witness boundary.
 #[test]
-fn execution_owned_transitions_retain_rule_snapshots() -> TestResult {
+fn execution_owned_transitions_retain_rule_witnesses() -> TestResult {
     let limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10),
@@ -971,47 +976,49 @@ fn execution_owned_transitions_retain_rule_snapshots() -> TestResult {
     let execution = parse_program("a=b\nb=(return)ok")?.into_run(runtime_input(b"a", limits)?)?;
     let execution = match execution.step() {
         OwnedStepTransition::Applied(applied) => {
-            ensure_rule_snapshot(
+            ensure_owned_rule_witness(
                 applied.rule(),
                 1,
                 1,
                 b"a",
-                ExpectedSnapshotAction::Replace(b"b"),
+                ExpectedOwnedRuleAction::Replace(b"b"),
             )?;
             applied.into_session()
         }
         OwnedStepTransition::Stable(_)
         | OwnedStepTransition::Returned(_)
         | OwnedStepTransition::Failed(_) => {
-            return Err(TestFailure::message("expected owned applied snapshot"));
+            return Err(TestFailure::message("expected owned applied witness"));
         }
     };
 
     match execution.step() {
-        OwnedStepTransition::Returned(returned) => ensure_rule_snapshot(
+        OwnedStepTransition::Returned(returned) => ensure_owned_rule_witness(
             returned.rule(),
             2,
             2,
             b"b",
-            ExpectedSnapshotAction::Return(b"ok"),
+            ExpectedOwnedRuleAction::Return(b"ok"),
         ),
         OwnedStepTransition::Applied(_)
         | OwnedStepTransition::Stable(_)
-        | OwnedStepTransition::Failed(_) => Err(TestFailure::message(
-            "expected owned returned rule snapshot",
-        )),
+        | OwnedStepTransition::Failed(_) => {
+            Err(TestFailure::message("expected owned returned rule witness"))
+        }
     }?;
 
-    let attempt = parse_program("z=x\na=b")?
-        .into_rule_attempt_run(runtime_input(b"a", limits)?, RuleAttemptLimit::new(10))?;
+    let attempt = parse_program("z=x\na=b")?.into_rule_attempt_run(RuleAttemptSeed::new(
+        runtime_input(b"a", limits)?,
+        RuleAttemptLimit::new(10),
+    ))?;
     let attempt = match attempt.step() {
         OwnedRuleAttemptTransition::Missed(missed) => {
-            ensure_rule_snapshot(
+            ensure_owned_rule_witness(
                 missed.miss().rule(),
                 1,
                 1,
                 b"z",
-                ExpectedSnapshotAction::Replace(b"x"),
+                ExpectedOwnedRuleAction::Replace(b"x"),
             )?;
             ensure_eq!(missed.miss().reason(), RuleMissReason::StateMismatch)?;
             missed.into_session()
@@ -1020,18 +1027,18 @@ fn execution_owned_transitions_retain_rule_snapshots() -> TestResult {
         | OwnedRuleAttemptTransition::Stable(_)
         | OwnedRuleAttemptTransition::Returned(_)
         | OwnedRuleAttemptTransition::Failed(_) => {
-            return Err(TestFailure::message("expected owned missed rule snapshot"));
+            return Err(TestFailure::message("expected owned missed rule witness"));
         }
     };
 
     match attempt.step() {
         OwnedRuleAttemptTransition::Applied(applied) => {
-            ensure_rule_snapshot(
+            ensure_owned_rule_witness(
                 applied.rule(),
                 2,
                 2,
                 b"a",
-                ExpectedSnapshotAction::Replace(b"b"),
+                ExpectedOwnedRuleAction::Replace(b"b"),
             )?;
         }
         OwnedRuleAttemptTransition::Missed(_)
@@ -1042,19 +1049,21 @@ fn execution_owned_transitions_retain_rule_snapshots() -> TestResult {
         }
     };
 
-    let final_attempt = parse_program("z=x")?
-        .into_rule_attempt_run(runtime_input(b"a", limits)?, RuleAttemptLimit::new(10))?;
+    let final_attempt = parse_program("z=x")?.into_rule_attempt_run(RuleAttemptSeed::new(
+        runtime_input(b"a", limits)?,
+        RuleAttemptLimit::new(10),
+    ))?;
     match final_attempt.step() {
         OwnedRuleAttemptTransition::Stable(stable) => {
-            let RuleAttemptStableReason::FinalMiss(final_miss) = stable.stable_reason() else {
+            let OwnedRuleAttemptStableReason::FinalMiss(final_miss) = stable.stable_reason() else {
                 return Err(TestFailure::message("expected owned final miss"));
             };
-            ensure_rule_snapshot(
+            ensure_owned_rule_witness(
                 final_miss.rule(),
                 1,
                 1,
                 b"z",
-                ExpectedSnapshotAction::Replace(b"x"),
+                ExpectedOwnedRuleAction::Replace(b"x"),
             )?;
             ensure_eq!(final_miss.reason(), RuleMissReason::StateMismatch)
         }
@@ -1062,7 +1071,7 @@ fn execution_owned_transitions_retain_rule_snapshots() -> TestResult {
         | OwnedRuleAttemptTransition::Applied(_)
         | OwnedRuleAttemptTransition::Returned(_)
         | OwnedRuleAttemptTransition::Failed(_) => Err(TestFailure::message(
-            "expected owned stable final-miss snapshot",
+            "expected owned stable final-miss witness",
         )),
     }
 }
@@ -1081,7 +1090,10 @@ fn execution_owned_rule_attempt_terminals_can_return_program() -> TestResult {
     );
 
     let stable_program = match parse_program("a=b")?
-        .into_rule_attempt_run(runtime_input(b"z", limits)?, RuleAttemptLimit::new(10))?
+        .into_rule_attempt_run(RuleAttemptSeed::new(
+            runtime_input(b"z", limits)?,
+            RuleAttemptLimit::new(10),
+        ))?
         .step()
     {
         OwnedRuleAttemptTransition::Stable(stable) => stable.into_program(),
@@ -1095,7 +1107,10 @@ fn execution_owned_rule_attempt_terminals_can_return_program() -> TestResult {
     ensure_eq!(stable_program.rule_count().get(), 1)?;
 
     let returned_program = match parse_program("a=(return)ok")?
-        .into_rule_attempt_run(runtime_input(b"a", limits)?, RuleAttemptLimit::new(10))?
+        .into_rule_attempt_run(RuleAttemptSeed::new(
+            runtime_input(b"a", limits)?,
+            RuleAttemptLimit::new(10),
+        ))?
         .step()
     {
         OwnedRuleAttemptTransition::Returned(returned) => returned.into_program(),

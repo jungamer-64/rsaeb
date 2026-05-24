@@ -28,7 +28,7 @@ use crate::input::RunSeed;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::limits::ParseLimits;
 use crate::parser::parse_rules_impl;
-use crate::rule::Rule;
+use crate::rule::{OnceRuleCount as RuntimeOnceRuleCount, Rule};
 use crate::source::ProgramSource;
 
 pub(crate) use rule_set::{RuleSet, RuleSetBuilder};
@@ -109,6 +109,11 @@ impl Program {
     /// Borrows the immutable rule table in execution order.
     pub(crate) fn rule_slice(&self) -> &[Rule] {
         self.rule_set.as_slice()
+    }
+
+    /// Runtime once-state slots required by one execution.
+    pub(crate) fn once_rule_slot_count(&self) -> RuntimeOnceRuleCount {
+        self.rule_set.once_rule_slot_count()
     }
 
     /// Starts a stateful run session that borrows this parsed program.

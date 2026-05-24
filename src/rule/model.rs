@@ -198,11 +198,6 @@ pub(crate) struct OnceRuleSlot {
 }
 
 impl OnceRuleCount {
-    /// Builds a count from parser-owned once-slot state.
-    pub(crate) const fn new(value: usize) -> Self {
-        Self { value }
-    }
-
     /// Number of per-run once slots required by the program.
     pub(crate) const fn get(self) -> usize {
         self.value
@@ -248,14 +243,6 @@ impl RuleAvailability {
         match self {
             Self::Always => RuleRepeat::Always,
             Self::Once(_) => RuleRepeat::Once,
-        }
-    }
-
-    /// Returns whether this availability owns a once slot.
-    pub(crate) const fn is_once(self) -> bool {
-        match self {
-            Self::Always => false,
-            Self::Once(_) => true,
         }
     }
 }

@@ -11,6 +11,8 @@ use crate::rule::{OnceRuleCount, ParsedRule, Rule, RuleAvailability, RuleRepeatS
 pub(crate) struct RuleSet {
     /// Parsed rules in execution order.
     rules: Vec<Rule>,
+    /// Parser-assigned once-slot count for one runtime invocation.
+    once_rule_count: OnceRuleCount,
 }
 
 /// Parser-owned rule table builder.
@@ -176,7 +178,10 @@ impl RuleSetBuilder {
 
     /// Finalizes parsed rules into an immutable executable table.
     pub(crate) fn finish(self) -> RuleSet {
-        RuleSet { rules: self.rules }
+        RuleSet {
+            rules: self.rules,
+            once_rule_count: self.next_once_rule_count,
+        }
     }
 }
 
@@ -188,12 +193,12 @@ impl RuleSet {
 
     /// Public count of parsed `(once)` rules.
     pub(crate) fn once_rule_count(&self) -> PublicOnceRuleCount {
-        PublicOnceRuleCount::new(
-            self.rules
-                .iter()
-                .filter(|rule| rule.availability().is_once())
-                .count(),
-        )
+        PublicOnceRuleCount::new(self.once_rule_count.get())
+    }
+
+    /// Runtime slot count required for one execution.
+    pub(crate) const fn once_rule_slot_count(&self) -> OnceRuleCount {
+        self.once_rule_count
     }
 
     /// Borrows rules in execution order.

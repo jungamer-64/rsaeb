@@ -17,6 +17,10 @@ pub(crate) enum PayloadInspectionDomain {}
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CanonicalRuleSourceDomain {}
 
+/// Marker for parsed rule bytes materialized for owned execution witnesses.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum OwnedRuleWitnessPayloadDomain {}
+
 /// Owned bytes tagged with the domain that produced them.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct MaterializedBytes<Domain> {

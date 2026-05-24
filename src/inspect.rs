@@ -115,6 +115,9 @@ pub struct RuleNumber {
 }
 
 impl RuleNumber {
+    /// First public rule number.
+    pub(crate) const FIRST: Self = Self { one_based: 1 };
+
     /// Builds an index from a zero-based offset.
     fn from_zero_based(zero_based: usize) -> Option<Self> {
         let one_based = zero_based.checked_add(1)?;
@@ -140,6 +143,11 @@ pub struct RulePosition {
 }
 
 impl RulePosition {
+    /// First executable rule position.
+    pub(crate) const FIRST: Self = Self {
+        number: RuleNumber::FIRST,
+    };
+
     /// Builds an index from a zero-based offset.
     pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
         let number = RuleNumber::from_zero_based(zero_based)?;

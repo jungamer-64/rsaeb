@@ -44,6 +44,13 @@ pub enum RunInvariantError {
         /// Number of runtime once-state slots available for this run.
         available_slots: crate::inspect::OnceRuleCount,
     },
+    /// Rule-attempt cursor pointed outside the parsed executable rule table.
+    MissingRuleCursorTarget {
+        /// Program-local rule position requested by the cursor.
+        rule: crate::inspect::RulePosition,
+        /// Number of executable rules available in the parsed program.
+        available_rules: crate::inspect::RuleCount,
+    },
 }
 
 impl Error for RunInvariantError {}

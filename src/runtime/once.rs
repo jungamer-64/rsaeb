@@ -73,19 +73,13 @@ impl MatchedRuleCommit {
 }
 
 impl OnceStateSet {
-    /// Builds per-execution once-slot state directly from parsed rules.
+    /// Builds per-execution once-slot state from parser-assigned slot count.
     ///
     /// # Errors
     ///
     /// Returns `AllocationError` if the per-execution once-state table cannot
     /// be allocated.
-    pub(crate) fn new(rules: &[Rule]) -> Result<Self, AllocationError> {
-        let once_rule_count = OnceRuleCount::new(
-            rules
-                .iter()
-                .filter(|rule| rule.availability().is_once())
-                .count(),
-        );
+    pub(crate) fn new(once_rule_count: OnceRuleCount) -> Result<Self, AllocationError> {
         let mut states = Vec::new();
         try_reserve_total_exact(
             &mut states,

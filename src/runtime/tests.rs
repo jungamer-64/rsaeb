@@ -314,7 +314,7 @@ fn once_rewrite_limit_failure_does_not_commit_rule() -> TestResult {
     let mut state = state_from_input_bytes(b"a", limits)?;
     let mut budget = RuntimeBudgetState::new(limits.execution());
     let mut scratch = RewriteScratch::new();
-    let mut once_states = OnceStateSet::new(program.rule_slice())?;
+    let mut once_states = OnceStateSet::new(program.once_rule_slot_count())?;
 
     let matched = match find_next_match(program.rule_slice(), &once_states, &state)? {
         RuleSearch::Matched(matched) => matched,
@@ -363,7 +363,7 @@ fn once_return_limit_failure_does_not_commit_rule() -> TestResult {
     let mut state = state_from_input_bytes(b"a", limits)?;
     let mut budget = RuntimeBudgetState::new(limits.execution());
     let mut scratch = RewriteScratch::new();
-    let mut once_states = OnceStateSet::new(program.rule_slice())?;
+    let mut once_states = OnceStateSet::new(program.once_rule_slot_count())?;
 
     let matched = match find_next_match(program.rule_slice(), &once_states, &state)? {
         RuleSearch::Matched(matched) => matched,
@@ -404,7 +404,7 @@ fn once_return_limit_failure_does_not_commit_rule() -> TestResult {
 #[test]
 fn once_state_set_is_constructed_from_the_rule_table() -> TestResult {
     let program = parse_program("(once)a=b")?;
-    let once_states = OnceStateSet::new(program.rule_slice())?;
+    let once_states = OnceStateSet::new(program.once_rule_slot_count())?;
     let state = state_from_input_bytes(
         b"a",
         TestRunPolicy::new(
@@ -431,8 +431,7 @@ fn once_state_set_is_constructed_from_the_rule_table() -> TestResult {
 #[test]
 fn missing_once_rule_state_is_runtime_invariant_error() -> TestResult {
     let program = parse_program("(once)a=b")?;
-    let empty_rules: &[crate::rule::Rule] = &[];
-    let once_states = OnceStateSet::new(empty_rules)?;
+    let once_states = OnceStateSet::new(crate::rule::OnceRuleCount::default())?;
     let state = state_from_input_bytes(
         b"a",
         TestRunPolicy::new(

@@ -28,6 +28,8 @@ pub enum AllocationContext {
     RuntimeRewriteState,
     /// Materializing a payload view outside parser/runtime execution.
     PayloadView,
+    /// Materializing parsed rule payloads for owned execution witnesses.
+    OwnedRuleWitness,
     /// Materializing a borrowed runtime-state view outside trace snapshot APIs.
     RuntimeStateView,
     /// Materializing a stable final runtime state as public output bytes.
@@ -233,10 +235,10 @@ mod tests {
         ensure_eq!(error.context(), AllocationContext::RuntimeInputValidation)?;
 
         let error = AllocationError::reservation_failed(
-            AllocationContext::RuleSnapshot,
+            AllocationContext::OwnedRuleWitness,
             RequestedCapacity::new(5),
         );
-        ensure_eq!(error.context(), AllocationContext::RuleSnapshot)?;
+        ensure_eq!(error.context(), AllocationContext::OwnedRuleWitness)?;
 
         Ok(())
     }
@@ -278,13 +280,13 @@ mod tests {
         )?;
 
         let error = AllocationError::reservation_failed(
-            AllocationContext::RuleSnapshot,
+            AllocationContext::OwnedRuleWitness,
             RequestedCapacity::new(5),
         );
 
         ensure_eq!(
             error.to_string(),
-            "allocation reservation failure while building rule snapshot; requested capacity: 5",
+            "allocation reservation failure while building owned execution rule witness; requested capacity: 5",
         )?;
 
         let error = AllocationError::capacity_overflow(AllocationContext::CanonicalSource);

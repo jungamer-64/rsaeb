@@ -1,6 +1,6 @@
-use crate::error::{RunError, TracedRunError};
+use crate::error::{RunError, RunInvariantError, TracedRunError};
 use crate::input::RunSeed;
-use crate::inspect::RuleView;
+use crate::inspect::{RuleCount, RulePosition, RuleView};
 use crate::limits::{RuleAttemptCount, RuleAttemptLimit, StepCount};
 use crate::program::{Program, ReturnOutput, RunResult};
 use crate::runtime::action::{AppliedRule, apply_matched_rule, prepare_matched_rule};
@@ -11,7 +11,7 @@ use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
 use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
 
-use super::{RuleAttemptStableReason, RuleMiss};
+use super::{CoreRuleAttemptStableReason, CoreRuleMiss, OwnedRuleWitness};
 
 /// Mutable runtime state independent of program ownership mode.
 #[derive(Debug)]
@@ -53,13 +53,24 @@ pub(super) struct RuleCursor {
     state: RuleCursorState,
 }
 
+/// Zero-based executable rule index paired with its public position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct RuleIndex {
+    /// Zero-based rule-table offset.
+    zero_based: usize,
+    /// Public one-based rule position for diagnostics.
+    position: RulePosition,
+}
+
 /// Cursor state for rule-attempt execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuleCursorState {
     /// Cursor points at the next executable rule index.
     At {
         /// Zero-based rule index to evaluate next.
-        next_rule_index: usize,
+        next_rule_index: RuleIndex,
+        /// Final executable rule index in this program.
+        final_rule_index: RuleIndex,
     },
     /// No executable rule remains in this pass.
     Exhausted,
@@ -75,10 +86,8 @@ struct MissCommit<'attempt, RuleWitness> {
     core: &'attempt RunCore,
     /// Committed attempt count assigned to this miss.
     attempt: RuleAttemptCount,
-    /// Total executable rule count in the parsed program.
-    rule_count: usize,
     /// Non-applying rule selected by the current cursor.
-    miss: RuleMiss<RuleWitness>,
+    miss: CoreRuleMiss<RuleWitness>,
 }
 
 /// Program ownership shape used by the internal runtime session.
@@ -144,7 +153,7 @@ pub(super) enum CoreRuleAttempt<RuleWitness> {
         /// Rule-attempt count committed by this transition.
         attempt: RuleAttemptCount,
         /// Non-applying rule information.
-        miss: RuleMiss<RuleWitness>,
+        miss: CoreRuleMiss<RuleWitness>,
     },
     /// A rule committed and may have terminal side effects.
     Applied {
@@ -160,7 +169,7 @@ pub(super) enum CoreRuleAttempt<RuleWitness> {
         /// Rewrite steps committed before stability.
         steps: StepCount,
         /// Why the rule-attempt pass reached stability.
-        stable_reason: RuleAttemptStableReason<RuleWitness>,
+        stable_reason: CoreRuleAttemptStableReason<RuleWitness>,
     },
 }
 
@@ -202,7 +211,7 @@ impl RunCore {
     fn new(program: &Program, seed: RunSeed) -> Result<Self, RunError> {
         let (input, budget) = seed.into_runtime_parts();
         let state = State::from_input(input);
-        let once_states = OnceStateSet::new(program.rule_slice())?;
+        let once_states = OnceStateSet::new(program.once_rule_slot_count())?;
         Ok(Self {
             state,
             scratch: RewriteScratch::new(),
@@ -287,29 +296,39 @@ enum RuleCursorAfterMiss {
 }
 
 impl RuleCursor {
-    /// Starts rule-attempt execution at the first executable rule.
-    const fn first() -> Self {
+    /// Starts rule-attempt execution over a parsed program's executable rules.
+    fn for_rule_count(rule_count: RuleCount) -> Self {
+        let Some(final_rule_index) = RuleIndex::last_for(rule_count) else {
+            return Self {
+                state: RuleCursorState::Exhausted,
+            };
+        };
+
         Self {
-            state: RuleCursorState::At { next_rule_index: 0 },
+            state: RuleCursorState::At {
+                next_rule_index: RuleIndex::first(),
+                final_rule_index,
+            },
         }
     }
 
     /// Current zero-based rule index, if this pass still has a rule.
-    const fn current_index(self) -> Option<usize> {
+    const fn current_index(self) -> Option<RuleIndex> {
         match self.state {
-            RuleCursorState::At { next_rule_index } => Some(next_rule_index),
+            RuleCursorState::At {
+                next_rule_index, ..
+            } => Some(next_rule_index),
             RuleCursorState::Exhausted => None,
         }
     }
 
     /// Advances after a miss or reports that the pass is stable.
-    fn advance_after_miss(&mut self, rule_count: usize) -> RuleCursorAfterMiss {
-        let RuleCursorState::At { next_rule_index } = self.state else {
-            return RuleCursorAfterMiss::Stable;
-        };
-
-        let Some(final_rule_index) = rule_count.checked_sub(1) else {
-            self.state = RuleCursorState::Exhausted;
+    fn advance_after_miss(&mut self) -> RuleCursorAfterMiss {
+        let RuleCursorState::At {
+            next_rule_index,
+            final_rule_index,
+        } = self.state
+        else {
             return RuleCursorAfterMiss::Stable;
         };
 
@@ -318,8 +337,11 @@ impl RuleCursor {
             return RuleCursorAfterMiss::Stable;
         }
 
-        if let Some(next_rule_index) = next_rule_index.checked_add(1) {
-            self.state = RuleCursorState::At { next_rule_index };
+        if let Some(next_rule_index) = next_rule_index.checked_next() {
+            self.state = RuleCursorState::At {
+                next_rule_index,
+                final_rule_index,
+            };
             RuleCursorAfterMiss::Advanced
         } else {
             self.state = RuleCursorState::Exhausted;
@@ -329,7 +351,56 @@ impl RuleCursor {
 
     /// Resets to the first executable rule after a committed match.
     const fn reset_to_first(&mut self) {
-        self.state = RuleCursorState::At { next_rule_index: 0 };
+        if let RuleCursorState::At {
+            final_rule_index, ..
+        } = self.state
+        {
+            self.state = RuleCursorState::At {
+                next_rule_index: RuleIndex::first(),
+                final_rule_index,
+            };
+        }
+    }
+}
+
+impl RuleIndex {
+    /// First executable rule index.
+    const fn first() -> Self {
+        Self {
+            zero_based: 0,
+            position: RulePosition::FIRST,
+        }
+    }
+
+    /// Builds an index from a zero-based rule-table offset.
+    fn from_zero_based(zero_based: usize) -> Option<Self> {
+        let position = RulePosition::from_zero_based(zero_based)?;
+        Some(Self {
+            zero_based,
+            position,
+        })
+    }
+
+    /// Final executable rule index for a parsed rule count.
+    fn last_for(rule_count: RuleCount) -> Option<Self> {
+        let zero_based = rule_count.get().checked_sub(1)?;
+        Self::from_zero_based(zero_based)
+    }
+
+    /// Returns the checked next index.
+    fn checked_next(self) -> Option<Self> {
+        let zero_based = self.zero_based.checked_add(1)?;
+        Self::from_zero_based(zero_based)
+    }
+
+    /// Zero-based rule-table offset.
+    const fn get(self) -> usize {
+        self.zero_based
+    }
+
+    /// Public rule position for diagnostics.
+    const fn position(self) -> RulePosition {
+        self.position
     }
 }
 
@@ -398,11 +469,12 @@ impl<P: ProgramOwner> AttemptSession<P> {
         seed: RunSeed,
         limit: RuleAttemptLimit,
     ) -> Result<Self, RunError> {
+        let cursor = RuleCursor::for_rule_count(program.program().rule_count());
         let core = RunCore::new(program.program(), seed)?;
         Ok(Self {
             program,
             core,
-            cursor: RuleCursor::first(),
+            cursor,
             attempt_budget: RuleAttemptBudgetState::new(limit),
         })
     }
@@ -440,17 +512,15 @@ impl<'program> Session<BorrowedProgram<'program>> {
 }
 
 impl Session<OwnedProgram> {
-    /// Advances this run by one matching rule with owned rule snapshots.
+    /// Advances this run by one matching rule with owned rule witnesses.
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if matching, preparation, snapshot materialization,
+    /// Returns `RunError` if matching, preparation, witness materialization,
     /// or application fails.
-    pub(super) fn step_owned(
-        &mut self,
-    ) -> Result<CoreStep<crate::inspect::RuleSnapshot>, RunError> {
+    pub(super) fn step_owned(&mut self) -> Result<CoreStep<OwnedRuleWitness>, RunError> {
         step_with_witness(&mut self.core, &self.program.program, |rule| {
-            Ok(rule.to_snapshot()?)
+            Ok(OwnedRuleWitness::from_rule_view(rule)?)
         })
     }
 }
@@ -476,21 +546,19 @@ impl<'program> AttemptSession<BorrowedProgram<'program>> {
 }
 
 impl AttemptSession<OwnedProgram> {
-    /// Advances this rule-attempt run by one executable rule with owned rule snapshots.
+    /// Advances this rule-attempt run by one executable rule with owned rule witnesses.
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if rule-attempt matching, preparation, snapshot
+    /// Returns `RunError` if rule-attempt matching, preparation, witness
     /// materialization, or application fails.
-    pub(super) fn step_owned(
-        &mut self,
-    ) -> Result<CoreRuleAttempt<crate::inspect::RuleSnapshot>, RunError> {
+    pub(super) fn step_owned(&mut self) -> Result<CoreRuleAttempt<OwnedRuleWitness>, RunError> {
         attempt_current_rule_with_witness(
             &self.program.program,
             &mut self.core,
             &mut self.cursor,
             &mut self.attempt_budget,
-            |rule| Ok(rule.to_snapshot()?),
+            |rule| Ok(OwnedRuleWitness::from_rule_view(rule)?),
         )
     }
 }
@@ -541,17 +609,17 @@ fn attempt_current_rule_with_witness<'program, RuleWitness>(
         return Ok(CoreRuleAttempt::Stable {
             attempts: attempt_budget.completed_attempts(),
             steps: core.completed_steps(),
-            stable_reason: RuleAttemptStableReason::NoExecutableRules,
+            stable_reason: CoreRuleAttemptStableReason::NoExecutableRules,
         });
     };
 
-    let Some(rule) = rules.get(next_rule_index) else {
+    let Some(rule) = rules.get(next_rule_index.get()) else {
         cursor.state = RuleCursorState::Exhausted;
-        return Ok(CoreRuleAttempt::Stable {
-            attempts: attempt_budget.completed_attempts(),
-            steps: core.completed_steps(),
-            stable_reason: RuleAttemptStableReason::NoExecutableRules,
-        });
+        return Err(RunInvariantError::MissingRuleCursorTarget {
+            rule: next_rule_index.position(),
+            available_rules: program.rule_count(),
+        }
+        .into());
     };
 
     let permit = attempt_budget.reserve_next_attempt(core.state.byte_count())?;
@@ -566,8 +634,7 @@ fn attempt_current_rule_with_witness<'program, RuleWitness>(
                 attempt_budget,
                 core,
                 attempt,
-                rule_count: rules.len(),
-                miss: RuleMiss::new(witness, missed.reason()),
+                miss: CoreRuleMiss::new(witness, missed.reason()),
             }))
         }
         RuleAttempt::Matched(matched) => {
@@ -592,11 +659,11 @@ fn attempt_current_rule_with_witness<'program, RuleWitness>(
 
 /// Commits a non-applying rule attempt and decides whether the run is stable.
 fn commit_miss<RuleWitness>(context: MissCommit<'_, RuleWitness>) -> CoreRuleAttempt<RuleWitness> {
-    match context.cursor.advance_after_miss(context.rule_count) {
+    match context.cursor.advance_after_miss() {
         RuleCursorAfterMiss::Stable => CoreRuleAttempt::Stable {
             attempts: context.attempt_budget.completed_attempts(),
             steps: context.core.completed_steps(),
-            stable_reason: RuleAttemptStableReason::FinalMiss(context.miss),
+            stable_reason: CoreRuleAttemptStableReason::FinalMiss(context.miss),
         },
         RuleCursorAfterMiss::Advanced => CoreRuleAttempt::Missed {
             attempt: context.attempt,
