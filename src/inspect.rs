@@ -338,6 +338,23 @@ pub enum RuleActionView<'program> {
     Return(PayloadView<'program>),
 }
 
+/// Owned snapshot of a parsed rule action.
+///
+/// This is used by owned execution transitions, where the parsed program moves
+/// with the transition and public rule metadata cannot borrow from a separate
+/// external [`Program`](crate::program::Program).
+#[derive(Debug, PartialEq, Eq)]
+pub enum RuleActionSnapshot {
+    /// Replace the matched bytes with the payload.
+    Replace(PayloadBytes),
+    /// Remove the matched bytes and insert the payload at the start.
+    MoveStart(PayloadBytes),
+    /// Remove the matched bytes and append the payload at the end.
+    MoveEnd(PayloadBytes),
+    /// Stop execution and return the payload as output.
+    Return(PayloadBytes),
+}
+
 /// Read-only structured view of a parsed rule.
 ///
 /// The view borrows the parsed rule and carries the rule's execution position.
@@ -347,6 +364,26 @@ pub enum RuleActionView<'program> {
 pub struct RuleView<'program> {
     /// Parsed rule borrowed from the program rule table.
     rule: &'program Rule,
+}
+
+/// Owned parsed-rule metadata retained by owned execution transitions.
+///
+/// The byte payloads are materialized explicitly at the owned execution
+/// boundary. Borrowed execution transitions use [`RuleView`] instead.
+#[derive(Debug, PartialEq, Eq)]
+pub struct RuleSnapshot {
+    /// Program-local parsed-rule position.
+    position: RulePosition,
+    /// One-based source line number.
+    line_number: SourceLineNumber,
+    /// Rule repeat policy.
+    repeat: RuleRepeat,
+    /// Rule match anchor.
+    anchor: RuleAnchor,
+    /// Materialized left-side match payload.
+    lhs: PayloadBytes,
+    /// Materialized right-side action payload.
+    action: RuleActionSnapshot,
 }
 
 impl core::fmt::Debug for RuleView<'_> {
@@ -418,6 +455,39 @@ impl<'program> RuleView<'program> {
         self.rule.action().view()
     }
 
+    /// Materializes this borrowed rule into an owned snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if either rule payload cannot be materialized
+    /// at the owned rule-snapshot boundary.
+    pub fn to_snapshot(self) -> Result<RuleSnapshot, AllocationError> {
+        let lhs = snapshot_payload(self.lhs())?;
+        let action = match self.action() {
+            RuleActionView::Replace(payload) => {
+                RuleActionSnapshot::Replace(snapshot_payload(payload)?)
+            }
+            RuleActionView::MoveStart(payload) => {
+                RuleActionSnapshot::MoveStart(snapshot_payload(payload)?)
+            }
+            RuleActionView::MoveEnd(payload) => {
+                RuleActionSnapshot::MoveEnd(snapshot_payload(payload)?)
+            }
+            RuleActionView::Return(payload) => {
+                RuleActionSnapshot::Return(snapshot_payload(payload)?)
+            }
+        };
+
+        Ok(RuleSnapshot {
+            position: self.position(),
+            line_number: self.line_number(),
+            repeat: self.repeat(),
+            anchor: self.anchor(),
+            lhs,
+            action,
+        })
+    }
+
     /// Generates canonical executable source for diagnostics/display.
     ///
     /// Whitespace and comments are not preserved by design. The canonical text
@@ -433,4 +503,68 @@ impl<'program> RuleView<'program> {
             bytes: MaterializedBytes::from_vec(crate::rule::canonical_source(self.rule)?),
         })
     }
+}
+
+impl RuleActionSnapshot {
+    /// Borrow the materialized action payload.
+    #[must_use]
+    pub const fn payload(&self) -> &PayloadBytes {
+        match self {
+            Self::Replace(payload)
+            | Self::MoveStart(payload)
+            | Self::MoveEnd(payload)
+            | Self::Return(payload) => payload,
+        }
+    }
+}
+
+impl RuleSnapshot {
+    /// Program-local parsed-rule position.
+    #[must_use]
+    pub const fn position(&self) -> RulePosition {
+        self.position
+    }
+
+    /// One-based source line number.
+    #[must_use]
+    pub const fn line_number(&self) -> SourceLineNumber {
+        self.line_number
+    }
+
+    /// Rule repeat policy.
+    #[must_use]
+    pub const fn repeat(&self) -> RuleRepeat {
+        self.repeat
+    }
+
+    /// Rule match anchor.
+    #[must_use]
+    pub const fn anchor(&self) -> RuleAnchor {
+        self.anchor
+    }
+
+    /// Materialized left-side match payload.
+    #[must_use]
+    pub const fn lhs(&self) -> &PayloadBytes {
+        &self.lhs
+    }
+
+    /// Materialized right-side action payload.
+    #[must_use]
+    pub const fn action(&self) -> &RuleActionSnapshot {
+        &self.action
+    }
+}
+
+/// Materializes a payload at the owned rule-snapshot boundary.
+///
+/// # Errors
+///
+/// Returns `AllocationError` if the payload bytes cannot be materialized.
+fn snapshot_payload(payload: PayloadView<'_>) -> Result<PayloadBytes, AllocationError> {
+    Ok(PayloadBytes {
+        bytes: MaterializedBytes::from_vec(
+            payload.to_vec_with_context(AllocationContext::RuleSnapshot)?,
+        ),
+    })
 }

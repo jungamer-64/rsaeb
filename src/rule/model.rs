@@ -1,6 +1,5 @@
 use crate::bytes::Payload;
 use crate::inspect::{PayloadView, RuleActionView, RuleAnchor, RulePosition, RuleRepeat};
-use crate::program::ReturnOutputView;
 use crate::source::SourceLineNumber;
 
 /// Parsed right-side action after syntax has been assigned a domain.
@@ -328,13 +327,5 @@ impl Rule {
     /// Right-side action applied after a match.
     pub(crate) const fn action(&self) -> &RuleAction {
         &self.action
-    }
-
-    /// Borrows this rule's right side as runtime return output when applicable.
-    pub(crate) const fn return_output_view(&self) -> Option<ReturnOutputView<'_>> {
-        match &self.action {
-            RuleAction::Return(payload) => Some(ReturnOutputView::new(payload)),
-            RuleAction::Rewrite(_) => None,
-        }
     }
 }

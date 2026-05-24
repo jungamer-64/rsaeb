@@ -1,74 +1,154 @@
 use crate::bytes::ReturnOutputByteCount;
 use crate::error::RunError;
-use crate::inspect::RulePosition;
 use crate::limits::StepCount;
 use crate::program::{ReturnOutput, ReturnOutputView};
-use crate::rule::RuleAction;
+use crate::rule::{Rule, RuleAction};
 
 use super::budget::RuntimeBudgetState;
+use super::budget::StepPermit;
 use super::matcher::MatchedRuleApplication;
-use super::rewrite::RewriteScratch;
+use super::rewrite::{PreparedRewrite, RewriteScratch};
 use super::state::State;
 
 /// Committed rule application reported back to the session layer.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum AppliedRule {
+pub(crate) enum AppliedRule<'program> {
     /// One rewrite rule committed and execution may continue.
-    Rewrite(CommittedRewriteRule),
+    Rewrite(CommittedRewriteRule<'program>),
     /// One return rule committed and execution is terminal.
-    Return(CommittedReturnRule),
+    Return(CommittedReturnRule<'program>),
+}
+
+/// Rule application after all failure-prone runtime preparation has succeeded.
+#[derive(Debug)]
+pub(crate) enum PreparedRuleApplication<'program, 'once> {
+    /// Prepared non-terminal rewrite.
+    Rewrite(PreparedRewriteRule<'program, 'once>),
+    /// Prepared terminal return.
+    Return(PreparedReturnRule<'program, 'once>),
 }
 
 /// Committed non-terminal rewrite rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CommittedRewriteRule {
+pub(crate) struct CommittedRewriteRule<'program> {
     /// Step number assigned by the runtime budget.
     step: StepCount,
-    /// Program-local position of the committed rewrite rule.
-    rule_position: RulePosition,
+    /// Parsed rule whose rewrite committed.
+    rule: &'program Rule,
 }
 
 /// Committed terminal return rule.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct CommittedReturnRule {
+pub(crate) struct CommittedReturnRule<'program> {
     /// Step number assigned by the runtime budget.
     step: StepCount,
-    /// Program-local position of the committed return rule.
-    rule_position: RulePosition,
+    /// Parsed rule whose return committed.
+    rule: &'program Rule,
+    /// Borrowed return output payload from the committed parsed rule.
+    output_view: ReturnOutputView<'program>,
     /// Materialized return output produced before committing the terminal step.
     output: ReturnOutput,
 }
 
-impl CommittedRewriteRule {
+/// Prepared non-terminal rewrite before its step and once-state side effects commit.
+#[derive(Debug)]
+pub(crate) struct PreparedRewriteRule<'program, 'once> {
+    /// Reserved step number.
+    permit: StepPermit,
+    /// Matched rule and once-state commit permit.
+    matched: MatchedRuleApplication<'program, 'once>,
+    /// Runtime bytes ready to become the next state.
+    rewrite: PreparedRewrite,
+}
+
+/// Prepared terminal return before its step and once-state side effects commit.
+#[derive(Debug)]
+pub(crate) struct PreparedReturnRule<'program, 'once> {
+    /// Reserved step number.
+    permit: StepPermit,
+    /// Matched rule and once-state commit permit.
+    matched: MatchedRuleApplication<'program, 'once>,
+    /// Borrowed return output payload from the matched parsed rule.
+    output_view: ReturnOutputView<'program>,
+    /// Materialized return output.
+    output: ReturnOutput,
+}
+
+impl CommittedRewriteRule<'_> {
     /// Step number assigned by the runtime budget.
     pub(crate) const fn step(self) -> StepCount {
         self.step
     }
 }
 
-impl CommittedRewriteRule {
-    /// Program-local position of the committed rewrite rule.
-    pub(crate) const fn rule_position(self) -> RulePosition {
-        self.rule_position
+impl<'program> CommittedRewriteRule<'program> {
+    /// Parsed rule whose rewrite committed.
+    pub(crate) const fn rule(self) -> &'program Rule {
+        self.rule
     }
 }
 
-impl CommittedReturnRule {
+impl CommittedReturnRule<'_> {
     /// Step number assigned by the runtime budget.
     pub(crate) const fn step(&self) -> StepCount {
         self.step
     }
 }
 
-impl CommittedReturnRule {
-    /// Program-local position of the committed return rule.
-    pub(crate) const fn rule_position(&self) -> RulePosition {
-        self.rule_position
+impl<'program> CommittedReturnRule<'program> {
+    /// Parsed rule whose return committed.
+    pub(crate) const fn rule(&self) -> &'program Rule {
+        self.rule
+    }
+
+    /// Borrowed return output payload from the committed parsed rule.
+    pub(crate) const fn output_view(&self) -> ReturnOutputView<'program> {
+        self.output_view
     }
 
     /// Consumes this committed return rule into its materialized output.
     pub(crate) fn into_output(self) -> ReturnOutput {
         self.output
+    }
+}
+
+impl<'program> PreparedRuleApplication<'program, '_> {
+    /// Parsed rule selected by this prepared application.
+    pub(crate) const fn rule(&self) -> &'program Rule {
+        match self {
+            Self::Rewrite(prepared) => prepared.matched.rule(),
+            Self::Return(prepared) => prepared.matched.rule(),
+        }
+    }
+
+    /// Commits the prepared runtime side effects.
+    pub(crate) fn commit(
+        self,
+        state: &mut State,
+        scratch: &mut RewriteScratch,
+        budget: &mut RuntimeBudgetState,
+    ) -> AppliedRule<'program> {
+        match self {
+            Self::Rewrite(prepared) => {
+                let committed = prepared.matched.commit();
+                let step = budget.commit(prepared.permit);
+                state.commit_rewrite(prepared.rewrite, scratch);
+                AppliedRule::Rewrite(CommittedRewriteRule {
+                    step,
+                    rule: committed.rule(),
+                })
+            }
+            Self::Return(prepared) => {
+                let committed = prepared.matched.commit();
+                let step = budget.commit(prepared.permit);
+                AppliedRule::Return(CommittedReturnRule {
+                    step,
+                    rule: committed.rule(),
+                    output_view: prepared.output_view,
+                    output: prepared.output,
+                })
+            }
+        }
     }
 }
 
@@ -89,35 +169,48 @@ pub(crate) fn materialize_return_output(
 ///
 /// Returns `RunError` if the next step exceeds limits, the rewrite would
 /// exceed state limits, return output exceeds limits, or allocation fails.
-pub(crate) fn apply_matched_rule(
+pub(crate) fn apply_matched_rule<'program>(
     state: &mut State,
     scratch: &mut RewriteScratch,
     budget: &mut RuntimeBudgetState,
-    matched: MatchedRuleApplication<'_, '_>,
-) -> Result<AppliedRule, RunError> {
+    matched: MatchedRuleApplication<'program, '_>,
+) -> Result<AppliedRule<'program>, RunError> {
+    let prepared = prepare_matched_rule(state, scratch, *budget, matched)?;
+    Ok(prepared.commit(state, scratch, budget))
+}
+
+/// Prepares one matched rule without committing state, budget, or once-rule side effects.
+///
+/// # Errors
+///
+/// Returns `RunError` if the next step exceeds limits, the rewrite would
+/// exceed state limits, return output exceeds limits, or allocation fails.
+pub(crate) fn prepare_matched_rule<'program, 'once>(
+    state: &State,
+    scratch: &mut RewriteScratch,
+    budget: RuntimeBudgetState,
+    matched: MatchedRuleApplication<'program, 'once>,
+) -> Result<PreparedRuleApplication<'program, 'once>, RunError> {
     let permit = budget.reserve_next_step(state.byte_count())?;
     match matched.rule().action() {
         RuleAction::Rewrite(action) => {
-            let rewrite = state.rewrite_into(matched.state_match(), action, scratch, *budget)?;
-            let committed = matched.commit();
-            let step = budget.commit(permit);
-            state.commit_rewrite(rewrite, scratch);
-            Ok(AppliedRule::Rewrite(CommittedRewriteRule {
-                step,
-                rule_position: committed.rule_position(),
+            let rewrite = state.rewrite_into(matched.state_match(), action, scratch, budget)?;
+            Ok(PreparedRuleApplication::Rewrite(PreparedRewriteRule {
+                permit,
+                matched,
+                rewrite,
             }))
         }
         RuleAction::Return(output) => {
             let output_view = ReturnOutputView::new(output);
             let output_len = ReturnOutputByteCount::from_payload_count(output.byte_count());
-            (*budget).ensure_return_len(output_len)?;
+            budget.ensure_return_len(output_len)?;
             let materialized_output = materialize_return_output(output_view)?;
 
-            let committed = matched.commit();
-            let step = budget.commit(permit);
-            Ok(AppliedRule::Return(CommittedReturnRule {
-                step,
-                rule_position: committed.rule_position(),
+            Ok(PreparedRuleApplication::Return(PreparedReturnRule {
+                permit,
+                matched,
+                output_view,
                 output: materialized_output,
             }))
         }

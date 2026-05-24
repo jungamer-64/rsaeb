@@ -152,7 +152,7 @@ fn owned_step_signatures(
             OwnedStepTransition::Applied(applied) => {
                 signatures.push(CommittedStepSignature::Continue {
                     step: applied.step().get(),
-                    rule_position: applied.rule_position().number().get(),
+                    rule_position: applied.rule().position().number().get(),
                     state: applied.state().materialize()?.into_raw_bytes(),
                 });
                 session = applied.into_session();
@@ -160,7 +160,7 @@ fn owned_step_signatures(
             OwnedStepTransition::Returned(returned) => {
                 signatures.push(CommittedStepSignature::Return {
                     step: returned.step().get(),
-                    rule_position: returned.rule_position().number().get(),
+                    rule_position: returned.rule().position().number().get(),
                     output: returned.output().as_slice().to_vec(),
                 });
                 return Ok(signatures);

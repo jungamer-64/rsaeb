@@ -170,6 +170,9 @@
 //!
 //! let execution = match execution.step() {
 //!     BorrowedStepTransition::Applied(applied) => {
+//!         if applied.rule().position().number().get() != 1 {
+//!             return Err("unexpected first applied rule".into());
+//!         }
 //!         if applied.state().materialize()?.as_slice() != b"b" {
 //!             return Err("unexpected first applied state".into());
 //!         }
@@ -182,6 +185,9 @@
 //!
 //! let execution = match execution.step() {
 //!     BorrowedStepTransition::Applied(applied) => {
+//!         if applied.rule().position().number().get() != 2 {
+//!             return Err("unexpected second applied rule".into());
+//!         }
 //!         if applied.state().materialize()?.as_slice() != b"c" {
 //!             return Err("unexpected second applied state".into());
 //!         }
@@ -216,7 +222,10 @@
 //! uncommitted-state diagnostics for owned sessions, and it can split into the
 //! runtime error plus the parsed program when ownership matters. Failed
 //! transitions are terminal; recovering the program never recovers a retryable
-//! session.
+//! session. Borrowed applied and returned transitions carry
+//! [`inspect::RuleView`] witnesses; owned transitions retain
+//! [`inspect::RuleSnapshot`] values so rule metadata remains available after
+//! ownership moves.
 //!
 //! Use [`program::Program::start_rule_attempt_run`] when the host needs to
 //! observe every executable rule line, including lines that do not apply to the
@@ -248,10 +257,10 @@
 //!
 //! let execution = match execution.step() {
 //!     BorrowedRuleAttemptTransition::Missed(missed) => {
-//!         if missed.reason() != RuleMissReason::StateMismatch {
+//!         if missed.miss().reason() != RuleMissReason::StateMismatch {
 //!             return Err("unexpected miss reason".into());
 //!         }
-//!         if missed.rule_position().number().get() != 1 {
+//!         if missed.miss().rule().position().number().get() != 1 {
 //!             return Err("unexpected missed rule".into());
 //!         }
 //!         missed.into_session()
@@ -264,7 +273,7 @@
 //!
 //! match execution.step() {
 //!     BorrowedRuleAttemptTransition::Applied(applied) => {
-//!         if applied.step().get() != 1 || applied.rule_position().number().get() != 2 {
+//!         if applied.step().get() != 1 || applied.rule().position().number().get() != 2 {
 //!             return Err("unexpected applied rule attempt".into());
 //!         }
 //!     }

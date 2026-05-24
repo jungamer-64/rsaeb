@@ -1,7 +1,6 @@
 use super::once::{MatchedRuleCommit, OnceRuleAvailability, OnceStateSet};
 use super::state::{State, StateMatch};
 use crate::error::RunError;
-use crate::inspect::RulePosition;
 use crate::rule::{Rule, RuleAnchorSyntax};
 
 /// Outcome of scanning the rule table for the next applicable rule.
@@ -70,10 +69,8 @@ enum RuleInspection<'program> {
 /// Rule view after all runtime side effects have committed.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CommittedRule<'program> {
-    /// Program-local position of the committed parsed rule.
-    rule_position: RulePosition,
-    /// Marker tying this witness to the parsed rule lifetime.
-    _program: core::marker::PhantomData<&'program Rule>,
+    /// Parsed rule whose runtime side effects committed.
+    rule: &'program Rule,
 }
 
 impl<'program> RuleAttemptMiss<'program> {
@@ -135,17 +132,14 @@ impl<'program, 'once> MatchedRuleApplication<'program, 'once> {
     /// Commits the matched rule's deferred side effects.
     pub(crate) fn commit(self) -> CommittedRule<'program> {
         self.commit.commit();
-        CommittedRule {
-            rule_position: self.rule.position(),
-            _program: core::marker::PhantomData,
-        }
+        CommittedRule { rule: self.rule }
     }
 }
 
-impl CommittedRule<'_> {
-    /// Program-local position of the committed rule.
-    pub(crate) const fn rule_position(self) -> RulePosition {
-        self.rule_position
+impl<'program> CommittedRule<'program> {
+    /// Parsed rule whose runtime side effects committed.
+    pub(crate) const fn rule(self) -> &'program Rule {
+        self.rule
     }
 }
 

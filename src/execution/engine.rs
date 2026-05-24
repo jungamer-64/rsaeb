@@ -1,13 +1,11 @@
-use crate::error::{RunError, RunInvariantError, TracedRunError};
+use crate::error::{RunError, TracedRunError};
 use crate::input::RunSeed;
 use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, RuleAttemptLimit, StepCount};
-use crate::program::{Program, RunResult};
-use crate::runtime::action::{AppliedRule, apply_matched_rule};
+use crate::program::{Program, ReturnOutput, RunResult};
+use crate::runtime::action::{AppliedRule, apply_matched_rule, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
-use crate::runtime::matcher::{
-    RuleAttempt, RuleAttemptMiss, RuleSearch, attempt_rule, find_next_match,
-};
+use crate::runtime::matcher::{RuleAttempt, RuleSearch, attempt_rule, find_next_match};
 use crate::runtime::once::OnceStateSet;
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
@@ -56,7 +54,7 @@ pub(super) struct RuleCursor {
 }
 
 /// All data needed to commit one non-applying rule attempt.
-struct MissCommit<'attempt, 'program> {
+struct MissCommit<'attempt, RuleWitness> {
     /// Cursor to advance when the miss is not the final executable rule.
     cursor: &'attempt mut RuleCursor,
     /// Rule-attempt budget after the miss has been committed.
@@ -68,7 +66,7 @@ struct MissCommit<'attempt, 'program> {
     /// Total executable rule count in the parsed program.
     rule_count: usize,
     /// Non-applying rule selected by the current cursor.
-    missed: RuleAttemptMiss<'program>,
+    miss: RuleMiss<RuleWitness>,
 }
 
 /// Program ownership shape used by the internal runtime session.
@@ -92,28 +90,56 @@ pub(super) struct OwnedProgram {
 }
 
 /// Internal non-error result of one core step attempt.
-pub(super) enum CoreStep {
+pub(super) enum CoreStep<RuleWitness> {
     /// A rule committed and may have terminal side effects.
-    Applied(AppliedRule),
+    Applied(CoreAppliedRule<RuleWitness>),
     /// No rule matched the current runtime state.
     Stable(StepCount),
 }
 
+/// Internal runtime step retaining committed parsed-rule borrows.
+enum RuntimeStep<'program> {
+    /// A rule committed and may have terminal side effects.
+    Applied(AppliedRule<'program>),
+    /// No rule matched the current runtime state.
+    Stable(StepCount),
+}
+
+/// Internal committed application paired with its public rule witness.
+pub(super) enum CoreAppliedRule<RuleWitness> {
+    /// One rewrite rule committed and execution may continue.
+    Rewrite {
+        /// Committed step count.
+        step: StepCount,
+        /// Rule witness selected before runtime side effects committed.
+        rule: RuleWitness,
+    },
+    /// One return rule committed and execution is terminal.
+    Return {
+        /// Committed step count.
+        step: StepCount,
+        /// Rule witness selected before runtime side effects committed.
+        rule: RuleWitness,
+        /// Materialized return output.
+        output: ReturnOutput,
+    },
+}
+
 /// Internal non-error result of one rule-attempt step.
-pub(super) enum CoreRuleAttempt {
+pub(super) enum CoreRuleAttempt<RuleWitness> {
     /// A rule line was consumed without applying.
     Missed {
         /// Rule-attempt count committed by this transition.
         attempt: RuleAttemptCount,
         /// Non-applying rule information.
-        miss: RuleMiss,
+        miss: RuleMiss<RuleWitness>,
     },
     /// A rule committed and may have terminal side effects.
     Applied {
         /// Rule-attempt count committed by this transition.
         attempt: RuleAttemptCount,
         /// Applied rule effect.
-        applied: AppliedRule,
+        applied: CoreAppliedRule<RuleWitness>,
     },
     /// No rule in the current pass matched the current runtime state.
     Stable {
@@ -122,8 +148,25 @@ pub(super) enum CoreRuleAttempt {
         /// Rewrite steps committed before stability.
         steps: StepCount,
         /// Why the rule-attempt pass reached stability.
-        stable_reason: RuleAttemptStableReason,
+        stable_reason: RuleAttemptStableReason<RuleWitness>,
     },
+}
+
+impl<RuleWitness> CoreAppliedRule<RuleWitness> {
+    /// Combines a committed runtime application with its pre-commit rule witness.
+    fn from_applied_rule(applied: AppliedRule<'_>, rule: RuleWitness) -> Self {
+        match applied {
+            AppliedRule::Rewrite(committed) => Self::Rewrite {
+                step: committed.step(),
+                rule,
+            },
+            AppliedRule::Return(committed) => Self::Return {
+                step: committed.step(),
+                rule,
+                output: committed.into_output(),
+            },
+        }
+    }
 }
 
 impl ProgramOwner for BorrowedProgram<'_> {
@@ -182,20 +225,53 @@ impl RunCore {
     /// Returns `RunError` if rule matching detects an internal invariant
     /// failure or if applying the matched rule exceeds limits or allocation
     /// fails.
-    fn step(&mut self, program: &Program) -> Result<CoreStep, RunError> {
+    fn step_runtime<'program>(
+        &mut self,
+        program: &'program Program,
+    ) -> Result<RuntimeStep<'program>, RunError> {
         let matched =
             match find_next_match(program.rule_slice(), &mut self.once_states, &self.state)? {
                 RuleSearch::Matched(matched) => matched,
-                RuleSearch::Stable => return Ok(CoreStep::Stable(self.budget.completed_steps())),
+                RuleSearch::Stable => {
+                    return Ok(RuntimeStep::Stable(self.budget.completed_steps()));
+                }
             };
 
-        Ok(CoreStep::Applied(apply_matched_rule(
+        let applied = apply_matched_rule(
             &mut self.state,
             &mut self.scratch,
             &mut self.budget,
             matched,
-        )?))
+        )?;
+        Ok(RuntimeStep::Applied(applied))
     }
+
+    /// Advances the mutable runtime core against the supplied immutable program.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if rule matching detects an internal invariant
+    /// failure or if applying the matched rule exceeds limits or allocation
+    /// fails.
+    fn step(&mut self, program: &Program) -> Result<CoreStep<()>, RunError> {
+        let applied = match self.step_runtime(program)? {
+            RuntimeStep::Applied(applied) => applied,
+            RuntimeStep::Stable(steps) => return Ok(CoreStep::Stable(steps)),
+        };
+        Ok(CoreStep::Applied(CoreAppliedRule::from_applied_rule(
+            applied,
+            (),
+        )))
+    }
+}
+
+/// Cursor movement after a non-applying rule line has been consumed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuleCursorAfterMiss {
+    /// Cursor advanced to the next executable rule.
+    Advanced,
+    /// The consumed miss was the final executable rule.
+    Stable,
 }
 
 impl RuleCursor {
@@ -204,17 +280,14 @@ impl RuleCursor {
         Self { next_rule_index: 0 }
     }
 
-    /// Whether this cursor points at the final executable rule.
-    fn is_final_rule(self, rule_count: usize) -> bool {
-        self.next_rule_index
-            .checked_add(1)
-            .is_none_or(|next_index| next_index >= rule_count)
-    }
-
-    /// Advances to the next executable rule after a non-final miss.
-    fn advance_after_miss(&mut self) -> Option<()> {
-        self.next_rule_index = self.next_rule_index.checked_add(1)?;
-        Some(())
+    /// Advances after a miss or reports that the pass is stable.
+    fn advance_after_miss(&mut self, rule_count: usize) -> RuleCursorAfterMiss {
+        if self.next_rule_index >= rule_count.saturating_sub(1) {
+            return RuleCursorAfterMiss::Stable;
+        }
+        let next_index = self.next_rule_index.saturating_add(1);
+        self.next_rule_index = next_index;
+        RuleCursorAfterMiss::Advanced
     }
 
     /// Resets to the first executable rule after a committed match.
@@ -254,7 +327,7 @@ impl<P: ProgramOwner> Session<P> {
     /// # Errors
     ///
     /// Returns `RunError` if rule matching or rule application fails.
-    pub(super) fn step(&mut self) -> Result<CoreStep, RunError> {
+    pub(super) fn step(&mut self) -> Result<CoreStep<()>, RunError> {
         self.core.step(self.program.program())
     }
 
@@ -267,9 +340,9 @@ impl<P: ProgramOwner> Session<P> {
     pub(super) fn finish(mut self) -> Result<RunResult, RunError> {
         loop {
             match self.step()? {
-                CoreStep::Applied(AppliedRule::Rewrite(_)) => {}
-                CoreStep::Applied(AppliedRule::Return(committed)) => {
-                    return Ok(committed.into_result());
+                CoreStep::Applied(CoreAppliedRule::Rewrite { .. }) => {}
+                CoreStep::Applied(CoreAppliedRule::Return { step, output, .. }) => {
+                    return Ok(RunResult::from_return(output, step));
                 }
                 CoreStep::Stable(steps) => return self.core.into_stable_result(steps),
             }
@@ -316,22 +389,96 @@ impl<P: ProgramOwner> AttemptSession<P> {
     pub(super) fn state(&self) -> RuntimeStateView<'_> {
         self.core.state()
     }
+}
 
-    /// Advances this run by exactly one executable rule line when possible.
+impl<'program> Session<BorrowedProgram<'program>> {
+    /// Advances this run by one matching rule with borrowed rule witnesses.
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if rule-attempt, rule matching, or rule application
-    /// fails.
-    pub(super) fn step(&mut self) -> Result<CoreRuleAttempt, RunError> {
-        let Self {
-            program,
-            core,
-            cursor,
-            attempt_budget,
-        } = self;
-        attempt_current_rule(program.program(), core, cursor, attempt_budget)
+    /// Returns `RunError` if matching, preparation, or application fails.
+    pub(super) fn step_borrowed(&mut self) -> Result<CoreStep<RuleView<'program>>, RunError> {
+        step_with_witness(&mut self.core, self.program.program, Ok)
     }
+}
+
+impl Session<OwnedProgram> {
+    /// Advances this run by one matching rule with owned rule snapshots.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if matching, preparation, snapshot materialization,
+    /// or application fails.
+    pub(super) fn step_owned(
+        &mut self,
+    ) -> Result<CoreStep<crate::inspect::RuleSnapshot>, RunError> {
+        step_with_witness(&mut self.core, &self.program.program, |rule| {
+            Ok(rule.to_snapshot()?)
+        })
+    }
+}
+
+impl<'program> AttemptSession<BorrowedProgram<'program>> {
+    /// Advances this rule-attempt run by one executable rule with borrowed rule witnesses.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if rule-attempt matching, preparation, or application
+    /// fails.
+    pub(super) fn step_borrowed(
+        &mut self,
+    ) -> Result<CoreRuleAttempt<RuleView<'program>>, RunError> {
+        attempt_current_rule_with_witness(
+            self.program.program,
+            &mut self.core,
+            &mut self.cursor,
+            &mut self.attempt_budget,
+            Ok,
+        )
+    }
+}
+
+impl AttemptSession<OwnedProgram> {
+    /// Advances this rule-attempt run by one executable rule with owned rule snapshots.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if rule-attempt matching, preparation, snapshot
+    /// materialization, or application fails.
+    pub(super) fn step_owned(
+        &mut self,
+    ) -> Result<CoreRuleAttempt<crate::inspect::RuleSnapshot>, RunError> {
+        attempt_current_rule_with_witness(
+            &self.program.program,
+            &mut self.core,
+            &mut self.cursor,
+            &mut self.attempt_budget,
+            |rule| Ok(rule.to_snapshot()?),
+        )
+    }
+}
+
+/// Advances the current run using the supplied rule-witness boundary.
+///
+/// # Errors
+///
+/// Returns `RunError` if matching, rule preparation, rule-witness materialization,
+/// or rule application fails.
+fn step_with_witness<'program, RuleWitness>(
+    core: &mut RunCore,
+    program: &'program Program,
+    make_witness: impl FnOnce(RuleView<'program>) -> Result<RuleWitness, RunError>,
+) -> Result<CoreStep<RuleWitness>, RunError> {
+    let matched = match find_next_match(program.rule_slice(), &mut core.once_states, &core.state)? {
+        RuleSearch::Matched(matched) => matched,
+        RuleSearch::Stable => return Ok(CoreStep::Stable(core.budget.completed_steps())),
+    };
+    let prepared = prepare_matched_rule(&core.state, &mut core.scratch, core.budget, matched)?;
+    let witness = make_witness(RuleView::new(prepared.rule()))?;
+    let applied = prepared.commit(&mut core.state, &mut core.scratch, &mut core.budget);
+    Ok(CoreStep::Applied(CoreAppliedRule::from_applied_rule(
+        applied, witness,
+    )))
 }
 
 /// Evaluates the current cursor against a parsed program.
@@ -340,12 +487,13 @@ impl<P: ProgramOwner> AttemptSession<P> {
 ///
 /// Returns `RunError` if rule-attempt, rule matching, or rule application
 /// fails.
-fn attempt_current_rule(
-    program: &Program,
+fn attempt_current_rule_with_witness<'program, RuleWitness>(
+    program: &'program Program,
     core: &mut RunCore,
     cursor: &mut RuleCursor,
     attempt_budget: &mut RuleAttemptBudgetState,
-) -> Result<CoreRuleAttempt, RunError> {
+    make_witness: impl FnOnce(RuleView<'program>) -> Result<RuleWitness, RunError>,
+) -> Result<CoreRuleAttempt<RuleWitness>, RunError> {
     let rules = program.rule_slice();
     let Some(rule) = rules.get(cursor.next_rule_index) else {
         return Ok(CoreRuleAttempt::Stable {
@@ -357,25 +505,28 @@ fn attempt_current_rule(
 
     let permit = attempt_budget.reserve_next_attempt(core.state.byte_count())?;
     let attempted = attempt_rule(rule, &mut core.once_states, &core.state)?;
-    let attempt = attempt_budget.commit(permit);
 
     match attempted {
-        RuleAttempt::Missed(missed) => commit_miss(MissCommit {
-            cursor,
-            attempt_budget,
-            core,
-            attempt,
-            rule_count: rules.len(),
-            missed,
-        }),
+        RuleAttempt::Missed(missed) => {
+            let witness = make_witness(RuleView::new(missed.rule()))?;
+            let attempt = attempt_budget.commit(permit);
+            Ok(commit_miss(MissCommit {
+                cursor,
+                attempt_budget,
+                core,
+                attempt,
+                rule_count: rules.len(),
+                miss: RuleMiss::new(witness, missed.reason()),
+            }))
+        }
         RuleAttempt::Matched(matched) => {
-            let applied = apply_matched_rule(
-                &mut core.state,
-                &mut core.scratch,
-                &mut core.budget,
-                matched,
-            )?;
-            if matches!(applied, AppliedRule::Rewrite(_)) {
+            let prepared =
+                prepare_matched_rule(&core.state, &mut core.scratch, core.budget, matched)?;
+            let witness = make_witness(RuleView::new(prepared.rule()))?;
+            let attempt = attempt_budget.commit(permit);
+            let applied = prepared.commit(&mut core.state, &mut core.scratch, &mut core.budget);
+            let applied = CoreAppliedRule::from_applied_rule(applied, witness);
+            if matches!(applied, CoreAppliedRule::Rewrite { .. }) {
                 cursor.reset_to_first();
             }
             Ok(CoreRuleAttempt::Applied { attempt, applied })
@@ -384,29 +535,17 @@ fn attempt_current_rule(
 }
 
 /// Commits a non-applying rule attempt and decides whether the run is stable.
-///
-/// # Errors
-///
-/// Returns `RunError` if advancing the rule-attempt cursor would violate an
-/// internal representation invariant.
-fn commit_miss(context: MissCommit<'_, '_>) -> Result<CoreRuleAttempt, RunError> {
-    let miss = RuleMiss::new(context.missed.rule().position(), context.missed.reason());
-    if context.cursor.is_final_rule(context.rule_count) {
-        Ok(CoreRuleAttempt::Stable {
+fn commit_miss<RuleWitness>(context: MissCommit<'_, RuleWitness>) -> CoreRuleAttempt<RuleWitness> {
+    match context.cursor.advance_after_miss(context.rule_count) {
+        RuleCursorAfterMiss::Stable => CoreRuleAttempt::Stable {
             attempts: context.attempt_budget.completed_attempts(),
             steps: context.core.completed_steps(),
-            stable_reason: RuleAttemptStableReason::FinalMiss(miss),
-        })
-    } else {
-        context.cursor.advance_after_miss().ok_or(
-            RunInvariantError::RuleAttemptCursorOverflow {
-                rule: miss.rule_position(),
-            },
-        )?;
-        Ok(CoreRuleAttempt::Missed {
+            stable_reason: RuleAttemptStableReason::FinalMiss(context.miss),
+        },
+        RuleCursorAfterMiss::Advanced => CoreRuleAttempt::Missed {
             attempt: context.attempt,
-            miss,
-        })
+            miss: context.miss,
+        },
     }
 }
 
@@ -430,45 +569,36 @@ impl<'program> Session<BorrowedProgram<'program>> {
         .map_err(TracedRunError::Trace)?;
 
         loop {
-            match self.step().map_err(TracedRunError::Run)? {
-                CoreStep::Applied(AppliedRule::Rewrite(committed)) => {
-                    let rule_position = committed.rule_position();
-                    let rule = self
-                        .program
-                        .program
-                        .rule_view_at(rule_position)
-                        .map_err(TracedRunError::Run)?;
+            match self
+                .core
+                .step_runtime(self.program.program)
+                .map_err(TracedRunError::Run)?
+            {
+                RuntimeStep::Applied(AppliedRule::Rewrite(committed)) => {
+                    let step = committed.step();
+                    let rule = RuleView::new(committed.rule());
                     Self::emit_step_trace(
                         &mut trace,
-                        committed.step(),
+                        step,
                         rule,
                         BorrowedTraceEffect::Continue {
                             state: self.state(),
                         },
                     )?;
                 }
-                CoreStep::Applied(AppliedRule::Return(committed)) => {
+                RuntimeStep::Applied(AppliedRule::Return(committed)) => {
                     let step = committed.step();
-                    let rule_position = committed.rule_position();
-                    let rule = self
-                        .program
-                        .program
-                        .rule_view_at(rule_position)
-                        .map_err(TracedRunError::Run)?;
-                    let output = self
-                        .program
-                        .program
-                        .return_output_view_at(rule_position)
-                        .map_err(TracedRunError::Run)?;
+                    let rule = RuleView::new(committed.rule());
+                    let output = committed.output_view();
                     Self::emit_step_trace(
                         &mut trace,
                         step,
                         rule,
                         BorrowedTraceEffect::Return { output },
                     )?;
-                    return Ok(committed.into_result());
+                    return Ok(RunResult::from_return(committed.into_output(), step));
                 }
-                CoreStep::Stable(steps) => {
+                RuntimeStep::Stable(steps) => {
                     return self
                         .core
                         .into_stable_result(steps)
