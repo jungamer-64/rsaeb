@@ -56,6 +56,16 @@ pub enum RunInvariantError {
         /// Program-local position of the rule that had just been consumed.
         rule: crate::inspect::RulePosition,
     },
+    /// A committed rule position was not present in its owning parsed program.
+    MissingCommittedRule {
+        /// Program-local position reported by the committed runtime step.
+        rule: crate::inspect::RulePosition,
+    },
+    /// A committed return step pointed at a non-return rule.
+    CommittedReturnRuleWithoutOutput {
+        /// Program-local position reported by the committed runtime step.
+        rule: crate::inspect::RulePosition,
+    },
 }
 
 impl Error for RunInvariantError {}

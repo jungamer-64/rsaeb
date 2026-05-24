@@ -6,8 +6,9 @@ mod support;
 
 use rsaeb::error::LimitError;
 use rsaeb::execution::{
-    AppliedStep, FailedRun, OwnedRuleAttemptTransition, OwnedStepTransition, ReturnedRun,
-    RuleAttemptTransition, RuleMissReason, RunSession, StableRun, StepTransition,
+    BorrowedAppliedStep, BorrowedFailedRun, BorrowedReturnedRun, BorrowedRuleAttemptTransition,
+    BorrowedRunSession, BorrowedStableRun, BorrowedStepTransition, OwnedRuleAttemptTransition,
+    OwnedStepTransition, RuleAttemptStableReason, RuleMissReason,
 };
 use rsaeb::input::RunSeed;
 use rsaeb::limits::{
@@ -63,7 +64,7 @@ enum StepSignature {
 /// # Errors
 ///
 /// Returns `TestFailure` if state materialization fails.
-fn applied_signature(applied: &AppliedStep<'_>) -> Result<StepSignature, TestFailure> {
+fn applied_signature(applied: &BorrowedAppliedStep<'_>) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Applied {
         step: applied.step().get(),
         rule_position: applied.rule_position().number().get(),
@@ -76,7 +77,7 @@ fn applied_signature(applied: &AppliedStep<'_>) -> Result<StepSignature, TestFai
 /// # Errors
 ///
 /// Returns `TestFailure` if stable-state materialization fails.
-fn stable_signature(stable: &StableRun<'_>) -> Result<StepSignature, TestFailure> {
+fn stable_signature(stable: &BorrowedStableRun<'_>) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Stable {
         steps: stable.steps().get(),
         state: runtime_view_bytes(stable.state())?,
@@ -88,7 +89,7 @@ fn stable_signature(stable: &StableRun<'_>) -> Result<StepSignature, TestFailure
 /// # Errors
 ///
 /// Returns `TestFailure` if output bytes differ from the expected signature.
-fn returned_signature(returned: &ReturnedRun<'_>) -> Result<StepSignature, TestFailure> {
+fn returned_signature(returned: &BorrowedReturnedRun<'_>) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Return {
         step: returned.step().get(),
         rule_position: returned.rule_position().number().get(),
@@ -102,24 +103,26 @@ fn returned_signature(returned: &ReturnedRun<'_>) -> Result<StepSignature, TestF
 ///
 /// Returns `TestFailure` if a step fails or transition materialization fails.
 fn finish_step_signatures(
-    mut execution: RunSession<'_>,
+    mut execution: BorrowedRunSession<'_>,
 ) -> Result<Vec<StepSignature>, TestFailure> {
     let mut signatures = Vec::new();
     loop {
         match expect_step_transition(execution.step())? {
-            StepTransition::Applied(applied) => {
+            BorrowedStepTransition::Applied(applied) => {
                 signatures.push(applied_signature(&applied)?);
                 execution = applied.into_session();
             }
-            StepTransition::Stable(stable) => {
+            BorrowedStepTransition::Stable(stable) => {
                 signatures.push(stable_signature(&stable)?);
                 return Ok(signatures);
             }
-            StepTransition::Returned(returned) => {
+            BorrowedStepTransition::Returned(returned) => {
                 signatures.push(returned_signature(&returned)?);
                 return Ok(signatures);
             }
-            StepTransition::Failed(failed) => return Err(TestFailure::from(failed.into_error())),
+            BorrowedStepTransition::Failed(failed) => {
+                return Err(TestFailure::from(failed.into_error()));
+            }
         }
     }
 }
@@ -130,10 +133,10 @@ fn finish_step_signatures(
 ///
 /// Returns `TestFailure` if stepping fails.
 fn expect_step_transition<'program>(
-    result: StepTransition<'program>,
-) -> Result<StepTransition<'program>, TestFailure> {
+    result: BorrowedStepTransition<'program>,
+) -> Result<BorrowedStepTransition<'program>, TestFailure> {
     match result {
-        StepTransition::Failed(failed) => Err(TestFailure::from(failed.into_error())),
+        BorrowedStepTransition::Failed(failed) => Err(TestFailure::from(failed.into_error())),
         transition => Ok(transition),
     }
 }
@@ -144,13 +147,13 @@ fn expect_step_transition<'program>(
 ///
 /// Returns `TestFailure` if stepping does not fail.
 fn expect_failed_transition<'program>(
-    result: StepTransition<'program>,
-) -> Result<FailedRun<'program>, TestFailure> {
+    result: BorrowedStepTransition<'program>,
+) -> Result<BorrowedFailedRun<'program>, TestFailure> {
     match result {
-        StepTransition::Failed(failed) => Ok(failed),
-        StepTransition::Applied(_) | StepTransition::Stable(_) | StepTransition::Returned(_) => {
-            Err(TestFailure::message("expected failed step"))
-        }
+        BorrowedStepTransition::Failed(failed) => Ok(failed),
+        BorrowedStepTransition::Applied(_)
+        | BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::Returned(_) => Err(TestFailure::message("expected failed step")),
     }
 }
 
@@ -169,10 +172,12 @@ fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFai
 ///
 /// Returns `TestFailure` if stepping fails.
 fn expect_rule_attempt_transition<'program>(
-    result: RuleAttemptTransition<'program>,
-) -> Result<RuleAttemptTransition<'program>, TestFailure> {
+    result: BorrowedRuleAttemptTransition<'program>,
+) -> Result<BorrowedRuleAttemptTransition<'program>, TestFailure> {
     match result {
-        RuleAttemptTransition::Failed(failed) => Err(TestFailure::from(failed.into_error())),
+        BorrowedRuleAttemptTransition::Failed(failed) => {
+            Err(TestFailure::from(failed.into_error()))
+        }
         transition => Ok(transition),
     }
 }
@@ -183,14 +188,14 @@ fn expect_rule_attempt_transition<'program>(
 ///
 /// Returns `TestFailure` if stepping does not fail.
 fn expect_failed_rule_attempt<'program>(
-    result: RuleAttemptTransition<'program>,
-) -> Result<rsaeb::execution::RuleAttemptFailedRun<'program>, TestFailure> {
+    result: BorrowedRuleAttemptTransition<'program>,
+) -> Result<rsaeb::execution::BorrowedRuleAttemptFailedRun<'program>, TestFailure> {
     match result {
-        RuleAttemptTransition::Failed(failed) => Ok(failed),
-        RuleAttemptTransition::Missed(_)
-        | RuleAttemptTransition::Applied(_)
-        | RuleAttemptTransition::Stable(_)
-        | RuleAttemptTransition::Returned(_) => {
+        BorrowedRuleAttemptTransition::Failed(failed) => Ok(failed),
+        BorrowedRuleAttemptTransition::Missed(_)
+        | BorrowedRuleAttemptTransition::Applied(_)
+        | BorrowedRuleAttemptTransition::Stable(_)
+        | BorrowedRuleAttemptTransition::Returned(_) => {
             Err(TestFailure::message("expected failed rule attempt"))
         }
     }
@@ -252,7 +257,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
     ensure_eq!(execution.completed_steps().get(), 0)?;
 
     let execution = match expect_step_transition(execution.step())? {
-        StepTransition::Applied(applied) => {
+        BorrowedStepTransition::Applied(applied) => {
             ensure_eq!(applied.step().get(), 1)?;
             ensure_eq!(applied.rule_position().number().get(), 1)?;
             ensure_eq!(
@@ -262,13 +267,15 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
             ensure_eq!(applied.state().byte_count().get(), 1)?;
             applied.into_session()
         }
-        StepTransition::Stable(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
+        BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::Failed(_) => {
             return Err(TestFailure::message("expected first applied step"));
         }
     };
 
     let execution = match expect_step_transition(execution.step())? {
-        StepTransition::Applied(applied) => {
+        BorrowedStepTransition::Applied(applied) => {
             ensure_eq!(applied.step().get(), 2)?;
             ensure_eq!(applied.rule_position().number().get(), 2)?;
             ensure_eq!(
@@ -277,20 +284,24 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
             )?;
             applied.into_session()
         }
-        StepTransition::Stable(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
+        BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::Failed(_) => {
             return Err(TestFailure::message("expected second applied step"));
         }
     };
 
     match expect_step_transition(execution.step())? {
-        StepTransition::Stable(stable) => {
+        BorrowedStepTransition::Stable(stable) => {
             ensure_eq!(stable.steps().get(), 2)?;
             ensure_eq!(
                 runtime_view_bytes(stable.state())?.as_slice(),
                 b"c".as_slice()
             )?;
         }
-        StepTransition::Applied(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
+        BorrowedStepTransition::Applied(_)
+        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::Failed(_) => {
             return Err(TestFailure::message("expected stable completion"));
         }
     }
@@ -314,7 +325,7 @@ fn execution_rule_attempt_surface_reports_misses_and_resets_after_apply() -> Tes
     let execution = program.start_rule_attempt_run(input, RuleAttemptLimit::new(20))?;
 
     let execution = match expect_rule_attempt_transition(execution.step())? {
-        RuleAttemptTransition::Missed(missed) => {
+        BorrowedRuleAttemptTransition::Missed(missed) => {
             ensure_eq!(missed.attempt().get(), 1)?;
             ensure_eq!(missed.rule_position().number().get(), 1)?;
             ensure_eq!(missed.reason(), RuleMissReason::StateMismatch)?;
@@ -324,16 +335,16 @@ fn execution_rule_attempt_surface_reports_misses_and_resets_after_apply() -> Tes
             )?;
             missed.into_session()
         }
-        RuleAttemptTransition::Applied(_)
-        | RuleAttemptTransition::Stable(_)
-        | RuleAttemptTransition::Returned(_)
-        | RuleAttemptTransition::Failed(_) => {
+        BorrowedRuleAttemptTransition::Applied(_)
+        | BorrowedRuleAttemptTransition::Stable(_)
+        | BorrowedRuleAttemptTransition::Returned(_)
+        | BorrowedRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message("expected first missed rule attempt"));
         }
     };
 
     let execution = match expect_rule_attempt_transition(execution.step())? {
-        RuleAttemptTransition::Applied(applied) => {
+        BorrowedRuleAttemptTransition::Applied(applied) => {
             ensure_eq!(applied.attempt().get(), 2)?;
             ensure_eq!(applied.step().get(), 1)?;
             ensure_eq!(applied.rule_position().number().get(), 2)?;
@@ -343,25 +354,25 @@ fn execution_rule_attempt_surface_reports_misses_and_resets_after_apply() -> Tes
             )?;
             applied.into_session()
         }
-        RuleAttemptTransition::Missed(_)
-        | RuleAttemptTransition::Stable(_)
-        | RuleAttemptTransition::Returned(_)
-        | RuleAttemptTransition::Failed(_) => {
+        BorrowedRuleAttemptTransition::Missed(_)
+        | BorrowedRuleAttemptTransition::Stable(_)
+        | BorrowedRuleAttemptTransition::Returned(_)
+        | BorrowedRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message("expected applied rule attempt"));
         }
     };
 
     let execution = match expect_rule_attempt_transition(execution.step())? {
-        RuleAttemptTransition::Missed(missed) => {
+        BorrowedRuleAttemptTransition::Missed(missed) => {
             ensure_eq!(missed.attempt().get(), 3)?;
             ensure_eq!(missed.rule_position().number().get(), 1)?;
             ensure_eq!(missed.reason(), RuleMissReason::StateMismatch)?;
             missed.into_session()
         }
-        RuleAttemptTransition::Applied(_)
-        | RuleAttemptTransition::Stable(_)
-        | RuleAttemptTransition::Returned(_)
-        | RuleAttemptTransition::Failed(_) => {
+        BorrowedRuleAttemptTransition::Applied(_)
+        | BorrowedRuleAttemptTransition::Stable(_)
+        | BorrowedRuleAttemptTransition::Returned(_)
+        | BorrowedRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message(
                 "expected cursor reset to first rule after apply",
             ));
@@ -369,22 +380,22 @@ fn execution_rule_attempt_surface_reports_misses_and_resets_after_apply() -> Tes
     };
 
     let execution = match expect_rule_attempt_transition(execution.step())? {
-        RuleAttemptTransition::Missed(missed) => {
+        BorrowedRuleAttemptTransition::Missed(missed) => {
             ensure_eq!(missed.attempt().get(), 4)?;
             ensure_eq!(missed.rule_position().number().get(), 2)?;
             ensure_eq!(missed.reason(), RuleMissReason::StateMismatch)?;
             missed.into_session()
         }
-        RuleAttemptTransition::Applied(_)
-        | RuleAttemptTransition::Stable(_)
-        | RuleAttemptTransition::Returned(_)
-        | RuleAttemptTransition::Failed(_) => {
+        BorrowedRuleAttemptTransition::Applied(_)
+        | BorrowedRuleAttemptTransition::Stable(_)
+        | BorrowedRuleAttemptTransition::Returned(_)
+        | BorrowedRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message("expected second miss after reset"));
         }
     };
 
     match expect_rule_attempt_transition(execution.step())? {
-        RuleAttemptTransition::Applied(applied) => {
+        BorrowedRuleAttemptTransition::Applied(applied) => {
             ensure_eq!(applied.attempt().get(), 5)?;
             ensure_eq!(applied.step().get(), 2)?;
             ensure_eq!(applied.rule_position().number().get(), 3)?;
@@ -393,14 +404,122 @@ fn execution_rule_attempt_surface_reports_misses_and_resets_after_apply() -> Tes
                 b"c".as_slice(),
             )?;
         }
-        RuleAttemptTransition::Missed(_)
-        | RuleAttemptTransition::Stable(_)
-        | RuleAttemptTransition::Returned(_)
-        | RuleAttemptTransition::Failed(_) => {
+        BorrowedRuleAttemptTransition::Missed(_)
+        | BorrowedRuleAttemptTransition::Stable(_)
+        | BorrowedRuleAttemptTransition::Returned(_)
+        | BorrowedRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message("expected later applied rule attempt"));
         }
     }
     Ok(())
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if owned rule-attempt execution loses the same miss,
+/// reset, return, or stable semantics as the borrowed surface.
+#[test]
+fn execution_owned_rule_attempt_surface_reports_misses_resets_returns_and_stable() -> TestResult {
+    let limits = TestRunPolicy::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let execution = parse_program("z=x\na=b\nb=(return)ok")?
+        .into_rule_attempt_run(runtime_input(b"a", limits)?, RuleAttemptLimit::new(20))?;
+
+    let execution = match execution.step() {
+        OwnedRuleAttemptTransition::Missed(missed) => {
+            ensure_eq!(missed.attempt().get(), 1)?;
+            ensure_eq!(missed.rule_position().number().get(), 1)?;
+            ensure_eq!(missed.reason(), RuleMissReason::StateMismatch)?;
+            missed.into_session()
+        }
+        OwnedRuleAttemptTransition::Applied(_)
+        | OwnedRuleAttemptTransition::Stable(_)
+        | OwnedRuleAttemptTransition::Returned(_)
+        | OwnedRuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message("expected owned first miss"));
+        }
+    };
+
+    let execution = match execution.step() {
+        OwnedRuleAttemptTransition::Applied(applied) => {
+            ensure_eq!(applied.attempt().get(), 2)?;
+            ensure_eq!(applied.step().get(), 1)?;
+            ensure_eq!(applied.rule_position().number().get(), 2)?;
+            applied.into_session()
+        }
+        OwnedRuleAttemptTransition::Missed(_)
+        | OwnedRuleAttemptTransition::Stable(_)
+        | OwnedRuleAttemptTransition::Returned(_)
+        | OwnedRuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message("expected owned apply"));
+        }
+    };
+
+    let execution = match execution.step() {
+        OwnedRuleAttemptTransition::Missed(missed) => {
+            ensure_eq!(missed.attempt().get(), 3)?;
+            ensure_eq!(missed.rule_position().number().get(), 1)?;
+            missed.into_session()
+        }
+        OwnedRuleAttemptTransition::Applied(_)
+        | OwnedRuleAttemptTransition::Stable(_)
+        | OwnedRuleAttemptTransition::Returned(_)
+        | OwnedRuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message("expected owned reset miss"));
+        }
+    };
+
+    let execution = match execution.step() {
+        OwnedRuleAttemptTransition::Missed(missed) => {
+            ensure_eq!(missed.attempt().get(), 4)?;
+            ensure_eq!(missed.rule_position().number().get(), 2)?;
+            missed.into_session()
+        }
+        OwnedRuleAttemptTransition::Applied(_)
+        | OwnedRuleAttemptTransition::Stable(_)
+        | OwnedRuleAttemptTransition::Returned(_)
+        | OwnedRuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message("expected owned second miss"));
+        }
+    };
+
+    match execution.step() {
+        OwnedRuleAttemptTransition::Returned(returned) => {
+            ensure_eq!(returned.attempt().get(), 5)?;
+            ensure_eq!(returned.step().get(), 2)?;
+            ensure_eq!(returned.rule_position().number().get(), 3)?;
+            ensure_eq!(returned.output().as_slice(), b"ok")?;
+        }
+        OwnedRuleAttemptTransition::Missed(_)
+        | OwnedRuleAttemptTransition::Applied(_)
+        | OwnedRuleAttemptTransition::Stable(_)
+        | OwnedRuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message("expected owned return"));
+        }
+    }
+
+    let stable = parse_program("a=b")?
+        .into_rule_attempt_run(runtime_input(b"z", limits)?, RuleAttemptLimit::new(20))?;
+    match stable.step() {
+        OwnedRuleAttemptTransition::Stable(stable) => {
+            ensure_eq!(stable.attempts().get(), 1)?;
+            ensure_eq!(stable.steps().get(), 0)?;
+            let RuleAttemptStableReason::FinalMiss(miss) = stable.stable_reason() else {
+                return Err(TestFailure::message("expected owned final miss"));
+            };
+            ensure_eq!(miss.rule_position().number().get(), 1)
+        }
+        OwnedRuleAttemptTransition::Missed(_)
+        | OwnedRuleAttemptTransition::Applied(_)
+        | OwnedRuleAttemptTransition::Returned(_)
+        | OwnedRuleAttemptTransition::Failed(_) => {
+            Err(TestFailure::message("expected owned stable final miss"))
+        }
+    }
 }
 
 /// # Errors
@@ -420,27 +539,65 @@ fn execution_rule_attempt_final_miss_is_stable_immediately() -> TestResult {
     let execution = program.start_rule_attempt_run(input, RuleAttemptLimit::new(10))?;
 
     match expect_rule_attempt_transition(execution.step())? {
-        RuleAttemptTransition::Stable(stable) => {
+        BorrowedRuleAttemptTransition::Stable(stable) => {
             ensure_eq!(stable.attempts().get(), 1)?;
             ensure_eq!(stable.steps().get(), 0)?;
-            let terminal_miss = stable
-                .terminal_miss()
-                .ok_or(TestFailure::message("expected terminal miss"))?;
-            ensure_eq!(terminal_miss.rule_position().number().get(), 1)?;
-            ensure_eq!(terminal_miss.reason(), RuleMissReason::StateMismatch)?;
+            let RuleAttemptStableReason::FinalMiss(final_miss) = stable.stable_reason() else {
+                return Err(TestFailure::message("expected terminal miss"));
+            };
+            ensure_eq!(final_miss.rule_position().number().get(), 1)?;
+            ensure_eq!(final_miss.reason(), RuleMissReason::StateMismatch)?;
             ensure_eq!(
                 runtime_view_bytes(stable.state())?.as_slice(),
                 b"z".as_slice(),
             )?;
         }
-        RuleAttemptTransition::Missed(_)
-        | RuleAttemptTransition::Applied(_)
-        | RuleAttemptTransition::Returned(_)
-        | RuleAttemptTransition::Failed(_) => {
+        BorrowedRuleAttemptTransition::Missed(_)
+        | BorrowedRuleAttemptTransition::Applied(_)
+        | BorrowedRuleAttemptTransition::Returned(_)
+        | BorrowedRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message("expected immediate stable terminal"));
         }
     }
     Ok(())
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if an empty parsed program is not distinguishable
+/// from a final non-matching rule line in rule-attempt execution.
+#[test]
+fn execution_rule_attempt_empty_program_has_typed_stable_reason() -> TestResult {
+    let limits = TestRunPolicy::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let program = parse_program("# no executable rules")?;
+    let input = runtime_input(b"z", limits)?;
+    let execution = program.start_rule_attempt_run(input, RuleAttemptLimit::new(10))?;
+
+    match expect_rule_attempt_transition(execution.step())? {
+        BorrowedRuleAttemptTransition::Stable(stable) => {
+            ensure_eq!(stable.attempts().get(), 0)?;
+            ensure_eq!(stable.steps().get(), 0)?;
+            ensure_eq!(
+                stable.stable_reason(),
+                RuleAttemptStableReason::NoExecutableRules
+            )?;
+            ensure_eq!(
+                runtime_view_bytes(stable.state())?.as_slice(),
+                b"z".as_slice(),
+            )
+        }
+        BorrowedRuleAttemptTransition::Missed(_)
+        | BorrowedRuleAttemptTransition::Applied(_)
+        | BorrowedRuleAttemptTransition::Returned(_)
+        | BorrowedRuleAttemptTransition::Failed(_) => Err(TestFailure::message(
+            "expected empty-program stable terminal",
+        )),
+    }
 }
 
 /// # Errors
@@ -460,45 +617,45 @@ fn execution_rule_attempt_reports_consumed_once_rule_before_later_match() -> Tes
     let execution = program.start_rule_attempt_run(input, RuleAttemptLimit::new(10))?;
 
     let execution = match expect_rule_attempt_transition(execution.step())? {
-        RuleAttemptTransition::Applied(applied) => {
+        BorrowedRuleAttemptTransition::Applied(applied) => {
             ensure_eq!(applied.attempt().get(), 1)?;
             ensure_eq!(applied.step().get(), 1)?;
             ensure_eq!(applied.rule_position().number().get(), 1)?;
             applied.into_session()
         }
-        RuleAttemptTransition::Missed(_)
-        | RuleAttemptTransition::Stable(_)
-        | RuleAttemptTransition::Returned(_)
-        | RuleAttemptTransition::Failed(_) => {
+        BorrowedRuleAttemptTransition::Missed(_)
+        | BorrowedRuleAttemptTransition::Stable(_)
+        | BorrowedRuleAttemptTransition::Returned(_)
+        | BorrowedRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message("expected once rule to apply first"));
         }
     };
 
     let execution = match expect_rule_attempt_transition(execution.step())? {
-        RuleAttemptTransition::Missed(missed) => {
+        BorrowedRuleAttemptTransition::Missed(missed) => {
             ensure_eq!(missed.attempt().get(), 2)?;
             ensure_eq!(missed.rule_position().number().get(), 1)?;
             ensure_eq!(missed.reason(), RuleMissReason::OnceConsumed)?;
             missed.into_session()
         }
-        RuleAttemptTransition::Applied(_)
-        | RuleAttemptTransition::Stable(_)
-        | RuleAttemptTransition::Returned(_)
-        | RuleAttemptTransition::Failed(_) => {
+        BorrowedRuleAttemptTransition::Applied(_)
+        | BorrowedRuleAttemptTransition::Stable(_)
+        | BorrowedRuleAttemptTransition::Returned(_)
+        | BorrowedRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message("expected consumed once miss"));
         }
     };
 
     match expect_rule_attempt_transition(execution.step())? {
-        RuleAttemptTransition::Applied(applied) => {
+        BorrowedRuleAttemptTransition::Applied(applied) => {
             ensure_eq!(applied.attempt().get(), 3)?;
             ensure_eq!(applied.step().get(), 2)?;
             ensure_eq!(applied.rule_position().number().get(), 2)?;
         }
-        RuleAttemptTransition::Missed(_)
-        | RuleAttemptTransition::Stable(_)
-        | RuleAttemptTransition::Returned(_)
-        | RuleAttemptTransition::Failed(_) => {
+        BorrowedRuleAttemptTransition::Missed(_)
+        | BorrowedRuleAttemptTransition::Stable(_)
+        | BorrowedRuleAttemptTransition::Returned(_)
+        | BorrowedRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message(
                 "expected later rule to match after once miss",
             ));
@@ -524,16 +681,16 @@ fn execution_rule_attempt_limit_is_independent_from_step_limit() -> TestResult {
     let execution = program.start_rule_attempt_run(input, RuleAttemptLimit::new(1))?;
 
     let execution = match expect_rule_attempt_transition(execution.step())? {
-        RuleAttemptTransition::Missed(missed) => {
+        BorrowedRuleAttemptTransition::Missed(missed) => {
             ensure_eq!(missed.attempt().get(), 1)?;
             ensure_eq!(missed.rule_position().number().get(), 1)?;
             ensure_eq!(missed.reason(), RuleMissReason::StateMismatch)?;
             missed.into_session()
         }
-        RuleAttemptTransition::Applied(_)
-        | RuleAttemptTransition::Stable(_)
-        | RuleAttemptTransition::Returned(_)
-        | RuleAttemptTransition::Failed(_) => {
+        BorrowedRuleAttemptTransition::Applied(_)
+        | BorrowedRuleAttemptTransition::Stable(_)
+        | BorrowedRuleAttemptTransition::Returned(_)
+        | BorrowedRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message(
                 "expected miss despite zero rewrite step limit",
             ));
@@ -580,14 +737,16 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
     )?;
 
     let execution = match expect_step_transition(execution.step())? {
-        StepTransition::Applied(applied) => {
+        BorrowedStepTransition::Applied(applied) => {
             ensure_eq!(
                 runtime_view_bytes(applied.state())?.as_slice(),
                 b"b".as_slice()
             )?;
             applied.into_session()
         }
-        StepTransition::Stable(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
+        BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::Failed(_) => {
             return Err(TestFailure::message("expected applied step"));
         }
     };
@@ -714,7 +873,7 @@ fn execution_owned_terminals_can_return_program() -> TestResult {
         DEFAULT_MAX_STATE_LEN,
         ReturnByteLimit::new(1),
     );
-    let (error, failed_session) = match parse_program("a=(return)ok")?
+    let (error, failed_program) = match parse_program("a=(return)ok")?
         .into_run(runtime_input(b"a", failed_limits)?)?
         .step()
     {
@@ -732,7 +891,7 @@ fn execution_owned_terminals_can_return_program() -> TestResult {
         ),
         "expected owned return limit failure",
     )?;
-    ensure_eq!(failed_session.into_program().rule_count().get(), 1)
+    ensure_eq!(failed_program.rule_count().get(), 1)
 }
 
 /// # Errors
@@ -804,7 +963,7 @@ fn execution_step_failure_is_terminal_transition() -> TestResult {
             rsaeb::error::RunError::Limit(LimitError::Return {
                 limit,
                 attempted_len,
-            }) if limit == &ReturnByteLimit::new(1) && attempted_len.get() == 2
+            }) if *limit == ReturnByteLimit::new(1) && attempted_len.get() == 2
         ),
         "expected return limit failure",
     )
@@ -826,8 +985,10 @@ fn execution_step_failure_preserves_current_progress() -> TestResult {
     let execution = program.start_run(runtime_input(b"a", limits)?)?;
 
     let running = match expect_step_transition(execution.step())? {
-        StepTransition::Applied(applied) => applied.into_session(),
-        StepTransition::Stable(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
+        BorrowedStepTransition::Applied(applied) => applied.into_session(),
+        BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::Failed(_) => {
             return Err(TestFailure::message("expected applied execution"));
         }
     };

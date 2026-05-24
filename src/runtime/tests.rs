@@ -5,7 +5,7 @@ use super::rewrite::RewriteScratch;
 use super::state::State;
 use crate::bytes::{CompactByte, Payload, PayloadSyntax};
 use crate::error::{LimitError, PayloadKind, RunError, RunInvariantError, RuntimeInputError};
-use crate::execution::{FailedRun, StepTransition};
+use crate::execution::{BorrowedFailedRun, BorrowedStepTransition};
 use crate::input::{RuntimeInput, RuntimeInputSource};
 use crate::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit,
@@ -71,13 +71,13 @@ fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
 ///
 /// Returns `TestFailure` if stepping succeeds.
 fn expect_step_error<'program>(
-    result: StepTransition<'program>,
-) -> Result<FailedRun<'program>, TestFailure> {
+    result: BorrowedStepTransition<'program>,
+) -> Result<BorrowedFailedRun<'program>, TestFailure> {
     match result {
-        StepTransition::Failed(failed) => Ok(failed),
-        StepTransition::Applied(_) | StepTransition::Stable(_) | StepTransition::Returned(_) => {
-            Err(TestFailure::message("expected step error"))
-        }
+        BorrowedStepTransition::Failed(failed) => Ok(failed),
+        BorrowedStepTransition::Applied(_)
+        | BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::Returned(_) => Err(TestFailure::message("expected step error")),
     }
 }
 
@@ -87,10 +87,10 @@ fn expect_step_error<'program>(
 ///
 /// Returns `TestFailure` if stepping fails.
 fn expect_step_transition<'program>(
-    result: StepTransition<'program>,
-) -> Result<StepTransition<'program>, TestFailure> {
+    result: BorrowedStepTransition<'program>,
+) -> Result<BorrowedStepTransition<'program>, TestFailure> {
     match result {
-        StepTransition::Failed(failed) => Err(TestFailure::from(failed.into_error())),
+        BorrowedStepTransition::Failed(failed) => Err(TestFailure::from(failed.into_error())),
         transition => Ok(transition),
     }
 }
@@ -153,14 +153,16 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
     let no_match_input = run_seed(b"x", limits)?;
     let no_match = program.start_run(no_match_input)?;
     match expect_step_transition(no_match.step())? {
-        StepTransition::Stable(stable) => {
+        BorrowedStepTransition::Stable(stable) => {
             ensure_eq!(stable.steps().get(), 0)?;
             ensure_eq!(
                 runtime_view_bytes(stable.state()).as_slice(),
                 b"x".as_slice()
             )?;
         }
-        StepTransition::Applied(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
+        BorrowedStepTransition::Applied(_)
+        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::Failed(_) => {
             return Err(TestFailure::message("expected stable completion"));
         }
     }
@@ -278,7 +280,7 @@ fn return_action_bypasses_rewrite_state_mutation_path() -> TestResult {
     let session = program.start_run(run_seed(b"a", limits)?)?;
 
     match expect_step_transition(session.step())? {
-        StepTransition::Returned(returned) => {
+        BorrowedStepTransition::Returned(returned) => {
             let result = returned.into_result();
             ensure_eq!(result.steps().get(), 1)?;
             ensure_matches(
@@ -289,7 +291,9 @@ fn return_action_bypasses_rewrite_state_mutation_path() -> TestResult {
                 "expected return output to bypass rewrite state limit",
             )
         }
-        StepTransition::Applied(_) | StepTransition::Stable(_) | StepTransition::Failed(_) => {
+        BorrowedStepTransition::Applied(_)
+        | BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::Failed(_) => {
             Err(TestFailure::message("expected return transition"))
         }
     }
@@ -658,10 +662,12 @@ fn empty_payload_matches_keep_anchor_specific_span_placement() -> TestResult {
         let session = program.start_run(run_seed(b"ab", limits)?)?;
 
         match expect_step_transition(session.step())? {
-            StepTransition::Applied(applied) => {
+            BorrowedStepTransition::Applied(applied) => {
                 ensure_eq!(runtime_view_bytes(applied.state()).as_slice(), expected)?;
             }
-            StepTransition::Stable(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
+            BorrowedStepTransition::Stable(_)
+            | BorrowedStepTransition::Returned(_)
+            | BorrowedStepTransition::Failed(_) => {
                 return Err(TestFailure::message("expected one empty-payload rewrite"));
             }
         }

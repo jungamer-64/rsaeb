@@ -84,24 +84,27 @@ the session itself must own the parsed program, such as when moving it across a
 path.
 
 The public typestate API lives under `rsaeb::execution`: borrowed
-`RunSession<'program>` advances through `StepTransition`, while
+`BorrowedRunSession<'program>` advances through `BorrowedStepTransition`, while
 `OwnedRunSession` advances through `OwnedStepTransition`. Applied, stable,
 returned, and failed states represent post-step states. `(return)` is
 terminal, not an ordinary continuation step. Running, applied, and stable
 executions expose borrowed `RuntimeStateView` values for observation. A failed
-borrowed step returns `StepTransition::Failed`, so a host can inspect the
+borrowed step returns `BorrowedStepTransition::Failed`, so a host can inspect the
 uncommitted state and then discard the failed run into its runtime error.
 An owned failed step returns `OwnedStepTransition::Failed`; it exposes the same
-diagnostics and can also split the runtime error from the uncommitted owned
-session when the host needs to recover the parsed program.
+diagnostics and can also split the runtime error from the owned parsed program.
+Failed transitions are terminal for both ownership modes; recovering ownership
+does not recover a retryable session.
 
 The docs.rs crate page contains a complete doctested stepwise example.
 
 Use `Program::start_rule_attempt_run` when a host needs debugger-style control
-over every executable rule line. It reports `RuleAttemptTransition::Missed`
+over every executable rule line. It reports `BorrowedRuleAttemptTransition::Missed`
 for non-applying rules with a typed `RuleMissReason`, consumes a separate
 `RuleAttemptLimit`, and keeps `StepLimit` reserved for committed rewrite steps.
-The owned counterpart is `Program::into_rule_attempt_run`.
+Stable rule-attempt terminals carry `RuleAttemptStableReason`, so an empty
+program is distinct from a final non-matching rule. The owned counterpart is
+`Program::into_rule_attempt_run`.
 
 ### Resource Limits
 
@@ -427,7 +430,7 @@ raw line bytes
 runtime input bytes
   -> AsciiByte         # runtime input domain validation
   -> RuntimeByte       # private ProgramConstructible(ProgramByte) or Opaque(NonProgramAsciiByte)
-  -> RunSession / OwnedRunSession
+  -> BorrowedRunSession / OwnedRunSession
                        # consumes RuntimeInput and owns mutable execution state
 ```
 
@@ -519,11 +522,13 @@ type import paths.
   `TraceSnapshotByteLimit`,
   `RuntimeInputLimits`, `ExecutionLimits`, parser/runtime byte-count value
   types, `StepCount`, `RuleAttemptCount`, and default budget constants
-- `rsaeb::execution`: borrowed stepwise run typestates (`RunSession`,
-  `StepTransition`, `AppliedStep`, `StableRun`, `ReturnedRun`, `FailedRun`) and
-  explicit owned typestates (`OwnedRunSession`, `OwnedStepTransition`,
-  `OwnedAppliedStep`, `OwnedStableRun`, `OwnedReturnedRun`, `OwnedFailedRun`),
-  plus borrowed and owned rule-attempt typestates with `RuleMissReason`
+- `rsaeb::execution`: borrowed stepwise run typestates (`BorrowedRunSession`,
+  `BorrowedStepTransition`, `BorrowedAppliedStep`, `BorrowedStableRun`,
+  `BorrowedReturnedRun`, `BorrowedFailedRun`) and explicit owned typestates
+  (`OwnedRunSession`, `OwnedStepTransition`, `OwnedAppliedStep`,
+  `OwnedStableRun`, `OwnedReturnedRun`, `OwnedFailedRun`), plus borrowed and
+  owned rule-attempt typestates with `RuleMissReason` and
+  `RuleAttemptStableReason`
 - `rsaeb::inspect`: `RuleView`, `RuleActionView`, `PayloadView`,
   `PayloadBytes`, `CanonicalRuleSource`, rule position/count types,
   `OnceRuleCount`, `RuleRepeat`, and `RuleAnchor`

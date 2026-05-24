@@ -244,6 +244,16 @@ impl fmt::Display for RunInvariantError {
                 "runtime invariant failure: rule-attempt cursor could not advance after rule {}",
                 rule.number().get(),
             ),
+            Self::MissingCommittedRule { rule } => write!(
+                f,
+                "runtime invariant failure: committed rule {} was missing from its parsed program",
+                rule.number().get(),
+            ),
+            Self::CommittedReturnRuleWithoutOutput { rule } => write!(
+                f,
+                "runtime invariant failure: committed return rule {} did not contain return output",
+                rule.number().get(),
+            ),
         }
     }
 }

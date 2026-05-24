@@ -146,7 +146,7 @@
 //! applied rule while keeping the parsed program reusable:
 //!
 //! ```
-//! use rsaeb::execution::StepTransition;
+//! use rsaeb::execution::BorrowedStepTransition;
 //! use rsaeb::limits::{
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 //! };
@@ -169,31 +169,31 @@
 //! let execution = program.start_run(seed)?;
 //!
 //! let execution = match execution.step() {
-//!     StepTransition::Applied(applied) => {
+//!     BorrowedStepTransition::Applied(applied) => {
 //!         if applied.state().materialize()?.as_slice() != b"b" {
 //!             return Err("unexpected first applied state".into());
 //!         }
 //!         applied.into_session()
 //!     }
-//!     StepTransition::Stable(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
+//!     BorrowedStepTransition::Stable(_) | BorrowedStepTransition::Returned(_) | BorrowedStepTransition::Failed(_) => {
 //!         return Err("expected first applied step".into());
 //!     }
 //! };
 //!
 //! let execution = match execution.step() {
-//!     StepTransition::Applied(applied) => {
+//!     BorrowedStepTransition::Applied(applied) => {
 //!         if applied.state().materialize()?.as_slice() != b"c" {
 //!             return Err("unexpected second applied state".into());
 //!         }
 //!         applied.into_session()
 //!     }
-//!     StepTransition::Stable(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
+//!     BorrowedStepTransition::Stable(_) | BorrowedStepTransition::Returned(_) | BorrowedStepTransition::Failed(_) => {
 //!         return Err("expected second applied step".into());
 //!     }
 //! };
 //!
 //! match execution.step() {
-//!     StepTransition::Stable(stable) => {
+//!     BorrowedStepTransition::Stable(stable) => {
 //!         if stable.steps().get() != 2 {
 //!             return Err("unexpected stable step count".into());
 //!         }
@@ -201,7 +201,7 @@
 //!             return Err("unexpected stable state".into());
 //!         }
 //!     }
-//!     StepTransition::Applied(_) | StepTransition::Returned(_) | StepTransition::Failed(_) => {
+//!     BorrowedStepTransition::Applied(_) | BorrowedStepTransition::Returned(_) | BorrowedStepTransition::Failed(_) => {
 //!         return Err("expected stable completion".into());
 //!     }
 //! }
@@ -209,20 +209,21 @@
 //! # }
 //! ```
 //!
-//! A [`execution::StepTransition::Failed`] value is terminal. It exposes the
+//! A [`execution::BorrowedStepTransition::Failed`] value is terminal. It exposes the
 //! uncommitted state for diagnostics, then lets callers discard the failed run
 //! into its [`error::RunError`]; it does not expose a retryable session.
 //! [`execution::OwnedStepTransition::Failed`] carries the same error and
-//! uncommitted-state diagnostics for owned sessions, and it can split back into
-//! the runtime error plus the uncommitted owned session so hosts can recover the
-//! parsed program when ownership matters.
+//! uncommitted-state diagnostics for owned sessions, and it can split into the
+//! runtime error plus the parsed program when ownership matters. Failed
+//! transitions are terminal; recovering the program never recovers a retryable
+//! session.
 //!
 //! Use [`program::Program::start_rule_attempt_run`] when the host needs to
 //! observe every executable rule line, including lines that do not apply to the
 //! current runtime state:
 //!
 //! ```
-//! use rsaeb::execution::{RuleAttemptTransition, RuleMissReason};
+//! use rsaeb::execution::{BorrowedRuleAttemptTransition, RuleMissReason};
 //! use rsaeb::limits::{
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
 //!     RuleAttemptLimit, StepLimit,
@@ -246,7 +247,7 @@
 //! let execution = program.start_rule_attempt_run(seed, RuleAttemptLimit::new(10))?;
 //!
 //! let execution = match execution.step() {
-//!     RuleAttemptTransition::Missed(missed) => {
+//!     BorrowedRuleAttemptTransition::Missed(missed) => {
 //!         if missed.reason() != RuleMissReason::StateMismatch {
 //!             return Err("unexpected miss reason".into());
 //!         }
@@ -255,22 +256,22 @@
 //!         }
 //!         missed.into_session()
 //!     }
-//!     RuleAttemptTransition::Applied(_)
-//!     | RuleAttemptTransition::Stable(_)
-//!     | RuleAttemptTransition::Returned(_)
-//!     | RuleAttemptTransition::Failed(_) => return Err("expected first rule to miss".into()),
+//!     BorrowedRuleAttemptTransition::Applied(_)
+//!     | BorrowedRuleAttemptTransition::Stable(_)
+//!     | BorrowedRuleAttemptTransition::Returned(_)
+//!     | BorrowedRuleAttemptTransition::Failed(_) => return Err("expected first rule to miss".into()),
 //! };
 //!
 //! match execution.step() {
-//!     RuleAttemptTransition::Applied(applied) => {
+//!     BorrowedRuleAttemptTransition::Applied(applied) => {
 //!         if applied.step().get() != 1 || applied.rule_position().number().get() != 2 {
 //!             return Err("unexpected applied rule attempt".into());
 //!         }
 //!     }
-//!     RuleAttemptTransition::Missed(_)
-//!     | RuleAttemptTransition::Stable(_)
-//!     | RuleAttemptTransition::Returned(_)
-//!     | RuleAttemptTransition::Failed(_) => return Err("expected second rule to apply".into()),
+//!     BorrowedRuleAttemptTransition::Missed(_)
+//!     | BorrowedRuleAttemptTransition::Stable(_)
+//!     | BorrowedRuleAttemptTransition::Returned(_)
+//!     | BorrowedRuleAttemptTransition::Failed(_) => return Err("expected second rule to apply".into()),
 //! }
 //! # Ok(())
 //! # }

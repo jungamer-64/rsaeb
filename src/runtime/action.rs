@@ -1,6 +1,6 @@
 use crate::bytes::ReturnOutputByteCount;
 use crate::error::RunError;
-use crate::inspect::RuleView;
+use crate::inspect::RulePosition;
 use crate::limits::StepCount;
 use crate::program::{ReturnOutput, ReturnOutputView};
 use crate::rule::RuleAction;
@@ -12,65 +12,58 @@ use super::state::State;
 
 /// Committed rule application reported back to the session layer.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum AppliedRule<'program> {
+pub(crate) enum AppliedRule {
     /// One rewrite rule committed and execution may continue.
-    Rewrite(CommittedRewriteRule<'program>),
+    Rewrite(CommittedRewriteRule),
     /// One return rule committed and execution is terminal.
-    Return(CommittedReturnRule<'program>),
+    Return(CommittedReturnRule),
 }
 
 /// Committed non-terminal rewrite rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CommittedRewriteRule<'program> {
+pub(crate) struct CommittedRewriteRule {
     /// Step number assigned by the runtime budget.
     step: StepCount,
-    /// Rule view proven to describe the committed rewrite rule.
-    rule: RuleView<'program>,
+    /// Program-local position of the committed rewrite rule.
+    rule_position: RulePosition,
 }
 
 /// Committed terminal return rule.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct CommittedReturnRule<'program> {
+pub(crate) struct CommittedReturnRule {
     /// Step number assigned by the runtime budget.
     step: StepCount,
-    /// Rule view proven to describe the committed return rule.
-    rule: RuleView<'program>,
-    /// Return output borrowed directly from the committed return rule.
-    output_view: ReturnOutputView<'program>,
+    /// Program-local position of the committed return rule.
+    rule_position: RulePosition,
     /// Materialized return output produced before committing the terminal step.
     output: ReturnOutput,
 }
 
-impl CommittedRewriteRule<'_> {
+impl CommittedRewriteRule {
     /// Step number assigned by the runtime budget.
     pub(crate) const fn step(self) -> StepCount {
         self.step
     }
 }
 
-impl<'program> CommittedRewriteRule<'program> {
-    /// Rule view proven to describe the committed rewrite rule.
-    pub(crate) const fn rule(self) -> RuleView<'program> {
-        self.rule
+impl CommittedRewriteRule {
+    /// Program-local position of the committed rewrite rule.
+    pub(crate) const fn rule_position(self) -> RulePosition {
+        self.rule_position
     }
 }
 
-impl CommittedReturnRule<'_> {
+impl CommittedReturnRule {
     /// Step number assigned by the runtime budget.
     pub(crate) const fn step(&self) -> StepCount {
         self.step
     }
 }
 
-impl<'program> CommittedReturnRule<'program> {
-    /// Rule view proven to describe the committed return rule.
-    pub(crate) const fn rule(&self) -> RuleView<'program> {
-        self.rule
-    }
-
-    /// Return output borrowed directly from the committed return rule.
-    pub(crate) const fn output_view(&self) -> ReturnOutputView<'program> {
-        self.output_view
+impl CommittedReturnRule {
+    /// Program-local position of the committed return rule.
+    pub(crate) const fn rule_position(&self) -> RulePosition {
+        self.rule_position
     }
 
     /// Consumes this committed return rule into its materialized output.
@@ -96,12 +89,12 @@ pub(crate) fn materialize_return_output(
 ///
 /// Returns `RunError` if the next step exceeds limits, the rewrite would
 /// exceed state limits, return output exceeds limits, or allocation fails.
-pub(crate) fn apply_matched_rule<'program>(
+pub(crate) fn apply_matched_rule(
     state: &mut State,
     scratch: &mut RewriteScratch,
     budget: &mut RuntimeBudgetState,
-    matched: MatchedRuleApplication<'program, '_>,
-) -> Result<AppliedRule<'program>, RunError> {
+    matched: MatchedRuleApplication<'_, '_>,
+) -> Result<AppliedRule, RunError> {
     let permit = budget.reserve_next_step(state.byte_count())?;
     match matched.rule().action() {
         RuleAction::Rewrite(action) => {
@@ -111,7 +104,7 @@ pub(crate) fn apply_matched_rule<'program>(
             state.commit_rewrite(rewrite, scratch);
             Ok(AppliedRule::Rewrite(CommittedRewriteRule {
                 step,
-                rule: committed.rule(),
+                rule_position: committed.rule_position(),
             }))
         }
         RuleAction::Return(output) => {
@@ -124,8 +117,7 @@ pub(crate) fn apply_matched_rule<'program>(
             let step = budget.commit(permit);
             Ok(AppliedRule::Return(CommittedReturnRule {
                 step,
-                rule: committed.rule(),
-                output_view,
+                rule_position: committed.rule_position(),
                 output: materialized_output,
             }))
         }
