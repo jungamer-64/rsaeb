@@ -19,12 +19,12 @@ mod rule_set;
 /// Program-level tracing entrypoints.
 mod tracing;
 
-use crate::error::{ParseError, RunError, RunInvariantError};
+use crate::error::{ParseError, RunError};
 use crate::execution::{
     BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRuleAttemptSession, OwnedRunSession,
 };
 use crate::input::RunSeed;
-use crate::inspect::{OnceRuleCount, RuleCount, RulePosition, RuleView};
+use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::limits::{ParseLimits, RuleAttemptLimit};
 use crate::parser::parse_rules_impl;
 use crate::rule::Rule;
@@ -108,40 +108,6 @@ impl Program {
     /// Borrows the immutable rule table in execution order.
     pub(crate) fn rule_slice(&self) -> &[Rule] {
         self.rule_set.as_slice()
-    }
-
-    /// Resolves a committed runtime rule position back into this parsed program.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` if runtime reported a rule position that is not owned
-    /// by this program.
-    pub(crate) fn rule_view_at(&self, position: RulePosition) -> Result<RuleView<'_>, RunError> {
-        let rule = self
-            .rule_slice()
-            .iter()
-            .find(|rule| rule.position() == position)
-            .ok_or(RunInvariantError::MissingCommittedRule { rule: position })?;
-        Ok(RuleView::new(rule))
-    }
-
-    /// Resolves a committed return step to its borrowed return-output payload.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` if the runtime reported a missing committed rule or a
-    /// non-return rule as a committed return.
-    pub(crate) fn return_output_view_at(
-        &self,
-        position: RulePosition,
-    ) -> Result<ReturnOutputView<'_>, RunError> {
-        let rule = self
-            .rule_slice()
-            .iter()
-            .find(|rule| rule.position() == position)
-            .ok_or(RunInvariantError::MissingCommittedRule { rule: position })?;
-        rule.return_output_view()
-            .ok_or(RunInvariantError::CommittedReturnRuleWithoutOutput { rule: position }.into())
     }
 
     /// Starts a stateful run session that borrows this parsed program.

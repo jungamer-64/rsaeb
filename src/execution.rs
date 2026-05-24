@@ -1335,12 +1335,6 @@ impl<'program> BorrowedAppliedStep<'program> {
         self.step
     }
 
-    /// Program-local position of the applied rule.
-    #[must_use]
-    pub const fn rule_position(&self) -> RulePosition {
-        self.rule_position
-    }
-
     /// Runtime state after the applied rewrite step.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
@@ -1361,12 +1355,6 @@ impl OwnedAppliedStep {
     #[must_use]
     pub const fn step(&self) -> StepCount {
         self.step
-    }
-
-    /// Program-local position of the applied rule.
-    #[must_use]
-    pub const fn rule_position(&self) -> RulePosition {
-        self.rule_position
     }
 
     /// Runtime state after the applied rewrite step.
@@ -1395,12 +1383,6 @@ impl<'program> BorrowedMissedRuleAttempt<'program> {
     #[must_use]
     pub const fn miss(&self) -> RuleMiss {
         self.miss
-    }
-
-    /// Program-local position of the consumed non-applying rule.
-    #[must_use]
-    pub const fn rule_position(&self) -> RulePosition {
-        self.miss.rule_position()
     }
 
     /// Why the consumed rule did not apply.
@@ -1435,12 +1417,6 @@ impl OwnedMissedRuleAttempt {
         self.miss
     }
 
-    /// Program-local position of the consumed non-applying rule.
-    #[must_use]
-    pub const fn rule_position(&self) -> RulePosition {
-        self.miss.rule_position()
-    }
-
     /// Why the consumed rule did not apply.
     #[must_use]
     pub const fn reason(&self) -> RuleMissReason {
@@ -1473,12 +1449,6 @@ impl<'program> BorrowedRuleAttemptAppliedStep<'program> {
         self.step
     }
 
-    /// Program-local position of the applied rule.
-    #[must_use]
-    pub const fn rule_position(&self) -> RulePosition {
-        self.rule_position
-    }
-
     /// Runtime state after the applied rewrite step.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
@@ -1503,12 +1473,6 @@ impl OwnedRuleAttemptAppliedStep {
     #[must_use]
     pub const fn step(&self) -> StepCount {
         self.step
-    }
-
-    /// Program-local position of the applied rule.
-    #[must_use]
-    pub const fn rule_position(&self) -> RulePosition {
-        self.rule_position
     }
 
     /// Runtime state after the applied rewrite step.
@@ -1696,12 +1660,6 @@ impl<'program> BorrowedReturnedRun<'program> {
         self.program
     }
 
-    /// Program-local position of the return rule.
-    #[must_use]
-    pub const fn rule_position(&self) -> RulePosition {
-        self.rule_position
-    }
-
     /// Materialized return output from runtime execution.
     #[must_use]
     pub const fn output(&self) -> &ReturnOutput {
@@ -1738,12 +1696,6 @@ impl OwnedReturnedRun {
         self.program
     }
 
-    /// Program-local position of the return rule.
-    #[must_use]
-    pub const fn rule_position(&self) -> RulePosition {
-        self.rule_position
-    }
-
     /// Materialized return output from runtime execution.
     #[must_use]
     pub const fn output(&self) -> &ReturnOutput {
@@ -1774,12 +1726,6 @@ impl<'program> BorrowedRuleAttemptReturnedRun<'program> {
     #[must_use]
     pub const fn program(&self) -> &'program Program {
         self.program
-    }
-
-    /// Program-local position of the return rule.
-    #[must_use]
-    pub const fn rule_position(&self) -> RulePosition {
-        self.rule_position
     }
 
     /// Materialized return output from runtime execution.
@@ -1822,12 +1768,6 @@ impl OwnedRuleAttemptReturnedRun {
     #[must_use]
     pub fn into_program(self) -> Program {
         self.program
-    }
-
-    /// Program-local position of the return rule.
-    #[must_use]
-    pub const fn rule_position(&self) -> RulePosition {
-        self.rule_position
     }
 
     /// Materialized return output from runtime execution.
