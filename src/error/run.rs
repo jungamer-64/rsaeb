@@ -18,11 +18,39 @@ use crate::limits::{
 pub enum RunError {
     /// A fallible allocation failed during runtime execution.
     Allocation(AllocationError),
+    /// Runtime-internal data violated a checked invariant.
+    InternalInvariant(RunInvariantError),
     /// A rewrite length could not be represented.
     StateSize(StateSizeError),
     /// A configured runtime budget would be exceeded.
     Limit(LimitError),
 }
+
+/// Runtime-internal invariant failure.
+///
+/// These errors are not attributable to ordinary source syntax, runtime input,
+/// allocation, or configured budgets. They report contradictions between
+/// parser-built witnesses and runtime-owned state without panicking or silently
+/// treating the run as stable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunInvariantError {
+    /// The parsed rule table and per-run `(once)` state table had different lengths.
+    RuleStateLengthMismatch {
+        /// Number of parsed executable rules.
+        rules: crate::inspect::RuleCount,
+        /// Number of per-run state rows.
+        states: crate::inspect::RuleCount,
+    },
+    /// Runtime attempted to use a match range against a different state length.
+    InvalidStateMatchRange {
+        /// State length recorded when the match witness was built.
+        matched_state_len: RuntimeStateByteCount,
+        /// Current state length at rewrite/open time.
+        current_state_len: RuntimeStateByteCount,
+    },
+}
+
+impl Error for RunInvariantError {}
 
 impl Error for RunError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {

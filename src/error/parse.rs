@@ -97,6 +97,10 @@ pub enum ParseErrorLocation {
 pub enum ParseErrorKind {
     /// A fallible allocation failed while parsing source.
     Allocation(AllocationError),
+    /// A parser representation limit unrelated to allocation was exceeded.
+    Representation(ParseRepresentationError),
+    /// Parser-internal data violated a checked invariant.
+    InternalInvariant(ParseInvariantError),
     /// A configured parser resource limit would be exceeded.
     Limit(ParseLimitError),
     /// A non-ASCII byte appeared before the line comment marker.
@@ -131,6 +135,45 @@ pub enum ParseErrorKind {
         action: RightActionKind,
     },
 }
+
+/// Parser-domain representation failure.
+///
+/// These errors describe parser metadata that cannot be represented, such as
+/// source positions or rule positions. They are separate from allocation
+/// failures so capacity errors do not hide non-allocation representation
+/// problems.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParseRepresentationError {
+    /// A one-based source line number could not be represented.
+    SourceLineOverflow,
+    /// A one-based source column could not be represented.
+    SourceColumnOverflow {
+        /// Source line where column conversion failed.
+        line: SourceLineNumber,
+    },
+    /// A rule-table position could not be represented.
+    RulePositionOverflow,
+    /// A parsed `(once)` rule count could not be represented.
+    OnceRuleCountOverflow,
+    /// A compact-code byte count could not be represented.
+    CompactCodeByteCountOverflow,
+}
+
+impl Error for ParseRepresentationError {}
+
+/// Parser-internal invariant failure.
+///
+/// These values are not ordinary syntax errors. They report contradictions in
+/// parser witness flow that must be surfaced without panicking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParseInvariantError {
+    /// A token match did not carry the source column needed for diagnostics.
+    MissingMatchedTokenColumn,
+    /// A validated payload witness did not carry the validated bytes it proves.
+    MissingValidatedPayloadBytes,
+}
+
+impl Error for ParseInvariantError {}
 
 /// Configured parser budget failure.
 ///
