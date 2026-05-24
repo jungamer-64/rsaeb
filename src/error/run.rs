@@ -44,13 +44,6 @@ pub enum RunInvariantError {
         /// Number of runtime once-state slots available for this run.
         available_slots: crate::inspect::OnceRuleCount,
     },
-    /// Runtime attempted to use a match range against a different state length.
-    InvalidStateMatchRange {
-        /// State length recorded when the match witness was built.
-        matched_state_len: RuntimeStateByteCount,
-        /// Current state length at rewrite/open time.
-        current_state_len: RuntimeStateByteCount,
-    },
 }
 
 impl Error for RunInvariantError {}
@@ -114,8 +107,6 @@ pub enum RuntimeInputError {
         /// Runtime input length that would have been classified.
         attempted_len: RuntimeInputByteCount,
     },
-    /// Runtime-input validation witness flow violated a checked invariant.
-    InternalInvariant(RuntimeInputInvariantError),
     /// Storing validated runtime input failed.
     Allocation(AllocationError),
 }
@@ -142,17 +133,12 @@ impl RuntimeInputError {
         }
     }
 
-    /// Builds the internal invariant value.
-    pub(crate) const fn internal_invariant(error: RuntimeInputInvariantError) -> Self {
-        Self::InternalInvariant(error)
-    }
 }
 
 impl Error for RuntimeInputError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Allocation(error) => Some(error),
-            Self::InternalInvariant(error) => Some(error),
             Self::NonAscii { .. } | Self::ColumnOverflow | Self::InputLimit { .. } => None,
         }
     }
@@ -163,18 +149,6 @@ impl From<AllocationError> for RuntimeInputError {
         Self::Allocation(value)
     }
 }
-
-/// Runtime-input internal invariant failure.
-///
-/// This reports contradictions after raw input has already been validated as
-/// ASCII, without reclassifying the contradiction as ordinary user input.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RuntimeInputInvariantError {
-    /// A byte from a validated runtime-input witness was no longer ASCII.
-    MissingValidatedAsciiByte,
-}
-
-impl Error for RuntimeInputInvariantError {}
 
 /// Run admission boundary error.
 ///

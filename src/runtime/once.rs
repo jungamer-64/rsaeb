@@ -23,15 +23,6 @@ pub(crate) enum OnceRuleState {
     Consumed,
 }
 
-/// Availability of a parsed rule according to per-run `(once)` state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum OnceRuleAvailability {
-    /// Rule is available to be matched against runtime state.
-    Available,
-    /// Rule has already committed during this runtime invocation.
-    Consumed,
-}
-
 /// Linear commit action for a matched rule.
 #[derive(Debug)]
 pub(super) enum MatchedRuleCommit<'once> {
@@ -102,66 +93,4 @@ impl OnceStateSet {
         Ok(Self { states })
     }
 
-    /// Returns this rule's current per-run once-state availability.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` if a parsed `(once)` rule references a runtime slot
-    /// missing from this run's once-state table.
-    pub(super) fn availability(&self, rule: &Rule) -> Result<OnceRuleAvailability, RunError> {
-        match rule.availability() {
-            RuleAvailability::Always => Ok(OnceRuleAvailability::Available),
-            RuleAvailability::Once(slot) => {
-                let available_slots = PublicOnceRuleCount::new(self.states.len());
-                let Some(state) = self.states.get(slot.get()) else {
-                    return Err(RunInvariantError::MissingOnceRuleState {
-                        rule: rule.position(),
-                        available_slots,
-                    }
-                    .into());
-                };
-
-                match state {
-                    OnceRuleState::Fresh => Ok(OnceRuleAvailability::Available),
-                    OnceRuleState::Consumed => Ok(OnceRuleAvailability::Consumed),
-                }
-            }
-        }
-    }
-
-    /// Reserves the commit side effect for a rule already proven available.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` if a parsed `(once)` rule references a runtime slot
-    /// missing from this run's once-state table.
-    pub(super) fn reserve_available_commit(
-        &mut self,
-        rule: &Rule,
-    ) -> Result<MatchedRuleCommit<'_>, RunError> {
-        match rule.availability() {
-            RuleAvailability::Always => Ok(MatchedRuleCommit::Always),
-            RuleAvailability::Once(slot) => {
-                let available_slots = PublicOnceRuleCount::new(self.states.len());
-                let Some(state) = self.states.get_mut(slot.get()) else {
-                    return Err(RunInvariantError::MissingOnceRuleState {
-                        rule: rule.position(),
-                        available_slots,
-                    }
-                    .into());
-                };
-
-                match state {
-                    OnceRuleState::Fresh => {
-                        Ok(MatchedRuleCommit::Once(OnceMatchPermit::new(state)))
-                    }
-                    OnceRuleState::Consumed => Err(RunInvariantError::MissingOnceRuleState {
-                        rule: rule.position(),
-                        available_slots,
-                    }
-                    .into()),
-                }
-            }
-        }
-    }
 }

@@ -7,7 +7,7 @@ use crate::bytes::{
     NonEmptyPayloadNeedle, Payload, PayloadByteCount, PayloadNeedle, RuntimeByte,
     RuntimeStateByteCount,
 };
-use crate::error::{RunError, RunInvariantError, StateSizeError};
+use crate::error::{RunError, StateSizeError};
 use crate::input::InitialStateBytes;
 use crate::program::RuntimeStateSnapshot;
 use crate::rule::RewriteAction;
@@ -130,7 +130,6 @@ impl State {
         output: &mut RewriteScratch,
         budget: RuntimeBudgetState,
     ) -> Result<PreparedRewrite, RunError> {
-        let state_match = state_match.open(self.byte_count())?;
         self.prepare_replacement_buffer(state_match, action.payload(), output, budget)?;
         match action {
             RewriteAction::Replace(rhs) => {
@@ -160,7 +159,7 @@ impl State {
     /// cannot be represented as a runtime state byte count.
     fn replaced_byte_count(
         &self,
-        state_match: CheckedStateMatch,
+        state_match: StateMatch,
         rhs: &Payload,
     ) -> Result<RuntimeStateByteCount, StateSizeError> {
         let state_len = self.byte_count();
@@ -183,7 +182,7 @@ impl State {
     /// rewritten state exceeds limits, or scratch allocation fails.
     fn prepare_replacement_buffer(
         &self,
-        state_match: CheckedStateMatch,
+        state_match: StateMatch,
         rhs: &Payload,
         output: &mut RewriteScratch,
         budget: RuntimeBudgetState,
@@ -381,13 +380,6 @@ pub(crate) struct StateMatch {
     range: StateSpanRange,
 }
 
-/// Match span reopened against the current runtime state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CheckedStateMatch {
-    /// Runtime-state range covered by the checked match.
-    range: StateSpanRange,
-}
-
 impl StateMatch {
     /// Builds a start-anchored match span.
     fn at_start(matched_len: PayloadByteCount, state_len: RuntimeStateByteCount) -> Option<Self> {
@@ -410,24 +402,6 @@ impl StateMatch {
         Some(Self { range })
     }
 
-    /// Opens this match witness against the current state length.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` if the match witness was built for a different state
-    /// length than the state it is being used against.
-    fn open(self, current_state_len: RuntimeStateByteCount) -> Result<CheckedStateMatch, RunError> {
-        if self.range.state_len() == current_state_len {
-            Ok(CheckedStateMatch { range: self.range })
-        } else {
-            Err(RunInvariantError::InvalidStateMatchRange {
-                matched_state_len: self.range.state_len(),
-                current_state_len,
-            }
-            .into())
-        }
-    }
-
     /// Iterates over bytes covered by this freshly built match witness.
     fn matched_bytes(self, bytes: &[RuntimeByte]) -> impl Iterator<Item = RuntimeByte> + '_ {
         bytes
@@ -438,7 +412,7 @@ impl StateMatch {
     }
 }
 
-impl CheckedStateMatch {
+impl StateMatch {
     /// Returns the matched payload length.
     fn matched_len(self) -> PayloadByteCount {
         self.range.byte_count()

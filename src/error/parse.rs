@@ -66,7 +66,6 @@ impl Error for ParseError {
         match &self.kind {
             ParseErrorKind::Allocation(error) => Some(error),
             ParseErrorKind::Representation(error) => Some(error),
-            ParseErrorKind::InternalInvariant(error) => Some(error),
             ParseErrorKind::Limit(error) => Some(error),
             ParseErrorKind::NonAsciiInCode { .. }
             | ParseErrorKind::NonPrintableAsciiInCode { .. }
@@ -101,8 +100,6 @@ pub enum ParseErrorKind {
     Allocation(AllocationError),
     /// A parser representation limit unrelated to allocation was exceeded.
     Representation(ParseRepresentationError),
-    /// Parser-internal data violated a checked invariant.
-    InternalInvariant(ParseInvariantError),
     /// A configured parser resource limit would be exceeded.
     Limit(ParseLimitError),
     /// A non-ASCII byte appeared before the line comment marker.
@@ -164,22 +161,6 @@ pub enum ParseRepresentationError {
 }
 
 impl Error for ParseRepresentationError {}
-
-/// Parser-internal invariant failure.
-///
-/// These values are not ordinary syntax errors. They report contradictions in
-/// parser witness flow that must be surfaced without panicking.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParseInvariantError {
-    /// A non-ASCII code-byte rejection witness was not available after detection.
-    RejectedNonAsciiCodeByteWithoutWitness,
-    /// A token match did not carry the source column needed for diagnostics.
-    MatchedTokenWithoutColumn,
-    /// A validated payload witness did not carry the validated bytes it proves.
-    ValidatedPayloadWithoutBytes,
-}
-
-impl Error for ParseInvariantError {}
 
 /// Configured parser budget failure.
 ///
