@@ -197,6 +197,10 @@
 //! A [`execution::StepTransition::Failed`] value is terminal. It exposes the
 //! uncommitted state for diagnostics, then lets callers discard the failed run
 //! into its [`error::RunError`]; it does not expose a retryable session.
+//! [`execution::OwnedStepTransition::Failed`] carries the same error and
+//! uncommitted-state diagnostics for owned sessions, and it can split back into
+//! the runtime error plus the uncommitted owned session so hosts can recover the
+//! parsed program when ownership matters.
 //!
 //! # Limits
 //!

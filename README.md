@@ -90,6 +90,9 @@ terminal, not an ordinary continuation step. Running, applied, and stable
 executions expose borrowed `RuntimeStateView` values for observation. A failed
 borrowed step returns `StepTransition::Failed`, so a host can inspect the
 uncommitted state and then discard the failed run into its runtime error.
+An owned failed step returns `OwnedStepTransition::Failed`; it exposes the same
+diagnostics and can also split the runtime error from the uncommitted owned
+session when the host needs to recover the parsed program.
 
 The docs.rs crate page contains a complete doctested stepwise example.
 
