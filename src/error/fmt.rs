@@ -381,6 +381,16 @@ impl fmt::Display for LimitError {
                 completed_steps.get(),
                 max_steps.get(),
             ),
+            Self::RuleAttempt {
+                max_attempts,
+                completed_attempts,
+                state_len,
+            } => write!(
+                f,
+                "rule-attempt limit exceeded after {} attempts; max attempts: {}, state length: {state_len} bytes",
+                completed_attempts.get(),
+                max_attempts.get(),
+            ),
         }
     }
 }

@@ -20,6 +20,8 @@ pub const DEFAULT_MAX_PAYLOAD_LEN: PayloadByteLimit = PayloadByteLimit::new(DEFA
 pub const DEFAULT_MAX_RULES: RuleLimit = RuleLimit::new(1_000_000);
 /// Default rewrite step budget for callers that want the crate policy value.
 pub const DEFAULT_MAX_STEPS: StepLimit = StepLimit::new(1_000_000);
+/// Default rule-attempt budget for callers that want the crate policy value.
+pub const DEFAULT_MAX_RULE_ATTEMPTS: RuleAttemptLimit = RuleAttemptLimit::new(1_000_000);
 /// Default runtime-state byte budget for callers that want the crate policy value.
 pub const DEFAULT_MAX_STATE_LEN: RuntimeStateByteLimit =
     RuntimeStateByteLimit::new(DEFAULT_BYTE_BUDGET);
@@ -284,6 +286,35 @@ impl StepLimit {
     }
 }
 
+/// Maximum number of executable rule-line attempts allowed in rule-attempt execution.
+///
+/// This is separate from [`StepLimit`]. A rule attempt observes one executable
+/// rule line, whether or not that rule matches the current runtime state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RuleAttemptLimit {
+    /// Maximum number of consumed rule attempts.
+    value: usize,
+}
+
+impl RuleAttemptLimit {
+    /// Creates a rule-attempt limit from a primitive count.
+    #[must_use]
+    pub const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
+    /// Returns this limit as a primitive count.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+
+    /// Checks whether another rule attempt may be reserved after the completed count.
+    pub(crate) const fn allows_next_after(self, completed_attempts: RuleAttemptCount) -> bool {
+        completed_attempts.get() < self.value
+    }
+}
+
 /// Maximum runtime state length in bytes.
 ///
 /// This applies both to the materialized initial input state and to every state
@@ -416,6 +447,33 @@ impl StepCount {
     pub(crate) const ZERO: Self = Self { value: 0 };
 
     /// Returns this completed-step count as a primitive count.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value
+    }
+
+    /// Returns the checked next result.
+    pub(crate) fn checked_next(self) -> Option<Self> {
+        let value = self.value.checked_add(1)?;
+        Some(Self { value })
+    }
+}
+
+/// Number of executable rule-line attempts consumed by a rule-attempt run.
+///
+/// Counts report inspected executable rule lines. A miss increments this count,
+/// and a matched rule increments it independently from committed rewrite steps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RuleAttemptCount {
+    /// Consumed rule attempts.
+    value: usize,
+}
+
+impl RuleAttemptCount {
+    /// ZERO boundary value.
+    pub(crate) const ZERO: Self = Self { value: 0 };
+
+    /// Returns this rule-attempt count as a primitive count.
     #[must_use]
     pub const fn get(self) -> usize {
         self.value

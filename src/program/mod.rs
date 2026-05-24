@@ -20,10 +20,10 @@ mod rule_set;
 mod tracing;
 
 use crate::error::{ParseError, RunError};
-use crate::execution::{OwnedRunSession, RunSession};
+use crate::execution::{OwnedRuleAttemptSession, OwnedRunSession, RuleAttemptSession, RunSession};
 use crate::input::RunSeed;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
-use crate::limits::ParseLimits;
+use crate::limits::{ParseLimits, RuleAttemptLimit};
 use crate::parser::parse_rules_impl;
 use crate::rule::Rule;
 use crate::source::ProgramSource;
@@ -134,6 +134,38 @@ impl Program {
     /// Returns `RunError` when allocating per-run execution state fails.
     pub fn into_run(self, seed: RunSeed) -> Result<OwnedRunSession, RunError> {
         OwnedRunSession::new(self, seed)
+    }
+
+    /// Starts a stateful borrowed run session that advances by executable rule attempt.
+    ///
+    /// Unlike [`Program::start_run`], this mode reports non-matching rule lines
+    /// before continuing to the next rule. Matching rewrites still reset the
+    /// rule cursor to the first executable rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` when allocating per-run execution state fails.
+    pub fn start_rule_attempt_run(
+        &self,
+        seed: RunSeed,
+        limit: RuleAttemptLimit,
+    ) -> Result<RuleAttemptSession<'_>, RunError> {
+        RuleAttemptSession::new(self, seed, limit)
+    }
+
+    /// Starts a stateful owned run session that advances by executable rule attempt.
+    ///
+    /// This is the owned counterpart to [`Program::start_rule_attempt_run`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` when allocating per-run execution state fails.
+    pub fn into_rule_attempt_run(
+        self,
+        seed: RunSeed,
+        limit: RuleAttemptLimit,
+    ) -> Result<OwnedRuleAttemptSession, RunError> {
+        OwnedRuleAttemptSession::new(self, seed, limit)
     }
 
     /// Runs this program with admitted runtime seed.

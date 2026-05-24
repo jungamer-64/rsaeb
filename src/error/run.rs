@@ -6,7 +6,8 @@ use crate::bytes::{
     RuntimeStateByteCount,
 };
 use crate::limits::{
-    ReturnByteLimit, RuntimeInputByteLimit, RuntimeStateByteLimit, StepCount, StepLimit,
+    ReturnByteLimit, RuleAttemptCount, RuleAttemptLimit, RuntimeInputByteLimit,
+    RuntimeStateByteLimit, StepCount, StepLimit,
 };
 
 /// Runtime execution error.
@@ -310,6 +311,15 @@ pub enum LimitError {
         /// Runtime state length when the limit was hit.
         state_len: RuntimeStateByteCount,
     },
+    /// Rule-attempt execution exceeded the configured rule-attempt limit.
+    RuleAttempt {
+        /// Configured maximum executable rule-line attempts.
+        max_attempts: RuleAttemptLimit,
+        /// Number of completed rule attempts when the next rule line was reached.
+        completed_attempts: RuleAttemptCount,
+        /// Runtime state length when the limit was hit.
+        state_len: RuntimeStateByteCount,
+    },
 }
 
 impl LimitError {
@@ -344,6 +354,19 @@ impl LimitError {
         Self::Step {
             max_steps,
             completed_steps,
+            state_len,
+        }
+    }
+
+    /// Builds the rule-attempt value.
+    pub(crate) const fn rule_attempt(
+        max_attempts: RuleAttemptLimit,
+        completed_attempts: RuleAttemptCount,
+        state_len: RuntimeStateByteCount,
+    ) -> Self {
+        Self::RuleAttempt {
+            max_attempts,
+            completed_attempts,
             state_len,
         }
     }
