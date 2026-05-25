@@ -2,7 +2,7 @@ use crate::bytes::{ReturnOutputByteCount, RuntimeStateByteCount};
 use crate::error::{LimitError, RunError};
 use crate::limits::{ExecutionLimits, RuleAttemptCount, RuleAttemptLimit, StepCount};
 
-/// Execution budgets plus the number of committed rewrite steps.
+/// Execution budgets plus the number of committed execution steps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RuntimeBudgetState {
     /// Host execution policy admitted for this run.
@@ -21,14 +21,14 @@ pub(crate) struct RuleAttemptBudgetState {
 }
 
 /// Reserved next step number that becomes visible only after commit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct StepPermit {
-    /// Step count to publish when the rewrite commits.
+    /// Step count to publish when the rule application commits.
     next_step: StepCount,
 }
 
 /// Reserved next rule-attempt number that becomes visible only after commit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RuleAttemptPermit {
     /// Rule-attempt count to publish when the rule line is consumed.
     next_attempt: RuleAttemptCount,
@@ -43,7 +43,7 @@ impl RuntimeBudgetState {
         }
     }
 
-    /// Number of rewrite steps committed so far.
+    /// Number of execution steps committed so far.
     pub(crate) const fn completed_steps(self) -> StepCount {
         self.completed_steps
     }
@@ -84,7 +84,7 @@ impl RuntimeBudgetState {
         Ok(())
     }
 
-    /// Checks whether another rewrite step can be attempted.
+    /// Checks whether another execution step can be attempted.
     ///
     /// # Errors
     ///
