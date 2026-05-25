@@ -286,7 +286,7 @@ pub enum LimitError {
     Step {
         /// Configured maximum step count.
         max_steps: StepLimit,
-        /// Number of completed rewrite steps when the next match was found.
+        /// Number of completed execution steps when the next match was found.
         completed_steps: StepCount,
         /// Runtime state length when the limit was hit.
         state_len: RuntimeStateByteCount,

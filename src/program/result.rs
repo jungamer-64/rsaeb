@@ -172,12 +172,12 @@ impl core::fmt::Debug for ReturnOutputView<'_> {
 
 /// Result of one program execution.
 ///
-/// The result records the number of committed rewrite steps and the terminal
+/// The result records the number of committed execution steps and the terminal
 /// outcome reached by the run. A failed run never produces this type; failures
 /// remain in [`crate::error::RunError`] or traced-run error domains.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RunResult {
-    /// Number of committed rewrite steps in this run.
+    /// Number of committed execution steps in this run.
     steps: StepCount,
     /// Terminal execution outcome.
     outcome: RunOutcome,
@@ -212,7 +212,7 @@ impl RunResult {
         self.outcome
     }
 
-    /// Number of rewrite steps applied.
+    /// Number of committed execution steps.
     #[must_use]
     pub const fn steps(&self) -> StepCount {
         self.steps

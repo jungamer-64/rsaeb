@@ -357,8 +357,8 @@ pub struct OwnedRunSession {
 /// Stateful run session that borrows a reusable parsed program and advances by rule attempt.
 ///
 /// A rule-attempt step consumes one executable rule line even when that rule
-/// does not apply. Ordinary rewrite steps still reset the rule cursor to the
-/// first executable rule.
+/// does not apply. Committed non-terminal rule applications reset the rule
+/// cursor to the first executable rule.
 pub struct BorrowedRuleAttemptSession<'program> {
     /// Internal rule-attempt session using the public borrowed program boundary.
     session: AttemptSession<BorrowedProgram<'program>>,
@@ -393,7 +393,7 @@ pub struct BorrowedAppliedStep<'program> {
     step: StepCount,
     /// Borrowed rewrite rule committed by this transition.
     rule: RuleView<'program>,
-    /// Continuation session after the committed rewrite.
+    /// Continuation session after the committed rule application.
     session: BorrowedRunSession<'program>,
 }
 
@@ -463,7 +463,7 @@ pub struct BorrowedRuleAttemptAppliedStep<'program> {
     step: StepCount,
     /// Borrowed rewrite rule committed by this transition.
     rule: RuleView<'program>,
-    /// Continuation session after the committed rewrite.
+    /// Continuation session after the committed rule application.
     session: BorrowedRuleAttemptSession<'program>,
 }
 
@@ -471,7 +471,7 @@ pub struct BorrowedRuleAttemptAppliedStep<'program> {
 pub struct BorrowedRuleAttemptStableRun<'program> {
     /// Number of consumed rule attempts before stability.
     attempts: RuleAttemptCount,
-    /// Number of committed rewrite steps before stability.
+    /// Number of committed execution steps before stability.
     steps: StepCount,
     /// Why the rule-attempt run reached stability.
     stable_reason: BorrowedRuleAttemptStableReason<'program>,
@@ -524,7 +524,7 @@ pub struct OwnedAppliedStep {
     step: StepCount,
     /// Owned rewrite rule witness committed by this transition.
     rule: OwnedRuleWitness,
-    /// Continuation session after the committed rewrite.
+    /// Continuation session after the committed rule application.
     session: OwnedRunSession,
 }
 
@@ -593,7 +593,7 @@ pub struct OwnedRuleAttemptAppliedStep {
     step: StepCount,
     /// Owned rewrite rule witness committed by this transition.
     rule: OwnedRuleWitness,
-    /// Continuation session after the committed rewrite.
+    /// Continuation session after the committed rule application.
     session: OwnedRuleAttemptSession,
 }
 
@@ -601,7 +601,7 @@ pub struct OwnedRuleAttemptAppliedStep {
 pub struct OwnedRuleAttemptStableRun {
     /// Number of consumed rule attempts before stability.
     attempts: RuleAttemptCount,
-    /// Number of committed rewrite steps before stability.
+    /// Number of committed execution steps before stability.
     steps: StepCount,
     /// Why the rule-attempt run reached stability.
     stable_reason: OwnedRuleAttemptStableReason,
@@ -1405,7 +1405,7 @@ impl<'program> BorrowedRunSession<'program> {
         })
     }
 
-    /// Number of rewrite steps that have already completed in this run.
+    /// Number of execution steps that have already completed in this run.
     ///
     /// Failed candidate steps are not counted because they never commit.
     #[must_use]
@@ -1462,7 +1462,7 @@ impl<'program> BorrowedRuleAttemptSession<'program> {
         })
     }
 
-    /// Number of rewrite steps that have already completed in this run.
+    /// Number of execution steps that have already completed in this run.
     #[must_use]
     pub const fn completed_steps(&self) -> StepCount {
         self.session.completed_steps()
@@ -1514,7 +1514,7 @@ impl OwnedRunSession {
         })
     }
 
-    /// Number of rewrite steps that have already completed in this run.
+    /// Number of execution steps that have already completed in this run.
     #[must_use]
     pub const fn completed_steps(&self) -> StepCount {
         self.session.completed_steps()
@@ -1579,7 +1579,7 @@ impl OwnedRuleAttemptSession {
         })
     }
 
-    /// Number of rewrite steps that have already completed in this run.
+    /// Number of execution steps that have already completed in this run.
     #[must_use]
     pub const fn completed_steps(&self) -> StepCount {
         self.session.completed_steps()
@@ -1642,7 +1642,7 @@ impl<'program> BorrowedAppliedStep<'program> {
         self.rule
     }
 
-    /// Runtime state after the applied rewrite step.
+    /// Runtime state after the applied step.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
         self.session.state()
@@ -1670,7 +1670,7 @@ impl OwnedAppliedStep {
         &self.rule
     }
 
-    /// Runtime state after the applied rewrite step.
+    /// Runtime state after the applied step.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
         self.session.state()
@@ -1682,6 +1682,13 @@ impl OwnedAppliedStep {
     #[must_use]
     pub fn into_session(self) -> OwnedRunSession {
         self.session
+    }
+
+    /// Splits the applied step into its committed count, owned rule witness, and
+    /// continuation session.
+    #[must_use]
+    pub fn into_parts(self) -> (StepCount, OwnedRuleWitness, OwnedRunSession) {
+        (self.step, self.rule, self.session)
     }
 }
 
@@ -1735,6 +1742,13 @@ impl OwnedMissedRuleAttempt {
     pub fn into_session(self) -> OwnedRuleAttemptSession {
         self.session
     }
+
+    /// Splits the missed rule attempt into its committed attempt count, owned
+    /// miss witness, and continuation session.
+    #[must_use]
+    pub fn into_parts(self) -> (RuleAttemptCount, OwnedRuleMiss, OwnedRuleAttemptSession) {
+        (self.attempt, self.miss, self.session)
+    }
 }
 
 impl<'program> BorrowedRuleAttemptAppliedStep<'program> {
@@ -1756,7 +1770,7 @@ impl<'program> BorrowedRuleAttemptAppliedStep<'program> {
         self.rule
     }
 
-    /// Runtime state after the applied rewrite step.
+    /// Runtime state after the applied step.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
         self.session.state()
@@ -1788,7 +1802,7 @@ impl OwnedRuleAttemptAppliedStep {
         &self.rule
     }
 
-    /// Runtime state after the applied rewrite step.
+    /// Runtime state after the applied step.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
         self.session.state()
@@ -1799,10 +1813,24 @@ impl OwnedRuleAttemptAppliedStep {
     pub fn into_session(self) -> OwnedRuleAttemptSession {
         self.session
     }
+
+    /// Splits the applied rule attempt into its committed attempt count,
+    /// committed step count, owned rule witness, and continuation session.
+    #[must_use]
+    pub fn into_parts(
+        self,
+    ) -> (
+        RuleAttemptCount,
+        StepCount,
+        OwnedRuleWitness,
+        OwnedRuleAttemptSession,
+    ) {
+        (self.attempt, self.step, self.rule, self.session)
+    }
 }
 
 impl<'program> BorrowedStableRun<'program> {
-    /// Number of rewrite steps applied before reaching the stable state.
+    /// Number of execution steps committed before reaching the stable state.
     #[must_use]
     pub const fn steps(&self) -> StepCount {
         self.steps
@@ -1831,7 +1859,7 @@ impl<'program> BorrowedStableRun<'program> {
 }
 
 impl OwnedStableRun {
-    /// Number of rewrite steps applied before reaching the stable state.
+    /// Number of execution steps committed before reaching the stable state.
     #[must_use]
     pub const fn steps(&self) -> StepCount {
         self.steps
@@ -1875,7 +1903,7 @@ impl<'program> BorrowedRuleAttemptStableRun<'program> {
         self.attempts
     }
 
-    /// Number of rewrite steps applied before reaching the stable state.
+    /// Number of execution steps committed before reaching the stable state.
     #[must_use]
     pub const fn steps(&self) -> StepCount {
         self.steps
@@ -1916,7 +1944,7 @@ impl OwnedRuleAttemptStableRun {
         self.attempts
     }
 
-    /// Number of rewrite steps applied before reaching the stable state.
+    /// Number of execution steps committed before reaching the stable state.
     #[must_use]
     pub const fn steps(&self) -> StepCount {
         self.steps
@@ -2132,7 +2160,7 @@ impl<'program> BorrowedFailedRun<'program> {
         &self.error
     }
 
-    /// Number of rewrite steps that completed before the failed step attempt.
+    /// Number of execution steps that completed before the failed step attempt.
     #[must_use]
     pub const fn completed_steps(&self) -> StepCount {
         self.session.completed_steps()
@@ -2190,7 +2218,7 @@ impl<'program> BorrowedRuleAttemptFailedRun<'program> {
         self.session.completed_attempts()
     }
 
-    /// Number of rewrite steps that completed before the failed rule attempt.
+    /// Number of execution steps that completed before the failed rule attempt.
     #[must_use]
     pub const fn completed_steps(&self) -> StepCount {
         self.session.completed_steps()
@@ -2239,7 +2267,7 @@ impl OwnedFailedRun {
         &self.error
     }
 
-    /// Number of rewrite steps that completed before the failed step attempt.
+    /// Number of execution steps that completed before the failed step attempt.
     #[must_use]
     pub const fn completed_steps(&self) -> StepCount {
         self.session.completed_steps()
@@ -2298,7 +2326,7 @@ impl OwnedRuleAttemptFailedRun {
         self.session.completed_attempts()
     }
 
-    /// Number of rewrite steps that completed before the failed rule attempt.
+    /// Number of execution steps that completed before the failed rule attempt.
     #[must_use]
     pub const fn completed_steps(&self) -> StepCount {
         self.session.completed_steps()

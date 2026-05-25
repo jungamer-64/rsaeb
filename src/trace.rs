@@ -3,7 +3,7 @@
 //! Borrowed tracing observes runtime state during the callback without
 //! materializing owned event snapshots. Snapshot tracing materializes bounded
 //! owned bytes at the trace boundary. Both surfaces describe the same event
-//! stream: the initial state followed by one event for each committed rewrite
+//! stream: the initial state followed by one event for each committed execution
 //! step.
 //!
 //! Use borrowed events when a sink can decide immediately, and snapshot events
@@ -196,7 +196,7 @@ impl core::fmt::Debug for RuntimeStateView<'_> {
 pub enum TraceEffect<State, Output> {
     /// The step produced the next runtime state and execution may continue.
     Continue {
-        /// Runtime state after the rewrite step.
+        /// Runtime state after a non-terminal applied step.
         state: State,
     },
     /// The step executed `(return)` and produced final output bytes.
@@ -276,7 +276,7 @@ impl TraceEffect<RuntimeStateView<'_>, ReturnOutputView<'_>> {
 /// program they describe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TraceEvent<'program, State, Effect> {
-    /// Initial runtime state before any rewrite step.
+    /// Initial runtime state before any execution step.
     Initial {
         /// Initial runtime state.
         state: State,
@@ -287,7 +287,7 @@ pub enum TraceEvent<'program, State, Effect> {
         step: StepCount,
         /// Structured view of the applied rule.
         rule: RuleView<'program>,
-        /// Structured result of the rewrite step.
+        /// Structured result of the execution step.
         effect: Effect,
     },
 }

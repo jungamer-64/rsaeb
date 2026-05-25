@@ -420,7 +420,7 @@ impl<P: ProgramOwner> Session<P> {
         self.program.program()
     }
 
-    /// Number of rewrite steps that have already completed in this run.
+    /// Number of execution steps that have already completed in this run.
     pub(super) const fn completed_steps(&self) -> StepCount {
         self.core.completed_steps()
     }
@@ -484,7 +484,7 @@ impl<P: ProgramOwner> AttemptSession<P> {
         self.program.program()
     }
 
-    /// Number of rewrite steps that have already completed in this run.
+    /// Number of execution steps that have already completed in this run.
     pub(super) const fn completed_steps(&self) -> StepCount {
         self.core.completed_steps()
     }

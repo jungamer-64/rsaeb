@@ -219,20 +219,22 @@ fn finish_owned_rule_attempt_signatures(
     loop {
         match execution.step() {
             OwnedRuleAttemptTransition::Missed(missed) => {
+                let (attempt, miss, next_execution) = missed.into_parts();
                 signatures.push(OwnedRuleAttemptSignature::Missed {
-                    attempt: missed.attempt().get(),
-                    rule_position: missed.miss().rule().position().number().get(),
-                    reason: missed.miss().reason(),
+                    attempt: attempt.get(),
+                    rule_position: miss.rule().position().number().get(),
+                    reason: miss.reason(),
                 });
-                execution = missed.into_session();
+                execution = next_execution;
             }
             OwnedRuleAttemptTransition::Applied(applied) => {
+                let (attempt, step, rule, next_execution) = applied.into_parts();
                 signatures.push(OwnedRuleAttemptSignature::Applied {
-                    attempt: applied.attempt().get(),
-                    step: applied.step().get(),
-                    rule_position: applied.rule().position().number().get(),
+                    attempt: attempt.get(),
+                    step: step.get(),
+                    rule_position: rule.position().number().get(),
                 });
-                execution = applied.into_session();
+                execution = next_execution;
             }
             OwnedRuleAttemptTransition::Stable(stable) => {
                 signatures.push(OwnedRuleAttemptSignature::Stable {
@@ -728,7 +730,7 @@ fn execution_rule_attempt_reports_consumed_once_rule_before_later_match() -> Tes
 
 /// # Errors
 ///
-/// Returns `TestFailure` if rule-attempt budget is folded into rewrite step
+/// Returns `TestFailure` if rule-attempt budget is folded into execution-step
 /// budget or fails to report typed details.
 #[test]
 fn execution_rule_attempt_limit_is_independent_from_step_limit() -> TestResult {
@@ -755,7 +757,7 @@ fn execution_rule_attempt_limit_is_independent_from_step_limit() -> TestResult {
         | BorrowedRuleAttemptTransition::Returned(_)
         | BorrowedRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message(
-                "expected miss despite zero rewrite step limit",
+                "expected miss despite zero execution-step limit",
             ));
         }
     };
@@ -983,14 +985,10 @@ fn ensure_owned_run_witnesses(limits: TestRunPolicy) -> TestResult {
     let execution = parse_program("a=b\nb=(return)ok")?.into_run(runtime_input(b"a", limits)?)?;
     let execution = match execution.step() {
         OwnedStepTransition::Applied(applied) => {
-            ensure_owned_rule_witness(
-                applied.rule(),
-                1,
-                1,
-                b"a",
-                ExpectedOwnedRuleAction::Replace(b"b"),
-            )?;
-            applied.into_session()
+            let (step, rule, next_execution) = applied.into_parts();
+            ensure_eq!(step.get(), 1)?;
+            ensure_owned_rule_witness(&rule, 1, 1, b"a", ExpectedOwnedRuleAction::Replace(b"b"))?;
+            next_execution
         }
         OwnedStepTransition::Stable(_)
         | OwnedStepTransition::Returned(_)
@@ -1027,15 +1025,17 @@ fn ensure_owned_rule_attempt_witnesses(limits: TestRunPolicy) -> TestResult {
     ))?;
     let attempt = match attempt.step() {
         OwnedRuleAttemptTransition::Missed(missed) => {
+            let (attempt, miss, next_attempt) = missed.into_parts();
+            ensure_eq!(attempt.get(), 1)?;
             ensure_owned_rule_witness(
-                missed.miss().rule(),
+                miss.rule(),
                 1,
                 1,
                 b"z",
                 ExpectedOwnedRuleAction::Replace(b"x"),
             )?;
-            ensure_eq!(missed.miss().reason(), RuleMissReason::StateMismatch)?;
-            missed.into_session()
+            ensure_eq!(miss.reason(), RuleMissReason::StateMismatch)?;
+            next_attempt
         }
         OwnedRuleAttemptTransition::Applied(_)
         | OwnedRuleAttemptTransition::Stable(_)
@@ -1047,13 +1047,10 @@ fn ensure_owned_rule_attempt_witnesses(limits: TestRunPolicy) -> TestResult {
 
     match attempt.step() {
         OwnedRuleAttemptTransition::Applied(applied) => {
-            ensure_owned_rule_witness(
-                applied.rule(),
-                2,
-                2,
-                b"a",
-                ExpectedOwnedRuleAction::Replace(b"b"),
-            )?;
+            let (attempt, step, rule, _next_attempt) = applied.into_parts();
+            ensure_eq!(attempt.get(), 2)?;
+            ensure_eq!(step.get(), 1)?;
+            ensure_owned_rule_witness(&rule, 2, 2, b"a", ExpectedOwnedRuleAction::Replace(b"b"))?;
         }
         OwnedRuleAttemptTransition::Missed(_)
         | OwnedRuleAttemptTransition::Stable(_)

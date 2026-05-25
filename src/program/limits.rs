@@ -18,7 +18,7 @@ pub const DEFAULT_MAX_CODE_LINE_LEN: CodeLineByteLimit =
 pub const DEFAULT_MAX_PAYLOAD_LEN: PayloadByteLimit = PayloadByteLimit::new(DEFAULT_BYTE_BUDGET);
 /// Default parsed-rule budget for callers that want the crate policy value.
 pub const DEFAULT_MAX_RULES: RuleLimit = RuleLimit::new(1_000_000);
-/// Default rewrite step budget for callers that want the crate policy value.
+/// Default execution-step budget for callers that want the crate policy value.
 pub const DEFAULT_MAX_STEPS: StepLimit = StepLimit::new(1_000_000);
 /// Default rule-attempt budget for callers that want the crate policy value.
 pub const DEFAULT_MAX_RULE_ATTEMPTS: RuleAttemptLimit = RuleAttemptLimit::new(1_000_000);
@@ -257,13 +257,13 @@ impl ParseLimits {
     }
 }
 
-/// Maximum number of rewrite steps allowed before the next matching rule fails.
+/// Maximum number of committed execution steps allowed before the next matching rule fails.
 ///
 /// A limit of `0` allows parsing and input materialization, but the first
 /// matching rule fails with a step-limit error instead of committing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StepLimit {
-    /// Maximum number of committed rewrite steps.
+    /// Maximum number of committed execution steps.
     value: usize,
 }
 
@@ -432,13 +432,14 @@ impl TraceSnapshotByteLimit {
     }
 }
 
-/// Number of completed rewrite steps.
+/// Number of committed execution steps.
 ///
-/// Counts report committed steps only. Failed step attempts do not increment
-/// this value.
+/// Counts report committed rule applications only. A non-terminal rewrite and a
+/// terminal `(return)` both increment this value; failed step attempts and
+/// non-applying rule attempts do not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StepCount {
-    /// Committed rewrite steps.
+    /// Committed execution steps.
     value: usize,
 }
 
@@ -462,7 +463,7 @@ impl StepCount {
 /// Number of executable rule-line attempts consumed by a rule-attempt run.
 ///
 /// Counts report inspected executable rule lines. A miss increments this count,
-/// and a matched rule increments it independently from committed rewrite steps.
+/// and a matched rule increments it independently from committed execution steps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleAttemptCount {
     /// Consumed rule attempts.
@@ -523,7 +524,7 @@ impl RuntimeInputLimits {
 /// return checks use the same policy after execution starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionLimits {
-    /// Budget for committed rewrite steps.
+    /// Budget for committed execution steps.
     steps: StepLimit,
     /// Budget for initial and rewritten runtime states.
     state_len: RuntimeStateByteLimit,
@@ -546,7 +547,7 @@ impl ExecutionLimits {
         }
     }
 
-    /// Maximum number of rewrite steps that may be applied.
+    /// Maximum number of execution steps that may be committed.
     #[must_use]
     pub const fn step_limit(self) -> StepLimit {
         self.steps

@@ -227,7 +227,9 @@
 //! session. Borrowed applied and returned transitions carry
 //! [`inspect::RuleView`] witnesses; owned transitions retain
 //! [`execution::OwnedRuleWitness`] values so rule metadata remains available
-//! after ownership moves.
+//! after ownership moves. Owned non-terminal applied and missed transitions also
+//! expose `into_parts` methods so callers can keep the owned witness and the
+//! continuation session together.
 //!
 //! Use [`program::Program::start_rule_attempt_run`] when the host needs to
 //! observe every executable rule line, including lines that do not apply to the

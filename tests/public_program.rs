@@ -74,7 +74,7 @@ fn program_parse_accepts_text_and_byte_sources() -> TestResult {
     let input = runtime_input(b"a", limits)?;
     let result = program.run(input)?;
     expect_stable_bytes(&result, b"b")?;
-    ensure_matches(result.steps().get() == 1, "expected one rewrite step")?;
+    ensure_matches(result.steps().get() == 1, "expected one execution step")?;
 
     let program = Program::parse(ProgramSource::from_bytes(b"a=b#\xff"), DEFAULT_PARSE_LIMITS)?;
     let input = runtime_input(b"a", limits)?;

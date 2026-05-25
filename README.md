@@ -97,7 +97,9 @@ Failed transitions are terminal for both ownership modes; recovering ownership
 does not recover a retryable session. Borrowed applied and returned transitions
 carry `RuleView` witnesses. Owned transitions retain `OwnedRuleWitness` values
 so rule metadata remains available after the parsed program moves with the
-session.
+session. Owned non-terminal applied and missed transitions also expose
+`into_parts` methods so callers can retain the owned witness and the
+continuation session together.
 
 The docs.rs crate page contains a complete doctested stepwise example.
 
@@ -106,7 +108,7 @@ over every executable rule line. It reports `BorrowedRuleAttemptTransition::Miss
 for non-applying rules as a `BorrowedRuleMiss` whose `rule()` is the borrowed
 rule witness and whose `reason()` is a typed `RuleMissReason`. It consumes
 `RuleAttemptSeed`, which binds the admitted `RunSeed` to a `RuleAttemptLimit`
-while keeping `StepLimit` reserved for committed rewrite steps. Stable
+while keeping `StepLimit` reserved for committed execution steps. Stable
 rule-attempt terminals carry `BorrowedRuleAttemptStableReason`; the owned
 counterpart exposes `OwnedRuleMiss`, `OwnedRuleWitness`, and
 `OwnedRuleAttemptStableReason` through `Program::into_rule_attempt_run`.
@@ -382,7 +384,7 @@ Execution is ordered and single-step.
 
 On each step, the runtime scans rules from top to bottom and applies the first
 rule that matches the current state. For an unanchored non-empty left side, the
-leftmost match in the current state is used. After one rewrite step, scanning
+leftmost match in the current state is used. After one applied step, scanning
 restarts from the first rule.
 
 Example:
