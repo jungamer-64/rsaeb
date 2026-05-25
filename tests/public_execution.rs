@@ -15,7 +15,7 @@ use rsaeb::input::RunSeed;
 use rsaeb::inspect::{RuleAction, RuleAnchor, RuleRepeat};
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit,
-    RuleAttemptLimit, StepLimit,
+    RuleAttemptLimit, RuntimeStateByteLimit, StepLimit,
 };
 use rsaeb::program::{RunOutcome, RunResult};
 use runtime_support::TestRunPolicy;
@@ -777,6 +777,42 @@ fn execution_rule_attempt_limit_is_independent_from_step_limit() -> TestResult {
                 && state_len.get() == 1
         ),
         "expected rule-attempt limit details",
+    )
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if failed rule preparation publishes the reserved
+/// rule-attempt count.
+#[test]
+fn execution_rule_attempt_preparation_failure_drops_attempt_reservation() -> TestResult {
+    let limits = TestRunPolicy::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10),
+        RuntimeStateByteLimit::new(1),
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let program = parse_program("a=aa")?;
+    let input = runtime_input(b"a", limits)?;
+    let execution =
+        program.start_rule_attempt_run(RuleAttemptSeed::new(input, RuleAttemptLimit::new(10)))?;
+
+    let failed = expect_failed_rule_attempt(execution.step())?;
+    ensure_eq!(failed.completed_attempts().get(), 0)?;
+    ensure_eq!(failed.completed_steps().get(), 0)?;
+    ensure_eq!(
+        runtime_view_bytes(failed.state())?.as_slice(),
+        b"a".as_slice(),
+    )?;
+    ensure_matches(
+        matches!(
+            failed.into_error(),
+            rsaeb::error::RunError::Limit(LimitError::State {
+                limit,
+                attempted_len,
+            }) if limit == RuntimeStateByteLimit::new(1) && attempted_len.get() == 2
+        ),
+        "expected state limit before attempt reservation commits",
     )
 }
 

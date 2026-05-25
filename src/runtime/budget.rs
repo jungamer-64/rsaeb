@@ -123,9 +123,12 @@ impl RuntimeBudgetState {
         self.ensure_next_step_allowed(self.completed_steps, state_len)?;
 
         let Some(next_step) = self.completed_steps.checked_next() else {
-            return Err(
-                LimitError::step(self.limits.step_limit(), self.completed_steps, state_len).into(),
-            );
+            return Err(LimitError::step(
+                self.limits.step_limit(),
+                self.completed_steps,
+                state_len,
+            )
+            .into());
         };
 
         Ok(StepReservation {

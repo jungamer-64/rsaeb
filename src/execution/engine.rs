@@ -562,7 +562,7 @@ fn step_with_witness<'program, RuleWitness>(
         RuleSearch::Matched(matched) => matched,
         RuleSearch::Stable => return Ok(CoreStep::Stable(core.budget.completed_steps())),
     };
-    let prepared = prepare_matched_rule(&core.state, &mut core.scratch, &mut core.budget, matched)?;
+    let prepared = prepare_matched_rule(&core.state, &mut core.scratch, &core.budget, matched)?;
     let witness = make_witness(RuleView::new(prepared.rule()))?;
     let applied = prepared.commit(
         &mut core.state,
@@ -606,13 +606,13 @@ fn attempt_current_rule_with_witness<'program, RuleWitness>(
         .into());
     };
 
-    let permit = attempt_budget.reserve_next_attempt(core.state.byte_count())?;
+    let reservation = attempt_budget.reserve_next_attempt(core.state.byte_count())?;
     let attempted = attempt_rule(rule, &core.once_states, &core.state)?;
 
     match attempted {
         RuleAttempt::Missed(missed) => {
             let witness = make_witness(RuleView::new(missed.rule()))?;
-            let attempt = attempt_budget.commit(permit)?;
+            let attempt = reservation.commit();
             Ok(commit_miss(MissCommit {
                 cursor,
                 attempt_budget,
@@ -624,9 +624,9 @@ fn attempt_current_rule_with_witness<'program, RuleWitness>(
         }
         RuleAttempt::Matched(matched) => {
             let prepared =
-                prepare_matched_rule(&core.state, &mut core.scratch, &mut core.budget, matched)?;
+                prepare_matched_rule(&core.state, &mut core.scratch, &core.budget, matched)?;
             let witness = make_witness(RuleView::new(prepared.rule()))?;
-            let attempt = attempt_budget.commit(permit)?;
+            let attempt = reservation.commit();
             let applied = prepared.commit(
                 &mut core.state,
                 &mut core.scratch,

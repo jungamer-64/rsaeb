@@ -350,6 +350,57 @@ fn once_rewrite_limit_failure_does_not_commit_rule() -> TestResult {
 
 /// # Errors
 ///
+/// Returns `TestFailure` if a failed `(once)` step reservation commits the once
+/// slot or advances runtime progress.
+#[test]
+fn once_step_limit_failure_does_not_commit_rule() -> TestResult {
+    let program = parse_program("(once)a=b")?;
+    let limits = TestRunPolicy::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(0),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let mut state = state_from_input_bytes(b"a", limits)?;
+    let mut budget = RuntimeBudgetState::new(limits.execution());
+    let mut scratch = RewriteScratch::new();
+    let mut once_states = OnceStateSet::new(program.once_rule_slot_count())?;
+
+    let matched = match find_next_match(program.rule_slice(), &once_states, &state)? {
+        RuleSearch::Matched(matched) => matched,
+        RuleSearch::Stable => {
+            return Err(TestFailure::message("expected once rewrite to match"));
+        }
+    };
+
+    ensure_eq!(
+        apply_matched_rule(
+            &mut state,
+            &mut scratch,
+            &mut budget,
+            &mut once_states,
+            matched
+        ),
+        Err(RunError::Limit(LimitError::Step {
+            max_steps: StepLimit::new(0),
+            completed_steps: StepCount::ZERO,
+            state_len: RuntimeStateByteCount::new(1),
+        })),
+    )?;
+    ensure_eq!(budget.completed_steps(), StepCount::ZERO)?;
+    ensure_eq!(runtime_view_bytes(state.view()).as_slice(), b"a")?;
+
+    ensure_matches(
+        matches!(
+            find_next_match(program.rule_slice(), &once_states, &state)?,
+            RuleSearch::Matched(_)
+        ),
+        "expected failed step reservation to leave once rule available",
+    )
+}
+
+/// # Errors
+///
 /// Returns `TestFailure` if a failed `(once)` return commits the once slot.
 #[test]
 fn once_return_limit_failure_does_not_commit_rule() -> TestResult {

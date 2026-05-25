@@ -5,7 +5,6 @@ use crate::program::{ReturnOutput, ReturnOutputView};
 use crate::rule::{ParsedRuleAction, Rule};
 
 use super::budget::RuntimeBudgetState;
-use super::budget::StepPermit;
 use super::matcher::MatchedRuleApplication;
 use super::once::OnceStateSet;
 use super::rewrite::{PreparedRewrite, RewriteScratch};
@@ -54,8 +53,6 @@ pub(crate) struct CommittedReturnRule<'program> {
 /// Prepared non-terminal rewrite before its step and once-state side effects commit.
 #[derive(Debug)]
 pub(crate) struct PreparedRewriteRule<'program> {
-    /// Reserved step number.
-    permit: StepPermit,
     /// Matched rule and once-state commit permit.
     matched: MatchedRuleApplication<'program>,
     /// Runtime bytes ready to become the next state.
@@ -65,8 +62,6 @@ pub(crate) struct PreparedRewriteRule<'program> {
 /// Prepared terminal return before its step and once-state side effects commit.
 #[derive(Debug)]
 pub(crate) struct PreparedReturnRule<'program> {
-    /// Reserved step number.
-    permit: StepPermit,
     /// Matched rule and once-state commit permit.
     matched: MatchedRuleApplication<'program>,
     /// Borrowed return output payload from the matched parsed rule.
@@ -135,10 +130,11 @@ impl<'program> PreparedRuleApplication<'program> {
         budget: &mut RuntimeBudgetState,
         once_states: &mut OnceStateSet,
     ) -> Result<AppliedRule<'program>, RunError> {
+        let reservation = budget.reserve_next_step(state.byte_count())?;
         match self {
             Self::Rewrite(prepared) => {
                 let committed = prepared.matched.commit(once_states)?;
-                let step = budget.commit(prepared.permit)?;
+                let step = reservation.commit();
                 state.commit_rewrite(prepared.rewrite, scratch);
                 Ok(AppliedRule::Rewrite(CommittedRewriteRule {
                     step,
@@ -147,7 +143,7 @@ impl<'program> PreparedRuleApplication<'program> {
             }
             Self::Return(prepared) => {
                 let committed = prepared.matched.commit(once_states)?;
-                let step = budget.commit(prepared.permit)?;
+                let step = reservation.commit();
                 Ok(AppliedRule::Return(CommittedReturnRule {
                     step,
                     rule: committed.rule(),
@@ -196,15 +192,13 @@ pub(crate) fn apply_matched_rule<'program>(
 pub(crate) fn prepare_matched_rule<'program>(
     state: &State,
     scratch: &mut RewriteScratch,
-    budget: &mut RuntimeBudgetState,
+    budget: &RuntimeBudgetState,
     matched: MatchedRuleApplication<'program>,
 ) -> Result<PreparedRuleApplication<'program>, RunError> {
-    let permit = budget.reserve_next_step(state.byte_count())?;
     match matched.rule().action() {
         ParsedRuleAction::Rewrite(action) => {
             let rewrite = state.rewrite_into(matched.state_match(), action, scratch, budget)?;
             Ok(PreparedRuleApplication::Rewrite(PreparedRewriteRule {
-                permit,
                 matched,
                 rewrite,
             }))
@@ -216,7 +210,6 @@ pub(crate) fn prepare_matched_rule<'program>(
             let materialized_output = materialize_return_output(output_view)?;
 
             Ok(PreparedRuleApplication::Return(PreparedReturnRule {
-                permit,
                 matched,
                 output_view,
                 output: materialized_output,
