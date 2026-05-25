@@ -3,24 +3,14 @@ use alloc::vec::Vec;
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
-use crate::inspect::RuleCount;
-use crate::program::RuleTarget;
+use crate::inspect::OnceRuleCount;
 use crate::rule::{Rule, RuleAvailability};
 
 /// Per-run execution state aligned one-to-one with parsed executable rules.
 #[derive(Debug)]
 pub(crate) struct OnceStateSet {
-    /// One runtime availability cell for each parsed executable rule.
-    states: Vec<RuleRuntimeState>,
-}
-
-/// Per-run runtime state for one parsed executable rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuleRuntimeState {
-    /// Rule has no `(once)` side effect.
-    Always,
-    /// Rule is governed by per-run `(once)` state.
-    Once(OnceRuleState),
+    /// One runtime state cell for each parsed `(once)` slot.
+    states: Vec<OnceRuleState>,
 }
 
 /// Consumption state for one `(once)` rule during a single run.
@@ -64,8 +54,8 @@ pub(super) struct OnceMatchPermit<'once> {
 pub(crate) struct RuntimeRule<'program, 'once> {
     /// Parsed executable rule.
     rule: &'program Rule,
-    /// Runtime state cell aligned with the parsed rule.
-    state: &'once mut RuleRuntimeState,
+    /// Runtime state cell for this rule's parsed once slot.
+    state: &'once mut OnceRuleState,
 }
 
 /// Non-copy marker carried by once-rule commit permits.
@@ -107,56 +97,30 @@ impl OnceStateSet {
     /// Returns `AllocationError` if the per-execution rule-state table cannot
     /// be allocated.
     pub(crate) fn new(rules: &[Rule]) -> Result<Self, AllocationError> {
-        let rule_count = RuleCount::new(rules.len());
+        let once_count = OnceRuleCount::new(
+            rules
+                .iter()
+                .filter(|rule| rule.availability().is_once())
+                .count(),
+        );
         let mut states = Vec::new();
         try_reserve_total_exact(
             &mut states,
-            RequestedCapacity::from_rule_count(rule_count),
+            RequestedCapacity::from_once_rule_count(once_count),
             AllocationContext::RuntimeOnceRuleState,
         )?;
 
         for rule in rules {
-            try_push(
-                &mut states,
-                RuleRuntimeState::from_rule(rule),
-                AllocationContext::RuntimeOnceRuleState,
-            )?;
+            if rule.availability().is_once() {
+                try_push(
+                    &mut states,
+                    OnceRuleState::Fresh,
+                    AllocationContext::RuntimeOnceRuleState,
+                )?;
+            }
         }
 
         Ok(Self { states })
-    }
-
-    /// Iterates parsed rules together with their aligned runtime availability states.
-    pub(super) fn runtime_rules_mut<'program, 'once>(
-        &'once mut self,
-        rules: &'program [Rule],
-    ) -> impl Iterator<Item = RuntimeRule<'program, 'once>> {
-        rules
-            .iter()
-            .zip(self.states.iter_mut())
-            .map(|(rule, state)| RuntimeRule { rule, state })
-    }
-
-    /// Pairs a rule-attempt target with its aligned runtime availability state.
-    pub(super) fn runtime_target_mut<'program, 'once>(
-        &'once mut self,
-        target: RuleTarget<'program>,
-    ) -> Option<RuntimeRule<'program, 'once>> {
-        let state = self.states.get_mut(target.index().get())?;
-        Some(RuntimeRule {
-            rule: target.rule(),
-            state,
-        })
-    }
-}
-
-impl RuleRuntimeState {
-    /// Builds the runtime availability state for one parsed rule.
-    const fn from_rule(rule: &Rule) -> Self {
-        match rule.availability() {
-            RuleAvailability::Always => Self::Always,
-            RuleAvailability::Once => Self::Once(OnceRuleState::Fresh),
-        }
     }
 }
 
@@ -168,15 +132,16 @@ impl<'program, 'once> RuntimeRule<'program, 'once> {
 
     /// Returns this rule's current per-run readiness and commit action.
     pub(super) fn readiness(self) -> OnceRuleReadiness<'once> {
-        match self.state {
-            RuleRuntimeState::Always => OnceRuleReadiness::Available(MatchedRuleCommit::Always),
-            RuleRuntimeState::Once(OnceRuleState::Fresh) => {
-                let RuleRuntimeState::Once(state) = self.state else {
-                    return OnceRuleReadiness::Consumed;
-                };
-                OnceRuleReadiness::Available(MatchedRuleCommit::Once(OnceMatchPermit::new(state)))
-            }
-            RuleRuntimeState::Once(OnceRuleState::Consumed) => OnceRuleReadiness::Consumed,
+        match self.rule.availability() {
+            RuleAvailability::Always => OnceRuleReadiness::Available(MatchedRuleCommit::Always),
+            RuleAvailability::Once => match self.state {
+                OnceRuleState::Fresh => {
+                    OnceRuleReadiness::Available(MatchedRuleCommit::Once(OnceMatchPermit::new(
+                        self.state,
+                    )))
+                }
+                OnceRuleState::Consumed => OnceRuleReadiness::Consumed,
+            },
         }
     }
 }
