@@ -1,6 +1,33 @@
 use crate::bytes::{ReturnOutputByteCount, RuntimeStateByteCount};
 use crate::error::{LimitError, RunError};
-use crate::limits::{ExecutionLimits, RuleAttemptCount, RuleAttemptLimit, StepCount};
+use crate::limits::{
+    ExecutionLimits, ReturnByteLimit, RuleAttemptCount, RuleAttemptLimit, RuntimeStateByteLimit,
+    StepCount, StepLimit,
+};
+
+/// Runtime byte budget that can reject a measured byte count.
+trait RuntimeByteLimit<Count>: Copy {
+    /// Checks whether the measured byte count is inside this budget.
+    fn accepts_count(self, attempted_len: Count) -> bool;
+
+    /// Builds the typed runtime limit error for a rejected byte count.
+    fn limit_error(self, attempted_len: Count) -> LimitError;
+}
+
+/// Monotonic execution budget that can reserve the next committed count.
+trait ReservationLimit<Count>: Copy {
+    /// Checks whether another count may be reserved after the completed count.
+    fn allows_next_after_count(self, completed_count: Count) -> bool;
+
+    /// Builds the typed runtime limit error for a rejected reservation.
+    fn limit_error(self, completed_count: Count, state_len: RuntimeStateByteCount) -> LimitError;
+}
+
+/// Monotonic count that can advance by one without losing its domain.
+trait ReservableCount: Copy {
+    /// Returns the next representable count.
+    fn checked_next_count(self) -> Option<Self>;
+}
 
 /// Execution budgets plus the number of committed execution steps.
 #[derive(Debug, PartialEq, Eq)]
@@ -62,11 +89,7 @@ impl RuntimeBudgetState {
         &self,
         attempted_len: RuntimeStateByteCount,
     ) -> Result<(), RunError> {
-        if !self.limits.state_byte_limit().accepts(attempted_len) {
-            return Err(LimitError::state(self.limits.state_byte_limit(), attempted_len).into());
-        }
-
-        Ok(())
+        ensure_runtime_byte_limit(self.limits.state_byte_limit(), attempted_len)
     }
 
     /// Checks a `(return)` payload against return-output limits.
@@ -79,35 +102,7 @@ impl RuntimeBudgetState {
         &self,
         attempted_len: ReturnOutputByteCount,
     ) -> Result<(), RunError> {
-        if !self.limits.return_byte_limit().accepts(attempted_len) {
-            return Err(
-                LimitError::return_output(self.limits.return_byte_limit(), attempted_len).into(),
-            );
-        }
-
-        Ok(())
-    }
-
-    /// Checks whether another execution step can be attempted.
-    ///
-    /// # Errors
-    ///
-    /// Returns `LimitError` if the configured step limit has already been
-    /// reached.
-    fn ensure_next_step_allowed(
-        &self,
-        completed_steps: StepCount,
-        state_len: RuntimeStateByteCount,
-    ) -> Result<(), LimitError> {
-        if !self.limits.step_limit().allows_next_after(completed_steps) {
-            return Err(LimitError::step(
-                self.limits.step_limit(),
-                completed_steps,
-                state_len,
-            ));
-        }
-
-        Ok(())
+        ensure_runtime_byte_limit(self.limits.return_byte_limit(), attempted_len)
     }
 
     /// Reserves the next step number before a rule commits.
@@ -120,16 +115,8 @@ impl RuntimeBudgetState {
         &mut self,
         state_len: RuntimeStateByteCount,
     ) -> Result<StepReservation<'_>, RunError> {
-        self.ensure_next_step_allowed(self.completed_steps, state_len)?;
-
-        let Some(next_step) = self.completed_steps.checked_next() else {
-            return Err(LimitError::step(
-                self.limits.step_limit(),
-                self.completed_steps,
-                state_len,
-            )
-            .into());
-        };
+        let next_step =
+            reserve_next_count(self.limits.step_limit(), self.completed_steps, state_len)?;
 
         Ok(StepReservation {
             budget: self,
@@ -186,28 +173,6 @@ impl RuleAttemptBudgetState {
         self.completed_attempts
     }
 
-    /// Checks whether another rule attempt can be consumed.
-    ///
-    /// # Errors
-    ///
-    /// Returns `LimitError` if the configured rule-attempt limit has already
-    /// been reached.
-    fn ensure_next_attempt_allowed(
-        &self,
-        completed_attempts: RuleAttemptCount,
-        state_len: RuntimeStateByteCount,
-    ) -> Result<(), LimitError> {
-        if !self.limit.allows_next_after(completed_attempts) {
-            return Err(LimitError::rule_attempt(
-                self.limit,
-                completed_attempts,
-                state_len,
-            ));
-        }
-
-        Ok(())
-    }
-
     /// Reserves the next rule-attempt number before a rule line is evaluated.
     ///
     /// # Errors
@@ -218,13 +183,7 @@ impl RuleAttemptBudgetState {
         &mut self,
         state_len: RuntimeStateByteCount,
     ) -> Result<RuleAttemptReservation<'_>, RunError> {
-        self.ensure_next_attempt_allowed(self.completed_attempts, state_len)?;
-
-        let Some(next_attempt) = self.completed_attempts.checked_next() else {
-            return Err(
-                LimitError::rule_attempt(self.limit, self.completed_attempts, state_len).into(),
-            );
-        };
+        let next_attempt = reserve_next_count(self.limit, self.completed_attempts, state_len)?;
 
         Ok(RuleAttemptReservation {
             budget: self,
@@ -239,4 +198,108 @@ impl RuleAttemptReservation<'_> {
         self.budget.completed_attempts = self.next_attempt;
         self.next_attempt
     }
+}
+
+impl RuntimeByteLimit<RuntimeStateByteCount> for RuntimeStateByteLimit {
+    fn accepts_count(self, attempted_len: RuntimeStateByteCount) -> bool {
+        self.accepts(attempted_len)
+    }
+
+    fn limit_error(self, attempted_len: RuntimeStateByteCount) -> LimitError {
+        LimitError::state(self, attempted_len)
+    }
+}
+
+impl RuntimeByteLimit<ReturnOutputByteCount> for ReturnByteLimit {
+    fn accepts_count(self, attempted_len: ReturnOutputByteCount) -> bool {
+        self.accepts(attempted_len)
+    }
+
+    fn limit_error(self, attempted_len: ReturnOutputByteCount) -> LimitError {
+        LimitError::return_output(self, attempted_len)
+    }
+}
+
+impl ReservationLimit<StepCount> for StepLimit {
+    fn allows_next_after_count(self, completed_count: StepCount) -> bool {
+        self.allows_next_after(completed_count)
+    }
+
+    fn limit_error(
+        self,
+        completed_count: StepCount,
+        state_len: RuntimeStateByteCount,
+    ) -> LimitError {
+        LimitError::step(self, completed_count, state_len)
+    }
+}
+
+impl ReservationLimit<RuleAttemptCount> for RuleAttemptLimit {
+    fn allows_next_after_count(self, completed_count: RuleAttemptCount) -> bool {
+        self.allows_next_after(completed_count)
+    }
+
+    fn limit_error(
+        self,
+        completed_count: RuleAttemptCount,
+        state_len: RuntimeStateByteCount,
+    ) -> LimitError {
+        LimitError::rule_attempt(self, completed_count, state_len)
+    }
+}
+
+impl ReservableCount for StepCount {
+    fn checked_next_count(self) -> Option<Self> {
+        self.checked_next()
+    }
+}
+
+impl ReservableCount for RuleAttemptCount {
+    fn checked_next_count(self) -> Option<Self> {
+        self.checked_next()
+    }
+}
+
+/// Checks a runtime byte budget while preserving the concrete limit domain.
+///
+/// # Errors
+///
+/// Returns `RunError` if the measured byte count is outside the supplied budget.
+fn ensure_runtime_byte_limit<Limit, Count>(
+    limit: Limit,
+    attempted_len: Count,
+) -> Result<(), RunError>
+where
+    Limit: RuntimeByteLimit<Count>,
+    Count: Copy,
+{
+    if limit.accepts_count(attempted_len) {
+        return Ok(());
+    }
+
+    Err(limit.limit_error(attempted_len).into())
+}
+
+/// Reserves the next monotonic runtime count.
+///
+/// # Errors
+///
+/// Returns `RunError` if the supplied limit is exhausted or the next count cannot
+/// be represented.
+fn reserve_next_count<Limit, Count>(
+    limit: Limit,
+    completed_count: Count,
+    state_len: RuntimeStateByteCount,
+) -> Result<Count, RunError>
+where
+    Limit: ReservationLimit<Count>,
+    Count: ReservableCount,
+{
+    if !limit.allows_next_after_count(completed_count) {
+        return Err(limit.limit_error(completed_count, state_len).into());
+    }
+
+    completed_count
+        .checked_next_count()
+        .ok_or_else(|| limit.limit_error(completed_count, state_len).into())
 }

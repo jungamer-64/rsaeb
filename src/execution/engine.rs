@@ -66,6 +66,18 @@ struct MissCommit<'attempt, RuleWitness> {
     miss: RuleMiss<RuleWitness>,
 }
 
+/// Mutable rule-attempt state needed to consume one executable rule line.
+struct RuleAttemptContext<'attempt, 'program> {
+    /// Parsed program that owns the rule selected by the cursor.
+    program: &'program Program,
+    /// Mutable runtime state observed by the attempted rule.
+    core: &'attempt mut RunCore,
+    /// Next executable rule line to evaluate.
+    cursor: &'attempt mut RuleCursor,
+    /// Rule-attempt budget and consumed-attempt count.
+    attempt_budget: &'attempt mut RuleAttemptBudgetState,
+}
+
 /// Program ownership shape used by the internal runtime session.
 pub(super) trait ProgramOwner {
     /// Borrows the parsed program.
@@ -387,13 +399,13 @@ impl<'program> AttemptSession<BorrowedProgram<'program>> {
     pub(super) fn step_borrowed(
         &mut self,
     ) -> Result<CoreRuleAttempt<RuleView<'program>>, RunError> {
-        attempt_current_rule_with_witness(
-            self.program.program,
-            &mut self.core,
-            &mut self.cursor,
-            &mut self.attempt_budget,
-            Ok,
-        )
+        let mut context = RuleAttemptContext {
+            program: self.program.program,
+            core: &mut self.core,
+            cursor: &mut self.cursor,
+            attempt_budget: &mut self.attempt_budget,
+        };
+        attempt_current_rule_with_witness(&mut context, Ok)
     }
 }
 
@@ -405,13 +417,15 @@ impl AttemptSession<OwnedProgram> {
     /// Returns `RunError` if rule-attempt matching, preparation, witness
     /// materialization, or application fails.
     pub(super) fn step_owned(&mut self) -> Result<CoreRuleAttempt<OwnedRuleWitness>, RunError> {
-        attempt_current_rule_with_witness(
-            &self.program.program,
-            &mut self.core,
-            &mut self.cursor,
-            &mut self.attempt_budget,
-            |rule| Ok(OwnedRuleWitness::from_rule_view(rule)?),
-        )
+        let mut context = RuleAttemptContext {
+            program: &self.program.program,
+            core: &mut self.core,
+            cursor: &mut self.cursor,
+            attempt_budget: &mut self.attempt_budget,
+        };
+        attempt_current_rule_with_witness(&mut context, |rule| {
+            Ok(OwnedRuleWitness::from_rule_view(rule)?)
+        })
     }
 }
 
@@ -446,63 +460,65 @@ fn step_with_witness<'program, RuleWitness>(
 /// Returns `RunError` if rule-attempt, rule matching, or rule application
 /// fails.
 fn attempt_current_rule_with_witness<'program, RuleWitness>(
-    program: &'program Program,
-    core: &mut RunCore,
-    cursor: &mut RuleCursor,
-    attempt_budget: &mut RuleAttemptBudgetState,
+    context: &mut RuleAttemptContext<'_, 'program>,
     make_witness: impl FnOnce(RuleView<'program>) -> Result<RuleWitness, RunError>,
 ) -> Result<CoreRuleAttempt<RuleWitness>, RunError> {
-    let Some(active_cursor) = cursor.take_active() else {
-        return Ok(CoreRuleAttempt::Stable {
-            attempts: attempt_budget.completed_attempts(),
-            steps: core.completed_steps(),
-            stable_reason: RuleAttemptStableReason::NoExecutableRules,
-        });
+    let Some(active_cursor) = context.cursor.take_active() else {
+        return Ok(no_executable_rules(context));
     };
-    let Some(target) = program.target_for_cursor(active_cursor) else {
-        return Ok(CoreRuleAttempt::Stable {
-            attempts: attempt_budget.completed_attempts(),
-            steps: core.completed_steps(),
-            stable_reason: RuleAttemptStableReason::NoExecutableRules,
-        });
+    let Some(target) = context.program.target_for_cursor(active_cursor) else {
+        return Ok(no_executable_rules(context));
     };
-    let Some(runtime_rule) = runtime_rule_for_target(&mut core.once_states, target) else {
-        return Ok(CoreRuleAttempt::Stable {
-            attempts: attempt_budget.completed_attempts(),
-            steps: core.completed_steps(),
-            stable_reason: RuleAttemptStableReason::NoExecutableRules,
-        });
+    let Some(runtime_rule) = runtime_rule_for_target(&mut context.core.once_states, target) else {
+        return Ok(no_executable_rules(context));
     };
 
-    let reservation = attempt_budget.reserve_next_attempt(core.state.byte_count())?;
-    let attempted = attempt_rule(runtime_rule, &core.state);
+    let reservation = context
+        .attempt_budget
+        .reserve_next_attempt(context.core.state.byte_count())?;
+    let attempted = attempt_rule(runtime_rule, &context.core.state);
 
     match attempted {
         RuleAttempt::Missed(missed) => {
             let witness = make_witness(RuleView::new(missed.rule()))?;
             let attempt = reservation.commit();
             Ok(commit_miss(MissCommit {
-                cursor,
-                attempt_budget,
-                core,
+                cursor: &mut *context.cursor,
+                attempt_budget: &*context.attempt_budget,
+                core: &*context.core,
                 attempt,
                 active_cursor,
                 miss: RuleMiss::new(witness, missed.reason()),
             }))
         }
         RuleAttempt::Matched(matched) => {
-            let state_len = core.state.byte_count();
-            let prepared =
-                prepare_matched_rule(&mut core.scratch, &mut core.budget, state_len, matched)?;
+            let state_len = context.core.state.byte_count();
+            let prepared = prepare_matched_rule(
+                &mut context.core.scratch,
+                &mut context.core.budget,
+                state_len,
+                matched,
+            )?;
             let witness = make_witness(RuleView::new(prepared.rule()))?;
             let attempt = reservation.commit();
-            let applied = prepared.commit(&mut core.state, &mut core.scratch);
+            let applied = prepared.commit(&mut context.core.state, &mut context.core.scratch);
             let applied = CoreAppliedRule::from_applied_rule(applied, witness);
             if matches!(applied, CoreAppliedRule::Rewrite { .. }) {
-                *cursor = RuleCursor::Active(active_cursor.reset_to_first());
+                *context.cursor = RuleCursor::Active(active_cursor.reset_to_first());
             }
             Ok(CoreRuleAttempt::Applied { attempt, applied })
         }
+    }
+}
+
+/// Materializes a stable rule-attempt result when the cursor has no executable target.
+fn no_executable_rules<RuleWitness>(
+    context: &RuleAttemptContext<'_, '_>,
+) -> CoreRuleAttempt<RuleWitness> {
+    CoreRuleAttempt::Stable {
+        attempts: context.attempt_budget.completed_attempts(),
+        steps: context.core.completed_steps(),
+        stable_reason: RuleAttemptStableReason::NoExecutableRules,
     }
 }
 

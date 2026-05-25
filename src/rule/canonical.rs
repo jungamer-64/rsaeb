@@ -64,47 +64,73 @@ pub(crate) fn canonical_source(rule: &Rule) -> Result<Vec<u8>, AllocationError> 
 fn canonical_source_len(rule: &Rule) -> Result<usize, AllocationError> {
     let mut len = rule.lhs().byte_count().get();
 
-    if matches!(rule.availability(), RuleAvailability::Once(_)) {
-        len = len.checked_add(SyntaxToken::Once.len()).ok_or_else(|| {
-            AllocationError::capacity_overflow(AllocationContext::CanonicalSource)
-        })?;
-    }
+    len = checked_source_len_add(len, availability_token_len(rule.availability()))?;
+    len = checked_source_len_add(len, anchor_token_len(rule.anchor()))?;
+    len = checked_source_len_add(len, 1)?;
+    len = checked_source_len_add(len, right_side_len(rule.action().canonical_right_side())?)?;
 
-    let anchor_len = match rule.anchor() {
+    Ok(len)
+}
+
+/// Returns the canonical `(once)` marker length for a rule availability.
+fn availability_token_len(availability: RuleAvailability) -> usize {
+    match availability {
+        RuleAvailability::Always => 0,
+        RuleAvailability::Once(_) => SyntaxToken::Once.len(),
+    }
+}
+
+/// Returns the canonical anchor marker length.
+fn anchor_token_len(anchor: RuleAnchorSyntax) -> usize {
+    match anchor {
         RuleAnchorSyntax::Anywhere => 0,
         RuleAnchorSyntax::Start => SyntaxToken::Start.len(),
         RuleAnchorSyntax::End => SyntaxToken::End.len(),
-    };
+    }
+}
 
-    let right_side_len = match rule.action().canonical_right_side() {
-        CanonicalRightSide::Replace(payload) => payload.byte_count().get(),
-        CanonicalRightSide::MoveStart(payload) => SyntaxToken::Start
-            .len()
-            .checked_add(payload.byte_count().get())
-            .ok_or_else(|| {
-                AllocationError::capacity_overflow(AllocationContext::CanonicalSource)
-            })?,
-        CanonicalRightSide::MoveEnd(payload) => SyntaxToken::End
-            .len()
-            .checked_add(payload.byte_count().get())
-            .ok_or_else(|| {
-                AllocationError::capacity_overflow(AllocationContext::CanonicalSource)
-            })?,
-        CanonicalRightSide::Return(payload) => SyntaxToken::Return
-            .len()
-            .checked_add(payload.byte_count().get())
-            .ok_or_else(|| {
-                AllocationError::capacity_overflow(AllocationContext::CanonicalSource)
-            })?,
-    };
+/// Computes the canonical right-side byte length.
+///
+/// # Errors
+///
+/// Returns `AllocationError` if token-plus-payload length arithmetic overflows.
+fn right_side_len(right_side: CanonicalRightSide<'_>) -> Result<usize, AllocationError> {
+    let payload_len = right_side_payload(right_side).byte_count().get();
 
-    len = len
-        .checked_add(anchor_len)
-        .and_then(|len| len.checked_add(1))
-        .and_then(|len| len.checked_add(right_side_len))
-        .ok_or_else(|| AllocationError::capacity_overflow(AllocationContext::CanonicalSource))?;
+    match right_side_token(right_side) {
+        Some(token) => checked_source_len_add(token.len(), payload_len),
+        None => Ok(payload_len),
+    }
+}
 
-    Ok(len)
+/// Returns the canonical syntax token that prefixes a right-side payload.
+fn right_side_token(right_side: CanonicalRightSide<'_>) -> Option<SyntaxToken> {
+    match right_side {
+        CanonicalRightSide::Replace(_) => None,
+        CanonicalRightSide::MoveStart(_) => Some(SyntaxToken::Start),
+        CanonicalRightSide::MoveEnd(_) => Some(SyntaxToken::End),
+        CanonicalRightSide::Return(_) => Some(SyntaxToken::Return),
+    }
+}
+
+/// Returns the right-side payload independent of its canonical prefix token.
+fn right_side_payload(right_side: CanonicalRightSide<'_>) -> &Payload {
+    match right_side {
+        CanonicalRightSide::Replace(payload)
+        | CanonicalRightSide::MoveStart(payload)
+        | CanonicalRightSide::MoveEnd(payload)
+        | CanonicalRightSide::Return(payload) => payload,
+    }
+}
+
+/// Adds one canonical-source length segment.
+///
+/// # Errors
+///
+/// Returns `AllocationError` if the combined length cannot be represented.
+fn checked_source_len_add(len: usize, segment_len: usize) -> Result<usize, AllocationError> {
+    len.checked_add(segment_len)
+        .ok_or_else(|| AllocationError::capacity_overflow(AllocationContext::CanonicalSource))
 }
 
 /// Appends one syntax token to canonical source output.
