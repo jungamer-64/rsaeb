@@ -3,8 +3,8 @@ use super::matcher::{RuleSearch, find_next_match};
 use super::once::OnceStateSet;
 use super::rewrite::RewriteScratch;
 use super::state::State;
-use crate::bytes::{CompactByte, Payload, PayloadSyntax};
-use crate::error::{LimitError, PayloadKind, RunError, RunInvariantError, RuntimeInputError};
+use crate::bytes::Payload;
+use crate::error::{LimitError, RunError, RuntimeInputError};
 use crate::execution::{BorrowedFailedRun, BorrowedStepTransition};
 use crate::input::{RuntimeInput, RuntimeInputSource};
 use crate::limits::{
@@ -13,10 +13,9 @@ use crate::limits::{
     RuntimeStateByteLimit, StepCount, StepLimit,
 };
 use crate::program::RunOutcome;
-use crate::runtime::action::apply_matched_rule;
+use crate::runtime::action::prepare_matched_rule;
 use crate::test_support::{
     TestFailure, TestResult, TestRunPolicy, ensure_eq, ensure_matches, parse_program, run_seed,
-    source_column, source_line_number,
 };
 use crate::trace::RuntimeStateView;
 use alloc::vec::Vec;
@@ -58,10 +57,9 @@ fn expect_payload_byte(payload: &Payload, index: usize) -> Result<u8, TestFailur
 fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
     match error {
         RunError::Limit(error @ LimitError::Step { .. }) => Ok(error),
-        RunError::Allocation(_)
-        | RunError::InternalInvariant(_)
-        | RunError::StateSize(_)
-        | RunError::Limit(_) => Err(TestFailure::message("expected step limit error")),
+        RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_) => {
+            Err(TestFailure::message("expected step limit error"))
+        }
     }
 }
 
@@ -314,23 +312,19 @@ fn once_rewrite_limit_failure_does_not_commit_rule() -> TestResult {
     let mut state = state_from_input_bytes(b"a", limits)?;
     let mut budget = RuntimeBudgetState::new(limits.execution());
     let mut scratch = RewriteScratch::new();
-    let mut once_states = OnceStateSet::new(program.once_rule_slot_count())?;
+    let mut once_states = OnceStateSet::new(program.rule_slice())?;
 
-    let matched = match find_next_match(program.rule_slice(), &once_states, &state)? {
+    let matched = match find_next_match(program.rule_slice(), &mut once_states, &state) {
         RuleSearch::Matched(matched) => matched,
         RuleSearch::Stable => {
             return Err(TestFailure::message("expected once rewrite to match"));
         }
     };
 
+    let result = prepare_matched_rule(&mut scratch, &budget, matched)
+        .and_then(|prepared| prepared.commit(&mut state, &mut scratch, &mut budget));
     ensure_eq!(
-        apply_matched_rule(
-            &mut state,
-            &mut scratch,
-            &mut budget,
-            &mut once_states,
-            matched
-        ),
+        result,
         Err(RunError::Limit(LimitError::State {
             limit: RuntimeStateByteLimit::new(1),
             attempted_len: RuntimeStateByteCount::new(3),
@@ -341,7 +335,7 @@ fn once_rewrite_limit_failure_does_not_commit_rule() -> TestResult {
 
     ensure_matches(
         matches!(
-            find_next_match(program.rule_slice(), &once_states, &state)?,
+            find_next_match(program.rule_slice(), &mut once_states, &state),
             RuleSearch::Matched(_)
         ),
         "expected failed once rewrite to remain available",
@@ -364,23 +358,19 @@ fn once_step_limit_failure_does_not_commit_rule() -> TestResult {
     let mut state = state_from_input_bytes(b"a", limits)?;
     let mut budget = RuntimeBudgetState::new(limits.execution());
     let mut scratch = RewriteScratch::new();
-    let mut once_states = OnceStateSet::new(program.once_rule_slot_count())?;
+    let mut once_states = OnceStateSet::new(program.rule_slice())?;
 
-    let matched = match find_next_match(program.rule_slice(), &once_states, &state)? {
+    let matched = match find_next_match(program.rule_slice(), &mut once_states, &state) {
         RuleSearch::Matched(matched) => matched,
         RuleSearch::Stable => {
             return Err(TestFailure::message("expected once rewrite to match"));
         }
     };
 
+    let result = prepare_matched_rule(&mut scratch, &budget, matched)
+        .and_then(|prepared| prepared.commit(&mut state, &mut scratch, &mut budget));
     ensure_eq!(
-        apply_matched_rule(
-            &mut state,
-            &mut scratch,
-            &mut budget,
-            &mut once_states,
-            matched
-        ),
+        result,
         Err(RunError::Limit(LimitError::Step {
             max_steps: StepLimit::new(0),
             completed_steps: StepCount::ZERO,
@@ -392,7 +382,7 @@ fn once_step_limit_failure_does_not_commit_rule() -> TestResult {
 
     ensure_matches(
         matches!(
-            find_next_match(program.rule_slice(), &once_states, &state)?,
+            find_next_match(program.rule_slice(), &mut once_states, &state),
             RuleSearch::Matched(_)
         ),
         "expected failed step reservation to leave once rule available",
@@ -414,23 +404,19 @@ fn once_return_limit_failure_does_not_commit_rule() -> TestResult {
     let mut state = state_from_input_bytes(b"a", limits)?;
     let mut budget = RuntimeBudgetState::new(limits.execution());
     let mut scratch = RewriteScratch::new();
-    let mut once_states = OnceStateSet::new(program.once_rule_slot_count())?;
+    let mut once_states = OnceStateSet::new(program.rule_slice())?;
 
-    let matched = match find_next_match(program.rule_slice(), &once_states, &state)? {
+    let matched = match find_next_match(program.rule_slice(), &mut once_states, &state) {
         RuleSearch::Matched(matched) => matched,
         RuleSearch::Stable => {
             return Err(TestFailure::message("expected once return to match"));
         }
     };
 
+    let result = prepare_matched_rule(&mut scratch, &budget, matched)
+        .and_then(|prepared| prepared.commit(&mut state, &mut scratch, &mut budget));
     ensure_eq!(
-        apply_matched_rule(
-            &mut state,
-            &mut scratch,
-            &mut budget,
-            &mut once_states,
-            matched
-        ),
+        result,
         Err(RunError::Limit(LimitError::Return {
             limit: ReturnByteLimit::new(1),
             attempted_len: ReturnOutputByteCount::new(2),
@@ -441,7 +427,7 @@ fn once_return_limit_failure_does_not_commit_rule() -> TestResult {
 
     ensure_matches(
         matches!(
-            find_next_match(program.rule_slice(), &once_states, &state)?,
+            find_next_match(program.rule_slice(), &mut once_states, &state),
             RuleSearch::Matched(_)
         ),
         "expected failed once return to remain available",
@@ -455,7 +441,7 @@ fn once_return_limit_failure_does_not_commit_rule() -> TestResult {
 #[test]
 fn once_state_set_is_constructed_from_the_rule_table() -> TestResult {
     let program = parse_program("(once)a=b")?;
-    let once_states = OnceStateSet::new(program.once_rule_slot_count())?;
+    let mut once_states = OnceStateSet::new(program.rule_slice())?;
     let state = state_from_input_bytes(
         b"a",
         TestRunPolicy::new(
@@ -468,43 +454,10 @@ fn once_state_set_is_constructed_from_the_rule_table() -> TestResult {
 
     ensure_matches(
         matches!(
-            find_next_match(program.rule_slice(), &once_states, &state)?,
+            find_next_match(program.rule_slice(), &mut once_states, &state),
             RuleSearch::Matched(_)
         ),
         "expected rule-aligned once state to keep the rule available",
-    )
-}
-
-/// # Errors
-///
-/// Returns `TestFailure` if a parsed once slot missing from runtime state is
-/// treated as an ordinary stable run.
-#[test]
-fn missing_once_rule_state_is_runtime_invariant_error() -> TestResult {
-    let program = parse_program("(once)a=b")?;
-    let once_states = OnceStateSet::new(crate::rule::OnceRuleCount::default())?;
-    let state = state_from_input_bytes(
-        b"a",
-        TestRunPolicy::new(
-            DEFAULT_MAX_INPUT_LEN,
-            StepLimit::new(1),
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        ),
-    )?;
-
-    let error = find_next_match(program.rule_slice(), &once_states, &state);
-    ensure_matches(
-        matches!(
-            error,
-            Err(RunError::InternalInvariant(
-                RunInvariantError::MissingOnceRuleState {
-                    rule,
-                    available_slots
-                }
-            )) if rule.number().get() == 1 && available_slots.get() == 0
-        ),
-        "expected missing once-state slot invariant error",
     )
 }
 
@@ -580,9 +533,13 @@ fn runtime_input_error_is_structured_at_the_runtime_boundary() -> TestResult {
 /// not kept in distinct domains.
 #[test]
 fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
-    let compact = [CompactByte::new(b'a', source_column(1)?)];
-    let payload = PayloadSyntax::new(&compact, source_line_number(1)?, PayloadKind::LeftSideData)
-        .validate()?;
+    let program = parse_program("a=b")?;
+    let payload = program
+        .rule_slice()
+        .iter()
+        .next()
+        .ok_or(TestFailure::message("expected parsed rule"))?
+        .lhs();
     let limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10_000),
@@ -592,13 +549,12 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
     let (input, _) = run_seed(b"a=()# ", limits)?.into_runtime_parts();
     let state = State::from_input(input);
 
-    ensure_eq!(expect_payload_byte(&payload, 0)?, b'a')?;
+    ensure_eq!(expect_payload_byte(payload, 0)?, b'a')?;
     ensure_eq!(expect_runtime_byte(&state, 0)?, b'a')?;
     ensure_eq!(expect_runtime_byte(&state, 1)?, b'=')?;
     ensure_eq!(expect_runtime_byte(&state, 2)?, b'(')?;
     ensure_eq!(expect_runtime_byte(&state, 5)?, b' ')?;
 
-    let program = parse_program("a=b")?;
     let result = program.run(run_seed(b"a=()# ", limits)?)?;
     ensure_matches(
         matches!(

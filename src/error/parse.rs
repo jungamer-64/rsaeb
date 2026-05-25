@@ -154,10 +154,6 @@ pub enum ParseRepresentationError {
     RulePosition,
     /// A parsed rule count could not be represented.
     RuleCount,
-    /// A parsed `(once)` rule count could not be represented.
-    OnceRuleCount,
-    /// A compact-code byte count could not be represented.
-    CompactCodeByteCount,
 }
 
 impl Error for ParseRepresentationError {}

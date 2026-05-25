@@ -3,7 +3,8 @@ use alloc::vec::Vec;
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
-use crate::error::{ParseError, ParseErrorKind, PayloadKind};
+use crate::error::{ParseError, ParseErrorKind, ParseLimitError, PayloadKind};
+use crate::limits::PayloadByteLimit;
 use crate::source::SourceLineNumber;
 
 use super::compact::CompactByte;
@@ -48,17 +49,30 @@ pub(crate) struct PayloadSyntax<'code> {
 }
 
 impl<'code> PayloadSyntax<'code> {
-    /// Labels compact syntax bytes as the payload domain expected by the parser.
-    pub(crate) const fn new(
+    /// Checks the payload length before admitting compact syntax bytes as payload syntax.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if the payload exceeds `limit`.
+    pub(crate) fn check(
         bytes: &'code [CompactByte],
         line_number: SourceLineNumber,
         payload_kind: PayloadKind,
-    ) -> Self {
-        Self {
+        limit: PayloadByteLimit,
+    ) -> Result<Self, ParseError> {
+        let syntax = Self {
             bytes,
             line_number,
             payload_kind,
+        };
+        if limit.accepts(syntax.byte_count()) {
+            return Ok(syntax);
         }
+
+        Err(ParseError::at_line(
+            line_number,
+            ParseErrorKind::Limit(ParseLimitError::payload(limit, syntax.byte_count())),
+        ))
     }
 
     /// Returns the typed byte count.

@@ -1,11 +1,15 @@
-use crate::error::{RunError, RunInvariantError, TracedRunError};
+use crate::error::{RunError, TracedRunError};
 use crate::input::RunSeed;
-use crate::inspect::{RuleCount, RulePosition, RuleView};
+use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, RuleAttemptLimit, StepCount};
-use crate::program::{Program, ReturnOutput, RunResult};
-use crate::runtime::action::{AppliedRule, apply_matched_rule, prepare_matched_rule};
+use crate::program::{
+    ActiveRuleCursor, Program, ReturnOutput, RuleCursor, RuleCursorAfterMiss, RunResult,
+};
+use crate::runtime::action::{AppliedRule, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
-use crate::runtime::matcher::{RuleAttempt, RuleSearch, attempt_rule, find_next_match};
+use crate::runtime::matcher::{
+    RuleAttempt, RuleSearch, attempt_rule, find_next_match, runtime_rule_for_target,
+};
 use crate::runtime::once::OnceStateSet;
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
@@ -44,33 +48,6 @@ pub(super) struct AttemptSession<P> {
     pub(super) cursor: RuleCursor,
     /// Rule-attempt budget and consumed-attempt count.
     pub(super) attempt_budget: RuleAttemptBudgetState,
-}
-
-/// Cursor pointing to the next executable rule line in one rule-attempt run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RuleCursor {
-    /// Cursor points at the next executable rule index.
-    Active(ActiveRuleCursor),
-    /// No executable rule remains in this pass.
-    Exhausted,
-}
-
-/// Zero-based executable rule index paired with its public position.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct RuleIndex {
-    /// Zero-based rule-table offset.
-    zero_based: usize,
-    /// Public one-based rule position for diagnostics.
-    position: RulePosition,
-}
-
-/// Active cursor state for rule-attempt execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct ActiveRuleCursor {
-    /// Zero-based rule index to evaluate next.
-    next_rule_index: RuleIndex,
-    /// Final executable rule index in this program.
-    final_rule_index: RuleIndex,
 }
 
 /// All data needed to commit one non-applying rule attempt.
@@ -210,7 +187,7 @@ impl RunCore {
     fn new(program: &Program, seed: RunSeed) -> Result<Self, RunError> {
         let (input, budget) = seed.into_runtime_parts();
         let state = State::from_input(input);
-        let once_states = OnceStateSet::new(program.once_rule_slot_count())?;
+        let once_states = OnceStateSet::new(program.rule_slice())?;
         Ok(Self {
             state,
             scratch: RewriteScratch::new(),
@@ -242,27 +219,21 @@ impl RunCore {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if rule matching detects an internal invariant
-    /// failure or if applying the matched rule exceeds limits or allocation
-    /// fails.
+    /// Returns `RunError` if applying the matched rule exceeds limits or allocation fails.
     fn step_runtime<'program>(
         &mut self,
         program: &'program Program,
     ) -> Result<RuntimeStep<'program>, RunError> {
-        let matched = match find_next_match(program.rule_slice(), &self.once_states, &self.state)? {
-            RuleSearch::Matched(matched) => matched,
-            RuleSearch::Stable => {
-                return Ok(RuntimeStep::Stable(self.budget.completed_steps()));
-            }
-        };
+        let matched =
+            match find_next_match(program.rule_slice(), &mut self.once_states, &self.state) {
+                RuleSearch::Matched(matched) => matched,
+                RuleSearch::Stable => {
+                    return Ok(RuntimeStep::Stable(self.budget.completed_steps()));
+                }
+            };
 
-        let applied = apply_matched_rule(
-            &mut self.state,
-            &mut self.scratch,
-            &mut self.budget,
-            &mut self.once_states,
-            matched,
-        )?;
+        let prepared = prepare_matched_rule(&mut self.scratch, &self.budget, matched)?;
+        let applied = prepared.commit(&mut self.state, &mut self.scratch, &mut self.budget)?;
         Ok(RuntimeStep::Applied(applied))
     }
 
@@ -270,9 +241,7 @@ impl RunCore {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if rule matching detects an internal invariant
-    /// failure or if applying the matched rule exceeds limits or allocation
-    /// fails.
+    /// Returns `RunError` if applying the matched rule exceeds limits or allocation fails.
     fn step(&mut self, program: &Program) -> Result<CoreStep<()>, RunError> {
         let applied = match self.step_runtime(program)? {
             RuntimeStep::Applied(applied) => applied,
@@ -282,109 +251,6 @@ impl RunCore {
             applied,
             (),
         )))
-    }
-}
-
-/// Cursor movement after a non-applying rule line has been consumed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuleCursorAfterMiss {
-    /// Cursor advanced to the next executable rule.
-    Advanced(ActiveRuleCursor),
-    /// The consumed miss was the final executable rule.
-    Stable,
-}
-
-impl RuleCursor {
-    /// Starts rule-attempt execution over a parsed program's executable rules.
-    fn for_rule_count(rule_count: RuleCount) -> Self {
-        let Some(final_rule_index) = RuleIndex::last_for(rule_count) else {
-            return Self::Exhausted;
-        };
-
-        Self::Active(ActiveRuleCursor {
-            next_rule_index: RuleIndex::first(),
-            final_rule_index,
-        })
-    }
-
-    /// Takes the active cursor state, leaving this cursor exhausted until the attempt commits.
-    fn take_active(&mut self) -> Option<ActiveRuleCursor> {
-        match core::mem::replace(self, Self::Exhausted) {
-            Self::Active(active) => Some(active),
-            Self::Exhausted => None,
-        }
-    }
-}
-
-impl ActiveRuleCursor {
-    /// Current zero-based rule index.
-    const fn current_index(&self) -> RuleIndex {
-        self.next_rule_index
-    }
-
-    /// Advances after a miss or reports that the pass is stable.
-    fn advance_after_miss(self) -> RuleCursorAfterMiss {
-        if self.next_rule_index >= self.final_rule_index {
-            return RuleCursorAfterMiss::Stable;
-        }
-
-        if let Some(next_rule_index) = self.next_rule_index.checked_next() {
-            RuleCursorAfterMiss::Advanced(Self {
-                next_rule_index,
-                final_rule_index: self.final_rule_index,
-            })
-        } else {
-            RuleCursorAfterMiss::Stable
-        }
-    }
-
-    /// Resets to the first executable rule after a committed match.
-    const fn reset_to_first(self) -> Self {
-        Self {
-            next_rule_index: RuleIndex::first(),
-            final_rule_index: self.final_rule_index,
-        }
-    }
-}
-
-impl RuleIndex {
-    /// First executable rule index.
-    const fn first() -> Self {
-        Self {
-            zero_based: 0,
-            position: RulePosition::FIRST,
-        }
-    }
-
-    /// Builds an index from a zero-based rule-table offset.
-    fn from_zero_based(zero_based: usize) -> Option<Self> {
-        let position = RulePosition::from_zero_based(zero_based)?;
-        Some(Self {
-            zero_based,
-            position,
-        })
-    }
-
-    /// Final executable rule index for a parsed rule count.
-    fn last_for(rule_count: RuleCount) -> Option<Self> {
-        let zero_based = rule_count.get().checked_sub(1)?;
-        Self::from_zero_based(zero_based)
-    }
-
-    /// Returns the checked next index.
-    fn checked_next(self) -> Option<Self> {
-        let zero_based = self.zero_based.checked_add(1)?;
-        Self::from_zero_based(zero_based)
-    }
-
-    /// Zero-based rule-table offset.
-    const fn get(self) -> usize {
-        self.zero_based
-    }
-
-    /// Public rule position for diagnostics.
-    const fn position(self) -> RulePosition {
-        self.position
     }
 }
 
@@ -453,7 +319,7 @@ impl<P: ProgramOwner> AttemptSession<P> {
         seed: RunSeed,
         limit: RuleAttemptLimit,
     ) -> Result<Self, RunError> {
-        let cursor = RuleCursor::for_rule_count(program.program().rule_count());
+        let cursor = program.program().rule_attempt_cursor();
         let core = RunCore::new(program.program(), seed)?;
         Ok(Self {
             program,
@@ -558,18 +424,13 @@ fn step_with_witness<'program, RuleWitness>(
     program: &'program Program,
     make_witness: impl FnOnce(RuleView<'program>) -> Result<RuleWitness, RunError>,
 ) -> Result<CoreStep<RuleWitness>, RunError> {
-    let matched = match find_next_match(program.rule_slice(), &core.once_states, &core.state)? {
+    let matched = match find_next_match(program.rule_slice(), &mut core.once_states, &core.state) {
         RuleSearch::Matched(matched) => matched,
         RuleSearch::Stable => return Ok(CoreStep::Stable(core.budget.completed_steps())),
     };
-    let prepared = prepare_matched_rule(&core.state, &mut core.scratch, &core.budget, matched)?;
+    let prepared = prepare_matched_rule(&mut core.scratch, &core.budget, matched)?;
     let witness = make_witness(RuleView::new(prepared.rule()))?;
-    let applied = prepared.commit(
-        &mut core.state,
-        &mut core.scratch,
-        &mut core.budget,
-        &mut core.once_states,
-    )?;
+    let applied = prepared.commit(&mut core.state, &mut core.scratch, &mut core.budget)?;
     Ok(CoreStep::Applied(CoreAppliedRule::from_applied_rule(
         applied, witness,
     )))
@@ -588,7 +449,6 @@ fn attempt_current_rule_with_witness<'program, RuleWitness>(
     attempt_budget: &mut RuleAttemptBudgetState,
     make_witness: impl FnOnce(RuleView<'program>) -> Result<RuleWitness, RunError>,
 ) -> Result<CoreRuleAttempt<RuleWitness>, RunError> {
-    let rules = program.rule_slice();
     let Some(active_cursor) = cursor.take_active() else {
         return Ok(CoreRuleAttempt::Stable {
             attempts: attempt_budget.completed_attempts(),
@@ -596,18 +456,23 @@ fn attempt_current_rule_with_witness<'program, RuleWitness>(
             stable_reason: RuleAttemptStableReason::NoExecutableRules,
         });
     };
-    let next_rule_index = active_cursor.current_index();
-
-    let Some(rule) = rules.get(next_rule_index.get()) else {
-        return Err(RunInvariantError::MissingRuleCursorTarget {
-            rule: next_rule_index.position(),
-            available_rules: program.rule_count(),
-        }
-        .into());
+    let Some(target) = program.target_for_cursor(active_cursor) else {
+        return Ok(CoreRuleAttempt::Stable {
+            attempts: attempt_budget.completed_attempts(),
+            steps: core.completed_steps(),
+            stable_reason: RuleAttemptStableReason::NoExecutableRules,
+        });
+    };
+    let Some(runtime_rule) = runtime_rule_for_target(&mut core.once_states, target) else {
+        return Ok(CoreRuleAttempt::Stable {
+            attempts: attempt_budget.completed_attempts(),
+            steps: core.completed_steps(),
+            stable_reason: RuleAttemptStableReason::NoExecutableRules,
+        });
     };
 
     let reservation = attempt_budget.reserve_next_attempt(core.state.byte_count())?;
-    let attempted = attempt_rule(rule, &core.once_states, &core.state)?;
+    let attempted = attempt_rule(runtime_rule, &core.state);
 
     match attempted {
         RuleAttempt::Missed(missed) => {
@@ -623,16 +488,10 @@ fn attempt_current_rule_with_witness<'program, RuleWitness>(
             }))
         }
         RuleAttempt::Matched(matched) => {
-            let prepared =
-                prepare_matched_rule(&core.state, &mut core.scratch, &core.budget, matched)?;
+            let prepared = prepare_matched_rule(&mut core.scratch, &core.budget, matched)?;
             let witness = make_witness(RuleView::new(prepared.rule()))?;
             let attempt = reservation.commit();
-            let applied = prepared.commit(
-                &mut core.state,
-                &mut core.scratch,
-                &mut core.budget,
-                &mut core.once_states,
-            )?;
+            let applied = prepared.commit(&mut core.state, &mut core.scratch, &mut core.budget)?;
             let applied = CoreAppliedRule::from_applied_rule(applied, witness);
             if matches!(applied, CoreAppliedRule::Rewrite { .. }) {
                 *cursor = RuleCursor::Active(active_cursor.reset_to_first());

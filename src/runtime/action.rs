@@ -5,8 +5,7 @@ use crate::program::{ReturnOutput, ReturnOutputView};
 use crate::rule::{ParsedRuleAction, Rule};
 
 use super::budget::RuntimeBudgetState;
-use super::matcher::MatchedRuleApplication;
-use super::once::OnceStateSet;
+use super::matcher::{MatchedRuleApplication, PreparedMatchedRule};
 use super::rewrite::{PreparedRewrite, RewriteScratch};
 use super::state::State;
 
@@ -21,11 +20,11 @@ pub(crate) enum AppliedRule<'program> {
 
 /// Rule application after all failure-prone runtime preparation has succeeded.
 #[derive(Debug)]
-pub(crate) enum PreparedRuleApplication<'program> {
+pub(crate) enum PreparedRuleApplication<'program, 'once> {
     /// Prepared non-terminal rewrite.
-    Rewrite(PreparedRewriteRule<'program>),
+    Rewrite(PreparedRewriteRule<'program, 'once>),
     /// Prepared terminal return.
-    Return(PreparedReturnRule<'program>),
+    Return(PreparedReturnRule<'program, 'once>),
 }
 
 /// Committed non-terminal rewrite rule.
@@ -52,18 +51,18 @@ pub(crate) struct CommittedReturnRule<'program> {
 
 /// Prepared non-terminal rewrite before its step and once-state side effects commit.
 #[derive(Debug)]
-pub(crate) struct PreparedRewriteRule<'program> {
+pub(crate) struct PreparedRewriteRule<'program, 'once> {
     /// Matched rule and once-state commit permit.
-    matched: MatchedRuleApplication<'program>,
+    matched: PreparedMatchedRule<'program, 'once>,
     /// Runtime bytes ready to become the next state.
     rewrite: PreparedRewrite,
 }
 
 /// Prepared terminal return before its step and once-state side effects commit.
 #[derive(Debug)]
-pub(crate) struct PreparedReturnRule<'program> {
+pub(crate) struct PreparedReturnRule<'program, 'once> {
     /// Matched rule and once-state commit permit.
-    matched: MatchedRuleApplication<'program>,
+    matched: PreparedMatchedRule<'program, 'once>,
     /// Borrowed return output payload from the matched parsed rule.
     output_view: ReturnOutputView<'program>,
     /// Materialized return output.
@@ -108,7 +107,7 @@ impl<'program> CommittedReturnRule<'program> {
     }
 }
 
-impl<'program> PreparedRuleApplication<'program> {
+impl<'program> PreparedRuleApplication<'program, '_> {
     /// Parsed rule selected by this prepared application.
     pub(crate) const fn rule(&self) -> &'program Rule {
         match self {
@@ -121,19 +120,17 @@ impl<'program> PreparedRuleApplication<'program> {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if a prepared once-rule commit permit no longer
-    /// points at a valid runtime once-state slot.
+    /// Returns `RunError` if the next step exceeds the configured step limit.
     pub(crate) fn commit(
         self,
         state: &mut State,
         scratch: &mut RewriteScratch,
         budget: &mut RuntimeBudgetState,
-        once_states: &mut OnceStateSet,
     ) -> Result<AppliedRule<'program>, RunError> {
         let reservation = budget.reserve_next_step(state.byte_count())?;
         match self {
             Self::Rewrite(prepared) => {
-                let committed = prepared.matched.commit(once_states)?;
+                let committed = prepared.matched.commit();
                 let step = reservation.commit();
                 state.commit_rewrite(prepared.rewrite, scratch);
                 Ok(AppliedRule::Rewrite(CommittedRewriteRule {
@@ -142,7 +139,7 @@ impl<'program> PreparedRuleApplication<'program> {
                 }))
             }
             Self::Return(prepared) => {
-                let committed = prepared.matched.commit(once_states)?;
+                let committed = prepared.matched.commit();
                 let step = reservation.commit();
                 Ok(AppliedRule::Return(CommittedReturnRule {
                     step,
@@ -166,38 +163,21 @@ pub(crate) fn materialize_return_output(
     Ok(ReturnOutput::from_return_output_view(output)?)
 }
 
-/// Applies one matched rule and commits its once-rule state on success.
-///
-/// # Errors
-///
-/// Returns `RunError` if the next step exceeds limits, the rewrite would
-/// exceed state limits, return output exceeds limits, or allocation fails.
-pub(crate) fn apply_matched_rule<'program>(
-    state: &mut State,
-    scratch: &mut RewriteScratch,
-    budget: &mut RuntimeBudgetState,
-    once_states: &mut OnceStateSet,
-    matched: MatchedRuleApplication<'program>,
-) -> Result<AppliedRule<'program>, RunError> {
-    let prepared = prepare_matched_rule(state, scratch, budget, matched)?;
-    prepared.commit(state, scratch, budget, once_states)
-}
-
 /// Prepares one matched rule without committing state, budget, or once-rule side effects.
 ///
 /// # Errors
 ///
 /// Returns `RunError` if the next step exceeds limits, the rewrite would
 /// exceed state limits, return output exceeds limits, or allocation fails.
-pub(crate) fn prepare_matched_rule<'program>(
-    state: &State,
+pub(crate) fn prepare_matched_rule<'program, 'once>(
     scratch: &mut RewriteScratch,
     budget: &RuntimeBudgetState,
-    matched: MatchedRuleApplication<'program>,
-) -> Result<PreparedRuleApplication<'program>, RunError> {
+    matched: MatchedRuleApplication<'program, '_, 'once>,
+) -> Result<PreparedRuleApplication<'program, 'once>, RunError> {
+    let (state_match, matched) = matched.into_prepare_parts();
     match matched.rule().action() {
         ParsedRuleAction::Rewrite(action) => {
-            let rewrite = state.rewrite_into(matched.state_match(), action, scratch, budget)?;
+            let rewrite = state_match.rewrite_into(action, scratch, budget)?;
             Ok(PreparedRuleApplication::Rewrite(PreparedRewriteRule {
                 matched,
                 rewrite,

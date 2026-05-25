@@ -499,9 +499,9 @@ snapshots without parsing display strings.
 
 Representation failures such as unrepresentable parser positions are separate
 from allocation failure and are reported as `ParseErrorKind::Representation`.
-Parser or runtime witness contradictions that should be unreachable through
-ordinary public inputs are reported as `InternalInvariant` variants instead of
-panicking or being folded into allocation errors.
+Runtime witness contradictions that should be unreachable through ordinary
+public inputs are eliminated by construction instead of being exposed as a
+public runtime error variant.
 
 State length arithmetic overflow is separate from allocation failure and is
 reported as `RunError::StateSize`. Configured byte budgets and step budgets are

@@ -183,58 +183,13 @@ impl RuleAnchorSyntax {
     }
 }
 
-/// Internal once rule count.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct OnceRuleCount {
-    /// Number of once slots assigned so far.
-    value: usize,
-}
-
-/// Parser-assigned slot for one `(once)` rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct OnceRuleSlot {
-    /// Zero-based index into the per-run once-state table.
-    zero_based: usize,
-}
-
-impl OnceRuleCount {
-    /// Number of per-run once slots required by the program.
-    pub(crate) const fn get(self) -> usize {
-        self.value
-    }
-
-    /// Increments the count for one accepted `(once)` rule.
-    pub(crate) fn checked_next(self) -> Option<Self> {
-        let next = self.value.checked_add(1)?;
-        Some(Self { value: next })
-    }
-
-    /// Assigns the next contiguous slot for a parsed `(once)` rule.
-    pub(crate) fn assign_next_slot(self) -> Option<(OnceRuleSlot, Self)> {
-        let next_count = self.checked_next()?;
-        Some((
-            OnceRuleSlot {
-                zero_based: self.value,
-            },
-            next_count,
-        ))
-    }
-}
-
-impl OnceRuleSlot {
-    /// Zero-based slot in the runtime once-state table.
-    pub(crate) const fn get(self) -> usize {
-        self.zero_based
-    }
-}
-
 /// Runtime availability assigned after program-level rule construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuleAvailability {
     /// Rule can apply on every match.
     Always,
-    /// Rule can apply once per run through the assigned runtime slot.
-    Once(OnceRuleSlot),
+    /// Rule can apply once per run.
+    Once,
 }
 
 impl RuleAvailability {
@@ -242,8 +197,13 @@ impl RuleAvailability {
     pub(crate) const fn public_repeat(self) -> RuleRepeat {
         match self {
             Self::Always => RuleRepeat::Always,
-            Self::Once(_) => RuleRepeat::Once,
+            Self::Once => RuleRepeat::Once,
         }
+    }
+
+    /// Returns whether this rule requires per-run once-state tracking.
+    pub(crate) const fn is_once(self) -> bool {
+        matches!(self, Self::Once)
     }
 }
 

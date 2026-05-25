@@ -14,7 +14,7 @@ mod runtime;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use compact::CompactByte;
+pub(crate) use compact::{CompactByte, ExecutableCodeByte};
 pub use count::{
     PayloadByteCount, ReturnOutputByteCount, RuntimeInputByteCount, RuntimeStateByteCount,
     TraceSnapshotByteCount,

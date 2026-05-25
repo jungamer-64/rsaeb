@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
-use crate::bytes::{CompactByte, NonPrintableCodeByte};
-use crate::error::{ParseError, ParseErrorKind, ParseLimitError, ParseRepresentationError};
+use crate::bytes::{CompactByte, ExecutableCodeByte};
+use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
 use crate::limits::{CodeLineByteCount, CodeLineByteLimit};
 use crate::source::{SourceLineNumber, SourcePosition};
 
@@ -97,58 +97,41 @@ impl CodeLine<'_> {
     /// Returns `ParseError` when compacting sees non-printable executable code
     /// bytes, allocation fails, or source positions cannot be represented.
     pub(super) fn into_compact_line(self) -> Result<CompactCodeLine, ParseError> {
-        let compact_byte_count = self.compact_byte_count()?;
-        let bytes = self.compact_bytes(compact_byte_count)?;
+        let executable = self.into_executable_line()?;
+        let mut bytes = Vec::new();
+        try_reserve_total_exact(
+            &mut bytes,
+            RequestedCapacity::new(executable.bytes.len()),
+            AllocationContext::ProgramCodeLine,
+        )
+        .map_err(|error| parse_allocation_error(executable.line_number, error))?;
+
+        for byte in executable.bytes {
+            try_push(
+                &mut bytes,
+                CompactByte::from_executable(byte),
+                AllocationContext::ProgramCodeLine,
+            )
+            .map_err(|error| parse_allocation_error(executable.line_number, error))?;
+        }
 
         Ok(CompactCodeLine {
-            line_number: self.line_number,
+            line_number: executable.line_number,
             bytes,
         })
     }
 
-    /// Counts compact executable bytes after whitespace removal.
+    /// Validates non-whitespace executable bytes before compact syntax construction.
     ///
     /// # Errors
     ///
-    /// Returns `ParseError` when a non-printable byte is found or the compact
-    /// length cannot be represented.
-    fn compact_byte_count(&self) -> Result<CompactCodeByteCount, ParseError> {
-        let mut byte_count = CompactCodeByteCount::ZERO;
-        for (zero_based_column, byte) in self.bytes.iter().copied().enumerate() {
-            if byte.is_ascii_whitespace() {
-                continue;
-            }
-
-            if let Some(rejected) = NonPrintableCodeByte::parse(byte) {
-                return Err(ParseError::at_position(
-                    SourcePosition::new(
-                        self.line_number,
-                        source_column(zero_based_column, self.line_number)?,
-                    ),
-                    ParseErrorKind::NonPrintableAsciiInCode { byte: rejected },
-                ));
-            }
-
-            byte_count = byte_count.checked_next(self.line_number)?;
-        }
-
-        Ok(byte_count)
-    }
-
-    /// Builds compact source bytes with original source columns attached.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError` if allocation fails or a source column cannot be
-    /// represented.
-    fn compact_bytes(
-        &self,
-        compact_byte_count: CompactCodeByteCount,
-    ) -> Result<Vec<CompactByte>, ParseError> {
+    /// Returns `ParseError` if allocation fails or a non-whitespace executable
+    /// byte is non-printable code.
+    fn into_executable_line(self) -> Result<ExecutableCodeLine, ParseError> {
         let mut bytes = Vec::new();
         try_reserve_total_exact(
             &mut bytes,
-            RequestedCapacity::new(compact_byte_count.get()),
+            RequestedCapacity::new(self.bytes.len()),
             AllocationContext::ProgramCodeLine,
         )
         .map_err(|error| parse_allocation_error(self.line_number, error))?;
@@ -158,48 +141,29 @@ impl CodeLine<'_> {
                 continue;
             }
 
-            try_push(
-                &mut bytes,
-                CompactByte::new(byte, source_column(zero_based_column, self.line_number)?),
-                AllocationContext::ProgramCodeLine,
-            )
-            .map_err(|error| parse_allocation_error(self.line_number, error))?;
+            let position = SourcePosition::new(
+                self.line_number,
+                source_column(zero_based_column, self.line_number)?,
+            );
+            let byte = ExecutableCodeByte::validate(byte, position)?;
+            try_push(&mut bytes, byte, AllocationContext::ProgramCodeLine)
+                .map_err(|error| parse_allocation_error(self.line_number, error))?;
         }
 
-        Ok(bytes)
+        Ok(ExecutableCodeLine {
+            line_number: self.line_number,
+            bytes,
+        })
     }
 }
 
-/// Internal compact code byte count.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CompactCodeByteCount {
-    /// Number of executable bytes after whitespace removal.
-    value: usize,
-}
-
-impl CompactCodeByteCount {
-    /// ZERO boundary value.
-    const ZERO: Self = Self { value: 0 };
-
-    /// Returns this count after accepting one more compact code byte.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError` if the compact byte count cannot be represented.
-    fn checked_next(self, line_number: SourceLineNumber) -> Result<Self, ParseError> {
-        let value = self.value.checked_add(1).ok_or_else(|| {
-            ParseError::at_line(
-                line_number,
-                ParseErrorKind::Representation(ParseRepresentationError::CompactCodeByteCount),
-            )
-        })?;
-        Ok(Self { value })
-    }
-
-    /// Returns the primitive stored value.
-    const fn get(self) -> usize {
-        self.value
-    }
+/// Executable code line after non-whitespace bytes have been validated.
+#[derive(Debug, PartialEq, Eq)]
+struct ExecutableCodeLine {
+    /// Original one-based source line number.
+    line_number: SourceLineNumber,
+    /// Executable bytes retained after whitespace removal.
+    bytes: Vec<ExecutableCodeByte>,
 }
 
 /// Internal compact code line.

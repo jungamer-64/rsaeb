@@ -6,7 +6,6 @@ mod support;
 
 use rsaeb::error::{
     ParseErrorKind, ParseErrorLocation, ParseRepresentationError, PayloadKind, RunError,
-    RunInvariantError,
 };
 use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
 use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, RuntimeInputLimits};
@@ -135,27 +134,11 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if exposed representation/runtime-invariant error
-/// domains lose display output.
+/// Returns `TestFailure` if exposed parser representation errors lose display output.
 #[test]
-fn errors_representation_and_runtime_invariant_subdomains_are_public() -> TestResult {
+fn errors_representation_subdomain_is_public() -> TestResult {
     ensure_eq!(
         ParseRepresentationError::RulePosition.to_string(),
         "rule position could not be represented",
-    )?;
-
-    let once_program = parse_program("(once)a=b")?;
-    let once_rule = once_program
-        .rules()
-        .next()
-        .ok_or(TestFailure::message("expected once rule"))?;
-    let available_slots = parse_program("")?.once_rule_count();
-    ensure_eq!(
-        RunInvariantError::MissingOnceRuleState {
-            rule: once_rule.position(),
-            available_slots,
-        }
-        .to_string(),
-        "runtime invariant failure: once rule 1 had no state slot among 0 available once slots",
     )
 }

@@ -2,7 +2,7 @@ use crate::error::{ParseError, ParseErrorKind, PayloadKind};
 use crate::source::{SourceLineNumber, SourcePosition};
 
 use super::compact::CompactByte;
-use super::rejection::{NonAsciiCodeByte, NonPrintableCodeByte, ReservedSyntaxByte};
+use super::rejection::ReservedSyntaxByte;
 
 /// A byte that is valid executable A=B payload data.
 ///
@@ -31,28 +31,16 @@ impl ProgramByte {
     ///
     /// # Errors
     ///
-    /// Returns `ParseError` when the byte is non-ASCII, non-printable, or
-    /// reserved executable syntax for the selected payload boundary.
+    /// Returns `ParseError` when the byte is reserved executable syntax for
+    /// the selected payload boundary. Non-ASCII and non-printable executable
+    /// code cannot enter this function because [`CompactByte`] is built from
+    /// validated executable code bytes.
     pub(crate) fn parse(
         byte: CompactByte,
         line_number: SourceLineNumber,
         payload_kind: PayloadKind,
     ) -> Result<Self, ParseError> {
         let raw = byte.as_u8();
-
-        if let Some(rejected) = NonAsciiCodeByte::parse(raw) {
-            return Err(ParseError::at_position(
-                SourcePosition::new(line_number, byte.source_column()),
-                ParseErrorKind::NonAsciiInCode { byte: rejected },
-            ));
-        }
-
-        if let Some(rejected) = NonPrintableCodeByte::parse(raw) {
-            return Err(ParseError::at_position(
-                SourcePosition::new(line_number, byte.source_column()),
-                ParseErrorKind::NonPrintableAsciiInCode { byte: rejected },
-            ));
-        }
 
         if let Some(rejected) = ReservedSyntaxByte::parse(raw) {
             return Err(ParseError::at_position(

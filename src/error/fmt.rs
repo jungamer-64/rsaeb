@@ -110,10 +110,6 @@ impl fmt::Display for ParseRepresentationError {
             ),
             Self::RulePosition => f.write_str("rule position could not be represented"),
             Self::RuleCount => f.write_str("rule count could not be represented"),
-            Self::OnceRuleCount => f.write_str("once-rule count could not be represented"),
-            Self::CompactCodeByteCount => {
-                f.write_str("compact code byte count could not be represented")
-            }
         }
     }
 }

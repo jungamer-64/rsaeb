@@ -1,10 +1,8 @@
 use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, try_push};
-use crate::bytes::{CompactByte, Payload, PayloadByteCount, PayloadSyntax};
-use crate::error::{
-    LeftModifierKind, ParseError, ParseErrorKind, ParseLimitError, PayloadKind, RightActionKind,
-};
+use crate::bytes::{CompactByte, Payload, PayloadSyntax};
+use crate::error::{LeftModifierKind, ParseError, ParseErrorKind, PayloadKind, RightActionKind};
 use crate::limits::PayloadByteLimit;
 use crate::rule::{
     ParsedRule, ParsedRuleAction, RewriteAction, RuleAnchorSyntax, RuleBody, RuleHead,
@@ -582,29 +580,8 @@ fn parse_payload(
     payload_kind: PayloadKind,
     limit: PayloadByteLimit,
 ) -> Result<Payload, ParseError> {
-    let syntax = PayloadSyntax::new(bytes, line_number, payload_kind);
-    ensure_payload_within_limit(line_number, syntax.byte_count(), limit)?;
+    let syntax = PayloadSyntax::check(bytes, line_number, payload_kind, limit)?;
     syntax.validate()
-}
-
-/// Checks one parsed payload length against parser limits.
-///
-/// # Errors
-///
-/// Returns `ParseError` if the payload length exceeds `limit`.
-fn ensure_payload_within_limit(
-    line_number: SourceLineNumber,
-    attempted_len: PayloadByteCount,
-    limit: PayloadByteLimit,
-) -> Result<(), ParseError> {
-    if limit.accepts(attempted_len) {
-        return Ok(());
-    }
-
-    Err(ParseError::at_line(
-        line_number,
-        ParseErrorKind::Limit(ParseLimitError::payload(limit, attempted_len)),
-    ))
 }
 
 /// Classifies the first token from an ordered token map.

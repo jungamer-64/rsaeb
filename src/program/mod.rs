@@ -28,9 +28,10 @@ use crate::input::RunSeed;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::limits::ParseLimits;
 use crate::parser::parse_rules_impl;
-use crate::rule::{OnceRuleCount as RuntimeOnceRuleCount, Rule};
+use crate::rule::Rule;
 use crate::source::ProgramSource;
 
+pub(crate) use rule_set::{ActiveRuleCursor, RuleCursor, RuleCursorAfterMiss, RuleTarget};
 pub(crate) use rule_set::{RuleSet, RuleSetBuilder};
 
 pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeStateSnapshot};
@@ -111,11 +112,6 @@ impl Program {
         self.rule_set.as_slice()
     }
 
-    /// Runtime once-state slots required by one execution.
-    pub(crate) fn once_rule_slot_count(&self) -> RuntimeOnceRuleCount {
-        self.rule_set.once_rule_slot_count()
-    }
-
     /// Starts a stateful run session that borrows this parsed program.
     ///
     /// The parsed rule table stays reusable while per-run state lives in the
@@ -187,5 +183,15 @@ impl Program {
     /// overflows, or a configured execution budget would be exceeded.
     pub fn run(&self, seed: RunSeed) -> Result<RunResult, RunError> {
         crate::execution::finish_borrowed_run(self, seed)
+    }
+
+    /// Starts a rule-attempt cursor minted from this parsed rule table.
+    pub(crate) fn rule_attempt_cursor(&self) -> RuleCursor {
+        self.rule_set.rule_attempt_cursor()
+    }
+
+    /// Resolves an active rule-attempt cursor to the selected parsed rule.
+    pub(crate) fn target_for_cursor(&self, cursor: ActiveRuleCursor) -> Option<RuleTarget<'_>> {
+        self.rule_set.target_for_cursor(cursor)
     }
 }
