@@ -24,6 +24,18 @@ fn expect_stable_bytes(result: &RunResult, expected: &[u8]) -> TestResult {
     }
 }
 
+/// Validates bytes with the default public runtime-input limit.
+///
+/// # Errors
+///
+/// Returns `RuntimeInputError` if validation rejects the bytes.
+fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
+    RuntimeInput::validate(
+        RuntimeInputSource::from_bytes(bytes),
+        RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN),
+    )
+}
+
 /// # Errors
 ///
 /// Returns `TestFailure` if runtime input loses owned typed bytes before it is
@@ -81,10 +93,7 @@ fn runtime_input_validates_ascii_boundary() -> TestResult {
 /// information.
 #[test]
 fn runtime_input_reports_public_errors_and_debug_bytes() -> TestResult {
-    let Err(error) = RuntimeInput::validate(
-        RuntimeInputSource::from_bytes(&[0xff]),
-        RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN),
-    ) else {
+    let Err(error) = runtime_input(&[0xff]) else {
         return Err(TestFailure::message("expected input error"));
     };
 
@@ -94,8 +103,15 @@ fn runtime_input_reports_public_errors_and_debug_bytes() -> TestResult {
             rsaeb::error::RuntimeInputError::NonAscii { column, .. } if column.get() == 1
         ),
         "expected runtime input error",
-    )?;
+    )
+}
 
+/// # Errors
+///
+/// Returns `TestFailure` if runtime input byte-limit errors lose public boundary
+/// information.
+#[test]
+fn runtime_input_reports_public_limit_errors() -> TestResult {
     let Err(limit_error) = RuntimeInput::validate(
         RuntimeInputSource::from_bytes(b"aa"),
         RuntimeInputLimits::new(RuntimeInputByteLimit::new(1)),
@@ -113,12 +129,15 @@ fn runtime_input_reports_public_errors_and_debug_bytes() -> TestResult {
             } if limit == RuntimeInputByteLimit::new(1) && attempted_len.get() == 2
         ),
         "expected runtime input construction limit details",
-    )?;
+    )
+}
 
-    let admitted_input = RuntimeInput::validate(
-        RuntimeInputSource::from_bytes(b"aa"),
-        RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN),
-    )?;
+/// # Errors
+///
+/// Returns `TestFailure` if run admission loses public state-size boundary details.
+#[test]
+fn runtime_input_reports_public_admission_errors() -> TestResult {
+    let admitted_input = runtime_input(b"aa")?;
     let Err(state_limit_error) = RunSeed::admit(
         admitted_input,
         ExecutionLimits::new(
@@ -140,12 +159,15 @@ fn runtime_input_reports_public_errors_and_debug_bytes() -> TestResult {
             } if limit == RuntimeStateByteLimit::new(1) && attempted_len.get() == 2
         ),
         "expected initial state admission limit details",
-    )?;
+    )
+}
 
-    let input = RuntimeInput::validate(
-        RuntimeInputSource::from_bytes(b"a=\n"),
-        RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN),
-    )?;
+/// # Errors
+///
+/// Returns `TestFailure` if debug output exposes internal runtime byte domains.
+#[test]
+fn runtime_input_debug_hides_internal_byte_domains() -> TestResult {
+    let input = runtime_input(b"a=\n")?;
     let debug = format!("{input:?}");
     ensure_eq!(debug.as_str(), "RuntimeInput { bytes: [97, 61, 10] }")?;
     ensure_matches(

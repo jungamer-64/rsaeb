@@ -17,7 +17,7 @@ use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit,
     RuleAttemptLimit, RuntimeStateByteLimit, StepLimit,
 };
-use rsaeb::program::{RunOutcome, RunResult};
+use rsaeb::program::{Program, RunOutcome, RunResult};
 use runtime_support::TestRunPolicy;
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
@@ -147,6 +147,118 @@ macro_rules! borrowed_stable {
     };
 }
 
+macro_rules! expect_non_failed_transition {
+    ($result:expr, $failed:path) => {
+        match $result {
+            $failed(failed) => Err(TestFailure::from(failed.into_error())),
+            transition => Ok(transition),
+        }
+    };
+}
+
+macro_rules! collect_owned_rule_attempt_signatures {
+    ($execution:expr) => {{
+        let mut execution = $execution;
+        let mut signatures = Vec::new();
+        loop {
+            match execution.step() {
+                OwnedRuleAttemptTransition::Missed(missed) => {
+                    let (attempt, miss, next_execution) = missed.into_parts();
+                    signatures.push(OwnedRuleAttemptSignature::Missed {
+                        attempt: attempt.get(),
+                        rule_position: miss.rule().position().number().get(),
+                        reason: miss.reason(),
+                    });
+                    execution = next_execution;
+                }
+                OwnedRuleAttemptTransition::Applied(applied) => {
+                    let (attempt, step, rule, next_execution) = applied.into_parts();
+                    signatures.push(OwnedRuleAttemptSignature::Applied {
+                        attempt: attempt.get(),
+                        step: step.get(),
+                        rule_position: rule.position().number().get(),
+                    });
+                    execution = next_execution;
+                }
+                OwnedRuleAttemptTransition::Stable(stable) => {
+                    signatures.push(OwnedRuleAttemptSignature::Stable {
+                        attempts: stable.attempts().get(),
+                        steps: stable.steps().get(),
+                        stable_reason: stable_reason_signature(stable.stable_reason(), |rule| {
+                            rule.position().number().get()
+                        }),
+                    });
+                    return Ok(signatures);
+                }
+                OwnedRuleAttemptTransition::Returned(returned) => {
+                    signatures.push(OwnedRuleAttemptSignature::Return {
+                        attempt: returned.attempt().get(),
+                        step: returned.step().get(),
+                        rule_position: returned.rule().position().number().get(),
+                        output: returned.output().as_slice().to_vec(),
+                    });
+                    return Ok(signatures);
+                }
+                OwnedRuleAttemptTransition::Failed(failed) => {
+                    return Err(TestFailure::from(failed.into_error()));
+                }
+            }
+        }
+    }};
+}
+
+macro_rules! collect_borrowed_rule_attempt_signatures {
+    ($execution:expr) => {{
+        let mut execution = $execution;
+        let mut signatures = Vec::new();
+        loop {
+            match expect_rule_attempt_transition(execution.step())? {
+                BorrowedRuleAttemptTransition::Missed(missed) => {
+                    signatures.push(BorrowedRuleAttemptSignature::Missed {
+                        attempt: missed.attempt().get(),
+                        rule_position: missed.miss().rule().position().number().get(),
+                        reason: missed.miss().reason(),
+                        state: runtime_view_bytes(missed.state())?,
+                    });
+                    execution = missed.into_session();
+                }
+                BorrowedRuleAttemptTransition::Applied(applied) => {
+                    signatures.push(BorrowedRuleAttemptSignature::Applied {
+                        attempt: applied.attempt().get(),
+                        step: applied.step().get(),
+                        rule_position: applied.rule().position().number().get(),
+                        state: runtime_view_bytes(applied.state())?,
+                    });
+                    execution = applied.into_session();
+                }
+                BorrowedRuleAttemptTransition::Stable(stable) => {
+                    signatures.push(BorrowedRuleAttemptSignature::Stable {
+                        attempts: stable.attempts().get(),
+                        steps: stable.steps().get(),
+                        stable_reason: stable_reason_signature(stable.stable_reason(), |rule| {
+                            rule.position().number().get()
+                        }),
+                        state: runtime_view_bytes(stable.state())?,
+                    });
+                    return Ok(signatures);
+                }
+                BorrowedRuleAttemptTransition::Returned(returned) => {
+                    signatures.push(BorrowedRuleAttemptSignature::Return {
+                        attempt: returned.attempt().get(),
+                        step: returned.step().get(),
+                        rule_position: returned.rule().position().number().get(),
+                        output: returned.output().as_slice().to_vec(),
+                    });
+                    return Ok(signatures);
+                }
+                BorrowedRuleAttemptTransition::Failed(failed) => {
+                    return Err(TestFailure::from(failed.into_error()));
+                }
+            }
+        }
+    }};
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum StableReasonSignature {
     NoExecutableRules,
@@ -166,6 +278,19 @@ struct ExpectedOwnedRuleWitness<'expected> {
     line_number: usize,
     lhs: &'expected [u8],
     action: ExpectedRuleAction<'expected>,
+}
+
+enum ExpectedOwnedAttemptWitness<'expected> {
+    Missed {
+        attempt: usize,
+        rule: ExpectedOwnedRuleWitness<'expected>,
+        reason: RuleMissReason,
+    },
+    Applied {
+        attempt: usize,
+        step: usize,
+        rule: ExpectedOwnedRuleWitness<'expected>,
+    },
 }
 
 /// Ensures an owned public rule witness retained the expected parsed-rule metadata.
@@ -197,25 +322,14 @@ fn ensure_owned_rule_witness(
     }
 }
 
-fn owned_stable_reason_signature(
-    reason: &RuleAttemptStableReason<OwnedRuleWitness>,
+fn stable_reason_signature<Rule>(
+    reason: &RuleAttemptStableReason<Rule>,
+    rule_position: impl FnOnce(&Rule) -> usize,
 ) -> StableReasonSignature {
     match reason {
         RuleAttemptStableReason::NoExecutableRules => StableReasonSignature::NoExecutableRules,
         RuleAttemptStableReason::FinalMiss(miss) => StableReasonSignature::FinalMiss {
-            rule_position: miss.rule().position().number().get(),
-            reason: miss.reason(),
-        },
-    }
-}
-
-fn borrowed_stable_reason_signature(
-    reason: &RuleAttemptStableReason<rsaeb::inspect::RuleView<'_>>,
-) -> StableReasonSignature {
-    match reason {
-        RuleAttemptStableReason::NoExecutableRules => StableReasonSignature::NoExecutableRules,
-        RuleAttemptStableReason::FinalMiss(miss) => StableReasonSignature::FinalMiss {
-            rule_position: miss.rule().position().number().get(),
+            rule_position: rule_position(miss.rule()),
             reason: miss.reason(),
         },
     }
@@ -255,6 +369,33 @@ fn returned_signature(returned: &BorrowedReturnedRun<'_>) -> StepSignature {
     }
 }
 
+fn default_test_run_policy() -> TestRunPolicy {
+    TestRunPolicy::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(10),
+        DEFAULT_MAX_STATE_LEN,
+        DEFAULT_MAX_RETURN_LEN,
+    )
+}
+
+/// Runs borrowed rule-attempt execution and collects comparable transition signatures.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the program cannot be parsed, input is rejected, or
+/// rule-attempt execution fails.
+fn borrowed_rule_attempt_signatures(
+    program: &Program,
+    input: &'static [u8],
+    attempt_limit: RuleAttemptLimit,
+) -> Result<Vec<BorrowedRuleAttemptSignature>, TestFailure> {
+    let execution = program.start_rule_attempt_run(RuleAttemptSeed::new(
+        runtime_input(input, default_test_run_policy())?,
+        attempt_limit,
+    ))?;
+    finish_borrowed_rule_attempt_signatures(execution)
+}
+
 /// Runs stepwise execution and collects comparable transition signatures.
 ///
 /// # Errors
@@ -291,51 +432,9 @@ fn finish_step_signatures(
 ///
 /// Returns `TestFailure` if a rule attempt fails.
 fn finish_owned_rule_attempt_signatures(
-    mut execution: OwnedRuleAttemptSession,
+    execution: OwnedRuleAttemptSession,
 ) -> Result<Vec<OwnedRuleAttemptSignature>, TestFailure> {
-    let mut signatures = Vec::new();
-    loop {
-        match execution.step() {
-            OwnedRuleAttemptTransition::Missed(missed) => {
-                let (attempt, miss, next_execution) = missed.into_parts();
-                signatures.push(OwnedRuleAttemptSignature::Missed {
-                    attempt: attempt.get(),
-                    rule_position: miss.rule().position().number().get(),
-                    reason: miss.reason(),
-                });
-                execution = next_execution;
-            }
-            OwnedRuleAttemptTransition::Applied(applied) => {
-                let (attempt, step, rule, next_execution) = applied.into_parts();
-                signatures.push(OwnedRuleAttemptSignature::Applied {
-                    attempt: attempt.get(),
-                    step: step.get(),
-                    rule_position: rule.position().number().get(),
-                });
-                execution = next_execution;
-            }
-            OwnedRuleAttemptTransition::Stable(stable) => {
-                signatures.push(OwnedRuleAttemptSignature::Stable {
-                    attempts: stable.attempts().get(),
-                    steps: stable.steps().get(),
-                    stable_reason: owned_stable_reason_signature(stable.stable_reason()),
-                });
-                return Ok(signatures);
-            }
-            OwnedRuleAttemptTransition::Returned(returned) => {
-                signatures.push(OwnedRuleAttemptSignature::Return {
-                    attempt: returned.attempt().get(),
-                    step: returned.step().get(),
-                    rule_position: returned.rule().position().number().get(),
-                    output: returned.output().as_slice().to_vec(),
-                });
-                return Ok(signatures);
-            }
-            OwnedRuleAttemptTransition::Failed(failed) => {
-                return Err(TestFailure::from(failed.into_error()));
-            }
-        }
-    }
+    collect_owned_rule_attempt_signatures!(execution)
 }
 
 /// Runs borrowed rule-attempt execution and collects comparable transition signatures.
@@ -344,52 +443,9 @@ fn finish_owned_rule_attempt_signatures(
 ///
 /// Returns `TestFailure` if a rule attempt fails or state materialization fails.
 fn finish_borrowed_rule_attempt_signatures(
-    mut execution: BorrowedRuleAttemptSession<'_>,
+    execution: BorrowedRuleAttemptSession<'_>,
 ) -> Result<Vec<BorrowedRuleAttemptSignature>, TestFailure> {
-    let mut signatures = Vec::new();
-    loop {
-        match expect_rule_attempt_transition(execution.step())? {
-            BorrowedRuleAttemptTransition::Missed(missed) => {
-                signatures.push(BorrowedRuleAttemptSignature::Missed {
-                    attempt: missed.attempt().get(),
-                    rule_position: missed.miss().rule().position().number().get(),
-                    reason: missed.miss().reason(),
-                    state: runtime_view_bytes(missed.state())?,
-                });
-                execution = missed.into_session();
-            }
-            BorrowedRuleAttemptTransition::Applied(applied) => {
-                signatures.push(BorrowedRuleAttemptSignature::Applied {
-                    attempt: applied.attempt().get(),
-                    step: applied.step().get(),
-                    rule_position: applied.rule().position().number().get(),
-                    state: runtime_view_bytes(applied.state())?,
-                });
-                execution = applied.into_session();
-            }
-            BorrowedRuleAttemptTransition::Stable(stable) => {
-                signatures.push(BorrowedRuleAttemptSignature::Stable {
-                    attempts: stable.attempts().get(),
-                    steps: stable.steps().get(),
-                    stable_reason: borrowed_stable_reason_signature(stable.stable_reason()),
-                    state: runtime_view_bytes(stable.state())?,
-                });
-                return Ok(signatures);
-            }
-            BorrowedRuleAttemptTransition::Returned(returned) => {
-                signatures.push(BorrowedRuleAttemptSignature::Return {
-                    attempt: returned.attempt().get(),
-                    step: returned.step().get(),
-                    rule_position: returned.rule().position().number().get(),
-                    output: returned.output().as_slice().to_vec(),
-                });
-                return Ok(signatures);
-            }
-            BorrowedRuleAttemptTransition::Failed(failed) => {
-                return Err(TestFailure::from(failed.into_error()));
-            }
-        }
-    }
+    collect_borrowed_rule_attempt_signatures!(execution)
 }
 
 /// Returns the expected successful step transition.
@@ -400,10 +456,7 @@ fn finish_borrowed_rule_attempt_signatures(
 fn expect_step_transition<'program>(
     result: BorrowedStepTransition<'program>,
 ) -> Result<BorrowedStepTransition<'program>, TestFailure> {
-    match result {
-        BorrowedStepTransition::Failed(failed) => Err(TestFailure::from(failed.into_error())),
-        transition => Ok(transition),
-    }
+    expect_non_failed_transition!(result, BorrowedStepTransition::Failed)
 }
 
 /// Returns the expected failed step transition.
@@ -439,12 +492,7 @@ fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFai
 fn expect_rule_attempt_transition<'program>(
     result: BorrowedRuleAttemptTransition<'program>,
 ) -> Result<BorrowedRuleAttemptTransition<'program>, TestFailure> {
-    match result {
-        BorrowedRuleAttemptTransition::Failed(failed) => {
-            Err(TestFailure::from(failed.into_error()))
-        }
-        transition => Ok(transition),
-    }
+    expect_non_failed_transition!(result, BorrowedRuleAttemptTransition::Failed)
 }
 
 /// Returns the expected failed rule-attempt transition.
@@ -579,18 +627,9 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
 /// non-matching executable rule lines or reset the rule cursor after matches.
 #[test]
 fn execution_rule_attempt_surface_reports_misses_and_resets_after_apply() -> TestResult {
-    let limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(10),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
     let program = parse_program("z=x\na=b\nb=c")?;
-    let input = runtime_input(b"a", limits)?;
-    let execution =
-        program.start_rule_attempt_run(RuleAttemptSeed::new(input, RuleAttemptLimit::new(20)))?;
     ensure_eq!(
-        finish_borrowed_rule_attempt_signatures(execution)?,
+        borrowed_rule_attempt_signatures(&program, b"a", RuleAttemptLimit::new(20))?,
         vec![
             borrowed_miss!(1, 1, RuleMissReason::StateMismatch, b"a"),
             borrowed_apply!(2, 1, 2, b"b"),
@@ -732,19 +771,10 @@ fn execution_rule_attempt_stable_reason_is_typed() -> TestResult {
 /// consumed `(once)` rules stop being reported as typed rule-attempt misses.
 #[test]
 fn execution_rule_attempt_preserves_interleaved_once_slots() -> TestResult {
-    let limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(10),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
     let program = parse_program("(once)a=b\nz=z\n(once)b=c")?;
     ensure_eq!(program.once_rule_count().get(), 2)?;
-    let input = runtime_input(b"a", limits)?;
-    let execution =
-        program.start_rule_attempt_run(RuleAttemptSeed::new(input, RuleAttemptLimit::new(10)))?;
     ensure_eq!(
-        finish_borrowed_rule_attempt_signatures(execution)?,
+        borrowed_rule_attempt_signatures(&program, b"a", RuleAttemptLimit::new(10))?,
         vec![
             borrowed_apply!(1, 1, 1, b"b"),
             borrowed_miss!(2, 1, RuleMissReason::OnceConsumed, b"b"),
@@ -1106,8 +1136,32 @@ fn ensure_owned_rule_attempt_witnesses(limits: TestRunPolicy) -> TestResult {
         runtime_input(b"a", limits)?,
         RuleAttemptLimit::new(10),
     ))?;
-    let attempt = ensure_owned_missed_rule_witness(attempt)?;
-    ensure_owned_applied_rule_witness(attempt)?;
+    let attempt = ensure_owned_attempt_witness(
+        attempt,
+        ExpectedOwnedAttemptWitness::Missed {
+            attempt: 1,
+            rule: ExpectedOwnedRuleWitness {
+                position: 1,
+                line_number: 1,
+                lhs: b"z",
+                action: ExpectedRuleAction::Replace(b"x"),
+            },
+            reason: RuleMissReason::StateMismatch,
+        },
+    )?;
+    let _attempt = ensure_owned_attempt_witness(
+        attempt,
+        ExpectedOwnedAttemptWitness::Applied {
+            attempt: 2,
+            step: 1,
+            rule: ExpectedOwnedRuleWitness {
+                position: 2,
+                line_number: 2,
+                lhs: b"a",
+                action: ExpectedRuleAction::Replace(b"b"),
+            },
+        },
+    )?;
 
     let final_attempt = parse_program("z=x")?.into_rule_attempt_run(RuleAttemptSeed::new(
         runtime_input(b"a", limits)?,
@@ -1116,67 +1170,55 @@ fn ensure_owned_rule_attempt_witnesses(limits: TestRunPolicy) -> TestResult {
     ensure_owned_final_miss_witness(final_attempt)
 }
 
-/// Ensures an owned missed rule-attempt transition retains its rule witness.
+/// Ensures an owned rule-attempt transition retains its expected rule witness.
 ///
 /// # Errors
 ///
-/// Returns `TestFailure` if the transition or owned miss witness differs.
-fn ensure_owned_missed_rule_witness(
+/// Returns `TestFailure` if the transition or owned witness differs.
+fn ensure_owned_attempt_witness(
     attempt: OwnedRuleAttemptSession,
+    expected: ExpectedOwnedAttemptWitness<'_>,
 ) -> Result<OwnedRuleAttemptSession, TestFailure> {
-    match attempt.step() {
-        OwnedRuleAttemptTransition::Missed(missed) => {
+    match (attempt.step(), expected) {
+        (
+            OwnedRuleAttemptTransition::Missed(missed),
+            ExpectedOwnedAttemptWitness::Missed {
+                attempt: expected_attempt,
+                rule,
+                reason,
+            },
+        ) => {
             let (attempt, miss, next_attempt) = missed.into_parts();
-            ensure_eq!(attempt.get(), 1)?;
-            ensure_owned_rule_witness(
-                miss.rule(),
-                ExpectedOwnedRuleWitness {
-                    position: 1,
-                    line_number: 1,
-                    lhs: b"z",
-                    action: ExpectedRuleAction::Replace(b"x"),
-                },
-            )?;
-            ensure_eq!(miss.reason(), RuleMissReason::StateMismatch)?;
+            ensure_eq!(attempt.get(), expected_attempt)?;
+            ensure_owned_rule_witness(miss.rule(), rule)?;
+            ensure_eq!(miss.reason(), reason)?;
             Ok(next_attempt)
         }
-        OwnedRuleAttemptTransition::Applied(_)
-        | OwnedRuleAttemptTransition::Stable(_)
-        | OwnedRuleAttemptTransition::Returned(_)
-        | OwnedRuleAttemptTransition::Failed(_) => {
-            Err(TestFailure::message("expected owned missed rule witness"))
+        (
+            OwnedRuleAttemptTransition::Applied(applied),
+            ExpectedOwnedAttemptWitness::Applied {
+                attempt: expected_attempt,
+                step: expected_step,
+                rule: expected_rule,
+            },
+        ) => {
+            let (attempt, step, rule, next_attempt) = applied.into_parts();
+            ensure_eq!(attempt.get(), expected_attempt)?;
+            ensure_eq!(step.get(), expected_step)?;
+            ensure_owned_rule_witness(&rule, expected_rule)?;
+            Ok(next_attempt)
         }
-    }
-}
-
-/// Ensures an owned applied rule-attempt transition retains its rule witness.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if the transition or owned applied witness differs.
-fn ensure_owned_applied_rule_witness(attempt: OwnedRuleAttemptSession) -> TestResult {
-    match attempt.step() {
-        OwnedRuleAttemptTransition::Applied(applied) => {
-            let (attempt, step, rule, _next_attempt) = applied.into_parts();
-            ensure_eq!(attempt.get(), 2)?;
-            ensure_eq!(step.get(), 1)?;
-            ensure_owned_rule_witness(
-                &rule,
-                ExpectedOwnedRuleWitness {
-                    position: 2,
-                    line_number: 2,
-                    lhs: b"a",
-                    action: ExpectedRuleAction::Replace(b"b"),
-                },
-            )?;
-            Ok(())
-        }
-        OwnedRuleAttemptTransition::Missed(_)
-        | OwnedRuleAttemptTransition::Stable(_)
-        | OwnedRuleAttemptTransition::Returned(_)
-        | OwnedRuleAttemptTransition::Failed(_) => {
-            Err(TestFailure::message("expected owned applied attempt"))
-        }
+        (
+            OwnedRuleAttemptTransition::Missed(_)
+            | OwnedRuleAttemptTransition::Applied(_)
+            | OwnedRuleAttemptTransition::Stable(_)
+            | OwnedRuleAttemptTransition::Returned(_)
+            | OwnedRuleAttemptTransition::Failed(_),
+            ExpectedOwnedAttemptWitness::Missed { .. }
+            | ExpectedOwnedAttemptWitness::Applied { .. },
+        ) => Err(TestFailure::message(
+            "expected owned rule-attempt witness transition",
+        )),
     }
 }
 
