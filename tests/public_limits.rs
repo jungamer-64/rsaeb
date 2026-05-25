@@ -156,10 +156,10 @@ fn limits_parse_resource_errors_are_structured() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if public limit errors no longer preserve distinct
-/// step, state, and return domains.
+/// Returns `TestFailure` if step limit errors no longer preserve their typed
+/// public domain details.
 #[test]
-fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
+fn step_limit_preserves_public_domain_details() -> TestResult {
     let step_limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(0),
@@ -181,7 +181,15 @@ fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
         ),
         "expected step limit details",
     )?;
+    Ok(())
+}
 
+/// # Errors
+///
+/// Returns `TestFailure` if rewrite admission still happens after step budget
+/// exhaustion.
+#[test]
+fn step_limit_precedes_rewrite_state_growth() -> TestResult {
     let oversized_rewrite = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(0),
@@ -203,7 +211,15 @@ fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
         ),
         "expected step limit before rewrite state limit",
     )?;
+    Ok(())
+}
 
+/// # Errors
+///
+/// Returns `TestFailure` if return materialization still happens after step
+/// budget exhaustion.
+#[test]
+fn step_limit_precedes_return_materialization() -> TestResult {
     let oversized_return = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(0),
@@ -225,7 +241,15 @@ fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
         ),
         "expected step limit before return materialization limit",
     )?;
+    Ok(())
+}
 
+/// # Errors
+///
+/// Returns `TestFailure` if initial runtime input admission no longer reports
+/// the public state-size domain.
+#[test]
+fn initial_state_admission_preserves_public_domain_details() -> TestResult {
     let initial_state_limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10),
@@ -248,7 +272,15 @@ fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
         ),
         "expected run admission state limit",
     )?;
+    Ok(())
+}
 
+/// # Errors
+///
+/// Returns `TestFailure` if rewrite state limits no longer report the public
+/// state-size domain.
+#[test]
+fn rewrite_state_limit_preserves_public_domain_details() -> TestResult {
     let rewrite_limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(1),
@@ -268,7 +300,15 @@ fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
         ),
         "expected rewrite state limit",
     )?;
+    Ok(())
+}
 
+/// # Errors
+///
+/// Returns `TestFailure` if return limits no longer report the public return
+/// byte domain.
+#[test]
+fn return_limit_preserves_public_domain_details() -> TestResult {
     let return_limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(1),
