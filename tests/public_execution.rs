@@ -6,10 +6,10 @@ mod support;
 
 use rsaeb::error::LimitError;
 use rsaeb::execution::{
-    BorrowedAppliedStep, BorrowedFailedRun, BorrowedReturnedRun, BorrowedRuleAttemptTransition,
-    BorrowedRunSession, BorrowedStableRun, BorrowedStepTransition, OwnedRuleAttemptSession,
-    OwnedRuleAttemptTransition, OwnedRuleWitness, OwnedStepTransition, RuleAttemptSeed,
-    RuleAttemptStableReason, RuleMissReason,
+    BorrowedAppliedStep, BorrowedFailedRun, BorrowedReturnedRun, BorrowedRuleAttemptSession,
+    BorrowedRuleAttemptTransition, BorrowedRunSession, BorrowedStableRun, BorrowedStepTransition,
+    OwnedRuleAttemptSession, OwnedRuleAttemptTransition, OwnedRuleWitness, OwnedStepTransition,
+    RuleAttemptSeed, RuleAttemptStableReason, RuleMissReason,
 };
 use rsaeb::input::RunSeed;
 use rsaeb::inspect::{RuleAction, RuleAnchor, RuleRepeat};
@@ -87,6 +87,67 @@ enum OwnedRuleAttemptSignature {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+enum BorrowedRuleAttemptSignature {
+    Missed {
+        attempt: usize,
+        rule_position: usize,
+        reason: RuleMissReason,
+        state: Vec<u8>,
+    },
+    Applied {
+        attempt: usize,
+        step: usize,
+        rule_position: usize,
+        state: Vec<u8>,
+    },
+    Stable {
+        attempts: usize,
+        steps: usize,
+        stable_reason: StableReasonSignature,
+        state: Vec<u8>,
+    },
+    Return {
+        attempt: usize,
+        step: usize,
+        rule_position: usize,
+        output: Vec<u8>,
+    },
+}
+
+macro_rules! borrowed_miss {
+    ($attempt:expr, $rule_position:expr, $reason:expr, $state:expr) => {
+        BorrowedRuleAttemptSignature::Missed {
+            attempt: $attempt,
+            rule_position: $rule_position,
+            reason: $reason,
+            state: $state.to_vec(),
+        }
+    };
+}
+
+macro_rules! borrowed_apply {
+    ($attempt:expr, $step:expr, $rule_position:expr, $state:expr) => {
+        BorrowedRuleAttemptSignature::Applied {
+            attempt: $attempt,
+            step: $step,
+            rule_position: $rule_position,
+            state: $state.to_vec(),
+        }
+    };
+}
+
+macro_rules! borrowed_stable {
+    ($attempts:expr, $steps:expr, $stable_reason:expr, $state:expr $(,)?) => {
+        BorrowedRuleAttemptSignature::Stable {
+            attempts: $attempts,
+            steps: $steps,
+            stable_reason: $stable_reason,
+            state: $state.to_vec(),
+        }
+    };
+}
+
+#[derive(Debug, PartialEq, Eq)]
 enum StableReasonSignature {
     NoExecutableRules,
     FinalMiss {
@@ -100,6 +161,13 @@ enum ExpectedRuleAction<'expected> {
     Return(&'expected [u8]),
 }
 
+struct ExpectedOwnedRuleWitness<'expected> {
+    position: usize,
+    line_number: usize,
+    lhs: &'expected [u8],
+    action: ExpectedRuleAction<'expected>,
+}
+
 /// Ensures an owned public rule witness retained the expected parsed-rule metadata.
 ///
 /// # Errors
@@ -107,17 +175,14 @@ enum ExpectedRuleAction<'expected> {
 /// Returns `TestFailure` if the witness metadata or materialized payloads differ.
 fn ensure_owned_rule_witness(
     rule: &OwnedRuleWitness,
-    position: usize,
-    line_number: usize,
-    lhs: &[u8],
-    action: ExpectedRuleAction<'_>,
+    expected: ExpectedOwnedRuleWitness<'_>,
 ) -> TestResult {
-    ensure_eq!(rule.position().number().get(), position)?;
-    ensure_eq!(rule.line_number().get(), line_number)?;
+    ensure_eq!(rule.position().number().get(), expected.position)?;
+    ensure_eq!(rule.line_number().get(), expected.line_number)?;
     ensure_eq!(rule.repeat(), RuleRepeat::Always)?;
     ensure_eq!(rule.anchor(), RuleAnchor::Anywhere)?;
-    ensure_eq!(rule.lhs().as_slice(), lhs)?;
-    match (rule.action(), action) {
+    ensure_eq!(rule.lhs().as_slice(), expected.lhs)?;
+    match (rule.action(), expected.action) {
         (RuleAction::Replace(payload), ExpectedRuleAction::Replace(expected))
         | (RuleAction::Return(payload), ExpectedRuleAction::Return(expected)) => {
             ensure_eq!(payload.as_slice(), expected)
@@ -134,6 +199,18 @@ fn ensure_owned_rule_witness(
 
 fn owned_stable_reason_signature(
     reason: &RuleAttemptStableReason<OwnedRuleWitness>,
+) -> StableReasonSignature {
+    match reason {
+        RuleAttemptStableReason::NoExecutableRules => StableReasonSignature::NoExecutableRules,
+        RuleAttemptStableReason::FinalMiss(miss) => StableReasonSignature::FinalMiss {
+            rule_position: miss.rule().position().number().get(),
+            reason: miss.reason(),
+        },
+    }
+}
+
+fn borrowed_stable_reason_signature(
+    reason: &RuleAttemptStableReason<rsaeb::inspect::RuleView<'_>>,
 ) -> StableReasonSignature {
     match reason {
         RuleAttemptStableReason::NoExecutableRules => StableReasonSignature::NoExecutableRules,
@@ -255,6 +332,60 @@ fn finish_owned_rule_attempt_signatures(
                 return Ok(signatures);
             }
             OwnedRuleAttemptTransition::Failed(failed) => {
+                return Err(TestFailure::from(failed.into_error()));
+            }
+        }
+    }
+}
+
+/// Runs borrowed rule-attempt execution and collects comparable transition signatures.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if a rule attempt fails or state materialization fails.
+fn finish_borrowed_rule_attempt_signatures(
+    mut execution: BorrowedRuleAttemptSession<'_>,
+) -> Result<Vec<BorrowedRuleAttemptSignature>, TestFailure> {
+    let mut signatures = Vec::new();
+    loop {
+        match expect_rule_attempt_transition(execution.step())? {
+            BorrowedRuleAttemptTransition::Missed(missed) => {
+                signatures.push(BorrowedRuleAttemptSignature::Missed {
+                    attempt: missed.attempt().get(),
+                    rule_position: missed.miss().rule().position().number().get(),
+                    reason: missed.miss().reason(),
+                    state: runtime_view_bytes(missed.state())?,
+                });
+                execution = missed.into_session();
+            }
+            BorrowedRuleAttemptTransition::Applied(applied) => {
+                signatures.push(BorrowedRuleAttemptSignature::Applied {
+                    attempt: applied.attempt().get(),
+                    step: applied.step().get(),
+                    rule_position: applied.rule().position().number().get(),
+                    state: runtime_view_bytes(applied.state())?,
+                });
+                execution = applied.into_session();
+            }
+            BorrowedRuleAttemptTransition::Stable(stable) => {
+                signatures.push(BorrowedRuleAttemptSignature::Stable {
+                    attempts: stable.attempts().get(),
+                    steps: stable.steps().get(),
+                    stable_reason: borrowed_stable_reason_signature(stable.stable_reason()),
+                    state: runtime_view_bytes(stable.state())?,
+                });
+                return Ok(signatures);
+            }
+            BorrowedRuleAttemptTransition::Returned(returned) => {
+                signatures.push(BorrowedRuleAttemptSignature::Return {
+                    attempt: returned.attempt().get(),
+                    step: returned.step().get(),
+                    rule_position: returned.rule().position().number().get(),
+                    output: returned.output().as_slice().to_vec(),
+                });
+                return Ok(signatures);
+            }
+            BorrowedRuleAttemptTransition::Failed(failed) => {
                 return Err(TestFailure::from(failed.into_error()));
             }
         }
@@ -458,95 +589,27 @@ fn execution_rule_attempt_surface_reports_misses_and_resets_after_apply() -> Tes
     let input = runtime_input(b"a", limits)?;
     let execution =
         program.start_rule_attempt_run(RuleAttemptSeed::new(input, RuleAttemptLimit::new(20)))?;
-
-    let execution = match expect_rule_attempt_transition(execution.step())? {
-        BorrowedRuleAttemptTransition::Missed(missed) => {
-            ensure_eq!(missed.attempt().get(), 1)?;
-            ensure_eq!((*missed.miss().rule()).position().number().get(), 1)?;
-            ensure_eq!(missed.miss().reason(), RuleMissReason::StateMismatch)?;
-            ensure_eq!(
-                runtime_view_bytes(missed.state())?.as_slice(),
-                b"a".as_slice(),
-            )?;
-            missed.into_session()
-        }
-        BorrowedRuleAttemptTransition::Applied(_)
-        | BorrowedRuleAttemptTransition::Stable(_)
-        | BorrowedRuleAttemptTransition::Returned(_)
-        | BorrowedRuleAttemptTransition::Failed(_) => {
-            return Err(TestFailure::message("expected first missed rule attempt"));
-        }
-    };
-
-    let execution = match expect_rule_attempt_transition(execution.step())? {
-        BorrowedRuleAttemptTransition::Applied(applied) => {
-            ensure_eq!(applied.attempt().get(), 2)?;
-            ensure_eq!(applied.step().get(), 1)?;
-            ensure_eq!(applied.rule().position().number().get(), 2)?;
-            ensure_eq!(
-                runtime_view_bytes(applied.state())?.as_slice(),
-                b"b".as_slice(),
-            )?;
-            applied.into_session()
-        }
-        BorrowedRuleAttemptTransition::Missed(_)
-        | BorrowedRuleAttemptTransition::Stable(_)
-        | BorrowedRuleAttemptTransition::Returned(_)
-        | BorrowedRuleAttemptTransition::Failed(_) => {
-            return Err(TestFailure::message("expected applied rule attempt"));
-        }
-    };
-
-    let execution = match expect_rule_attempt_transition(execution.step())? {
-        BorrowedRuleAttemptTransition::Missed(missed) => {
-            ensure_eq!(missed.attempt().get(), 3)?;
-            ensure_eq!((*missed.miss().rule()).position().number().get(), 1)?;
-            ensure_eq!(missed.miss().reason(), RuleMissReason::StateMismatch)?;
-            missed.into_session()
-        }
-        BorrowedRuleAttemptTransition::Applied(_)
-        | BorrowedRuleAttemptTransition::Stable(_)
-        | BorrowedRuleAttemptTransition::Returned(_)
-        | BorrowedRuleAttemptTransition::Failed(_) => {
-            return Err(TestFailure::message(
-                "expected cursor reset to first rule after apply",
-            ));
-        }
-    };
-
-    let execution = match expect_rule_attempt_transition(execution.step())? {
-        BorrowedRuleAttemptTransition::Missed(missed) => {
-            ensure_eq!(missed.attempt().get(), 4)?;
-            ensure_eq!((*missed.miss().rule()).position().number().get(), 2)?;
-            ensure_eq!(missed.miss().reason(), RuleMissReason::StateMismatch)?;
-            missed.into_session()
-        }
-        BorrowedRuleAttemptTransition::Applied(_)
-        | BorrowedRuleAttemptTransition::Stable(_)
-        | BorrowedRuleAttemptTransition::Returned(_)
-        | BorrowedRuleAttemptTransition::Failed(_) => {
-            return Err(TestFailure::message("expected second miss after reset"));
-        }
-    };
-
-    match expect_rule_attempt_transition(execution.step())? {
-        BorrowedRuleAttemptTransition::Applied(applied) => {
-            ensure_eq!(applied.attempt().get(), 5)?;
-            ensure_eq!(applied.step().get(), 2)?;
-            ensure_eq!(applied.rule().position().number().get(), 3)?;
-            ensure_eq!(
-                runtime_view_bytes(applied.state())?.as_slice(),
-                b"c".as_slice(),
-            )?;
-        }
-        BorrowedRuleAttemptTransition::Missed(_)
-        | BorrowedRuleAttemptTransition::Stable(_)
-        | BorrowedRuleAttemptTransition::Returned(_)
-        | BorrowedRuleAttemptTransition::Failed(_) => {
-            return Err(TestFailure::message("expected later applied rule attempt"));
-        }
-    }
-    Ok(())
+    ensure_eq!(
+        finish_borrowed_rule_attempt_signatures(execution)?,
+        vec![
+            borrowed_miss!(1, 1, RuleMissReason::StateMismatch, b"a"),
+            borrowed_apply!(2, 1, 2, b"b"),
+            borrowed_miss!(3, 1, RuleMissReason::StateMismatch, b"b"),
+            borrowed_miss!(4, 2, RuleMissReason::StateMismatch, b"b"),
+            borrowed_apply!(5, 2, 3, b"c"),
+            borrowed_miss!(6, 1, RuleMissReason::StateMismatch, b"c"),
+            borrowed_miss!(7, 2, RuleMissReason::StateMismatch, b"c"),
+            borrowed_stable!(
+                8,
+                2,
+                StableReasonSignature::FinalMiss {
+                    rule_position: 3,
+                    reason: RuleMissReason::StateMismatch,
+                },
+                b"c",
+            ),
+        ],
+    )
 }
 
 /// # Errors
@@ -680,68 +743,26 @@ fn execution_rule_attempt_preserves_interleaved_once_slots() -> TestResult {
     let input = runtime_input(b"a", limits)?;
     let execution =
         program.start_rule_attempt_run(RuleAttemptSeed::new(input, RuleAttemptLimit::new(10)))?;
-
-    let execution = match expect_rule_attempt_transition(execution.step())? {
-        BorrowedRuleAttemptTransition::Applied(applied) => {
-            ensure_eq!(applied.attempt().get(), 1)?;
-            ensure_eq!(applied.step().get(), 1)?;
-            ensure_eq!(applied.rule().position().number().get(), 1)?;
-            applied.into_session()
-        }
-        BorrowedRuleAttemptTransition::Missed(_)
-        | BorrowedRuleAttemptTransition::Stable(_)
-        | BorrowedRuleAttemptTransition::Returned(_)
-        | BorrowedRuleAttemptTransition::Failed(_) => {
-            return Err(TestFailure::message("expected once rule to apply first"));
-        }
-    };
-
-    let execution = match expect_rule_attempt_transition(execution.step())? {
-        BorrowedRuleAttemptTransition::Missed(missed) => {
-            ensure_eq!(missed.attempt().get(), 2)?;
-            ensure_eq!((*missed.miss().rule()).position().number().get(), 1)?;
-            ensure_eq!(missed.miss().reason(), RuleMissReason::OnceConsumed)?;
-            missed.into_session()
-        }
-        BorrowedRuleAttemptTransition::Applied(_)
-        | BorrowedRuleAttemptTransition::Stable(_)
-        | BorrowedRuleAttemptTransition::Returned(_)
-        | BorrowedRuleAttemptTransition::Failed(_) => {
-            return Err(TestFailure::message("expected consumed once miss"));
-        }
-    };
-
-    let execution = match expect_rule_attempt_transition(execution.step())? {
-        BorrowedRuleAttemptTransition::Missed(missed) => {
-            ensure_eq!(missed.attempt().get(), 3)?;
-            ensure_eq!((*missed.miss().rule()).position().number().get(), 2)?;
-            ensure_eq!(missed.miss().reason(), RuleMissReason::StateMismatch)?;
-            missed.into_session()
-        }
-        BorrowedRuleAttemptTransition::Applied(_)
-        | BorrowedRuleAttemptTransition::Stable(_)
-        | BorrowedRuleAttemptTransition::Returned(_)
-        | BorrowedRuleAttemptTransition::Failed(_) => {
-            return Err(TestFailure::message("expected interleaved always miss"));
-        }
-    };
-
-    match expect_rule_attempt_transition(execution.step())? {
-        BorrowedRuleAttemptTransition::Applied(applied) => {
-            ensure_eq!(applied.attempt().get(), 4)?;
-            ensure_eq!(applied.step().get(), 2)?;
-            ensure_eq!(applied.rule().position().number().get(), 3)?;
-        }
-        BorrowedRuleAttemptTransition::Missed(_)
-        | BorrowedRuleAttemptTransition::Stable(_)
-        | BorrowedRuleAttemptTransition::Returned(_)
-        | BorrowedRuleAttemptTransition::Failed(_) => {
-            return Err(TestFailure::message(
-                "expected later rule to match after once miss",
-            ));
-        }
-    }
-    Ok(())
+    ensure_eq!(
+        finish_borrowed_rule_attempt_signatures(execution)?,
+        vec![
+            borrowed_apply!(1, 1, 1, b"b"),
+            borrowed_miss!(2, 1, RuleMissReason::OnceConsumed, b"b"),
+            borrowed_miss!(3, 2, RuleMissReason::StateMismatch, b"b"),
+            borrowed_apply!(4, 2, 3, b"c"),
+            borrowed_miss!(5, 1, RuleMissReason::OnceConsumed, b"c"),
+            borrowed_miss!(6, 2, RuleMissReason::StateMismatch, b"c"),
+            borrowed_stable!(
+                7,
+                2,
+                StableReasonSignature::FinalMiss {
+                    rule_position: 3,
+                    reason: RuleMissReason::OnceConsumed,
+                },
+                b"c",
+            ),
+        ],
+    )
 }
 
 /// # Errors
@@ -1039,7 +1060,15 @@ fn ensure_owned_run_witnesses(limits: TestRunPolicy) -> TestResult {
         OwnedStepTransition::Applied(applied) => {
             let (step, rule, next_execution) = applied.into_parts();
             ensure_eq!(step.get(), 1)?;
-            ensure_owned_rule_witness(&rule, 1, 1, b"a", ExpectedRuleAction::Replace(b"b"))?;
+            ensure_owned_rule_witness(
+                &rule,
+                ExpectedOwnedRuleWitness {
+                    position: 1,
+                    line_number: 1,
+                    lhs: b"a",
+                    action: ExpectedRuleAction::Replace(b"b"),
+                },
+            )?;
             next_execution
         }
         OwnedStepTransition::Stable(_)
@@ -1052,10 +1081,12 @@ fn ensure_owned_run_witnesses(limits: TestRunPolicy) -> TestResult {
     match execution.step() {
         OwnedStepTransition::Returned(returned) => ensure_owned_rule_witness(
             returned.rule(),
-            2,
-            2,
-            b"b",
-            ExpectedRuleAction::Return(b"ok"),
+            ExpectedOwnedRuleWitness {
+                position: 2,
+                line_number: 2,
+                lhs: b"b",
+                action: ExpectedRuleAction::Return(b"ok"),
+            },
         ),
         OwnedStepTransition::Applied(_)
         | OwnedStepTransition::Stable(_)
@@ -1075,52 +1106,99 @@ fn ensure_owned_rule_attempt_witnesses(limits: TestRunPolicy) -> TestResult {
         runtime_input(b"a", limits)?,
         RuleAttemptLimit::new(10),
     ))?;
-    let attempt = match attempt.step() {
-        OwnedRuleAttemptTransition::Missed(missed) => {
-            let (attempt, miss, next_attempt) = missed.into_parts();
-            ensure_eq!(attempt.get(), 1)?;
-            ensure_owned_rule_witness(miss.rule(), 1, 1, b"z", ExpectedRuleAction::Replace(b"x"))?;
-            ensure_eq!(miss.reason(), RuleMissReason::StateMismatch)?;
-            next_attempt
-        }
-        OwnedRuleAttemptTransition::Applied(_)
-        | OwnedRuleAttemptTransition::Stable(_)
-        | OwnedRuleAttemptTransition::Returned(_)
-        | OwnedRuleAttemptTransition::Failed(_) => {
-            return Err(TestFailure::message("expected owned missed rule witness"));
-        }
-    };
-
-    match attempt.step() {
-        OwnedRuleAttemptTransition::Applied(applied) => {
-            let (attempt, step, rule, _next_attempt) = applied.into_parts();
-            ensure_eq!(attempt.get(), 2)?;
-            ensure_eq!(step.get(), 1)?;
-            ensure_owned_rule_witness(&rule, 2, 2, b"a", ExpectedRuleAction::Replace(b"b"))?;
-        }
-        OwnedRuleAttemptTransition::Missed(_)
-        | OwnedRuleAttemptTransition::Stable(_)
-        | OwnedRuleAttemptTransition::Returned(_)
-        | OwnedRuleAttemptTransition::Failed(_) => {
-            return Err(TestFailure::message("expected owned applied attempt"));
-        }
-    }
+    let attempt = ensure_owned_missed_rule_witness(attempt)?;
+    ensure_owned_applied_rule_witness(attempt)?;
 
     let final_attempt = parse_program("z=x")?.into_rule_attempt_run(RuleAttemptSeed::new(
         runtime_input(b"a", limits)?,
         RuleAttemptLimit::new(10),
     ))?;
-    match final_attempt.step() {
+    ensure_owned_final_miss_witness(final_attempt)
+}
+
+/// Ensures an owned missed rule-attempt transition retains its rule witness.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the transition or owned miss witness differs.
+fn ensure_owned_missed_rule_witness(
+    attempt: OwnedRuleAttemptSession,
+) -> Result<OwnedRuleAttemptSession, TestFailure> {
+    match attempt.step() {
+        OwnedRuleAttemptTransition::Missed(missed) => {
+            let (attempt, miss, next_attempt) = missed.into_parts();
+            ensure_eq!(attempt.get(), 1)?;
+            ensure_owned_rule_witness(
+                miss.rule(),
+                ExpectedOwnedRuleWitness {
+                    position: 1,
+                    line_number: 1,
+                    lhs: b"z",
+                    action: ExpectedRuleAction::Replace(b"x"),
+                },
+            )?;
+            ensure_eq!(miss.reason(), RuleMissReason::StateMismatch)?;
+            Ok(next_attempt)
+        }
+        OwnedRuleAttemptTransition::Applied(_)
+        | OwnedRuleAttemptTransition::Stable(_)
+        | OwnedRuleAttemptTransition::Returned(_)
+        | OwnedRuleAttemptTransition::Failed(_) => {
+            Err(TestFailure::message("expected owned missed rule witness"))
+        }
+    }
+}
+
+/// Ensures an owned applied rule-attempt transition retains its rule witness.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the transition or owned applied witness differs.
+fn ensure_owned_applied_rule_witness(attempt: OwnedRuleAttemptSession) -> TestResult {
+    match attempt.step() {
+        OwnedRuleAttemptTransition::Applied(applied) => {
+            let (attempt, step, rule, _next_attempt) = applied.into_parts();
+            ensure_eq!(attempt.get(), 2)?;
+            ensure_eq!(step.get(), 1)?;
+            ensure_owned_rule_witness(
+                &rule,
+                ExpectedOwnedRuleWitness {
+                    position: 2,
+                    line_number: 2,
+                    lhs: b"a",
+                    action: ExpectedRuleAction::Replace(b"b"),
+                },
+            )?;
+            Ok(())
+        }
+        OwnedRuleAttemptTransition::Missed(_)
+        | OwnedRuleAttemptTransition::Stable(_)
+        | OwnedRuleAttemptTransition::Returned(_)
+        | OwnedRuleAttemptTransition::Failed(_) => {
+            Err(TestFailure::message("expected owned applied attempt"))
+        }
+    }
+}
+
+/// Ensures an owned stable final miss retains its rule witness.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the terminal transition or final miss witness differs.
+fn ensure_owned_final_miss_witness(attempt: OwnedRuleAttemptSession) -> TestResult {
+    match attempt.step() {
         OwnedRuleAttemptTransition::Stable(stable) => {
             let RuleAttemptStableReason::FinalMiss(final_miss) = stable.stable_reason() else {
                 return Err(TestFailure::message("expected owned final miss"));
             };
             ensure_owned_rule_witness(
                 final_miss.rule(),
-                1,
-                1,
-                b"z",
-                ExpectedRuleAction::Replace(b"x"),
+                ExpectedOwnedRuleWitness {
+                    position: 1,
+                    line_number: 1,
+                    lhs: b"z",
+                    action: ExpectedRuleAction::Replace(b"x"),
+                },
             )?;
             ensure_eq!(final_miss.reason(), RuleMissReason::StateMismatch)
         }
