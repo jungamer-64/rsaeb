@@ -2,7 +2,7 @@
 
 mod support;
 
-use rsaeb::inspect::{OnceRuleCount, RuleActionView, RuleAnchor, RuleRepeat};
+use rsaeb::inspect::{OnceRuleCount, RuleAction, RuleAnchor, RuleRepeat};
 use rsaeb::limits::DEFAULT_PARSE_LIMITS;
 use rsaeb::program::Program;
 use rsaeb::source::ProgramSource;
@@ -29,10 +29,10 @@ fn inspect_rule_views_expose_structured_public_data() -> TestResult {
     ensure_eq!(first.anchor(), RuleAnchor::Anywhere)?;
     ensure_eq!(first.lhs().materialize()?.as_slice(), b"a".as_slice())?;
     match first.action() {
-        RuleActionView::Replace(payload) => {
+        RuleAction::Replace(payload) => {
             ensure_eq!(payload.materialize()?.as_slice(), b"b".as_slice())?;
         }
-        RuleActionView::MoveStart(_) | RuleActionView::MoveEnd(_) | RuleActionView::Return(_) => {
+        RuleAction::MoveStart(_) | RuleAction::MoveEnd(_) | RuleAction::Return(_) => {
             return Err(TestFailure::message("expected replace action"));
         }
     }
@@ -41,10 +41,10 @@ fn inspect_rule_views_expose_structured_public_data() -> TestResult {
     ensure_eq!(second.line_number().get(), 2)?;
     ensure_eq!(second.anchor(), RuleAnchor::Start)?;
     match second.action() {
-        RuleActionView::MoveEnd(payload) => {
+        RuleAction::MoveEnd(payload) => {
             ensure_eq!(payload.materialize()?.as_slice(), b"d".as_slice())?;
         }
-        RuleActionView::Replace(_) | RuleActionView::MoveStart(_) | RuleActionView::Return(_) => {
+        RuleAction::Replace(_) | RuleAction::MoveStart(_) | RuleAction::Return(_) => {
             return Err(TestFailure::message("expected move-end action"));
         }
     }

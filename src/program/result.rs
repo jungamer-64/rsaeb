@@ -33,11 +33,46 @@ pub struct RuntimeStateSnapshot {
 }
 
 impl RuntimeStateSnapshot {
-    /// Tags materialized runtime-state bytes.
-    pub(crate) fn from_materialized(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes: MaterializedBytes::from_vec(bytes),
-        }
+    /// Materializes an explicitly requested runtime-state view.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` when the runtime-state view exceeds the
+    /// allocation limit for explicit state materialization.
+    pub(crate) fn from_runtime_state_view(
+        state: crate::trace::RuntimeStateView<'_>,
+    ) -> Result<Self, AllocationError> {
+        Ok(Self {
+            bytes: MaterializedBytes::from_runtime_state_view(state)?,
+        })
+    }
+
+    /// Materializes a terminal stable runtime state.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` when the final runtime state exceeds the
+    /// allocation limit for stable run output.
+    pub(crate) fn from_final_state_view(
+        state: crate::trace::RuntimeStateView<'_>,
+    ) -> Result<Self, AllocationError> {
+        Ok(Self {
+            bytes: MaterializedBytes::from_final_state_view(state)?,
+        })
+    }
+
+    /// Materializes a runtime-state view for trace snapshots.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` when the traced runtime state exceeds the
+    /// allocation limit for trace snapshot materialization.
+    pub(crate) fn from_trace_state_view(
+        state: crate::trace::RuntimeStateView<'_>,
+    ) -> Result<Self, AllocationError> {
+        Ok(Self {
+            bytes: MaterializedBytes::from_trace_state_view(state)?,
+        })
     }
 
     /// Borrow the materialized runtime-state bytes.
@@ -87,11 +122,32 @@ pub struct ReturnOutputView<'program> {
 }
 
 impl ReturnOutput {
-    /// Tags materialized `(return)` output bytes.
-    pub(crate) fn from_materialized(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes: MaterializedBytes::from_vec(bytes),
-        }
+    /// Materializes committed `(return)` output bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` when the committed return payload exceeds the
+    /// allocation limit for return output.
+    pub(crate) fn from_return_output_view(
+        output: ReturnOutputView<'_>,
+    ) -> Result<Self, AllocationError> {
+        Ok(Self {
+            bytes: MaterializedBytes::from_return_output_view(output)?,
+        })
+    }
+
+    /// Materializes committed `(return)` output bytes for a trace snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` when the traced return payload exceeds the
+    /// allocation limit for trace snapshot materialization.
+    pub(crate) fn from_trace_return_output_view(
+        output: ReturnOutputView<'_>,
+    ) -> Result<Self, AllocationError> {
+        Ok(Self {
+            bytes: MaterializedBytes::from_trace_return_output_view(output)?,
+        })
     }
 
     /// Borrow the materialized `(return)` output bytes.
@@ -155,9 +211,7 @@ impl<'program> ReturnOutputView<'program> {
     ///
     /// Returns `AllocationError` if return-output allocation fails.
     pub fn materialize(self) -> Result<ReturnOutput, AllocationError> {
-        Ok(ReturnOutput::from_materialized(
-            self.to_vec_with_context(AllocationContext::ReturnOutput)?,
-        ))
+        ReturnOutput::from_return_output_view(self)
     }
 }
 

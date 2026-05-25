@@ -342,7 +342,7 @@
 //!
 //! ```
 //! use rsaeb::limits::DEFAULT_PARSE_LIMITS;
-//! use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
+//! use rsaeb::inspect::{RuleAction, RuleAnchor, RuleRepeat};
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
@@ -360,12 +360,12 @@
 //!     return Err("unexpected left side".into());
 //! }
 //! match rule.action() {
-//!     RuleActionView::MoveEnd(payload) => {
+//!     RuleAction::MoveEnd(payload) => {
 //!         if payload.materialize()?.as_slice() != b"b" {
 //!             return Err("unexpected moved payload".into());
 //!         }
 //!     }
-//!     RuleActionView::Replace(_) | RuleActionView::MoveStart(_) | RuleActionView::Return(_) => {
+//!     RuleAction::Replace(_) | RuleAction::MoveStart(_) | RuleAction::Return(_) => {
 //!         return Err("expected move-end action".into());
 //!     }
 //! }

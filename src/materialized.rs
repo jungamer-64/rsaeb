@@ -1,6 +1,12 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
+use crate::allocation::{AllocationContext, AllocationError};
+use crate::inspect::PayloadView;
+use crate::program::ReturnOutputView;
+use crate::rule::{self, Rule};
+use crate::trace::RuntimeStateView;
+
 /// Marker for bytes materialized from runtime state.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeStateSnapshotDomain {}
@@ -31,8 +37,8 @@ pub(crate) struct MaterializedBytes<Domain> {
 }
 
 impl<Domain> MaterializedBytes<Domain> {
-    /// Tags already materialized bytes with their producing domain.
-    pub(crate) fn from_vec(bytes: Vec<u8>) -> Self {
+    /// Tags bytes after a domain-specific constructor has fixed their source.
+    fn from_owned_bytes(bytes: Vec<u8>) -> Self {
         Self {
             bytes,
             domain: PhantomData,
@@ -57,5 +63,114 @@ impl<Domain> MaterializedBytes<Domain> {
     /// Returns whether the byte sequence is empty.
     pub(crate) const fn is_empty(&self) -> bool {
         self.bytes.is_empty()
+    }
+}
+
+impl MaterializedBytes<PayloadInspectionDomain> {
+    /// Materializes bytes from a parsed payload inspection view.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the payload view cannot be materialized.
+    pub(crate) fn from_payload_view(payload: PayloadView<'_>) -> Result<Self, AllocationError> {
+        Ok(Self::from_owned_bytes(
+            payload.to_vec_with_context(AllocationContext::PayloadView)?,
+        ))
+    }
+}
+
+impl MaterializedBytes<CanonicalRuleSourceDomain> {
+    /// Materializes canonical source from one parsed rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if canonical source generation cannot
+    /// allocate or its length cannot be represented.
+    pub(crate) fn from_rule(rule: &Rule) -> Result<Self, AllocationError> {
+        Ok(Self::from_owned_bytes(rule::canonical_source(rule)?))
+    }
+}
+
+impl MaterializedBytes<OwnedRuleWitnessPayloadDomain> {
+    /// Materializes parsed payload bytes for an owned execution witness.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the payload cannot be retained.
+    pub(crate) fn from_owned_rule_payload(
+        payload: PayloadView<'_>,
+    ) -> Result<Self, AllocationError> {
+        Ok(Self::from_owned_bytes(payload.to_vec_with_context(
+            AllocationContext::OwnedRuleWitness,
+        )?))
+    }
+}
+
+impl MaterializedBytes<RuntimeStateSnapshotDomain> {
+    /// Materializes an explicitly requested runtime-state view.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the state view cannot be materialized.
+    pub(crate) fn from_runtime_state_view(
+        state: RuntimeStateView<'_>,
+    ) -> Result<Self, AllocationError> {
+        Ok(Self::from_owned_bytes(state.to_vec_with_context(
+            AllocationContext::RuntimeStateView,
+        )?))
+    }
+
+    /// Materializes the terminal stable runtime state.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the final state cannot be materialized.
+    pub(crate) fn from_final_state_view(
+        state: RuntimeStateView<'_>,
+    ) -> Result<Self, AllocationError> {
+        Ok(Self::from_owned_bytes(
+            state.to_vec_with_context(AllocationContext::FinalOutput)?,
+        ))
+    }
+
+    /// Materializes a runtime-state view for retained trace snapshots.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the trace snapshot cannot be materialized.
+    pub(crate) fn from_trace_state_view(
+        state: RuntimeStateView<'_>,
+    ) -> Result<Self, AllocationError> {
+        Ok(Self::from_owned_bytes(
+            state.to_vec_with_context(AllocationContext::TraceSnapshot)?,
+        ))
+    }
+}
+
+impl MaterializedBytes<ReturnOutputDomain> {
+    /// Materializes a committed return-output view.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the return output cannot be materialized.
+    pub(crate) fn from_return_output_view(
+        output: ReturnOutputView<'_>,
+    ) -> Result<Self, AllocationError> {
+        Ok(Self::from_owned_bytes(
+            output.to_vec_with_context(AllocationContext::ReturnOutput)?,
+        ))
+    }
+
+    /// Materializes a return-output view for retained trace snapshots.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the trace snapshot cannot be materialized.
+    pub(crate) fn from_trace_return_output_view(
+        output: ReturnOutputView<'_>,
+    ) -> Result<Self, AllocationError> {
+        Ok(Self::from_owned_bytes(
+            output.to_vec_with_context(AllocationContext::TraceSnapshot)?,
+        ))
     }
 }

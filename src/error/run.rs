@@ -51,6 +51,8 @@ pub enum RunInvariantError {
         /// Number of executable rules available in the parsed program.
         available_rules: crate::inspect::RuleCount,
     },
+    /// Runtime budget reservation state contradicted the attempted commit path.
+    BudgetReservation,
 }
 
 impl Error for RunInvariantError {}

@@ -18,7 +18,7 @@
 //! recover the owned parsed program or split it from the error.
 //! Rule-attempt transitions additionally expose typed miss reasons through
 //! [`RuleMissReason`], expose stable reasons through
-//! [`BorrowedRuleAttemptStableReason`] or [`OwnedRuleAttemptStableReason`], and
+//! [`RuleAttemptStableReason`], and
 //! consume [`RuleAttemptSeed`] instead of accepting a detached
 //! [`RuleAttemptLimit`].
 //!
@@ -70,11 +70,11 @@ mod engine;
 
 use alloc::vec::Vec;
 
-use crate::allocation::{AllocationContext, AllocationError};
+use crate::allocation::AllocationError;
 use crate::bytes::PayloadByteCount;
 use crate::error::{RunError, TracedRunError};
 use crate::input::RunSeed;
-use crate::inspect::{RuleActionView, RuleAnchor, RulePosition, RuleRepeat, RuleView};
+use crate::inspect::{RuleAction, RuleAnchor, RulePosition, RuleRepeat, RuleView};
 use crate::limits::{RuleAttemptCount, RuleAttemptLimit, StepCount};
 use crate::materialized::{MaterializedBytes, OwnedRuleWitnessPayloadDomain};
 use crate::program::{Program, ReturnOutput, RunResult};
@@ -147,32 +147,6 @@ impl OwnedRulePayload {
     }
 }
 
-/// Owned parsed-rule action retained by owned execution transitions.
-#[derive(Debug, PartialEq, Eq)]
-pub enum OwnedRuleAction {
-    /// Replace the matched bytes with the payload.
-    Replace(OwnedRulePayload),
-    /// Remove the matched bytes and insert the payload at the start.
-    MoveStart(OwnedRulePayload),
-    /// Remove the matched bytes and append the payload at the end.
-    MoveEnd(OwnedRulePayload),
-    /// Stop execution and return the payload as output.
-    Return(OwnedRulePayload),
-}
-
-impl OwnedRuleAction {
-    /// Borrow the materialized action payload.
-    #[must_use]
-    pub const fn payload(&self) -> &OwnedRulePayload {
-        match self {
-            Self::Replace(payload)
-            | Self::MoveStart(payload)
-            | Self::MoveEnd(payload)
-            | Self::Return(payload) => payload,
-        }
-    }
-}
-
 /// Owned parsed-rule witness retained by owned execution transitions.
 #[derive(Debug, PartialEq, Eq)]
 pub struct OwnedRuleWitness {
@@ -187,7 +161,7 @@ pub struct OwnedRuleWitness {
     /// Materialized left-side match payload.
     lhs: OwnedRulePayload,
     /// Materialized right-side action payload.
-    action: OwnedRuleAction,
+    action: RuleAction<OwnedRulePayload>,
 }
 
 impl OwnedRuleWitness {
@@ -200,17 +174,17 @@ impl OwnedRuleWitness {
     pub(crate) fn from_rule_view(rule: RuleView<'_>) -> Result<Self, AllocationError> {
         let lhs = materialize_owned_rule_payload(rule.lhs())?;
         let action = match rule.action() {
-            RuleActionView::Replace(payload) => {
-                OwnedRuleAction::Replace(materialize_owned_rule_payload(payload)?)
+            RuleAction::Replace(payload) => {
+                RuleAction::Replace(materialize_owned_rule_payload(payload)?)
             }
-            RuleActionView::MoveStart(payload) => {
-                OwnedRuleAction::MoveStart(materialize_owned_rule_payload(payload)?)
+            RuleAction::MoveStart(payload) => {
+                RuleAction::MoveStart(materialize_owned_rule_payload(payload)?)
             }
-            RuleActionView::MoveEnd(payload) => {
-                OwnedRuleAction::MoveEnd(materialize_owned_rule_payload(payload)?)
+            RuleAction::MoveEnd(payload) => {
+                RuleAction::MoveEnd(materialize_owned_rule_payload(payload)?)
             }
-            RuleActionView::Return(payload) => {
-                OwnedRuleAction::Return(materialize_owned_rule_payload(payload)?)
+            RuleAction::Return(payload) => {
+                RuleAction::Return(materialize_owned_rule_payload(payload)?)
             }
         };
 
@@ -256,7 +230,7 @@ impl OwnedRuleWitness {
 
     /// Materialized right-side action payload.
     #[must_use]
-    pub const fn action(&self) -> &OwnedRuleAction {
+    pub const fn action(&self) -> &RuleAction<OwnedRulePayload> {
         &self.action
     }
 }
@@ -271,64 +245,26 @@ fn materialize_owned_rule_payload(
     payload: crate::inspect::PayloadView<'_>,
 ) -> Result<OwnedRulePayload, AllocationError> {
     Ok(OwnedRulePayload {
-        bytes: MaterializedBytes::from_vec(
-            payload.to_vec_with_context(AllocationContext::OwnedRuleWitness)?,
-        ),
+        bytes: MaterializedBytes::from_owned_rule_payload(payload)?,
     })
 }
 
-/// Completed non-applying rule attempt in a borrowed session.
+/// Completed non-applying rule attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BorrowedRuleMiss<'program> {
+pub struct RuleMiss<RuleWitness> {
     /// Rule witness for the consumed rule line.
-    rule: RuleView<'program>,
+    rule: RuleWitness,
     /// Why the consumed rule did not apply.
     reason: RuleMissReason,
 }
 
-/// Completed non-applying rule attempt in an owned session.
-#[derive(Debug, PartialEq, Eq)]
-pub struct OwnedRuleMiss {
-    /// Rule witness for the consumed rule line.
-    rule: OwnedRuleWitness,
-    /// Why the consumed rule did not apply.
-    reason: RuleMissReason,
-}
-
-/// Why a borrowed rule-attempt run reached stability.
+/// Why a rule-attempt run reached stability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BorrowedRuleAttemptStableReason<'program> {
+pub enum RuleAttemptStableReason<RuleWitness> {
     /// The parsed program contains no executable rules.
     NoExecutableRules,
     /// The final executable rule line was consumed without applying.
-    FinalMiss(BorrowedRuleMiss<'program>),
-}
-
-/// Why an owned rule-attempt run reached stability.
-#[derive(Debug, PartialEq, Eq)]
-pub enum OwnedRuleAttemptStableReason {
-    /// The parsed program contains no executable rules.
-    NoExecutableRules,
-    /// The final executable rule line was consumed without applying.
-    FinalMiss(OwnedRuleMiss),
-}
-
-/// Internal non-applying rule attempt used before ownership-specific public mapping.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CoreRuleMiss<Rule> {
-    /// Rule witness for the consumed rule line.
-    rule: Rule,
-    /// Why the consumed rule did not apply.
-    reason: RuleMissReason,
-}
-
-/// Internal stable reason used before ownership-specific public mapping.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CoreRuleAttemptStableReason<Rule> {
-    /// The parsed program contains no executable rules.
-    NoExecutableRules,
-    /// The final executable rule line was consumed without applying.
-    FinalMiss(CoreRuleMiss<Rule>),
+    FinalMiss(RuleMiss<RuleWitness>),
 }
 
 /// Stateful run session that borrows a reusable parsed program.
@@ -450,7 +386,7 @@ pub struct BorrowedMissedRuleAttempt<'program> {
     /// Rule-attempt count committed by this transition.
     attempt: RuleAttemptCount,
     /// Non-applying rule information.
-    miss: BorrowedRuleMiss<'program>,
+    miss: RuleMiss<RuleView<'program>>,
     /// Continuation session after consuming the rule line.
     session: BorrowedRuleAttemptSession<'program>,
 }
@@ -474,7 +410,7 @@ pub struct BorrowedRuleAttemptStableRun<'program> {
     /// Number of committed execution steps before stability.
     steps: StepCount,
     /// Why the rule-attempt run reached stability.
-    stable_reason: BorrowedRuleAttemptStableReason<'program>,
+    stable_reason: RuleAttemptStableReason<RuleView<'program>>,
     /// Parsed program borrowed by the terminal state.
     program: &'program Program,
     /// Terminal runtime core containing the stable state.
@@ -580,7 +516,7 @@ pub struct OwnedMissedRuleAttempt {
     /// Rule-attempt count committed by this transition.
     attempt: RuleAttemptCount,
     /// Non-applying rule information.
-    miss: OwnedRuleMiss,
+    miss: RuleMiss<OwnedRuleWitness>,
     /// Continuation session after consuming the rule line.
     session: OwnedRuleAttemptSession,
 }
@@ -604,7 +540,7 @@ pub struct OwnedRuleAttemptStableRun {
     /// Number of committed execution steps before stability.
     steps: StepCount,
     /// Why the rule-attempt run reached stability.
-    stable_reason: OwnedRuleAttemptStableReason,
+    stable_reason: RuleAttemptStableReason<OwnedRuleWitness>,
     /// Parsed program retained by the owned terminal state.
     program: Program,
     /// Terminal runtime core containing the stable state.
@@ -925,47 +861,15 @@ impl core::fmt::Debug for OwnedRuleAttemptFailedRun {
     }
 }
 
-impl<Rule> CoreRuleMiss<Rule> {
+impl<RuleWitness> RuleMiss<RuleWitness> {
     /// Captures the rule and reason for one consumed non-applying rule line.
-    const fn new(rule: Rule, reason: RuleMissReason) -> Self {
+    pub(crate) const fn new(rule: RuleWitness, reason: RuleMissReason) -> Self {
         Self { rule, reason }
     }
-}
-
-impl<'program> BorrowedRuleMiss<'program> {
-    /// Maps the internal rule-attempt result into the borrowed public witness.
-    const fn from_core(miss: CoreRuleMiss<RuleView<'program>>) -> Self {
-        Self {
-            rule: miss.rule,
-            reason: miss.reason,
-        }
-    }
 
     /// Rule witness for the consumed rule line.
     #[must_use]
-    pub const fn rule(&self) -> RuleView<'program> {
-        self.rule
-    }
-
-    /// Why the consumed rule did not apply.
-    #[must_use]
-    pub const fn reason(&self) -> RuleMissReason {
-        self.reason
-    }
-}
-
-impl OwnedRuleMiss {
-    /// Maps the internal rule-attempt result into the owned public witness.
-    fn from_core(miss: CoreRuleMiss<OwnedRuleWitness>) -> Self {
-        Self {
-            rule: miss.rule,
-            reason: miss.reason,
-        }
-    }
-
-    /// Rule witness for the consumed rule line.
-    #[must_use]
-    pub const fn rule(&self) -> &OwnedRuleWitness {
+    pub const fn rule(&self) -> &RuleWitness {
         &self.rule
     }
 
@@ -974,29 +878,11 @@ impl OwnedRuleMiss {
     pub const fn reason(&self) -> RuleMissReason {
         self.reason
     }
-}
 
-impl<'program> BorrowedRuleAttemptStableReason<'program> {
-    /// Maps the internal stable reason into the borrowed public witness.
-    const fn from_core(reason: CoreRuleAttemptStableReason<RuleView<'program>>) -> Self {
-        match reason {
-            CoreRuleAttemptStableReason::NoExecutableRules => Self::NoExecutableRules,
-            CoreRuleAttemptStableReason::FinalMiss(miss) => {
-                Self::FinalMiss(BorrowedRuleMiss::from_core(miss))
-            }
-        }
-    }
-}
-
-impl OwnedRuleAttemptStableReason {
-    /// Maps the internal stable reason into the owned public witness.
-    fn from_core(reason: CoreRuleAttemptStableReason<OwnedRuleWitness>) -> Self {
-        match reason {
-            CoreRuleAttemptStableReason::NoExecutableRules => Self::NoExecutableRules,
-            CoreRuleAttemptStableReason::FinalMiss(miss) => {
-                Self::FinalMiss(OwnedRuleMiss::from_core(miss))
-            }
-        }
+    /// Splits this miss into its rule witness and miss reason.
+    #[must_use]
+    pub fn into_parts(self) -> (RuleWitness, RuleMissReason) {
+        (self.rule, self.reason)
     }
 }
 
@@ -1095,7 +981,7 @@ trait RuleAttemptRunSession: Sized {
     fn missed(
         self,
         attempt: RuleAttemptCount,
-        miss: CoreRuleMiss<Self::RuleWitness>,
+        miss: RuleMiss<Self::RuleWitness>,
     ) -> Self::Transition;
 
     /// Builds a non-terminal applied-attempt transition.
@@ -1120,7 +1006,7 @@ trait RuleAttemptRunSession: Sized {
         self,
         attempts: RuleAttemptCount,
         steps: StepCount,
-        stable_reason: CoreRuleAttemptStableReason<Self::RuleWitness>,
+        stable_reason: RuleAttemptStableReason<Self::RuleWitness>,
     ) -> Self::Transition;
 
     /// Builds a terminal failed transition.
@@ -1249,11 +1135,11 @@ impl<'program> RuleAttemptRunSession for BorrowedRuleAttemptSession<'program> {
     fn missed(
         self,
         attempt: RuleAttemptCount,
-        miss: CoreRuleMiss<Self::RuleWitness>,
+        miss: RuleMiss<Self::RuleWitness>,
     ) -> Self::Transition {
         BorrowedRuleAttemptTransition::Missed(BorrowedMissedRuleAttempt {
             attempt,
-            miss: BorrowedRuleMiss::from_core(miss),
+            miss,
             session: self,
         })
     }
@@ -1298,7 +1184,7 @@ impl<'program> RuleAttemptRunSession for BorrowedRuleAttemptSession<'program> {
         self,
         attempts: RuleAttemptCount,
         steps: StepCount,
-        stable_reason: CoreRuleAttemptStableReason<Self::RuleWitness>,
+        stable_reason: RuleAttemptStableReason<Self::RuleWitness>,
     ) -> Self::Transition {
         let AttemptSession {
             program,
@@ -1309,7 +1195,7 @@ impl<'program> RuleAttemptRunSession for BorrowedRuleAttemptSession<'program> {
         BorrowedRuleAttemptTransition::Stable(BorrowedRuleAttemptStableRun {
             attempts,
             steps,
-            stable_reason: BorrowedRuleAttemptStableReason::from_core(stable_reason),
+            stable_reason,
             program: program.program,
             core,
         })
@@ -1331,11 +1217,11 @@ impl RuleAttemptRunSession for OwnedRuleAttemptSession {
     fn missed(
         self,
         attempt: RuleAttemptCount,
-        miss: CoreRuleMiss<Self::RuleWitness>,
+        miss: RuleMiss<Self::RuleWitness>,
     ) -> Self::Transition {
         OwnedRuleAttemptTransition::Missed(OwnedMissedRuleAttempt {
             attempt,
-            miss: OwnedRuleMiss::from_core(miss),
+            miss,
             session: self,
         })
     }
@@ -1375,13 +1261,13 @@ impl RuleAttemptRunSession for OwnedRuleAttemptSession {
         self,
         attempts: RuleAttemptCount,
         steps: StepCount,
-        stable_reason: CoreRuleAttemptStableReason<Self::RuleWitness>,
+        stable_reason: RuleAttemptStableReason<Self::RuleWitness>,
     ) -> Self::Transition {
         let (program, core) = self.session.into_program_core();
         OwnedRuleAttemptTransition::Stable(OwnedRuleAttemptStableRun {
             attempts,
             steps,
-            stable_reason: OwnedRuleAttemptStableReason::from_core(stable_reason),
+            stable_reason,
             program,
             core,
         })
@@ -1701,8 +1587,8 @@ impl<'program> BorrowedMissedRuleAttempt<'program> {
 
     /// Non-applying rule information.
     #[must_use]
-    pub const fn miss(&self) -> BorrowedRuleMiss<'program> {
-        self.miss
+    pub const fn miss(&self) -> &RuleMiss<RuleView<'program>> {
+        &self.miss
     }
 
     /// Runtime state after the non-applying rule attempt.
@@ -1727,7 +1613,7 @@ impl OwnedMissedRuleAttempt {
 
     /// Non-applying rule information.
     #[must_use]
-    pub const fn miss(&self) -> &OwnedRuleMiss {
+    pub const fn miss(&self) -> &RuleMiss<OwnedRuleWitness> {
         &self.miss
     }
 
@@ -1746,7 +1632,13 @@ impl OwnedMissedRuleAttempt {
     /// Splits the missed rule attempt into its committed attempt count, owned
     /// miss witness, and continuation session.
     #[must_use]
-    pub fn into_parts(self) -> (RuleAttemptCount, OwnedRuleMiss, OwnedRuleAttemptSession) {
+    pub fn into_parts(
+        self,
+    ) -> (
+        RuleAttemptCount,
+        RuleMiss<OwnedRuleWitness>,
+        OwnedRuleAttemptSession,
+    ) {
         (self.attempt, self.miss, self.session)
     }
 }
@@ -1911,8 +1803,8 @@ impl<'program> BorrowedRuleAttemptStableRun<'program> {
 
     /// Why this rule-attempt pass reached stability.
     #[must_use]
-    pub const fn stable_reason(&self) -> BorrowedRuleAttemptStableReason<'program> {
-        self.stable_reason
+    pub const fn stable_reason(&self) -> &RuleAttemptStableReason<RuleView<'program>> {
+        &self.stable_reason
     }
 
     /// Borrow the parsed program used by this terminal state.
@@ -1952,7 +1844,7 @@ impl OwnedRuleAttemptStableRun {
 
     /// Why this rule-attempt pass reached stability.
     #[must_use]
-    pub const fn stable_reason(&self) -> &OwnedRuleAttemptStableReason {
+    pub const fn stable_reason(&self) -> &RuleAttemptStableReason<OwnedRuleWitness> {
         &self.stable_reason
     }
 

@@ -42,11 +42,11 @@ pub(crate) enum RewriteAction {
 
 impl RewriteAction {
     /// Borrows the runtime state as a public byte view.
-    pub(crate) fn view(&self) -> RuleActionView<'_> {
+    pub(crate) fn view(&self) -> RuleAction<PayloadView<'_>> {
         match self {
-            Self::Replace(payload) => RuleActionView::Replace(PayloadView::new(payload)),
-            Self::MoveStart(payload) => RuleActionView::MoveStart(PayloadView::new(payload)),
-            Self::MoveEnd(payload) => RuleActionView::MoveEnd(PayloadView::new(payload)),
+            Self::Replace(payload) => RuleAction::Replace(PayloadView::new(payload)),
+            Self::MoveStart(payload) => RuleAction::MoveStart(PayloadView::new(payload)),
+            Self::MoveEnd(payload) => RuleAction::MoveEnd(PayloadView::new(payload)),
         }
     }
 

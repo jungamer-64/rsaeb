@@ -6,14 +6,13 @@ mod support;
 
 use rsaeb::error::LimitError;
 use rsaeb::execution::{
-    BorrowedAppliedStep, BorrowedFailedRun, BorrowedReturnedRun, BorrowedRuleAttemptStableReason,
-    BorrowedRuleAttemptTransition, BorrowedRunSession, BorrowedStableRun, BorrowedStepTransition,
-    OwnedRuleAction, OwnedRuleAttemptSession, OwnedRuleAttemptStableReason,
+    BorrowedAppliedStep, BorrowedFailedRun, BorrowedReturnedRun, BorrowedRuleAttemptTransition,
+    BorrowedRunSession, BorrowedStableRun, BorrowedStepTransition, OwnedRuleAttemptSession,
     OwnedRuleAttemptTransition, OwnedRuleWitness, OwnedStepTransition, RuleAttemptSeed,
-    RuleMissReason,
+    RuleAttemptStableReason, RuleMissReason,
 };
 use rsaeb::input::RunSeed;
-use rsaeb::inspect::{RuleAnchor, RuleRepeat};
+use rsaeb::inspect::{RuleAction, RuleAnchor, RuleRepeat};
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit,
     RuleAttemptLimit, StepLimit,
@@ -96,7 +95,7 @@ enum StableReasonSignature {
     },
 }
 
-enum ExpectedOwnedRuleAction<'expected> {
+enum ExpectedRuleAction<'expected> {
     Replace(&'expected [u8]),
     Return(&'expected [u8]),
 }
@@ -111,7 +110,7 @@ fn ensure_owned_rule_witness(
     position: usize,
     line_number: usize,
     lhs: &[u8],
-    action: ExpectedOwnedRuleAction<'_>,
+    action: ExpectedRuleAction<'_>,
 ) -> TestResult {
     ensure_eq!(rule.position().number().get(), position)?;
     ensure_eq!(rule.line_number().get(), line_number)?;
@@ -119,24 +118,26 @@ fn ensure_owned_rule_witness(
     ensure_eq!(rule.anchor(), RuleAnchor::Anywhere)?;
     ensure_eq!(rule.lhs().as_slice(), lhs)?;
     match (rule.action(), action) {
-        (OwnedRuleAction::Replace(payload), ExpectedOwnedRuleAction::Replace(expected))
-        | (OwnedRuleAction::Return(payload), ExpectedOwnedRuleAction::Return(expected)) => {
+        (RuleAction::Replace(payload), ExpectedRuleAction::Replace(expected))
+        | (RuleAction::Return(payload), ExpectedRuleAction::Return(expected)) => {
             ensure_eq!(payload.as_slice(), expected)
         }
         (
-            OwnedRuleAction::MoveStart(_)
-            | OwnedRuleAction::MoveEnd(_)
-            | OwnedRuleAction::Replace(_)
-            | OwnedRuleAction::Return(_),
+            RuleAction::MoveStart(_)
+            | RuleAction::MoveEnd(_)
+            | RuleAction::Replace(_)
+            | RuleAction::Return(_),
             _,
         ) => Err(TestFailure::message("unexpected owned rule witness action")),
     }
 }
 
-fn owned_stable_reason_signature(reason: &OwnedRuleAttemptStableReason) -> StableReasonSignature {
+fn owned_stable_reason_signature(
+    reason: &RuleAttemptStableReason<OwnedRuleWitness>,
+) -> StableReasonSignature {
     match reason {
-        OwnedRuleAttemptStableReason::NoExecutableRules => StableReasonSignature::NoExecutableRules,
-        OwnedRuleAttemptStableReason::FinalMiss(miss) => StableReasonSignature::FinalMiss {
+        RuleAttemptStableReason::NoExecutableRules => StableReasonSignature::NoExecutableRules,
+        RuleAttemptStableReason::FinalMiss(miss) => StableReasonSignature::FinalMiss {
             rule_position: miss.rule().position().number().get(),
             reason: miss.reason(),
         },
@@ -461,7 +462,7 @@ fn execution_rule_attempt_surface_reports_misses_and_resets_after_apply() -> Tes
     let execution = match expect_rule_attempt_transition(execution.step())? {
         BorrowedRuleAttemptTransition::Missed(missed) => {
             ensure_eq!(missed.attempt().get(), 1)?;
-            ensure_eq!(missed.miss().rule().position().number().get(), 1)?;
+            ensure_eq!((*missed.miss().rule()).position().number().get(), 1)?;
             ensure_eq!(missed.miss().reason(), RuleMissReason::StateMismatch)?;
             ensure_eq!(
                 runtime_view_bytes(missed.state())?.as_slice(),
@@ -499,7 +500,7 @@ fn execution_rule_attempt_surface_reports_misses_and_resets_after_apply() -> Tes
     let execution = match expect_rule_attempt_transition(execution.step())? {
         BorrowedRuleAttemptTransition::Missed(missed) => {
             ensure_eq!(missed.attempt().get(), 3)?;
-            ensure_eq!(missed.miss().rule().position().number().get(), 1)?;
+            ensure_eq!((*missed.miss().rule()).position().number().get(), 1)?;
             ensure_eq!(missed.miss().reason(), RuleMissReason::StateMismatch)?;
             missed.into_session()
         }
@@ -516,7 +517,7 @@ fn execution_rule_attempt_surface_reports_misses_and_resets_after_apply() -> Tes
     let execution = match expect_rule_attempt_transition(execution.step())? {
         BorrowedRuleAttemptTransition::Missed(missed) => {
             ensure_eq!(missed.attempt().get(), 4)?;
-            ensure_eq!(missed.miss().rule().position().number().get(), 2)?;
+            ensure_eq!((*missed.miss().rule()).position().number().get(), 2)?;
             ensure_eq!(missed.miss().reason(), RuleMissReason::StateMismatch)?;
             missed.into_session()
         }
@@ -617,11 +618,10 @@ fn execution_rule_attempt_stable_reason_is_typed() -> TestResult {
         BorrowedRuleAttemptTransition::Stable(stable) => {
             ensure_eq!(stable.attempts().get(), 1)?;
             ensure_eq!(stable.steps().get(), 0)?;
-            let BorrowedRuleAttemptStableReason::FinalMiss(final_miss) = stable.stable_reason()
-            else {
+            let RuleAttemptStableReason::FinalMiss(final_miss) = stable.stable_reason() else {
                 return Err(TestFailure::message("expected terminal miss"));
             };
-            ensure_eq!(final_miss.rule().position().number().get(), 1)?;
+            ensure_eq!((*final_miss.rule()).position().number().get(), 1)?;
             ensure_eq!(final_miss.reason(), RuleMissReason::StateMismatch)?;
             ensure_eq!(
                 runtime_view_bytes(stable.state())?.as_slice(),
@@ -647,7 +647,7 @@ fn execution_rule_attempt_stable_reason_is_typed() -> TestResult {
             ensure_eq!(stable.steps().get(), 0)?;
             ensure_eq!(
                 stable.stable_reason(),
-                BorrowedRuleAttemptStableReason::NoExecutableRules
+                &RuleAttemptStableReason::NoExecutableRules
             )?;
             ensure_eq!(
                 runtime_view_bytes(stable.state())?.as_slice(),
@@ -698,7 +698,7 @@ fn execution_rule_attempt_reports_consumed_once_rule_before_later_match() -> Tes
     let execution = match expect_rule_attempt_transition(execution.step())? {
         BorrowedRuleAttemptTransition::Missed(missed) => {
             ensure_eq!(missed.attempt().get(), 2)?;
-            ensure_eq!(missed.miss().rule().position().number().get(), 1)?;
+            ensure_eq!((*missed.miss().rule()).position().number().get(), 1)?;
             ensure_eq!(missed.miss().reason(), RuleMissReason::OnceConsumed)?;
             missed.into_session()
         }
@@ -748,7 +748,7 @@ fn execution_rule_attempt_limit_is_independent_from_step_limit() -> TestResult {
     let execution = match expect_rule_attempt_transition(execution.step())? {
         BorrowedRuleAttemptTransition::Missed(missed) => {
             ensure_eq!(missed.attempt().get(), 1)?;
-            ensure_eq!(missed.miss().rule().position().number().get(), 1)?;
+            ensure_eq!((*missed.miss().rule()).position().number().get(), 1)?;
             ensure_eq!(missed.miss().reason(), RuleMissReason::StateMismatch)?;
             missed.into_session()
         }
@@ -987,7 +987,7 @@ fn ensure_owned_run_witnesses(limits: TestRunPolicy) -> TestResult {
         OwnedStepTransition::Applied(applied) => {
             let (step, rule, next_execution) = applied.into_parts();
             ensure_eq!(step.get(), 1)?;
-            ensure_owned_rule_witness(&rule, 1, 1, b"a", ExpectedOwnedRuleAction::Replace(b"b"))?;
+            ensure_owned_rule_witness(&rule, 1, 1, b"a", ExpectedRuleAction::Replace(b"b"))?;
             next_execution
         }
         OwnedStepTransition::Stable(_)
@@ -1003,7 +1003,7 @@ fn ensure_owned_run_witnesses(limits: TestRunPolicy) -> TestResult {
             2,
             2,
             b"b",
-            ExpectedOwnedRuleAction::Return(b"ok"),
+            ExpectedRuleAction::Return(b"ok"),
         ),
         OwnedStepTransition::Applied(_)
         | OwnedStepTransition::Stable(_)
@@ -1027,13 +1027,7 @@ fn ensure_owned_rule_attempt_witnesses(limits: TestRunPolicy) -> TestResult {
         OwnedRuleAttemptTransition::Missed(missed) => {
             let (attempt, miss, next_attempt) = missed.into_parts();
             ensure_eq!(attempt.get(), 1)?;
-            ensure_owned_rule_witness(
-                miss.rule(),
-                1,
-                1,
-                b"z",
-                ExpectedOwnedRuleAction::Replace(b"x"),
-            )?;
+            ensure_owned_rule_witness(miss.rule(), 1, 1, b"z", ExpectedRuleAction::Replace(b"x"))?;
             ensure_eq!(miss.reason(), RuleMissReason::StateMismatch)?;
             next_attempt
         }
@@ -1050,7 +1044,7 @@ fn ensure_owned_rule_attempt_witnesses(limits: TestRunPolicy) -> TestResult {
             let (attempt, step, rule, _next_attempt) = applied.into_parts();
             ensure_eq!(attempt.get(), 2)?;
             ensure_eq!(step.get(), 1)?;
-            ensure_owned_rule_witness(&rule, 2, 2, b"a", ExpectedOwnedRuleAction::Replace(b"b"))?;
+            ensure_owned_rule_witness(&rule, 2, 2, b"a", ExpectedRuleAction::Replace(b"b"))?;
         }
         OwnedRuleAttemptTransition::Missed(_)
         | OwnedRuleAttemptTransition::Stable(_)
@@ -1066,7 +1060,7 @@ fn ensure_owned_rule_attempt_witnesses(limits: TestRunPolicy) -> TestResult {
     ))?;
     match final_attempt.step() {
         OwnedRuleAttemptTransition::Stable(stable) => {
-            let OwnedRuleAttemptStableReason::FinalMiss(final_miss) = stable.stable_reason() else {
+            let RuleAttemptStableReason::FinalMiss(final_miss) = stable.stable_reason() else {
                 return Err(TestFailure::message("expected owned final miss"));
             };
             ensure_owned_rule_witness(
@@ -1074,7 +1068,7 @@ fn ensure_owned_rule_attempt_witnesses(limits: TestRunPolicy) -> TestResult {
                 1,
                 1,
                 b"z",
-                ExpectedOwnedRuleAction::Replace(b"x"),
+                ExpectedRuleAction::Replace(b"x"),
             )?;
             ensure_eq!(final_miss.reason(), RuleMissReason::StateMismatch)
         }

@@ -121,36 +121,85 @@ impl RuleSyntaxParts {
     /// Returns `ParseError` if the line has no `=`, multiple `=` bytes, or a
     /// side buffer cannot be allocated.
     fn split(line_number: SourceLineNumber, bytes: Vec<CompactByte>) -> Result<Self, ParseError> {
-        let mut left = OwnedCompactSyntax::new();
-        let mut right = OwnedCompactSyntax::new();
-        let mut seen_separator = false;
+        let mut splitter = RuleSyntaxSplitter::new(line_number);
 
         for byte in bytes {
-            if byte.as_u8() == b'=' {
-                if seen_separator {
-                    return Err(ParseError::at_position(
-                        SourcePosition::new(line_number, byte.source_column()),
-                        ParseErrorKind::MultipleEquals,
-                    ));
-                }
-                seen_separator = true;
-                continue;
-            }
-
-            if seen_separator {
-                right.push(byte, line_number)?;
-            } else {
-                left.push(byte, line_number)?;
-            }
+            splitter.push(byte)?;
         }
 
-        if seen_separator {
-            Ok(Self { left, right })
-        } else {
-            Err(ParseError::at_line(
-                line_number,
+        splitter.finish()
+    }
+}
+
+/// State machine that splits one compact rule line around its single separator.
+#[derive(Debug, PartialEq, Eq)]
+struct RuleSyntaxSplitter {
+    /// Original source line for diagnostics.
+    line_number: SourceLineNumber,
+    /// Left-side syntax before `=`.
+    left: OwnedCompactSyntax,
+    /// Right-side syntax after `=`.
+    right: OwnedCompactSyntax,
+    /// Current split state.
+    state: RuleSyntaxSplitState,
+}
+
+/// Current side receiving compact syntax bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuleSyntaxSplitState {
+    /// Separator has not been consumed yet.
+    BeforeEquals,
+    /// Separator has been consumed; subsequent bytes belong to the right side.
+    AfterEquals,
+}
+
+impl RuleSyntaxSplitter {
+    /// Starts splitting one compact rule line.
+    const fn new(line_number: SourceLineNumber) -> Self {
+        Self {
+            line_number,
+            left: OwnedCompactSyntax::new(),
+            right: OwnedCompactSyntax::new(),
+            state: RuleSyntaxSplitState::BeforeEquals,
+        }
+    }
+
+    /// Pushes one compact syntax byte through the current split state.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if a second separator appears or a side buffer
+    /// cannot be allocated.
+    fn push(&mut self, byte: CompactByte) -> Result<(), ParseError> {
+        match (self.state, byte.as_u8()) {
+            (RuleSyntaxSplitState::BeforeEquals, b'=') => {
+                self.state = RuleSyntaxSplitState::AfterEquals;
+                Ok(())
+            }
+            (RuleSyntaxSplitState::AfterEquals, b'=') => Err(ParseError::at_position(
+                SourcePosition::new(self.line_number, byte.source_column()),
+                ParseErrorKind::MultipleEquals,
+            )),
+            (RuleSyntaxSplitState::BeforeEquals, _) => self.left.push(byte, self.line_number),
+            (RuleSyntaxSplitState::AfterEquals, _) => self.right.push(byte, self.line_number),
+        }
+    }
+
+    /// Finishes the split after all bytes have been consumed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if no separator was consumed.
+    fn finish(self) -> Result<RuleSyntaxParts, ParseError> {
+        match self.state {
+            RuleSyntaxSplitState::BeforeEquals => Err(ParseError::at_line(
+                self.line_number,
                 ParseErrorKind::MissingEquals,
-            ))
+            )),
+            RuleSyntaxSplitState::AfterEquals => Ok(RuleSyntaxParts {
+                left: self.left,
+                right: self.right,
+            }),
         }
     }
 }
@@ -414,8 +463,8 @@ impl RightActionSyntax {
     /// Combines this action token with its parsed payload.
     fn into_body(self, payload: Payload) -> RuleBody {
         let action = match self {
-            Self::MoveStart => RuleAction::Rewrite(RewriteAction::MoveStart(payload)),
-            Self::MoveEnd => RuleAction::Rewrite(RewriteAction::MoveEnd(payload)),
+            Self::MoveStart => ParsedRuleAction::Rewrite(RewriteAction::MoveStart(payload)),
+            Self::MoveEnd => ParsedRuleAction::Rewrite(RewriteAction::MoveEnd(payload)),
             Self::Return => ParsedRuleAction::Return(payload),
         };
 
@@ -468,9 +517,9 @@ impl RightReplacePayloadSyntax<'_> {
             PayloadKind::RightSideData,
             payload_limit,
         )?;
-        Ok(RuleBody::new(ParsedRuleAction::Rewrite(RewriteAction::Replace(
-            payload,
-        ))))
+        Ok(RuleBody::new(ParsedRuleAction::Rewrite(
+            RewriteAction::Replace(payload),
+        )))
     }
 }
 

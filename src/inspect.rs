@@ -13,7 +13,7 @@
 //!
 //! ```
 //! use rsaeb::limits::DEFAULT_PARSE_LIMITS;
-//! use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
+//! use rsaeb::inspect::{RuleAction, RuleAnchor, RuleRepeat};
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
@@ -36,12 +36,12 @@
 //!     return Err("unexpected left side".into());
 //! }
 //! match rule.action() {
-//!     RuleActionView::Return(output) => {
+//!     RuleAction::Return(output) => {
 //!         if output.materialize()?.as_slice() != b"done" {
 //!             return Err("unexpected return output".into());
 //!         }
 //!     }
-//!     RuleActionView::Replace(_) | RuleActionView::MoveStart(_) | RuleActionView::MoveEnd(_) => {
+//!     RuleAction::Replace(_) | RuleAction::MoveStart(_) | RuleAction::MoveEnd(_) => {
 //!         return Err("expected return action".into());
 //!     }
 //! }
@@ -262,9 +262,7 @@ impl<'program> PayloadView<'program> {
     /// Returns `AllocationError` if the output buffer cannot be allocated.
     pub fn materialize(self) -> Result<PayloadBytes, AllocationError> {
         Ok(PayloadBytes {
-            bytes: MaterializedBytes::from_vec(
-                self.to_vec_with_context(AllocationContext::PayloadView)?,
-            ),
+            bytes: MaterializedBytes::from_payload_view(self)?,
         })
     }
 }
@@ -451,7 +449,7 @@ impl<'program> RuleView<'program> {
     /// allocated or if its computed length overflows.
     pub fn canonical_source(self) -> Result<CanonicalRuleSource, AllocationError> {
         Ok(CanonicalRuleSource {
-            bytes: MaterializedBytes::from_vec(crate::rule::canonical_source(self.rule)?),
+            bytes: MaterializedBytes::from_rule(self.rule)?,
         })
     }
 }

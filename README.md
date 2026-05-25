@@ -105,13 +105,13 @@ The docs.rs crate page contains a complete doctested stepwise example.
 
 Use `Program::start_rule_attempt_run` when a host needs debugger-style control
 over every executable rule line. It reports `BorrowedRuleAttemptTransition::Missed`
-for non-applying rules as a `BorrowedRuleMiss` whose `rule()` is the borrowed
-rule witness and whose `reason()` is a typed `RuleMissReason`. It consumes
-`RuleAttemptSeed`, which binds the admitted `RunSeed` to a `RuleAttemptLimit`
-while keeping `StepLimit` reserved for committed execution steps. Stable
-rule-attempt terminals carry `BorrowedRuleAttemptStableReason`; the owned
-counterpart exposes `OwnedRuleMiss`, `OwnedRuleWitness`, and
-`OwnedRuleAttemptStableReason` through `Program::into_rule_attempt_run`.
+for non-applying rules as a `RuleMiss<RuleView<'_>>` whose `rule()` is the
+borrowed rule witness and whose `reason()` is a typed `RuleMissReason`. It
+consumes `RuleAttemptSeed`, which binds the admitted `RunSeed` to a
+`RuleAttemptLimit` while keeping `StepLimit` reserved for committed execution
+steps. Stable rule-attempt terminals carry `RuleAttemptStableReason<RuleView<'_>>`;
+the owned counterpart uses the same generic `RuleMiss` and
+`RuleAttemptStableReason` shapes with `OwnedRuleWitness`.
 
 ### Resource Limits
 
@@ -535,10 +535,9 @@ type import paths.
   `BorrowedReturnedRun`, `BorrowedFailedRun`) and explicit owned typestates
   (`OwnedRunSession`, `OwnedStepTransition`, `OwnedAppliedStep`,
   `OwnedStableRun`, `OwnedReturnedRun`, `OwnedFailedRun`), plus borrowed and
-  owned rule-attempt typestates with `RuleAttemptSeed`, `RuleMissReason`,
-  borrowed/owned miss types, borrowed/owned stable-reason types, and
-  `OwnedRuleWitness`
-- `rsaeb::inspect`: `RuleView`, `RuleActionView`, `PayloadView`,
+  owned rule-attempt typestates with `RuleAttemptSeed`, `RuleMiss`,
+  `RuleMissReason`, `RuleAttemptStableReason`, and `OwnedRuleWitness`
+- `rsaeb::inspect`: `RuleView`, `RuleAction`, `PayloadView`,
   `PayloadBytes`, `CanonicalRuleSource`, rule position/count types,
   `OnceRuleCount`, `RuleRepeat`, and `RuleAnchor`
 - `rsaeb::trace`: `TraceEvent`, `TraceEffect`, borrowed trace aliases,

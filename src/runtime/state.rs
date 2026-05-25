@@ -1,8 +1,5 @@
 use super::budget::RuntimeBudgetState;
 use super::rewrite::{PreparedRewrite, RewriteScratch};
-use crate::allocation::{
-    AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
-};
 use crate::bytes::{
     NonEmptyPayloadNeedle, Payload, PayloadByteCount, PayloadNeedle, RuntimeByte,
     RuntimeStateByteCount,
@@ -128,7 +125,7 @@ impl State {
         state_match: StateMatch,
         action: &RewriteAction,
         output: &mut RewriteScratch,
-        budget: RuntimeBudgetState,
+        budget: &RuntimeBudgetState,
     ) -> Result<PreparedRewrite, RunError> {
         self.prepare_replacement_buffer(state_match, action.payload(), output, budget)?;
         match action {
@@ -185,7 +182,7 @@ impl State {
         state_match: StateMatch,
         rhs: &Payload,
         output: &mut RewriteScratch,
-        budget: RuntimeBudgetState,
+        budget: &RuntimeBudgetState,
     ) -> Result<(), RunError> {
         let capacity = self.replaced_byte_count(state_match, rhs)?;
 
@@ -195,34 +192,13 @@ impl State {
         Ok(())
     }
 
-    /// Materializes runtime state bytes at the requested allocation site.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AllocationError` if the output buffer cannot be allocated.
-    fn materialize(&self, context: AllocationContext) -> Result<Vec<u8>, AllocationError> {
-        let mut output = Vec::new();
-        try_reserve_total_exact(
-            &mut output,
-            RequestedCapacity::from_runtime_state_count(self.byte_count()),
-            context,
-        )?;
-        for byte in self.bytes.iter().copied() {
-            try_push(&mut output, byte.materialize(), context)?;
-        }
-        Ok(output)
-    }
-
     /// Materializes this state as a public runtime-state snapshot.
     ///
     /// # Errors
     ///
     /// Returns `RunError` if final output allocation fails.
     pub(crate) fn into_snapshot(self) -> Result<RuntimeStateSnapshot, RunError> {
-        let bytes = self
-            .materialize(AllocationContext::FinalOutput)
-            .map_err(RunError::from)?;
-        Ok(RuntimeStateSnapshot::from_materialized(bytes))
+        RuntimeStateSnapshot::from_final_state_view(self.view()).map_err(RunError::from)
     }
 }
 

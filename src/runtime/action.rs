@@ -2,7 +2,7 @@ use crate::bytes::ReturnOutputByteCount;
 use crate::error::RunError;
 use crate::limits::StepCount;
 use crate::program::{ReturnOutput, ReturnOutputView};
-use crate::rule::{Rule, RuleAction};
+use crate::rule::{ParsedRuleAction, Rule};
 
 use super::budget::RuntimeBudgetState;
 use super::budget::StepPermit;
@@ -138,7 +138,7 @@ impl<'program> PreparedRuleApplication<'program> {
         match self {
             Self::Rewrite(prepared) => {
                 let committed = prepared.matched.commit(once_states)?;
-                let step = budget.commit(prepared.permit);
+                let step = budget.commit(prepared.permit)?;
                 state.commit_rewrite(prepared.rewrite, scratch);
                 Ok(AppliedRule::Rewrite(CommittedRewriteRule {
                     step,
@@ -147,7 +147,7 @@ impl<'program> PreparedRuleApplication<'program> {
             }
             Self::Return(prepared) => {
                 let committed = prepared.matched.commit(once_states)?;
-                let step = budget.commit(prepared.permit);
+                let step = budget.commit(prepared.permit)?;
                 Ok(AppliedRule::Return(CommittedReturnRule {
                     step,
                     rule: committed.rule(),
@@ -167,7 +167,7 @@ impl<'program> PreparedRuleApplication<'program> {
 pub(crate) fn materialize_return_output(
     output: ReturnOutputView<'_>,
 ) -> Result<ReturnOutput, RunError> {
-    Ok(output.materialize()?)
+    Ok(ReturnOutput::from_return_output_view(output)?)
 }
 
 /// Applies one matched rule and commits its once-rule state on success.
@@ -183,7 +183,7 @@ pub(crate) fn apply_matched_rule<'program>(
     once_states: &mut OnceStateSet,
     matched: MatchedRuleApplication<'program>,
 ) -> Result<AppliedRule<'program>, RunError> {
-    let prepared = prepare_matched_rule(state, scratch, *budget, matched)?;
+    let prepared = prepare_matched_rule(state, scratch, budget, matched)?;
     prepared.commit(state, scratch, budget, once_states)
 }
 
@@ -196,12 +196,12 @@ pub(crate) fn apply_matched_rule<'program>(
 pub(crate) fn prepare_matched_rule<'program>(
     state: &State,
     scratch: &mut RewriteScratch,
-    budget: RuntimeBudgetState,
+    budget: &mut RuntimeBudgetState,
     matched: MatchedRuleApplication<'program>,
 ) -> Result<PreparedRuleApplication<'program>, RunError> {
     let permit = budget.reserve_next_step(state.byte_count())?;
     match matched.rule().action() {
-        RuleAction::Rewrite(action) => {
+        ParsedRuleAction::Rewrite(action) => {
             let rewrite = state.rewrite_into(matched.state_match(), action, scratch, budget)?;
             Ok(PreparedRuleApplication::Rewrite(PreparedRewriteRule {
                 permit,
@@ -209,7 +209,7 @@ pub(crate) fn prepare_matched_rule<'program>(
                 rewrite,
             }))
         }
-        RuleAction::Return(output) => {
+        ParsedRuleAction::Return(output) => {
             let output_view = ReturnOutputView::new(output);
             let output_len = ReturnOutputByteCount::from_payload_count(output.byte_count());
             budget.ensure_return_len(output_len)?;
