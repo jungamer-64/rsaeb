@@ -7,7 +7,8 @@ use crate::error::{
 };
 use crate::limits::PayloadByteLimit;
 use crate::rule::{
-    ParsedRule, RewriteAction, RuleAction, RuleAnchorSyntax, RuleBody, RuleHead, RuleRepeatSyntax,
+    ParsedRule, ParsedRuleAction, RewriteAction, RuleAnchorSyntax, RuleBody, RuleHead,
+    RuleRepeatSyntax,
 };
 use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
 use crate::syntax::SyntaxToken;
@@ -415,7 +416,7 @@ impl RightActionSyntax {
         let action = match self {
             Self::MoveStart => RuleAction::Rewrite(RewriteAction::MoveStart(payload)),
             Self::MoveEnd => RuleAction::Rewrite(RewriteAction::MoveEnd(payload)),
-            Self::Return => RuleAction::Return(payload),
+            Self::Return => ParsedRuleAction::Return(payload),
         };
 
         RuleBody::new(action)
@@ -467,7 +468,7 @@ impl RightReplacePayloadSyntax<'_> {
             PayloadKind::RightSideData,
             payload_limit,
         )?;
-        Ok(RuleBody::new(RuleAction::Rewrite(RewriteAction::Replace(
+        Ok(RuleBody::new(ParsedRuleAction::Rewrite(RewriteAction::Replace(
             payload,
         ))))
     }

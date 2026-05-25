@@ -329,21 +329,34 @@ impl fmt::Debug for PayloadView<'_> {
     }
 }
 
-/// Read-only view of a parsed rule action.
+/// Structured rule action carrying a caller-selected payload witness.
 ///
 /// Each variant carries the right-side payload in the domain implied by the
 /// parsed action token. There is no boolean flag that can confuse ordinary
 /// replacement, movement, and return behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuleActionView<'program> {
+pub enum RuleAction<Payload> {
     /// Replace the matched bytes with the payload.
-    Replace(PayloadView<'program>),
+    Replace(Payload),
     /// Remove the matched bytes and insert the payload at the start.
-    MoveStart(PayloadView<'program>),
+    MoveStart(Payload),
     /// Remove the matched bytes and append the payload at the end.
-    MoveEnd(PayloadView<'program>),
+    MoveEnd(Payload),
     /// Stop execution and return the payload as output.
-    Return(PayloadView<'program>),
+    Return(Payload),
+}
+
+impl<Payload> RuleAction<Payload> {
+    /// Borrow the payload carried by this action.
+    #[must_use]
+    pub const fn payload(&self) -> &Payload {
+        match self {
+            Self::Replace(payload)
+            | Self::MoveStart(payload)
+            | Self::MoveEnd(payload)
+            | Self::Return(payload) => payload,
+        }
+    }
 }
 
 /// Read-only structured view of a parsed rule.
@@ -422,7 +435,7 @@ impl<'program> RuleView<'program> {
 
     /// Right-side action.
     #[must_use]
-    pub fn action(self) -> RuleActionView<'program> {
+    pub fn action(self) -> RuleAction<PayloadView<'program>> {
         self.rule.action().view()
     }
 

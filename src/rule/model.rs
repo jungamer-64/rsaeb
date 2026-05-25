@@ -1,22 +1,22 @@
 use crate::bytes::Payload;
-use crate::inspect::{PayloadView, RuleActionView, RuleAnchor, RulePosition, RuleRepeat};
+use crate::inspect::{PayloadView, RuleAction, RuleAnchor, RulePosition, RuleRepeat};
 use crate::source::SourceLineNumber;
 
 /// Parsed right-side action after syntax has been assigned a domain.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum RuleAction {
+pub(crate) enum ParsedRuleAction {
     /// Rewrite the runtime state and optionally continue.
     Rewrite(RewriteAction),
     /// Stop execution and materialize the payload as return output.
     Return(Payload),
 }
 
-impl RuleAction {
+impl ParsedRuleAction {
     /// Borrows the runtime state as a public byte view.
-    pub(crate) fn view(&self) -> RuleActionView<'_> {
+    pub(crate) fn view(&self) -> RuleAction<PayloadView<'_>> {
         match self {
             Self::Rewrite(action) => action.view(),
-            Self::Return(payload) => RuleActionView::Return(PayloadView::new(payload)),
+            Self::Return(payload) => RuleAction::Return(PayloadView::new(payload)),
         }
     }
 
@@ -106,12 +106,12 @@ impl RuleHead {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RuleBody {
     /// Parsed right-side action.
-    action: RuleAction,
+    action: ParsedRuleAction,
 }
 
 impl RuleBody {
     /// Wraps the parsed right-side action.
-    pub(crate) const fn new(action: RuleAction) -> Self {
+    pub(crate) const fn new(action: ParsedRuleAction) -> Self {
         Self { action }
     }
 }
@@ -261,7 +261,7 @@ pub(crate) struct Rule {
     /// Left-side executable match payload.
     lhs: Payload,
     /// Right-side action applied after a match.
-    action: RuleAction,
+    action: ParsedRuleAction,
 }
 
 impl Rule {
@@ -312,7 +312,7 @@ impl Rule {
     }
 
     /// Right-side action applied after a match.
-    pub(crate) const fn action(&self) -> &RuleAction {
+    pub(crate) const fn action(&self) -> &ParsedRuleAction {
         &self.action
     }
 }

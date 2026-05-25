@@ -3,7 +3,7 @@ use crate::error::{LimitError, RunError};
 use crate::limits::{ExecutionLimits, RuleAttemptCount, RuleAttemptLimit, StepCount};
 
 /// Execution budgets plus the number of committed execution steps.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeBudgetState {
     /// Host execution policy admitted for this run.
     limits: ExecutionLimits,
@@ -12,7 +12,7 @@ pub(crate) struct RuntimeBudgetState {
 }
 
 /// Rule-attempt budget plus the number of consumed executable rule-line attempts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RuleAttemptBudgetState {
     /// Host rule-attempt policy admitted for this run.
     limit: RuleAttemptLimit,
@@ -113,7 +113,7 @@ impl RuntimeBudgetState {
     /// Returns `LimitError` if the step limit is reached or the next step
     /// count cannot be represented.
     pub(crate) fn reserve_next_step(
-        self,
+        &mut self,
         state_len: RuntimeStateByteCount,
     ) -> Result<StepPermit, LimitError> {
         self.ensure_next_step_allowed(state_len)?;
@@ -178,7 +178,7 @@ impl RuleAttemptBudgetState {
     /// Returns `LimitError` if the attempt limit is reached or the next attempt
     /// count cannot be represented.
     pub(crate) fn reserve_next_attempt(
-        self,
+        &mut self,
         state_len: RuntimeStateByteCount,
     ) -> Result<RuleAttemptPermit, LimitError> {
         self.ensure_next_attempt_allowed(state_len)?;
