@@ -5,8 +5,7 @@ use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind}
 use super::{
     InputColumn, LeftModifierKind, LimitError, ParseError, ParseErrorKind, ParseErrorLocation,
     ParseRepresentationError, PayloadKind, RightActionKind, RunAdmissionError, RunError,
-    RunInvariantError, RuntimeInputError, StateSizeError, TraceSnapshotError,
-    TraceSnapshotRunError, TracedRunError,
+    RuntimeInputError, StateSizeError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -195,34 +194,8 @@ impl fmt::Display for RunError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Allocation(error) => error.fmt(f),
-            Self::InternalInvariant(error) => error.fmt(f),
             Self::StateSize(error) => error.fmt(f),
             Self::Limit(error) => error.fmt(f),
-        }
-    }
-}
-
-impl fmt::Display for RunInvariantError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingOnceRuleState {
-                rule,
-                available_slots,
-            } => write!(
-                f,
-                "runtime invariant failure: once rule {} had no state slot among {} available once slots",
-                rule.number().get(),
-                available_slots.get(),
-            ),
-            Self::MissingRuleCursorTarget {
-                rule,
-                available_rules,
-            } => write!(
-                f,
-                "runtime invariant failure: rule-attempt cursor requested rule {} among {} executable rules",
-                rule.number().get(),
-                available_rules.get(),
-            ),
         }
     }
 }

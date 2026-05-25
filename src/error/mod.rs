@@ -73,7 +73,6 @@ pub use parse::{
     ParseRepresentationError, PayloadKind, RightActionKind,
 };
 pub use run::{
-    InputColumn, LimitError, RunAdmissionError, RunError, RunInvariantError, RuntimeInputError,
-    StateSizeError,
+    InputColumn, LimitError, RunAdmissionError, RunError, RuntimeInputError, StateSizeError,
 };
 pub use traced::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};

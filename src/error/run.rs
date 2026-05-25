@@ -21,45 +21,16 @@ use crate::limits::{
 pub enum RunError {
     /// A fallible allocation failed during runtime execution.
     Allocation(AllocationError),
-    /// Runtime-internal data violated a checked invariant.
-    InternalInvariant(RunInvariantError),
     /// A rewrite length could not be represented.
     StateSize(StateSizeError),
     /// A configured runtime budget would be exceeded.
     Limit(LimitError),
 }
 
-/// Runtime-internal invariant failure.
-///
-/// These errors are not attributable to ordinary source syntax, runtime input,
-/// allocation, or configured budgets. They report contradictions between
-/// parser-built witnesses and runtime-owned state without panicking or silently
-/// treating the run as stable.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RunInvariantError {
-    /// A parsed `(once)` rule referenced a slot missing from runtime state.
-    MissingOnceRuleState {
-        /// Program-local position of the parsed `(once)` rule.
-        rule: crate::inspect::RulePosition,
-        /// Number of runtime once-state slots available for this run.
-        available_slots: crate::inspect::OnceRuleCount,
-    },
-    /// Rule-attempt cursor pointed outside the parsed executable rule table.
-    MissingRuleCursorTarget {
-        /// Program-local rule position requested by the cursor.
-        rule: crate::inspect::RulePosition,
-        /// Number of executable rules available in the parsed program.
-        available_rules: crate::inspect::RuleCount,
-    },
-}
-
-impl Error for RunInvariantError {}
-
 impl Error for RunError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Allocation(error) => Some(error),
-            Self::InternalInvariant(error) => Some(error),
             Self::StateSize(error) => Some(error),
             Self::Limit(error) => Some(error),
         }
@@ -69,12 +40,6 @@ impl Error for RunError {
 impl From<AllocationError> for RunError {
     fn from(value: AllocationError) -> Self {
         Self::Allocation(value)
-    }
-}
-
-impl From<RunInvariantError> for RunError {
-    fn from(value: RunInvariantError) -> Self {
-        Self::InternalInvariant(value)
     }
 }
 
