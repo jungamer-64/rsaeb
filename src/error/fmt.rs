@@ -223,10 +223,6 @@ impl fmt::Display for RunInvariantError {
                 rule.number().get(),
                 available_rules.get(),
             ),
-            Self::BudgetReservation => write!(
-                f,
-                "runtime invariant failure: budget reservation did not match its commit path",
-            ),
         }
     }
 }
