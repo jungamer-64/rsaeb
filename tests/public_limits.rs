@@ -182,6 +182,50 @@ fn limits_runtime_variants_preserve_typed_domains() -> TestResult {
         "expected step limit details",
     )?;
 
+    let oversized_rewrite = TestRunPolicy::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(0),
+        RuntimeStateByteLimit::new(1),
+        DEFAULT_MAX_RETURN_LEN,
+    );
+    let rewrite_error = parse_program("a=aaa")?.run(runtime_input(b"a", oversized_rewrite)?);
+    let rewrite_error = expect_step_limit(expect_run_error(rewrite_error)?)?;
+    ensure_matches(
+        matches!(
+            rewrite_error,
+            LimitError::Step {
+                max_steps,
+                completed_steps,
+                state_len,
+            } if max_steps == StepLimit::new(0)
+                && completed_steps.get() == 0
+                && state_len.get() == 1
+        ),
+        "expected step limit before rewrite state limit",
+    )?;
+
+    let oversized_return = TestRunPolicy::new(
+        DEFAULT_MAX_INPUT_LEN,
+        StepLimit::new(0),
+        DEFAULT_MAX_STATE_LEN,
+        ReturnByteLimit::new(1),
+    );
+    let return_error = parse_program("a=(return)ok")?.run(runtime_input(b"a", oversized_return)?);
+    let return_error = expect_step_limit(expect_run_error(return_error)?)?;
+    ensure_matches(
+        matches!(
+            return_error,
+            LimitError::Step {
+                max_steps,
+                completed_steps,
+                state_len,
+            } if max_steps == StepLimit::new(0)
+                && completed_steps.get() == 0
+                && state_len.get() == 1
+        ),
+        "expected step limit before return materialization limit",
+    )?;
+
     let initial_state_limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10),

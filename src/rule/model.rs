@@ -1,5 +1,7 @@
 use crate::bytes::Payload;
-use crate::inspect::{PayloadView, RuleAction, RuleAnchor, RulePosition, RuleRepeat};
+use crate::inspect::{
+    OnceRuleCount, PayloadView, RuleAction, RuleAnchor, RulePosition, RuleRepeat,
+};
 use crate::source::SourceLineNumber;
 
 /// Parsed right-side action after syntax has been assigned a domain.
@@ -183,13 +185,34 @@ impl RuleAnchorSyntax {
     }
 }
 
+/// Parser-assigned `(once)` slot used by one runtime invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct OnceRuleSlot {
+    /// Zero-based slot in the per-run `(once)` state table.
+    zero_based: usize,
+}
+
+impl OnceRuleSlot {
+    /// Assigns the next slot from the current parsed `(once)` count.
+    pub(crate) const fn from_count(count: OnceRuleCount) -> Self {
+        Self {
+            zero_based: count.get(),
+        }
+    }
+
+    /// Zero-based slot index.
+    pub(crate) const fn index(self) -> usize {
+        self.zero_based
+    }
+}
+
 /// Runtime availability assigned after program-level rule construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuleAvailability {
     /// Rule can apply on every match.
     Always,
-    /// Rule can apply once per run.
-    Once,
+    /// Rule can apply once per run and owns this parser-assigned runtime slot.
+    Once(OnceRuleSlot),
 }
 
 impl RuleAvailability {
@@ -197,13 +220,8 @@ impl RuleAvailability {
     pub(crate) const fn public_repeat(self) -> RuleRepeat {
         match self {
             Self::Always => RuleRepeat::Always,
-            Self::Once => RuleRepeat::Once,
+            Self::Once(_) => RuleRepeat::Once,
         }
-    }
-
-    /// Returns whether this rule requires per-run once-state tracking.
-    pub(crate) const fn is_once(self) -> bool {
-        matches!(self, Self::Once)
     }
 }
 

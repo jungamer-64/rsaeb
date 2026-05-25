@@ -665,18 +665,19 @@ fn execution_rule_attempt_stable_reason_is_typed() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if consumed `(once)` rules are hidden instead of
-/// reported as typed rule-attempt misses.
+/// Returns `TestFailure` if interleaved always rules consume `(once)` slots or
+/// consumed `(once)` rules stop being reported as typed rule-attempt misses.
 #[test]
-fn execution_rule_attempt_reports_consumed_once_rule_before_later_match() -> TestResult {
+fn execution_rule_attempt_preserves_interleaved_once_slots() -> TestResult {
     let limits = TestRunPolicy::new(
         DEFAULT_MAX_INPUT_LEN,
         StepLimit::new(10),
         DEFAULT_MAX_STATE_LEN,
         DEFAULT_MAX_RETURN_LEN,
     );
-    let program = parse_program("(once)a=b\nb=c")?;
-    let input = runtime_input(b"ab", limits)?;
+    let program = parse_program("(once)a=b\nz=z\n(once)b=c")?;
+    ensure_eq!(program.once_rule_count().get(), 2)?;
+    let input = runtime_input(b"a", limits)?;
     let execution =
         program.start_rule_attempt_run(RuleAttemptSeed::new(input, RuleAttemptLimit::new(10)))?;
 
@@ -710,11 +711,26 @@ fn execution_rule_attempt_reports_consumed_once_rule_before_later_match() -> Tes
         }
     };
 
+    let execution = match expect_rule_attempt_transition(execution.step())? {
+        BorrowedRuleAttemptTransition::Missed(missed) => {
+            ensure_eq!(missed.attempt().get(), 3)?;
+            ensure_eq!((*missed.miss().rule()).position().number().get(), 2)?;
+            ensure_eq!(missed.miss().reason(), RuleMissReason::StateMismatch)?;
+            missed.into_session()
+        }
+        BorrowedRuleAttemptTransition::Applied(_)
+        | BorrowedRuleAttemptTransition::Stable(_)
+        | BorrowedRuleAttemptTransition::Returned(_)
+        | BorrowedRuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message("expected interleaved always miss"));
+        }
+    };
+
     match expect_rule_attempt_transition(execution.step())? {
         BorrowedRuleAttemptTransition::Applied(applied) => {
-            ensure_eq!(applied.attempt().get(), 3)?;
+            ensure_eq!(applied.attempt().get(), 4)?;
             ensure_eq!(applied.step().get(), 2)?;
-            ensure_eq!(applied.rule().position().number().get(), 2)?;
+            ensure_eq!(applied.rule().position().number().get(), 3)?;
         }
         BorrowedRuleAttemptTransition::Missed(_)
         | BorrowedRuleAttemptTransition::Stable(_)

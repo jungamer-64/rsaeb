@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::error::Error;
 
 use crate::bytes::{PayloadByteCount, RuntimeInputByteCount, RuntimeStateByteCount};
-use crate::inspect::RuleCount;
+use crate::inspect::{OnceRuleCount, RuleCount};
 
 /// Interpreter allocation site reported by [`AllocationError`].
 ///
@@ -91,6 +91,11 @@ impl RequestedCapacity {
 
     /// Requests storage for parsed rule-table entries.
     pub(crate) const fn from_rule_count(count: RuleCount) -> Self {
+        Self { value: count.get() }
+    }
+
+    /// Requests storage for per-run `(once)` slot states.
+    pub(crate) const fn from_once_rule_count(count: OnceRuleCount) -> Self {
         Self { value: count.get() }
     }
 

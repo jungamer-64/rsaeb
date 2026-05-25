@@ -457,8 +457,9 @@ inspection materializes to `PayloadBytes`, and snapshot tracing materializes
 owned event bytes under `TraceSnapshotByteLimit`. During execution, the active
 state and the rewrite scratch buffer are distinct typed buffers, and the
 runtime swaps them only after a successful continuation step. `(once)` rules
-carry private slots assigned during parsing; only a committed application can
-consume that slot.
+carry private slots assigned during parsing, and each execution allocates only
+those slot states rather than one state cell per rule. Only a committed
+application can consume its slot.
 
 ## `no_std + alloc` Boundary
 
@@ -470,7 +471,9 @@ snapshots. It requires an allocator, but not `std`.
 Allocation is explicit and fallible. Parser/runtime paths reserve explicitly
 and report `AllocationError` instead of relying on accidental `Vec` growth.
 Runtime expansion is budgeted through `ExecutionLimits`; the runtime checks size
-limits before allocating oversized states or return outputs. Trace snapshot
+limits before allocating oversized states or return outputs. Step budget is
+reserved before rewrite or return-output materialization, so an exhausted step
+limit cannot allocate a candidate state or return buffer. Trace snapshot
 materialization is budgeted separately through `TraceSnapshotByteLimit`.
 Internal parser/runtime witnesses are borrowed slices or typed indexes; they do
 not allocate just to strengthen invariants.

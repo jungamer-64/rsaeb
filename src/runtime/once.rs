@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::slice;
 
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
@@ -6,7 +7,7 @@ use crate::allocation::{
 use crate::inspect::OnceRuleCount;
 use crate::rule::{Rule, RuleAvailability};
 
-/// Per-run execution state aligned one-to-one with parsed executable rules.
+/// Per-run execution state for parsed `(once)` slots.
 #[derive(Debug)]
 pub(crate) struct OnceStateSet {
     /// One runtime state cell for each parsed `(once)` slot.
@@ -49,13 +50,30 @@ pub(super) struct OnceMatchPermit<'once> {
     linearity: OnceMatchPermitLinearity,
 }
 
-/// Parsed rule paired with its aligned runtime availability state.
+/// Parsed rule paired with its runtime availability state.
 #[derive(Debug)]
 pub(crate) struct RuntimeRule<'program, 'once> {
     /// Parsed executable rule.
     rule: &'program Rule,
-    /// Runtime state cell for this rule's parsed once slot.
-    state: &'once mut OnceRuleState,
+    /// Runtime availability selected by this rule's parsed shape.
+    availability: RuntimeRuleAvailability<'once>,
+}
+
+/// Iterator pairing parsed rules with only the `(once)` states they require.
+pub(super) struct RuntimeRulesMut<'program, 'once> {
+    /// Parsed executable rules in execution order.
+    rules: slice::Iter<'program, Rule>,
+    /// Runtime state cells for parser-assigned `(once)` slots.
+    once_states: slice::IterMut<'once, OnceRuleState>,
+}
+
+/// Runtime availability paired with one parsed rule.
+#[derive(Debug)]
+enum RuntimeRuleAvailability<'once> {
+    /// Rule has no per-run state.
+    Always,
+    /// Rule owns the state cell at its parser-assigned `(once)` slot.
+    Once(&'once mut OnceRuleState),
 }
 
 /// Non-copy marker carried by once-rule commit permits.
@@ -96,13 +114,7 @@ impl OnceStateSet {
     ///
     /// Returns `AllocationError` if the per-execution rule-state table cannot
     /// be allocated.
-    pub(crate) fn new(rules: &[Rule]) -> Result<Self, AllocationError> {
-        let once_count = OnceRuleCount::new(
-            rules
-                .iter()
-                .filter(|rule| rule.availability().is_once())
-                .count(),
-        );
+    pub(crate) fn new(once_count: OnceRuleCount) -> Result<Self, AllocationError> {
         let mut states = Vec::new();
         try_reserve_total_exact(
             &mut states,
@@ -110,17 +122,55 @@ impl OnceStateSet {
             AllocationContext::RuntimeOnceRuleState,
         )?;
 
-        for rule in rules {
-            if rule.availability().is_once() {
-                try_push(
-                    &mut states,
-                    OnceRuleState::Fresh,
-                    AllocationContext::RuntimeOnceRuleState,
-                )?;
-            }
+        for _ in 0..once_count.get() {
+            try_push(
+                &mut states,
+                OnceRuleState::Fresh,
+                AllocationContext::RuntimeOnceRuleState,
+            )?;
         }
 
         Ok(Self { states })
+    }
+
+    /// Pairs one parsed rule with its parser-assigned runtime availability.
+    pub(super) fn runtime_rule_mut<'program, 'once>(
+        &'once mut self,
+        rule: &'program Rule,
+    ) -> Option<RuntimeRule<'program, 'once>> {
+        let availability = match rule.availability() {
+            RuleAvailability::Always => RuntimeRuleAvailability::Always,
+            RuleAvailability::Once(slot) => {
+                RuntimeRuleAvailability::Once(self.states.get_mut(slot.index())?)
+            }
+        };
+
+        Some(RuntimeRule { rule, availability })
+    }
+
+    /// Iterates parsed rules with runtime availability without row-aligned state.
+    pub(super) fn runtime_rules_mut<'program, 'once>(
+        &'once mut self,
+        rules: &'program [Rule],
+    ) -> RuntimeRulesMut<'program, 'once> {
+        RuntimeRulesMut {
+            rules: rules.iter(),
+            once_states: self.states.iter_mut(),
+        }
+    }
+}
+
+impl<'program, 'once> Iterator for RuntimeRulesMut<'program, 'once> {
+    type Item = RuntimeRule<'program, 'once>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let rule = self.rules.next()?;
+        let availability = match rule.availability() {
+            RuleAvailability::Always => RuntimeRuleAvailability::Always,
+            RuleAvailability::Once(_) => RuntimeRuleAvailability::Once(self.once_states.next()?),
+        };
+
+        Some(RuntimeRule { rule, availability })
     }
 }
 
@@ -132,14 +182,14 @@ impl<'program, 'once> RuntimeRule<'program, 'once> {
 
     /// Returns this rule's current per-run readiness and commit action.
     pub(super) fn readiness(self) -> OnceRuleReadiness<'once> {
-        match self.rule.availability() {
-            RuleAvailability::Always => OnceRuleReadiness::Available(MatchedRuleCommit::Always),
-            RuleAvailability::Once => match self.state {
-                OnceRuleState::Fresh => {
-                    OnceRuleReadiness::Available(MatchedRuleCommit::Once(OnceMatchPermit::new(
-                        self.state,
-                    )))
-                }
+        match self.availability {
+            RuntimeRuleAvailability::Always => {
+                OnceRuleReadiness::Available(MatchedRuleCommit::Always)
+            }
+            RuntimeRuleAvailability::Once(state) => match state {
+                OnceRuleState::Fresh => OnceRuleReadiness::Available(MatchedRuleCommit::Once(
+                    OnceMatchPermit::new(state),
+                )),
                 OnceRuleState::Consumed => OnceRuleReadiness::Consumed,
             },
         }

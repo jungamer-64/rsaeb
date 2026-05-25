@@ -94,16 +94,19 @@ pub struct OnceRuleCount {
 }
 
 impl OnceRuleCount {
-    /// Creates a parsed `(once)` rule count from a primitive count.
-    #[must_use]
-    pub(crate) const fn new(value: usize) -> Self {
-        Self { value }
-    }
+    /// ZERO boundary value.
+    pub(crate) const ZERO: Self = Self { value: 0 };
 
     /// Parsed `(once)` rule count as a primitive value.
     #[must_use]
     pub const fn get(self) -> usize {
         self.value
+    }
+
+    /// Returns the checked next result.
+    pub(crate) fn checked_next(self) -> Option<Self> {
+        let value = self.value.checked_add(1)?;
+        Some(Self { value })
     }
 }
 

@@ -4,7 +4,7 @@ use crate::limits::StepCount;
 use crate::program::{ReturnOutput, ReturnOutputView};
 use crate::rule::{ParsedRuleAction, Rule};
 
-use super::budget::RuntimeBudgetState;
+use super::budget::{RuntimeBudgetState, StepReservation};
 use super::matcher::{MatchedRuleApplication, PreparedMatchedRule};
 use super::rewrite::{PreparedRewrite, RewriteScratch};
 use super::state::State;
@@ -20,11 +20,11 @@ pub(crate) enum AppliedRule<'program> {
 
 /// Rule application after all failure-prone runtime preparation has succeeded.
 #[derive(Debug)]
-pub(crate) enum PreparedRuleApplication<'program, 'once> {
+pub(crate) enum PreparedRuleApplication<'program, 'once, 'budget> {
     /// Prepared non-terminal rewrite.
-    Rewrite(PreparedRewriteRule<'program, 'once>),
+    Rewrite(PreparedRewriteRule<'program, 'once, 'budget>),
     /// Prepared terminal return.
-    Return(PreparedReturnRule<'program, 'once>),
+    Return(PreparedReturnRule<'program, 'once, 'budget>),
 }
 
 /// Committed non-terminal rewrite rule.
@@ -51,18 +51,22 @@ pub(crate) struct CommittedReturnRule<'program> {
 
 /// Prepared non-terminal rewrite before its step and once-state side effects commit.
 #[derive(Debug)]
-pub(crate) struct PreparedRewriteRule<'program, 'once> {
+pub(crate) struct PreparedRewriteRule<'program, 'once, 'budget> {
     /// Matched rule and once-state commit permit.
     matched: PreparedMatchedRule<'program, 'once>,
+    /// Step reservation required before this rewrite can commit.
+    step: StepReservation<'budget>,
     /// Runtime bytes ready to become the next state.
     rewrite: PreparedRewrite,
 }
 
 /// Prepared terminal return before its step and once-state side effects commit.
 #[derive(Debug)]
-pub(crate) struct PreparedReturnRule<'program, 'once> {
+pub(crate) struct PreparedReturnRule<'program, 'once, 'budget> {
     /// Matched rule and once-state commit permit.
     matched: PreparedMatchedRule<'program, 'once>,
+    /// Step reservation required before this return can commit.
+    step: StepReservation<'budget>,
     /// Borrowed return output payload from the matched parsed rule.
     output_view: ReturnOutputView<'program>,
     /// Materialized return output.
@@ -107,7 +111,7 @@ impl<'program> CommittedReturnRule<'program> {
     }
 }
 
-impl<'program> PreparedRuleApplication<'program, '_> {
+impl<'program> PreparedRuleApplication<'program, '_, '_> {
     /// Parsed rule selected by this prepared application.
     pub(crate) const fn rule(&self) -> &'program Rule {
         match self {
@@ -118,35 +122,30 @@ impl<'program> PreparedRuleApplication<'program, '_> {
 
     /// Commits the prepared runtime side effects.
     ///
-    /// # Errors
-    ///
-    /// Returns `RunError` if the next step exceeds the configured step limit.
     pub(crate) fn commit(
         self,
         state: &mut State,
         scratch: &mut RewriteScratch,
-        budget: &mut RuntimeBudgetState,
-    ) -> Result<AppliedRule<'program>, RunError> {
-        let reservation = budget.reserve_next_step(state.byte_count())?;
+    ) -> AppliedRule<'program> {
         match self {
             Self::Rewrite(prepared) => {
                 let committed = prepared.matched.commit();
-                let step = reservation.commit();
+                let step = prepared.step.commit();
                 state.commit_rewrite(prepared.rewrite, scratch);
-                Ok(AppliedRule::Rewrite(CommittedRewriteRule {
+                AppliedRule::Rewrite(CommittedRewriteRule {
                     step,
                     rule: committed.rule(),
-                }))
+                })
             }
             Self::Return(prepared) => {
                 let committed = prepared.matched.commit();
-                let step = reservation.commit();
-                Ok(AppliedRule::Return(CommittedReturnRule {
+                let step = prepared.step.commit();
+                AppliedRule::Return(CommittedReturnRule {
                     step,
                     rule: committed.rule(),
                     output_view: prepared.output_view,
                     output: prepared.output,
-                }))
+                })
             }
         }
     }
@@ -163,34 +162,38 @@ pub(crate) fn materialize_return_output(
     Ok(ReturnOutput::from_return_output_view(output)?)
 }
 
-/// Prepares one matched rule without committing state, budget, or once-rule side effects.
+/// Prepares one matched rule without committing state, completed-step count, or once-rule side effects.
 ///
 /// # Errors
 ///
-/// Returns `RunError` if the next step exceeds limits, the rewrite would
+/// Returns `RunError` if the next step cannot be reserved, the rewrite would
 /// exceed state limits, return output exceeds limits, or allocation fails.
-pub(crate) fn prepare_matched_rule<'program, 'once>(
+pub(crate) fn prepare_matched_rule<'program, 'once, 'budget>(
     scratch: &mut RewriteScratch,
-    budget: &RuntimeBudgetState,
+    budget: &'budget mut RuntimeBudgetState,
+    state_len: crate::bytes::RuntimeStateByteCount,
     matched: MatchedRuleApplication<'program, '_, 'once>,
-) -> Result<PreparedRuleApplication<'program, 'once>, RunError> {
+) -> Result<PreparedRuleApplication<'program, 'once, 'budget>, RunError> {
     let (state_match, matched) = matched.into_prepare_parts();
+    let step = budget.reserve_next_step(state_len)?;
     match matched.rule().action() {
         ParsedRuleAction::Rewrite(action) => {
-            let rewrite = state_match.rewrite_into(action, scratch, budget)?;
+            let rewrite = state_match.rewrite_into(action, scratch, &step)?;
             Ok(PreparedRuleApplication::Rewrite(PreparedRewriteRule {
                 matched,
+                step,
                 rewrite,
             }))
         }
         ParsedRuleAction::Return(output) => {
             let output_view = ReturnOutputView::new(output);
             let output_len = ReturnOutputByteCount::from_payload_count(output.byte_count());
-            budget.ensure_return_len(output_len)?;
+            step.ensure_return_len(output_len)?;
             let materialized_output = materialize_return_output(output_view)?;
 
             Ok(PreparedRuleApplication::Return(PreparedReturnRule {
                 matched,
+                step,
                 output_view,
                 output: materialized_output,
             }))

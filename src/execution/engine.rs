@@ -187,7 +187,7 @@ impl RunCore {
     fn new(program: &Program, seed: RunSeed) -> Result<Self, RunError> {
         let (input, budget) = seed.into_runtime_parts();
         let state = State::from_input(input);
-        let once_states = OnceStateSet::new(program.rule_slice())?;
+        let once_states = OnceStateSet::new(program.once_rule_count())?;
         Ok(Self {
             state,
             scratch: RewriteScratch::new(),
@@ -232,8 +232,10 @@ impl RunCore {
                 }
             };
 
-        let prepared = prepare_matched_rule(&mut self.scratch, &self.budget, matched)?;
-        let applied = prepared.commit(&mut self.state, &mut self.scratch, &mut self.budget)?;
+        let state_len = self.state.byte_count();
+        let prepared =
+            prepare_matched_rule(&mut self.scratch, &mut self.budget, state_len, matched)?;
+        let applied = prepared.commit(&mut self.state, &mut self.scratch);
         Ok(RuntimeStep::Applied(applied))
     }
 
@@ -428,9 +430,10 @@ fn step_with_witness<'program, RuleWitness>(
         RuleSearch::Matched(matched) => matched,
         RuleSearch::Stable => return Ok(CoreStep::Stable(core.budget.completed_steps())),
     };
-    let prepared = prepare_matched_rule(&mut core.scratch, &core.budget, matched)?;
+    let state_len = core.state.byte_count();
+    let prepared = prepare_matched_rule(&mut core.scratch, &mut core.budget, state_len, matched)?;
     let witness = make_witness(RuleView::new(prepared.rule()))?;
-    let applied = prepared.commit(&mut core.state, &mut core.scratch, &mut core.budget)?;
+    let applied = prepared.commit(&mut core.state, &mut core.scratch);
     Ok(CoreStep::Applied(CoreAppliedRule::from_applied_rule(
         applied, witness,
     )))
@@ -488,10 +491,12 @@ fn attempt_current_rule_with_witness<'program, RuleWitness>(
             }))
         }
         RuleAttempt::Matched(matched) => {
-            let prepared = prepare_matched_rule(&mut core.scratch, &core.budget, matched)?;
+            let state_len = core.state.byte_count();
+            let prepared =
+                prepare_matched_rule(&mut core.scratch, &mut core.budget, state_len, matched)?;
             let witness = make_witness(RuleView::new(prepared.rule()))?;
             let attempt = reservation.commit();
-            let applied = prepared.commit(&mut core.state, &mut core.scratch, &mut core.budget)?;
+            let applied = prepared.commit(&mut core.state, &mut core.scratch);
             let applied = CoreAppliedRule::from_applied_rule(applied, witness);
             if matches!(applied, CoreAppliedRule::Rewrite { .. }) {
                 *cursor = RuleCursor::Active(active_cursor.reset_to_first());

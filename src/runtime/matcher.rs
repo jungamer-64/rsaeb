@@ -202,7 +202,7 @@ pub(crate) fn runtime_rule_for_target<'program, 'once>(
     once_states: &'once mut OnceStateSet,
     target: RuleTarget<'program>,
 ) -> Option<RuntimeRule<'program, 'once>> {
-    once_states.runtime_target_mut(target)
+    once_states.runtime_rule_mut(target.rule())
 }
 
 /// Builds a committed-rule candidate for a single parsed rule.

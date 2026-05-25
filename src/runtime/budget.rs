@@ -139,6 +139,32 @@ impl RuntimeBudgetState {
 }
 
 impl StepReservation<'_> {
+    /// Checks a candidate rewrite state against runtime state limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if the rewritten state would exceed the configured
+    /// runtime state limit.
+    pub(crate) fn ensure_rewrite_state_len(
+        &self,
+        attempted_len: RuntimeStateByteCount,
+    ) -> Result<(), RunError> {
+        self.budget.ensure_rewrite_state_len(attempted_len)
+    }
+
+    /// Checks a `(return)` payload against return-output limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if the return payload exceeds the configured return
+    /// output limit.
+    pub(crate) fn ensure_return_len(
+        &self,
+        attempted_len: ReturnOutputByteCount,
+    ) -> Result<(), RunError> {
+        self.budget.ensure_return_len(attempted_len)
+    }
+
     /// Publishes the reserved step count.
     pub(crate) fn commit(self) -> StepCount {
         self.budget.completed_steps = self.next_step;

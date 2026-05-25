@@ -98,9 +98,9 @@
 //! # }
 //! ```
 //!
-//! Parse [`program::Program`] once when the same rules should be reused. Per-run
-//! `(once)` state is owned by each runtime invocation, not by the parsed
-//! program:
+//! Parse [`program::Program`] once when the same rules should be reused. The
+//! parser assigns private slots to `(once)` rules, and each runtime invocation
+//! owns only those per-run slot states rather than mutating the parsed program:
 //!
 //! ```
 //! use rsaeb::limits::{
@@ -299,8 +299,9 @@
 //! [`execution::RuleAttemptSeed`] binds one run seed to the
 //! [`limits::RuleAttemptLimit`] for the separate rule-line attempt mode.
 //! Trace snapshot materialization uses an explicit
-//! [`limits::TraceSnapshotByteLimit`]. Step limits are checked only when another
-//! matching rule would apply after the configured number of completed steps:
+//! [`limits::TraceSnapshotByteLimit`]. Step limits are reserved before rewrite
+//! or return-output materialization when another matching rule would apply
+//! after the configured number of completed steps:
 //!
 //! ```
 //! use rsaeb::error::{LimitError, RunError};
