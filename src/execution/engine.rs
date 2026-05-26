@@ -6,8 +6,8 @@ use crate::input::RunSeed;
 use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, RuleAttemptLimit, StepCount};
 use crate::program::{
-    ActiveRuleCursor, Program, ReturnOutput, RuleCursor, RuleCursorAfterMiss, RuleCursorSelection,
-    RunResult,
+    ActiveRuleCursor, Program, ReturnOutput, RuleAttemptTargetSelection, RuleCursor,
+    RuleCursorAfterMiss, RunResult,
 };
 use crate::runtime::action::{AppliedRule, PreparedRuleApplication, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
@@ -515,14 +515,15 @@ fn attempt_current_rule_with_witness<'program, RuleWitness, Error>(
 where
     Error: From<RuleAttemptStepError> + From<RunStepError>,
 {
-    let active_cursor = match context.cursor.select_next() {
-        RuleCursorSelection::Active(active_cursor) => active_cursor,
-        RuleCursorSelection::NoExecutableRules => return Ok(no_executable_rules(context)),
-    };
-    let target = context
+    let target = match context
         .program
-        .target_for_cursor(active_cursor)
-        .map_err(RuleAttemptStepError::from)?;
+        .select_attempt_target(context.cursor)
+        .map_err(RuleAttemptStepError::from)?
+    {
+        RuleAttemptTargetSelection::Target(target) => target,
+        RuleAttemptTargetSelection::NoExecutableRules => return Ok(no_executable_rules(context)),
+    };
+    let (active_cursor, target) = target.into_parts();
     let runtime_rule = runtime_rule_for_target(&mut context.core.once_states, target)
         .map_err(RunStepError::from)?;
 

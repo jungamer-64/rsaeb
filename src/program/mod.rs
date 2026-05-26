@@ -31,7 +31,8 @@ use crate::parser::parse_rules_impl;
 use crate::source::ProgramSource;
 
 pub(crate) use rule_set::{
-    ActiveRuleCursor, RuleCursor, RuleCursorAfterMiss, RuleCursorSelection, RuleScan, RuleTarget,
+    ActiveRuleCursor, RuleAttemptTargetSelection, RuleCursor, RuleCursorAfterMiss, RuleScan,
+    RuleTarget,
 };
 pub(crate) use rule_set::{RuleSet, RuleSetBuilder};
 
@@ -191,16 +192,16 @@ impl Program {
         self.rule_set.rule_attempt_cursor()
     }
 
-    /// Resolves an active rule-attempt cursor to the selected parsed rule.
+    /// Selects the next checked rule-attempt target.
     ///
     /// # Errors
     ///
-    /// Returns `RuleAttemptCursorError` if the cursor points outside this parsed
-    /// program.
-    pub(crate) fn target_for_cursor(
+    /// Returns `RuleAttemptCursorError` if the cursor no longer points inside
+    /// this parsed program.
+    pub(crate) fn select_attempt_target(
         &self,
-        cursor: ActiveRuleCursor,
-    ) -> Result<RuleTarget<'_>, RuleAttemptCursorError> {
-        self.rule_set.target_for_cursor(cursor)
+        cursor: &mut RuleCursor,
+    ) -> Result<RuleAttemptTargetSelection<'_>, RuleAttemptCursorError> {
+        self.rule_set.select_attempt_target(cursor)
     }
 }

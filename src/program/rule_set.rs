@@ -86,11 +86,27 @@ pub(crate) enum RuleCursorAfterMiss {
 
 /// Selection produced when a rule-attempt cursor is consumed for one step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuleCursorSelection {
+enum RuleCursorSelection {
     /// Cursor selected one executable rule line.
     Active(ActiveRuleCursor),
     /// The parsed program has no executable rule line for this attempt mode.
     NoExecutableRules,
+}
+
+/// Checked rule-attempt selection produced by a cursor and its owning rule table.
+pub(crate) enum RuleAttemptTargetSelection<'program> {
+    /// The cursor selected an executable target from this rule table.
+    Target(RuleAttemptTarget<'program>),
+    /// The cursor had no executable target left to select.
+    NoExecutableRules,
+}
+
+/// Active rule-attempt cursor paired with the checked target it selected.
+pub(crate) struct RuleAttemptTarget<'program> {
+    /// Cursor state that selected this target.
+    active_cursor: ActiveRuleCursor,
+    /// Parsed rule selected by the cursor from the same rule table.
+    target: RuleTarget<'program>,
 }
 
 /// Rule target selected by a rule-attempt cursor.
@@ -292,7 +308,7 @@ impl RuleSet {
     ///
     /// Returns `RuleAttemptCursorError` if the cursor points outside this parsed
     /// rule table.
-    pub(crate) fn target_for_cursor(
+    fn target_for_cursor(
         &self,
         active_cursor: ActiveRuleCursor,
     ) -> Result<RuleTarget<'_>, RuleAttemptCursorError> {
@@ -304,11 +320,34 @@ impl RuleSet {
             })?;
         Ok(RuleTarget { rule })
     }
+
+    /// Selects the next rule-attempt target from a cursor minted by this table.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RuleAttemptCursorError` if the active cursor no longer points
+    /// at a rule in this table.
+    pub(crate) fn select_attempt_target(
+        &self,
+        cursor: &mut RuleCursor,
+    ) -> Result<RuleAttemptTargetSelection<'_>, RuleAttemptCursorError> {
+        let active_cursor = match cursor.select_next() {
+            RuleCursorSelection::Active(active_cursor) => active_cursor,
+            RuleCursorSelection::NoExecutableRules => {
+                return Ok(RuleAttemptTargetSelection::NoExecutableRules);
+            }
+        };
+
+        Ok(RuleAttemptTargetSelection::Target(RuleAttemptTarget {
+            active_cursor,
+            target: self.target_for_cursor(active_cursor)?,
+        }))
+    }
 }
 
 impl RuleCursor {
     /// Takes the cursor state, leaving this cursor exhausted until the attempt commits.
-    pub(crate) fn select_next(&mut self) -> RuleCursorSelection {
+    fn select_next(&mut self) -> RuleCursorSelection {
         match core::mem::replace(self, Self::Exhausted) {
             Self::Active(active) => RuleCursorSelection::Active(active),
             Self::Exhausted => RuleCursorSelection::NoExecutableRules,
@@ -404,6 +443,13 @@ impl<'program> RuleTarget<'program> {
     /// Parsed rule selected by the cursor.
     pub(crate) const fn rule(self) -> &'program Rule {
         self.rule
+    }
+}
+
+impl<'program> RuleAttemptTarget<'program> {
+    /// Splits the checked target into cursor progress and selected rule.
+    pub(crate) const fn into_parts(self) -> (ActiveRuleCursor, RuleTarget<'program>) {
+        (self.active_cursor, self.target)
     }
 }
 
