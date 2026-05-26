@@ -72,7 +72,5 @@ pub use parse::{
     LeftModifierKind, ParseError, ParseErrorKind, ParseErrorLocation, ParseLimitError,
     ParseRepresentationError, PayloadKind, RightActionKind,
 };
-pub use run::{
-    InputColumn, LimitError, RunAdmissionError, RunError, RuntimeInputError, StateSizeError,
-};
+pub use run::{InputColumn, RunAdmissionError, RuntimeInputError};
 pub use traced::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
