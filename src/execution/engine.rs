@@ -9,7 +9,7 @@ use crate::program::{
     ActiveRuleCursor, Program, ReturnOutput, RuleCursor, RuleCursorAfterMiss, RuleCursorSelection,
     RunResult,
 };
-use crate::runtime::action::{AppliedRule, prepare_matched_rule};
+use crate::runtime::action::{AppliedRule, PreparedRuleApplication, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
 use crate::runtime::matcher::{
     RuleAttempt, RuleSearch, attempt_rule, find_next_match, runtime_rule_for_target,
@@ -80,6 +80,14 @@ struct RuleAttemptContext<'attempt, 'program> {
     cursor: &'attempt mut RuleCursor,
     /// Rule-attempt budget and consumed-attempt count.
     attempt_budget: &'attempt mut RuleAttemptBudgetState,
+}
+
+/// Rule application after the public witness has been created but before runtime side effects commit.
+struct WitnessedApplication<'program, 'once, 'budget, RuleWitness> {
+    /// Failure-prone runtime preparation that must still be committed linearly.
+    prepared: PreparedRuleApplication<'program, 'once, 'budget>,
+    /// Public rule witness created before mutation commits.
+    witness: RuleWitness,
 }
 
 /// Program ownership shape used by the internal runtime session.
@@ -179,6 +187,33 @@ impl<RuleWitness> CoreAppliedRule<RuleWitness> {
                 output: committed.into_output(),
             },
         }
+    }
+}
+
+impl<'program, 'once, 'budget, RuleWitness>
+    WitnessedApplication<'program, 'once, 'budget, RuleWitness>
+{
+    /// Pairs a prepared application with its public rule witness before commit.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error` if witness creation cannot retain the selected rule.
+    fn new<Error>(
+        prepared: PreparedRuleApplication<'program, 'once, 'budget>,
+        make_witness: impl FnOnce(RuleView<'program>) -> Result<RuleWitness, Error>,
+    ) -> Result<Self, Error> {
+        let witness = make_witness(RuleView::new(prepared.rule()))?;
+        Ok(Self { prepared, witness })
+    }
+
+    /// Commits prepared runtime side effects and publishes the paired witness.
+    fn commit(
+        self,
+        state: &mut State,
+        scratch: &mut RewriteScratch,
+    ) -> CoreAppliedRule<RuleWitness> {
+        let applied = self.prepared.commit(state, scratch);
+        CoreAppliedRule::from_applied_rule(applied, self.witness)
     }
 }
 
@@ -462,11 +497,9 @@ where
     };
     let state_len = core.state.byte_count();
     let prepared = prepare_matched_rule(&mut core.scratch, &mut core.budget, state_len, matched)?;
-    let witness = make_witness(RuleView::new(prepared.rule()))?;
-    let applied = prepared.commit(&mut core.state, &mut core.scratch);
-    Ok(CoreStep::Applied(CoreAppliedRule::from_applied_rule(
-        applied, witness,
-    )))
+    let witnessed = WitnessedApplication::new(prepared, make_witness)?;
+    let applied = witnessed.commit(&mut core.state, &mut core.scratch);
+    Ok(CoreStep::Applied(applied))
 }
 
 /// Evaluates the current cursor against a parsed program.
@@ -519,10 +552,9 @@ where
                 state_len,
                 matched,
             )?;
-            let witness = make_witness(RuleView::new(prepared.rule()))?;
+            let witnessed = WitnessedApplication::new(prepared, make_witness)?;
             let attempt = reservation.commit();
-            let applied = prepared.commit(&mut context.core.state, &mut context.core.scratch);
-            let applied = CoreAppliedRule::from_applied_rule(applied, witness);
+            let applied = witnessed.commit(&mut context.core.state, &mut context.core.scratch);
             if matches!(applied, CoreAppliedRule::Rewrite { .. }) {
                 *context.cursor = RuleCursor::Active(active_cursor.reset_to_first());
             }
