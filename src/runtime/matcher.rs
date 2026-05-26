@@ -1,5 +1,6 @@
 use super::once::{MatchedRuleCommit, OnceRuleReadiness, OnceStateSet, RuntimeRule};
 use super::state::{State, StateMatch};
+use crate::error::RuleRuntimeStateError;
 use crate::program::RuleTarget;
 use crate::rule::{Rule, RuleAnchorSyntax};
 
@@ -159,8 +160,9 @@ pub(crate) fn find_next_match<'program, 'state, 'once>(
     rules: &'program [Rule],
     once_states: &'once mut OnceStateSet,
     state: &'state State,
-) -> RuleSearch<'program, 'state, 'once> {
+) -> Result<RuleSearch<'program, 'state, 'once>, RuleRuntimeStateError> {
     for runtime_rule in once_states.runtime_rules_mut(rules) {
+        let runtime_rule = runtime_rule?;
         let rule = runtime_rule.rule();
         let Some(candidate) = matched_candidate_for_rule(rule, state) else {
             continue;
@@ -168,13 +170,13 @@ pub(crate) fn find_next_match<'program, 'state, 'once>(
 
         match runtime_rule.readiness() {
             OnceRuleReadiness::Available(commit) => {
-                return RuleSearch::Matched(candidate.into_application(commit));
+                return Ok(RuleSearch::Matched(candidate.into_application(commit)));
             }
             OnceRuleReadiness::Consumed => {}
         }
     }
 
-    RuleSearch::Stable
+    Ok(RuleSearch::Stable)
 }
 
 /// Evaluates exactly one parsed rule line against the current runtime state.
@@ -201,7 +203,7 @@ pub(crate) fn attempt_rule<'program, 'state, 'once>(
 pub(crate) fn runtime_rule_for_target<'program, 'once>(
     once_states: &'once mut OnceStateSet,
     target: RuleTarget<'program>,
-) -> Option<RuntimeRule<'program, 'once>> {
+) -> Result<RuntimeRule<'program, 'once>, RuleRuntimeStateError> {
     once_states.runtime_rule_mut(target.rule())
 }
 

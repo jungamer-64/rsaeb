@@ -4,6 +4,7 @@ use core::slice;
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
+use crate::error::RuleRuntimeStateError;
 use crate::inspect::OnceRuleCount;
 use crate::rule::{Rule, RuleAvailability};
 
@@ -137,15 +138,19 @@ impl OnceStateSet {
     pub(super) fn runtime_rule_mut<'program, 'once>(
         &'once mut self,
         rule: &'program Rule,
-    ) -> Option<RuntimeRule<'program, 'once>> {
+    ) -> Result<RuntimeRule<'program, 'once>, RuleRuntimeStateError> {
         let availability = match rule.availability() {
             RuleAvailability::Always => RuntimeRuleAvailability::Always,
             RuleAvailability::Once(slot) => {
-                RuntimeRuleAvailability::Once(self.states.get_mut(slot.index())?)
+                let state = self
+                    .states
+                    .get_mut(slot.index())
+                    .ok_or_else(|| RuleRuntimeStateError::missing_once_rule_state(rule.position()))?;
+                RuntimeRuleAvailability::Once(state)
             }
         };
 
-        Some(RuntimeRule { rule, availability })
+        Ok(RuntimeRule { rule, availability })
     }
 
     /// Iterates parsed rules with runtime availability without row-aligned state.
@@ -161,16 +166,23 @@ impl OnceStateSet {
 }
 
 impl<'program, 'once> Iterator for RuntimeRulesMut<'program, 'once> {
-    type Item = RuntimeRule<'program, 'once>;
+    type Item = Result<RuntimeRule<'program, 'once>, RuleRuntimeStateError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let rule = self.rules.next()?;
         let availability = match rule.availability() {
             RuleAvailability::Always => RuntimeRuleAvailability::Always,
-            RuleAvailability::Once(_) => RuntimeRuleAvailability::Once(self.once_states.next()?),
+            RuleAvailability::Once(_) => match self.once_states.next() {
+                Some(state) => RuntimeRuleAvailability::Once(state),
+                None => {
+                    return Some(Err(RuleRuntimeStateError::missing_once_rule_state(
+                        rule.position(),
+                    )));
+                }
+            },
         };
 
-        Some(RuntimeRule { rule, availability })
+        Some(Ok(RuntimeRule { rule, availability }))
     }
 }
 

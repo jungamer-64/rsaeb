@@ -19,7 +19,7 @@ mod rule_set;
 /// Program-level tracing entrypoints.
 mod tracing;
 
-use crate::error::{ParseError, RunError, RunStartError};
+use crate::error::{ParseError, RuleAttemptCursorError, RunError, RunStartError};
 use crate::execution::{
     BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRuleAttemptSession, OwnedRunSession,
     RuleAttemptSeed,
@@ -191,7 +191,10 @@ impl Program {
     }
 
     /// Resolves an active rule-attempt cursor to the selected parsed rule.
-    pub(crate) fn target_for_cursor(&self, cursor: ActiveRuleCursor) -> Option<RuleTarget<'_>> {
+    pub(crate) fn target_for_cursor(
+        &self,
+        cursor: ActiveRuleCursor,
+    ) -> Result<RuleTarget<'_>, RuleAttemptCursorError> {
         self.rule_set.target_for_cursor(cursor)
     }
 }

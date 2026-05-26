@@ -1,7 +1,9 @@
 use alloc::vec::Vec;
 
 use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
-use crate::error::{ParseError, ParseErrorKind, ParseLimitError, ParseRepresentationError};
+use crate::error::{
+    ParseError, ParseErrorKind, ParseLimitError, ParseRepresentationError, RuleAttemptCursorError,
+};
 use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePosition};
 use crate::limits::RuleLimit;
 use crate::rule::{OnceRuleSlot, ParsedRule, Rule, RuleAvailability, RuleRepeatSyntax};
@@ -266,9 +268,12 @@ impl RuleSet {
     pub(crate) fn target_for_cursor(
         &self,
         active_cursor: ActiveRuleCursor,
-    ) -> Option<RuleTarget<'_>> {
-        let rule = self.rules.get(active_cursor.current_index().get())?;
-        Some(RuleTarget { rule })
+    ) -> Result<RuleTarget<'_>, RuleAttemptCursorError> {
+        let rule = self
+            .rules
+            .get(active_cursor.current_index().get())
+            .ok_or_else(|| RuleAttemptCursorError::missing_rule(active_cursor.current_position()))?;
+        Ok(RuleTarget { rule })
     }
 }
 
@@ -286,6 +291,11 @@ impl ActiveRuleCursor {
     /// Current zero-based rule index.
     pub(crate) const fn current_index(self) -> RuleIndex {
         self.next_rule_index
+    }
+
+    /// Current public rule position.
+    pub(crate) const fn current_position(self) -> RulePosition {
+        self.next_rule_index.position()
     }
 
     /// Advances after a miss or reports that the pass is stable.
@@ -346,6 +356,11 @@ impl RuleIndex {
     /// Zero-based rule-table offset.
     pub(crate) const fn get(self) -> usize {
         self.zero_based
+    }
+
+    /// Public one-based rule position.
+    const fn position(self) -> RulePosition {
+        self.position
     }
 }
 

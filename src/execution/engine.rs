@@ -244,7 +244,7 @@ impl RunCore {
         program: &'program Program,
     ) -> Result<RuntimeStep<'program>, RunStepError> {
         let matched =
-            match find_next_match(program.rule_slice(), &mut self.once_states, &self.state) {
+            match find_next_match(program.rule_slice(), &mut self.once_states, &self.state)? {
                 RuleSearch::Matched(matched) => matched,
                 RuleSearch::Stable => {
                     return Ok(RuntimeStep::Stable(self.budget.completed_steps()));
@@ -453,7 +453,7 @@ fn step_with_witness<'program, RuleWitness, Error>(
 where
     Error: From<RunStepError>,
 {
-    let matched = match find_next_match(program.rule_slice(), &mut core.once_states, &core.state) {
+    let matched = match find_next_match(program.rule_slice(), &mut core.once_states, &core.state)? {
         RuleSearch::Matched(matched) => matched,
         RuleSearch::Stable => return Ok(CoreStep::Stable(core.budget.completed_steps())),
     };
@@ -482,12 +482,8 @@ where
     let Some(active_cursor) = context.cursor.take_active() else {
         return Ok(no_executable_rules(context));
     };
-    let Some(target) = context.program.target_for_cursor(active_cursor) else {
-        return Ok(no_executable_rules(context));
-    };
-    let Some(runtime_rule) = runtime_rule_for_target(&mut context.core.once_states, target) else {
-        return Ok(no_executable_rules(context));
-    };
+    let target = context.program.target_for_cursor(active_cursor)?;
+    let runtime_rule = runtime_rule_for_target(&mut context.core.once_states, target)?;
 
     let reservation = context
         .attempt_budget
