@@ -16,17 +16,30 @@ programming-puzzle idea. This crate exists because that design is worth
 studying, testing, and reimplementing. If this interpreter interests you,
 please support the original game.
 
+## Documentation Map
+
+- This README is the package entry point. It explains the interpreter shape, the
+  accepted A=B surface, byte-domain boundaries, and release checks.
+- The generated rustdoc is the exact API reference and carries the complete
+  doctested public examples.
+- The GitHub Wiki is a short navigation layer for use cases and embedding
+  boundaries.
+
+The crate root intentionally does not re-export duplicate type paths. Public
+types live under their domain modules, such as `source`, `input`, `program`,
+`limits`, `execution`, `inspect`, `trace`, and `error`.
+
 ## Quick Start
 
-Parse source into an immutable `Program`, validate runtime input, and run with
-explicit limits:
+Parse source into an immutable `Program`, validate runtime input, admit it into
+a run seed with explicit execution limits, then run:
 
 ```rust
-use rsaeb::limits::{
-    DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
-    DEFAULT_MAX_STEPS, ExecutionLimits, RuntimeInputLimits,
-};
 use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+use rsaeb::limits::{
+    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
+    DEFAULT_MAX_STEPS, DEFAULT_PARSE_LIMITS, ExecutionLimits, RuntimeInputLimits,
+};
 use rsaeb::program::{Program, RunOutcome};
 use rsaeb::source::ProgramSource;
 
@@ -53,140 +66,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Construct `ProgramSource` explicitly with `ProgramSource::from_text` or
-`ProgramSource::from_bytes`; there is no implicit source conversion at the API
-boundary. Use `from_bytes` when source comments may contain non-UTF-8 bytes.
-Reuse parsed programs freely: a `Program` is immutable, and `(once)`
-consumption is local to each execution.
+`ProgramSource::from_text` and `ProgramSource::from_bytes` only label source
+input; `Program::parse` performs source validation. `RuntimeInputSource` and
+`RuntimeInput::validate` do the same for runtime input bytes. Reuse parsed
+programs freely: a `Program` is immutable, and `(once)` consumption is local to
+each execution.
 
-## Execution APIs
+## Execution Shape
 
-The primary execution path is:
+The normal host flow is:
 
-1. Construct `ProgramSource` with `from_text` or `from_bytes`.
-2. Parse it with `Program::parse`.
-3. Label host bytes with `RuntimeInputSource::from_bytes` and validate them with `RuntimeInput::validate`.
-4. Admit `RuntimeInput` with `RunSeed::admit`, then execute with
-   `Program::run`, `Program::start_run`, `Program::start_rule_attempt_run`,
-   or the owned `into_*` session variants.
+1. Load source bytes or text outside the interpreter.
+2. Construct `ProgramSource`.
+3. Parse with `Program::parse`.
+4. Label host input bytes with `RuntimeInputSource::from_bytes`.
+5. Validate with `RuntimeInput::validate`.
+6. Admit with `RunSeed::admit` and `ExecutionLimits`.
+7. Execute through run-to-completion, stepwise execution, tracing, or
+   rule-attempt stepping.
 
-The crate intentionally contains no filesystem, process, stdout/stderr,
-argument parsing, environment access, or lossy display boundary. Hosts should
-perform I/O outside the interpreter and pass already-loaded bytes to
-`ProgramSource` and `RuntimeInput`.
+The crate intentionally contains no filesystem, process, argument parsing,
+environment access, stdout/stderr, or lossy display boundary. Hosts perform I/O
+outside the interpreter and pass already-loaded bytes into typed boundaries.
 
-### Stepwise Execution
+`Program::run` is the borrowed run-to-completion API. `Program::start_run` is
+the borrowed stepwise API for hosts that keep a reusable parsed program.
+`Program::into_run` is the explicit ownership-transfer stepwise API for cases
+where the execution session must own the parsed program. Rule-attempt execution
+is separate: `Program::start_rule_attempt_run` and `Program::into_rule_attempt_run`
+observe executable rule-line attempts, including misses, without changing normal
+committed-step semantics.
 
-Use `Program::start_run` when a host needs control after each applied rule
-while keeping the parsed program reusable. Use `Program::into_run` only when
-the session itself must own the parsed program, such as when moving it across a
-`'static` task boundary. `Program::run` remains the borrowed run-to-completion
-path.
-
-The public typestate API lives under `rsaeb::execution`: borrowed
-`BorrowedRunSession<'program>` advances through `BorrowedStepTransition`, while
-`OwnedRunSession` advances through `OwnedStepTransition`. Applied, stable,
-returned, and failed states represent post-step states. `(return)` is
-terminal, not an ordinary continuation step. Running, applied, and stable
-executions expose borrowed `RuntimeStateView` values for observation. A failed
-borrowed step returns `BorrowedStepTransition::Failed`, so a host can inspect the
-uncommitted state and then discard the failed run into its runtime error.
-An owned failed step returns `OwnedStepTransition::Failed`; it exposes the same
-diagnostics and can also split the runtime error from the owned parsed program.
-Failed transitions are terminal for both ownership modes; recovering ownership
-does not recover a retryable session. Borrowed applied and returned transitions
-carry `RuleView` witnesses. Owned transitions retain `OwnedRuleWitness` values
-so rule metadata remains available after the parsed program moves with the
-session. Owned non-terminal applied and missed transitions also expose
-`into_parts` methods so callers can retain the owned witness and the
-continuation session together.
-
-The docs.rs crate page contains a complete doctested stepwise example.
-
-Use `Program::start_rule_attempt_run` when a host needs debugger-style control
-over every executable rule line. It reports `BorrowedRuleAttemptTransition::Missed`
-for non-applying rules as a `RuleMiss<RuleView<'_>>` whose `rule()` is the
-borrowed rule witness and whose `reason()` is a typed `RuleMissReason`. It
-consumes `RuleAttemptSeed`, which binds the admitted `RunSeed` to a
-`RuleAttemptLimit` while keeping `StepLimit` reserved for committed execution
-steps. Stable rule-attempt terminals carry `RuleAttemptStableReason<RuleView<'_>>`;
-the owned counterpart uses the same generic `RuleMiss` and
-`RuleAttemptStableReason` shapes with `OwnedRuleWitness`.
-
-### Resource Limits
-
-`ParseLimits` is the parser contract. It bounds source bytes, executable
-code-line bytes, parsed payload bytes, and executable rule count before the
-parser accepts host-provided source into the program domain.
-
-`RuntimeInputLimits` is the raw input validation contract. `RunSeed::admit`
-is the boundary that ties one validated input to one `ExecutionLimits` value.
-`ExecutionLimits` is the run admission and execution contract: it validates
-initial runtime-state size during admission, then carries the step,
-rewrite-state, and return-output budgets through the run. Step count alone is
-not enough for a rewrite system because a short run can still expand state
-aggressively.
-`RuleAttemptSeed` belongs only to rule-attempt sessions and binds the admitted
-run seed to a `RuleAttemptLimit`. The limit counts consumed executable rule
-lines, including misses.
-
-```rust
-use rsaeb::error::{RunError, RunFinishError, RunStepError};
-use rsaeb::limits::{
-    DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
-    ExecutionLimits, RuntimeInputLimits, StepLimit,
-};
-use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
-use rsaeb::program::Program;
-use rsaeb::source::ProgramSource;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let input_limits = RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN);
-    let execution_limits = ExecutionLimits::new(
-        StepLimit::new(0),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
-    let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), input_limits)?;
-    let seed = RunSeed::admit(input, execution_limits)?;
-    let result = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?.run(seed);
-
-    if !matches!(
-        result,
-        Err(RunError::Finish(RunFinishError::Step(RunStepError::StepLimit(error))))
-            if error.completed_steps().get() == 0
-    ) {
-        return Err("unexpected step-limit error".into());
-    }
-
-    Ok(())
-}
-```
-
-Execution may succeed exactly at the step limit. The step limit becomes an
-error only when another rule would still apply after the configured number of
-completed steps.
-
-Runtime input validation is bounded by `RuntimeInputLimits`; initial state
-admission is bounded by `ExecutionLimits` before the interpreter creates an
-execution session. Trace snapshot materialization has its own
-`TraceSnapshotByteLimit` because tracing is outside runtime execution.
-
-### Tracing
-
-Tracing has two layers:
-
-- Borrowed tracing does not materialize owned event snapshots. Events borrow
-  runtime state or return payload bytes only for the callback invocation.
-- Snapshot tracing materializes owned event bytes under `TraceSnapshotByteLimit`.
-
-Borrowed trace sinks use `run_with_borrowed_trace`, which separates runtime
-errors from trace-sink errors with `TracedRunError`. Snapshot tracing adds one
-more failure domain through `TraceSnapshotRunError`: runtime execution,
-snapshot materialization, and sink failures are distinct variants.
-
-Parsed rule views inside trace events borrow from the parsed `Program`, so
-retained trace events cannot outlive that program.
+The exact typestate names, transition variants, owned recovery methods, tracing
+events, and error variants are documented in rustdoc.
 
 ## A=B Language Reference
 
@@ -438,8 +350,7 @@ raw line bytes
 runtime input bytes
   -> AsciiByte         # runtime input domain validation
   -> RuntimeByte       # private ProgramConstructible(ProgramByte) or Opaque(NonProgramAsciiByte)
-  -> BorrowedRunSession / OwnedRunSession
-                       # consumes RuntimeInput and owns mutable execution state
+  -> execution session # consumes RuntimeInput and owns mutable execution state
 ```
 
 Program payloads are stored as `ProgramByte`, not raw `u8`. Runtime state is
@@ -449,17 +360,16 @@ bytes from input become opaque ASCII bytes. Ordinary rules match only editable
 bytes. Opaque input bytes are preserved by surrounding rewrites but cannot be
 directly matched, created, or deleted by program payloads.
 
-Runtime input and runtime state stay in the typed byte domain during execution. Public
-observation crosses an explicit materialization boundary: `RuntimeStateView`
-materializes to `RuntimeStateSnapshot`, stable run results use
-`RuntimeStateSnapshot`, `(return)` outputs use `ReturnOutput`, parsed payload
-inspection materializes to `PayloadBytes`, and snapshot tracing materializes
-owned event bytes under `TraceSnapshotByteLimit`. During execution, the active
-state and the rewrite scratch buffer are distinct typed buffers, and the
-runtime swaps them only after a successful continuation step. `(once)` rules
-carry private slots assigned during parsing, and each execution allocates only
-those slot states rather than one state cell per rule. Only a committed
-application can consume its slot.
+Public observation crosses explicit materialization boundaries. Runtime state
+views materialize to snapshots only when requested, stable run results own final
+state bytes, `(return)` outputs use a separate return-output domain, parsed
+payload inspection materializes explicitly, and snapshot tracing has its own
+byte limit. During execution, the active state and rewrite scratch buffer remain
+separate typed buffers until a successful continuation step commits.
+
+`(once)` rules carry private slots assigned during parsing. Each execution
+allocates only those slot states, and only a committed application can consume
+its slot.
 
 ## `no_std + alloc` Boundary
 
@@ -475,8 +385,6 @@ limits before allocating oversized states or return outputs. Step budget is
 reserved before rewrite or return-output materialization, so an exhausted step
 limit cannot allocate a candidate state or return buffer. Trace snapshot
 materialization is budgeted separately through `TraceSnapshotByteLimit`.
-Internal parser/runtime witnesses are borrowed slices or typed indexes; they do
-not allocate just to strengthen invariants.
 
 Owned public values that contain byte buffers intentionally do not implement
 `Clone`; copying bytes is an explicit materialization step, not a hidden
@@ -490,8 +398,8 @@ allocate.
 ## Error Model
 
 The library error model is intentionally split. Parse errors, runtime input
-errors, runtime execution errors, allocation errors, configured limit errors,
-and trace materialization errors have separate structured types under
+errors, run-admission errors, runtime execution errors, allocation errors, and
+trace materialization errors have separate structured types under
 `rsaeb::error`.
 
 Allocation failures preserve the allocation boundary as `AllocationContext`.
@@ -500,56 +408,15 @@ distinguish failures while validating input, materializing state views,
 building canonical rule source, producing final output, or retaining trace
 snapshots without parsing display strings.
 
-Representation failures such as unrepresentable parser positions are separate
-from allocation failure and are reported as `ParseErrorKind::Representation`.
-Runtime witness contradictions that should be unreachable through ordinary
-public inputs are eliminated by construction instead of being exposed as a
-public runtime error variant.
-
-Rewrite length arithmetic overflow is separate from allocation failure and is
-reported as `RunStepError::RewriteSize`. Configured byte budgets and step
-budgets are reported through concrete step errors such as
-`RunStepError::RuntimeStateLimit`, `RunStepError::ReturnOutputLimit`, and
-`RunStepError::StepLimit`. Trace snapshot byte limits are reported through
-`TraceSnapshotError`, because snapshot materialization is outside runtime
-execution.
+Configured byte budgets and step budgets are reported through concrete errors
+such as `ParseLimitError`, `RuntimeStateLimitError`, `ReturnOutputLimitError`,
+`StepLimitError`, and `RuleAttemptLimitError`. Trace snapshot byte limits are
+reported through `TraceSnapshotError`, because snapshot materialization is
+outside runtime execution.
 
 Filesystem failures are not part of the library error model. External I/O must
 be handled before bytes enter `ProgramSource::from_bytes`,
 `ProgramSource::from_text`, or `RuntimeInputSource::from_bytes`.
-
-## Public API Overview
-
-The generated rustdoc is the complete API reference. Public types live under
-their domain modules; the crate root intentionally does not provide duplicate
-type import paths.
-
-- `rsaeb::source`: `ProgramSource` and source-position value types used by
-  parser diagnostics
-- `rsaeb::input`: `RuntimeInputSource`, `RuntimeInput`, and `RunSeed`
-- `rsaeb::program`: `Program`, `RunResult`, `RunOutcome`,
-  `RuntimeStateSnapshot`, `ReturnOutput`, and `ReturnOutputView`
-- `rsaeb::limits`: `ParseLimits`, `SourceByteLimit`, `CodeLineByteLimit`,
-  `PayloadByteLimit`, `RuleLimit`, `StepLimit`, `RuleAttemptLimit`,
-  `RuntimeInputByteLimit`, `RuntimeStateByteLimit`, `ReturnByteLimit`,
-  `TraceSnapshotByteLimit`,
-  `RuntimeInputLimits`, `ExecutionLimits`, parser/runtime byte-count value
-  types, `StepCount`, `RuleAttemptCount`, and default budget constants
-- `rsaeb::execution`: borrowed stepwise run typestates (`BorrowedRunSession`,
-  `BorrowedStepTransition`, `BorrowedAppliedStep`, `BorrowedStableRun`,
-  `BorrowedReturnedRun`, `BorrowedFailedRun`) and explicit owned typestates
-  (`OwnedRunSession`, `OwnedStepTransition`, `OwnedAppliedStep`,
-  `OwnedStableRun`, `OwnedReturnedRun`, `OwnedFailedRun`), plus borrowed and
-  owned rule-attempt typestates with `RuleAttemptSeed`, `RuleMiss`,
-  `RuleMissReason`, `RuleAttemptStableReason`, and `OwnedRuleWitness`
-- `rsaeb::inspect`: `RuleView`, `RuleAction`, `PayloadView`,
-  `PayloadBytes`, `CanonicalRuleSource`, rule position/count types,
-  `OnceRuleCount`, `RuleRepeat`, and `RuleAnchor`
-- `rsaeb::trace`: `TraceEvent`, `TraceEffect`, borrowed trace aliases,
-  snapshot trace aliases, and `RuntimeStateView`
-- `rsaeb::error`: parse, input, runtime, allocation, limit, and trace error
-  types, including rejected-byte diagnostic value types and
-  `RequestedCapacity`
 
 ## Development Checks
 
@@ -558,6 +425,7 @@ Run the public documentation and package checks before publishing changes:
 ```sh
 rustup target add thumbv7em-none-eabihf
 cargo fmt --check
+cargo check --lib --no-default-features
 cargo check --lib --all-features --target thumbv7em-none-eabihf
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features

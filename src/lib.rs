@@ -1,7 +1,8 @@
 //! Byte-oriented interpreter for A=B ordered rewrite programs.
 //!
-//! This page is the docs.rs API guide. The README carries the longer language
-//! reference; this page focuses on the public Rust surface and the typed
+//! This page is the canonical API guide. The README is the package entry point
+//! and language overview, while the project wiki is a short use-case navigation
+//! layer. This page focuses on exact public Rust surfaces and the typed
 //! boundaries a host program should use.
 //!
 //! `rsaeb` is a `no_std + alloc` library crate. It parses compact A=B source
@@ -487,9 +488,9 @@
 //! [`error::TracedRunError`].
 //! Allocation reservation failures include a typed
 //! [`error::RequestedCapacity`] instead of only a formatted string.
-//! Representation and internal-invariant failures are distinct structured
-//! domains, so parser/runtime witness contradictions do not become hidden
-//! panics or allocation errors.
+//! Representation failures are distinct from allocation failures, and runtime
+//! contradictions that public construction paths cannot express are eliminated
+//! by typed witnesses instead of becoming hidden panics or display-only errors.
 //!
 //! ```
 //! use rsaeb::error::RuntimeInputError;
