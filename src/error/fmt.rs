@@ -3,9 +3,12 @@ use core::fmt;
 use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind};
 
 use super::{
-    InputColumn, LeftModifierKind, LimitError, ParseError, ParseErrorKind, ParseErrorLocation,
-    ParseRepresentationError, PayloadKind, RightActionKind, RunAdmissionError, RunError,
-    RuntimeInputError, StateSizeError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
+    InputColumn, LeftModifierKind, OwnedRuleAttemptStepError, OwnedRunStepError, ParseError,
+    ParseErrorKind, ParseErrorLocation, ParseRepresentationError, PayloadKind,
+    ReturnOutputLimitError, RewriteSizeError, RightActionKind, RuleAttemptLimitError,
+    RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError, RunStartError, RunStepError,
+    RuntimeInputError, RuntimeStateLimitError, StepLimitError, TraceSnapshotError,
+    TraceSnapshotRunError, TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -189,9 +192,72 @@ impl fmt::Display for PayloadKind {
 impl fmt::Display for RunError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Start(error) => error.fmt(f),
+            Self::Finish(error) => error.fmt(f),
+        }
+    }
+}
+
+impl fmt::Display for RunStartError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Allocation(error) => {
+                write!(f, "run start failed: {error}")
+            }
+        }
+    }
+}
+
+impl fmt::Display for RunStepError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
             Self::Allocation(error) => error.fmt(f),
-            Self::StateSize(error) => error.fmt(f),
-            Self::Limit(error) => error.fmt(f),
+            Self::RewriteSize(error) => error.fmt(f),
+            Self::RuntimeStateLimit(error) => error.fmt(f),
+            Self::ReturnOutputLimit(error) => error.fmt(f),
+            Self::StepLimit(error) => error.fmt(f),
+        }
+    }
+}
+
+impl fmt::Display for OwnedRunStepError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Step(error) => error.fmt(f),
+            Self::RuleWitnessAllocation(error) => {
+                write!(f, "owned rule witness materialization failed: {error}")
+            }
+        }
+    }
+}
+
+impl fmt::Display for RuleAttemptStepError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Step(error) => error.fmt(f),
+            Self::RuleAttemptLimit(error) => error.fmt(f),
+        }
+    }
+}
+
+impl fmt::Display for OwnedRuleAttemptStepError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Attempt(error) => error.fmt(f),
+            Self::RuleWitnessAllocation(error) => {
+                write!(f, "owned rule witness materialization failed: {error}")
+            }
+        }
+    }
+}
+
+impl fmt::Display for RunFinishError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Step(error) => error.fmt(f),
+            Self::FinalOutput(error) => {
+                write!(f, "final output materialization failed: {error}")
+            }
         }
     }
 }
@@ -282,11 +348,11 @@ impl fmt::Display for InputColumn {
     }
 }
 
-impl fmt::Display for StateSizeError {
+impl fmt::Display for RewriteSizeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "state size failure: replacing {} bytes in a {} byte state with {} bytes",
+            "rewrite size failure: replacing {} bytes in a {} byte state with {} bytes",
             self.lhs_len(),
             self.state_len(),
             self.rhs_len(),
@@ -294,46 +360,49 @@ impl fmt::Display for StateSizeError {
     }
 }
 
-impl fmt::Display for LimitError {
+impl fmt::Display for RuntimeStateLimitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::State {
-                limit,
-                attempted_len,
-            } => write!(
-                f,
-                "rewrite state limit exceeded; attempted length: {attempted_len}, limit: {}",
-                limit.get(),
-            ),
-            Self::Return {
-                limit,
-                attempted_len,
-            } => write!(
-                f,
-                "return output limit exceeded; attempted length: {attempted_len}, limit: {}",
-                limit.get(),
-            ),
-            Self::Step {
-                max_steps,
-                completed_steps,
-                state_len,
-            } => write!(
-                f,
-                "step limit exceeded after {} steps; max steps: {}, state length: {state_len} bytes",
-                completed_steps.get(),
-                max_steps.get(),
-            ),
-            Self::RuleAttempt {
-                max_attempts,
-                completed_attempts,
-                state_len,
-            } => write!(
-                f,
-                "rule-attempt limit exceeded after {} attempts; max attempts: {}, state length: {state_len} bytes",
-                completed_attempts.get(),
-                max_attempts.get(),
-            ),
-        }
+        write!(
+            f,
+            "rewrite state limit exceeded; attempted length: {}, limit: {}",
+            self.attempted_len(),
+            self.limit().get(),
+        )
+    }
+}
+
+impl fmt::Display for ReturnOutputLimitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "return output limit exceeded; attempted length: {}, limit: {}",
+            self.attempted_len(),
+            self.limit().get(),
+        )
+    }
+}
+
+impl fmt::Display for StepLimitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "step limit exceeded after {} steps; max steps: {}, state length: {} bytes",
+            self.completed_steps().get(),
+            self.max_steps().get(),
+            self.state_len(),
+        )
+    }
+}
+
+impl fmt::Display for RuleAttemptLimitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "rule-attempt limit exceeded after {} attempts; max attempts: {}, state length: {} bytes",
+            self.completed_attempts().get(),
+            self.max_attempts().get(),
+            self.state_len(),
+        )
     }
 }
 

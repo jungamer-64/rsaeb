@@ -1,4 +1,4 @@
-use crate::error::{RunError, TracedRunError};
+use crate::error::{RunError, RunFinishError, RunStartError, TracedRunError};
 use crate::input::RunSeed;
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::program::{Program, RunResult};
@@ -60,7 +60,10 @@ pub struct OwnedRuleAttemptSession {
 /// Returns `RunError` when execution setup fails or a later matching rule would
 /// exceed configured limits.
 pub(crate) fn finish_borrowed_run(program: &Program, seed: RunSeed) -> Result<RunResult, RunError> {
-    Session::new(BorrowedProgram { program }, seed)?.finish()
+    Session::new(BorrowedProgram { program }, seed)
+        .map_err(RunError::from)?
+        .finish()
+        .map_err(RunError::from)
 }
 
 /// Runs a borrowed program to completion while emitting borrowed trace events.
@@ -78,6 +81,7 @@ where
     F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
 {
     Session::new(BorrowedProgram { program }, seed)
+        .map_err(RunError::from)
         .map_err(TracedRunError::Run)?
         .run_with_borrowed_trace(trace)
 }
@@ -88,8 +92,8 @@ impl<'program> BorrowedRunSession<'program> {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if allocating per-run rule state fails.
-    pub(crate) fn new(program: &'program Program, seed: RunSeed) -> Result<Self, RunError> {
+    /// Returns `RunStartError` if allocating per-run rule state fails.
+    pub(crate) fn new(program: &'program Program, seed: RunSeed) -> Result<Self, RunStartError> {
         Ok(Self {
             session: Session::new(BorrowedProgram { program }, seed)?,
         })
@@ -132,9 +136,9 @@ impl<'program> BorrowedRunSession<'program> {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` when applying a later matching rule would exceed the
+    /// Returns `RunFinishError` when applying a later matching rule would exceed the
     /// configured limits, allocation fails, or state-size arithmetic overflows.
-    pub fn finish(self) -> Result<RunResult, RunError> {
+    pub fn finish(self) -> Result<RunResult, RunFinishError> {
         self.session.finish()
     }
 }
@@ -144,8 +148,11 @@ impl<'program> BorrowedRuleAttemptSession<'program> {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if allocating per-run rule state fails.
-    pub(crate) fn new(program: &'program Program, seed: RuleAttemptSeed) -> Result<Self, RunError> {
+    /// Returns `RunStartError` if allocating per-run rule state fails.
+    pub(crate) fn new(
+        program: &'program Program,
+        seed: RuleAttemptSeed,
+    ) -> Result<Self, RunStartError> {
         let (seed, limit) = seed.into_parts();
         Ok(Self {
             session: AttemptSession::new(BorrowedProgram { program }, seed, limit)?,
@@ -197,8 +204,8 @@ impl OwnedRunSession {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if allocating per-run rule state fails.
-    pub(crate) fn new(program: Program, seed: RunSeed) -> Result<Self, RunError> {
+    /// Returns `RunStartError` if allocating per-run rule state fails.
+    pub(crate) fn new(program: Program, seed: RunSeed) -> Result<Self, RunStartError> {
         Ok(Self {
             session: Session::new(OwnedProgram { program }, seed)?,
         })
@@ -249,9 +256,9 @@ impl OwnedRunSession {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` when applying a later matching rule would exceed the
+    /// Returns `RunFinishError` when applying a later matching rule would exceed the
     /// configured limits, allocation fails, or state-size arithmetic overflows.
-    pub fn finish(self) -> Result<RunResult, RunError> {
+    pub fn finish(self) -> Result<RunResult, RunFinishError> {
         self.session.finish()
     }
 }
@@ -261,8 +268,8 @@ impl OwnedRuleAttemptSession {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if allocating per-run rule state fails.
-    pub(crate) fn new(program: Program, seed: RuleAttemptSeed) -> Result<Self, RunError> {
+    /// Returns `RunStartError` if allocating per-run rule state fails.
+    pub(crate) fn new(program: Program, seed: RuleAttemptSeed) -> Result<Self, RunStartError> {
         let (seed, limit) = seed.into_parts();
         Ok(Self {
             session: AttemptSession::new(OwnedProgram { program }, seed, limit)?,

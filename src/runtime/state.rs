@@ -1,10 +1,11 @@
 use super::budget::StepReservation;
 use super::rewrite::{PreparedRewrite, RewriteScratch};
+use crate::allocation::AllocationError;
 use crate::bytes::{
     NonEmptyPayloadNeedle, Payload, PayloadByteCount, PayloadNeedle, RuntimeByte,
     RuntimeStateByteCount,
 };
-use crate::error::{RunError, StateSizeError};
+use crate::error::{RewriteSizeError, RunStepError};
 use crate::input::InitialStateBytes;
 use crate::program::RuntimeStateSnapshot;
 use crate::rule::RewriteAction;
@@ -111,9 +112,9 @@ impl State {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if final output allocation fails.
-    pub(crate) fn into_snapshot(self) -> Result<RuntimeStateSnapshot, RunError> {
-        RuntimeStateSnapshot::from_final_state_view(self.view()).map_err(RunError::from)
+    /// Returns `AllocationError` if final output allocation fails.
+    pub(crate) fn into_snapshot(self) -> Result<RuntimeStateSnapshot, AllocationError> {
+        RuntimeStateSnapshot::from_final_state_view(self.view())
     }
 }
 
@@ -304,14 +305,14 @@ impl<'state> StateMatch<'state> {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if replacement size arithmetic overflows, the
+    /// Returns `RunStepError` if replacement size arithmetic overflows, the
     /// rewritten state exceeds limits, or scratch allocation fails.
     pub(crate) fn rewrite_into(
         self,
         action: &RewriteAction,
         output: &mut RewriteScratch,
         step: &StepReservation<'_>,
-    ) -> Result<PreparedRewrite, RunError> {
+    ) -> Result<PreparedRewrite, RunStepError> {
         self.prepare_replacement_buffer(action.payload(), output, step)?;
         match action {
             RewriteAction::Replace(rhs) => {
@@ -337,9 +338,9 @@ impl<'state> StateMatch<'state> {
     ///
     /// # Errors
     ///
-    /// Returns `StateSizeError` if removing the match and adding the payload
+    /// Returns `RewriteSizeError` if removing the match and adding the payload
     /// cannot be represented as a runtime state byte count.
-    fn replaced_byte_count(self, rhs: &Payload) -> Result<RuntimeStateByteCount, StateSizeError> {
+    fn replaced_byte_count(self, rhs: &Payload) -> Result<RuntimeStateByteCount, RewriteSizeError> {
         let state_len = RuntimeStateByteCount::new(self.bytes.len());
         let lhs_len = self.matched_len();
         let rhs_len = rhs.byte_count();
@@ -349,21 +350,21 @@ impl<'state> StateMatch<'state> {
             .checked_sub(lhs_len.get())
             .and_then(|base| base.checked_add(rhs_len.get()))
             .map(RuntimeStateByteCount::new)
-            .ok_or_else(|| StateSizeError::new(state_len, lhs_len, rhs_len))
+            .ok_or_else(|| RewriteSizeError::new(state_len, lhs_len, rhs_len))
     }
 
     /// Clears and reserves scratch storage for one rewrite.
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if replacement size arithmetic overflows, the
+    /// Returns `RunStepError` if replacement size arithmetic overflows, the
     /// rewritten state exceeds limits, or scratch allocation fails.
     fn prepare_replacement_buffer(
         self,
         rhs: &Payload,
         output: &mut RewriteScratch,
         step: &StepReservation<'_>,
-    ) -> Result<(), RunError> {
+    ) -> Result<(), RunStepError> {
         let capacity = self.replaced_byte_count(rhs)?;
 
         step.ensure_rewrite_state_len(capacity)?;

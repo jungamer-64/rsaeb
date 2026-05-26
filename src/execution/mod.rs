@@ -15,7 +15,7 @@
 //! carry the continuation session. Stable and returned states are terminal.
 //! Failed states are also terminal for the borrowed API: they preserve the
 //! uncommitted state for diagnostics and then let the caller discard the run
-//! into its [`RunError`](crate::error::RunError). Owned failed states
+//! into its [`RunStepError`](crate::error::RunStepError). Owned failed states
 //! additionally let the caller recover the owned parsed program or split it
 //! from the error.
 //! Rule-attempt transitions additionally expose typed miss reasons through
@@ -25,7 +25,7 @@
 //! [`RuleAttemptLimit`](crate::limits::RuleAttemptLimit).
 //!
 //! ```
-//! use rsaeb::error::{LimitError, RunError};
+//! use rsaeb::error::RunStepError;
 //! use rsaeb::execution::BorrowedStepTransition;
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
 //! use rsaeb::limits::{
@@ -58,8 +58,8 @@
 //! }
 //! if !matches!(
 //!     failed.error(),
-//!     RunError::Limit(LimitError::State { attempted_len, .. })
-//!         if attempted_len.get() == 4
+//!     RunStepError::RuntimeStateLimit(error)
+//!         if error.attempted_len().get() == 4
 //! ) {
 //!     return Err("unexpected failed-step error".into());
 //! }

@@ -1,4 +1,6 @@
-use crate::error::RunError;
+use crate::error::{
+    OwnedRuleAttemptStepError, OwnedRunStepError, RuleAttemptStepError, RunStepError,
+};
 use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::program::{Program, ReturnOutput};
@@ -86,7 +88,7 @@ pub(super) struct RuleAttemptStable<RuleWitness> {
 }
 
 /// Public stepwise transition construction for one session ownership mode.
-pub(super) trait StepwiseTransition<Session, RuleWitness, ProgramHandle> {
+pub(super) trait StepwiseTransition<Session, RuleWitness, ProgramHandle, StepError> {
     /// Builds a non-terminal applied transition.
     fn applied(applied: StepwiseApplied<RuleWitness>, session: Session) -> Self;
 
@@ -100,11 +102,11 @@ pub(super) trait StepwiseTransition<Session, RuleWitness, ProgramHandle> {
     fn stable(steps: StepCount, terminal: TerminalRunParts<ProgramHandle>) -> Self;
 
     /// Builds a terminal failed transition.
-    fn failed(error: RunError, session: Session) -> Self;
+    fn failed(error: StepError, session: Session) -> Self;
 }
 
 /// Public rule-attempt transition construction for one session ownership mode.
-pub(super) trait RuleAttemptTransition<Session, RuleWitness, ProgramHandle> {
+pub(super) trait RuleAttemptTransition<Session, RuleWitness, ProgramHandle, StepError> {
     /// Builds a non-terminal missed-attempt transition.
     fn missed(missed: RuleAttemptMissed<RuleWitness>, session: Session) -> Self;
 
@@ -124,16 +126,19 @@ pub(super) trait RuleAttemptTransition<Session, RuleWitness, ProgramHandle> {
     ) -> Self;
 
     /// Builds a terminal failed transition.
-    fn failed(error: RunError, session: Session) -> Self;
+    fn failed(error: StepError, session: Session) -> Self;
 }
 
 /// Shared transition construction for ordinary stepwise sessions.
 pub(super) trait StepwiseRunSession: Sized {
     /// Public transition produced by this session.
-    type Transition: StepwiseTransition<Self, Self::RuleWitness, Self::TerminalProgram>;
+    type Transition: StepwiseTransition<Self, Self::RuleWitness, Self::TerminalProgram, Self::StepError>;
 
     /// Rule witness carried by public applied and returned transitions.
     type RuleWitness;
+
+    /// Error carried by failed public transitions.
+    type StepError;
 
     /// Program handle retained by terminal public transitions.
     type TerminalProgram;
@@ -142,8 +147,8 @@ pub(super) trait StepwiseRunSession: Sized {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if stepping through the private runtime session fails.
-    fn session_step(&mut self) -> Result<CoreStep<Self::RuleWitness>, RunError>;
+    /// Returns `StepError` if stepping through the private runtime session fails.
+    fn session_step(&mut self) -> Result<CoreStep<Self::RuleWitness>, Self::StepError>;
 
     /// Consumes the public session into terminal program/core ownership.
     fn into_terminal_parts(self) -> TerminalRunParts<Self::TerminalProgram>;
@@ -171,10 +176,13 @@ pub(super) trait StepwiseRunSession: Sized {
 /// Shared transition construction for rule-attempt stepwise sessions.
 pub(super) trait RuleAttemptRunSession: Sized {
     /// Public transition produced by this session.
-    type Transition: RuleAttemptTransition<Self, Self::RuleWitness, Self::TerminalProgram>;
+    type Transition: RuleAttemptTransition<Self, Self::RuleWitness, Self::TerminalProgram, Self::StepError>;
 
     /// Rule witness carried by public attempt transitions.
     type RuleWitness;
+
+    /// Error carried by failed public transitions.
+    type StepError;
 
     /// Program handle retained by terminal public transitions.
     type TerminalProgram;
@@ -183,8 +191,8 @@ pub(super) trait RuleAttemptRunSession: Sized {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if stepping through the private rule-attempt session fails.
-    fn session_step(&mut self) -> Result<CoreRuleAttempt<Self::RuleWitness>, RunError>;
+    /// Returns `StepError` if stepping through the private rule-attempt session fails.
+    fn session_step(&mut self) -> Result<CoreRuleAttempt<Self::RuleWitness>, Self::StepError>;
 
     /// Consumes the public session into terminal program/core ownership.
     fn into_terminal_parts(self) -> TerminalRunParts<Self::TerminalProgram>;
@@ -238,9 +246,10 @@ pub(super) trait RuleAttemptRunSession: Sized {
 impl<'program> StepwiseRunSession for BorrowedRunSession<'program> {
     type Transition = BorrowedStepTransition<'program>;
     type RuleWitness = RuleView<'program>;
+    type StepError = RunStepError;
     type TerminalProgram = &'program Program;
 
-    fn session_step(&mut self) -> Result<CoreStep<Self::RuleWitness>, RunError> {
+    fn session_step(&mut self) -> Result<CoreStep<Self::RuleWitness>, Self::StepError> {
         self.session.step_borrowed()
     }
 
@@ -254,8 +263,12 @@ impl<'program> StepwiseRunSession for BorrowedRunSession<'program> {
 }
 
 impl<'program>
-    StepwiseTransition<BorrowedRunSession<'program>, RuleView<'program>, &'program Program>
-    for BorrowedStepTransition<'program>
+    StepwiseTransition<
+        BorrowedRunSession<'program>,
+        RuleView<'program>,
+        &'program Program,
+        RunStepError,
+    > for BorrowedStepTransition<'program>
 {
     fn applied(
         StepwiseApplied { step, rule }: StepwiseApplied<RuleView<'program>>,
@@ -291,7 +304,7 @@ impl<'program>
         })
     }
 
-    fn failed(error: RunError, session: BorrowedRunSession<'program>) -> Self {
+    fn failed(error: RunStepError, session: BorrowedRunSession<'program>) -> Self {
         BorrowedStepTransition::Failed(BorrowedFailedRun::new(error, session))
     }
 }
@@ -299,9 +312,10 @@ impl<'program>
 impl StepwiseRunSession for OwnedRunSession {
     type Transition = OwnedStepTransition;
     type RuleWitness = OwnedRuleWitness;
+    type StepError = OwnedRunStepError;
     type TerminalProgram = Program;
 
-    fn session_step(&mut self) -> Result<CoreStep<Self::RuleWitness>, RunError> {
+    fn session_step(&mut self) -> Result<CoreStep<Self::RuleWitness>, Self::StepError> {
         self.session.step_owned()
     }
 
@@ -311,7 +325,9 @@ impl StepwiseRunSession for OwnedRunSession {
     }
 }
 
-impl StepwiseTransition<OwnedRunSession, OwnedRuleWitness, Program> for OwnedStepTransition {
+impl StepwiseTransition<OwnedRunSession, OwnedRuleWitness, Program, OwnedRunStepError>
+    for OwnedStepTransition
+{
     fn applied(
         StepwiseApplied { step, rule }: StepwiseApplied<OwnedRuleWitness>,
         session: OwnedRunSession,
@@ -346,7 +362,7 @@ impl StepwiseTransition<OwnedRunSession, OwnedRuleWitness, Program> for OwnedSte
         })
     }
 
-    fn failed(error: RunError, session: OwnedRunSession) -> Self {
+    fn failed(error: OwnedRunStepError, session: OwnedRunSession) -> Self {
         OwnedStepTransition::Failed(OwnedFailedRun::new(error, session))
     }
 }
@@ -354,9 +370,10 @@ impl StepwiseTransition<OwnedRunSession, OwnedRuleWitness, Program> for OwnedSte
 impl<'program> RuleAttemptRunSession for BorrowedRuleAttemptSession<'program> {
     type Transition = BorrowedRuleAttemptTransition<'program>;
     type RuleWitness = RuleView<'program>;
+    type StepError = RuleAttemptStepError;
     type TerminalProgram = &'program Program;
 
-    fn session_step(&mut self) -> Result<CoreRuleAttempt<Self::RuleWitness>, RunError> {
+    fn session_step(&mut self) -> Result<CoreRuleAttempt<Self::RuleWitness>, Self::StepError> {
         self.session.step_borrowed()
     }
 
@@ -379,6 +396,7 @@ impl<'program>
         BorrowedRuleAttemptSession<'program>,
         RuleView<'program>,
         &'program Program,
+        RuleAttemptStepError,
     > for BorrowedRuleAttemptTransition<'program>
 {
     fn missed(
@@ -443,7 +461,7 @@ impl<'program>
         })
     }
 
-    fn failed(error: RunError, session: BorrowedRuleAttemptSession<'program>) -> Self {
+    fn failed(error: RuleAttemptStepError, session: BorrowedRuleAttemptSession<'program>) -> Self {
         BorrowedRuleAttemptTransition::Failed(BorrowedRuleAttemptFailedRun::new(error, session))
     }
 }
@@ -451,9 +469,10 @@ impl<'program>
 impl RuleAttemptRunSession for OwnedRuleAttemptSession {
     type Transition = OwnedRuleAttemptTransition;
     type RuleWitness = OwnedRuleWitness;
+    type StepError = OwnedRuleAttemptStepError;
     type TerminalProgram = Program;
 
-    fn session_step(&mut self) -> Result<CoreRuleAttempt<Self::RuleWitness>, RunError> {
+    fn session_step(&mut self) -> Result<CoreRuleAttempt<Self::RuleWitness>, Self::StepError> {
         self.session.step_owned()
     }
 
@@ -463,8 +482,13 @@ impl RuleAttemptRunSession for OwnedRuleAttemptSession {
     }
 }
 
-impl RuleAttemptTransition<OwnedRuleAttemptSession, OwnedRuleWitness, Program>
-    for OwnedRuleAttemptTransition
+impl
+    RuleAttemptTransition<
+        OwnedRuleAttemptSession,
+        OwnedRuleWitness,
+        Program,
+        OwnedRuleAttemptStepError,
+    > for OwnedRuleAttemptTransition
 {
     fn missed(
         RuleAttemptMissed { attempt, miss }: RuleAttemptMissed<OwnedRuleWitness>,
@@ -528,7 +552,7 @@ impl RuleAttemptTransition<OwnedRuleAttemptSession, OwnedRuleWitness, Program>
         })
     }
 
-    fn failed(error: RunError, session: OwnedRuleAttemptSession) -> Self {
+    fn failed(error: OwnedRuleAttemptStepError, session: OwnedRuleAttemptSession) -> Self {
         OwnedRuleAttemptTransition::Failed(OwnedRuleAttemptFailedRun::new(error, session))
     }
 }

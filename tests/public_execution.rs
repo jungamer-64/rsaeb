@@ -4,7 +4,7 @@
 mod runtime_support;
 mod support;
 
-use rsaeb::error::LimitError;
+use rsaeb::error::{OwnedRunStepError, RuleAttemptStepError, RunStepError};
 use rsaeb::execution::{
     BorrowedAppliedStep, BorrowedFailedRun, BorrowedReturnedRun, BorrowedRuleAttemptSession,
     BorrowedRuleAttemptTransition, BorrowedRunSession, BorrowedStableRun, BorrowedStepTransition,
@@ -835,13 +835,10 @@ fn execution_rule_attempt_limit_is_independent_from_step_limit() -> TestResult {
     ensure_matches(
         matches!(
             failed.into_error(),
-            rsaeb::error::RunError::Limit(LimitError::RuleAttempt {
-                max_attempts,
-                completed_attempts,
-                state_len,
-            }) if max_attempts == RuleAttemptLimit::new(1)
-                && completed_attempts.get() == 1
-                && state_len.get() == 1
+            RuleAttemptStepError::RuleAttemptLimit(error)
+                if error.max_attempts() == RuleAttemptLimit::new(1)
+                    && error.completed_attempts().get() == 1
+                    && error.state_len().get() == 1
         ),
         "expected rule-attempt limit details",
     )
@@ -874,10 +871,9 @@ fn execution_rule_attempt_preparation_failure_drops_attempt_reservation() -> Tes
     ensure_matches(
         matches!(
             failed.into_error(),
-            rsaeb::error::RunError::Limit(LimitError::State {
-                limit,
-                attempted_len,
-            }) if limit == RuntimeStateByteLimit::new(1) && attempted_len.get() == 2
+            RuleAttemptStepError::Step(RunStepError::RuntimeStateLimit(error))
+                if error.limit() == RuntimeStateByteLimit::new(1)
+                    && error.attempted_len().get() == 2
         ),
         "expected state limit before attempt reservation commits",
     )
@@ -1055,7 +1051,7 @@ fn execution_owned_terminals_can_return_program() -> TestResult {
     ensure_matches(
         matches!(
             error,
-            rsaeb::error::RunError::Limit(LimitError::Return { .. })
+            OwnedRunStepError::Step(RunStepError::ReturnOutputLimit(_))
         ),
         "expected owned return limit failure",
     )?;
@@ -1325,10 +1321,9 @@ fn execution_step_failure_is_terminal_transition() -> TestResult {
     ensure_matches(
         matches!(
             failed.error(),
-            rsaeb::error::RunError::Limit(LimitError::Return {
-                limit,
-                attempted_len,
-            }) if *limit == ReturnByteLimit::new(1) && attempted_len.get() == 2
+            RunStepError::ReturnOutputLimit(error)
+                if error.limit() == ReturnByteLimit::new(1)
+                    && error.attempted_len().get() == 2
         ),
         "expected return limit failure",
     )
@@ -1366,10 +1361,7 @@ fn execution_step_failure_preserves_current_progress() -> TestResult {
     ensure_matches(
         matches!(
             failed.into_error(),
-            rsaeb::error::RunError::Limit(LimitError::Step {
-                completed_steps,
-                ..
-            }) if completed_steps.get() == 1
+            RunStepError::StepLimit(error) if error.completed_steps().get() == 1
         ),
         "expected completed-step limit failure",
     )

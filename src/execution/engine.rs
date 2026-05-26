@@ -1,4 +1,7 @@
-use crate::error::{RunError, TracedRunError};
+use crate::error::{
+    OwnedRuleAttemptStepError, OwnedRunStepError, RuleAttemptStepError, RunError, RunFinishError,
+    RunStartError, RunStepError, TracedRunError,
+};
 use crate::input::RunSeed;
 use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, RuleAttemptLimit, StepCount};
@@ -195,8 +198,8 @@ impl RunCore {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if per-run rule state allocation fails.
-    fn new(program: &Program, seed: RunSeed) -> Result<Self, RunError> {
+    /// Returns `RunStartError` if per-run rule state allocation fails.
+    fn new(program: &Program, seed: RunSeed) -> Result<Self, RunStartError> {
         let (input, budget) = seed.into_runtime_parts();
         let state = State::from_input(input);
         let once_states = OnceStateSet::new(program.once_rule_count())?;
@@ -222,20 +225,24 @@ impl RunCore {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if final state materialization cannot allocate.
-    pub(super) fn into_stable_result(self, steps: StepCount) -> Result<RunResult, RunError> {
-        Ok(RunResult::stable(self.state.into_snapshot()?, steps))
+    /// Returns `RunFinishError` if final state materialization cannot allocate.
+    pub(super) fn into_stable_result(self, steps: StepCount) -> Result<RunResult, RunFinishError> {
+        let output = self
+            .state
+            .into_snapshot()
+            .map_err(RunFinishError::FinalOutput)?;
+        Ok(RunResult::stable(output, steps))
     }
 
     /// Advances the mutable runtime core against the supplied immutable program.
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if applying the matched rule exceeds limits or allocation fails.
+    /// Returns `RunStepError` if applying the matched rule exceeds limits or allocation fails.
     fn step_runtime<'program>(
         &mut self,
         program: &'program Program,
-    ) -> Result<RuntimeStep<'program>, RunError> {
+    ) -> Result<RuntimeStep<'program>, RunStepError> {
         let matched =
             match find_next_match(program.rule_slice(), &mut self.once_states, &self.state) {
                 RuleSearch::Matched(matched) => matched,
@@ -255,8 +262,8 @@ impl RunCore {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if applying the matched rule exceeds limits or allocation fails.
-    fn step(&mut self, program: &Program) -> Result<CoreStep<()>, RunError> {
+    /// Returns `RunStepError` if applying the matched rule exceeds limits or allocation fails.
+    fn step(&mut self, program: &Program) -> Result<CoreStep<()>, RunStepError> {
         let applied = match self.step_runtime(program)? {
             RuntimeStep::Applied(applied) => applied,
             RuntimeStep::Stable(steps) => return Ok(CoreStep::Stable(steps)),
@@ -273,8 +280,8 @@ impl<P: ProgramOwner> Session<P> {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if allocating per-run rule state fails.
-    pub(super) fn new(program: P, seed: RunSeed) -> Result<Self, RunError> {
+    /// Returns `RunStartError` if allocating per-run rule state fails.
+    pub(super) fn new(program: P, seed: RunSeed) -> Result<Self, RunStartError> {
         let core = RunCore::new(program.program(), seed)?;
         Ok(Self { program, core })
     }
@@ -298,8 +305,8 @@ impl<P: ProgramOwner> Session<P> {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if rule matching or rule application fails.
-    pub(super) fn step(&mut self) -> Result<CoreStep<()>, RunError> {
+    /// Returns `RunStepError` if rule matching or rule application fails.
+    pub(super) fn step(&mut self) -> Result<CoreStep<()>, RunStepError> {
         self.core.step(self.program.program())
     }
 
@@ -307,11 +314,11 @@ impl<P: ProgramOwner> Session<P> {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` when a later matching rule would exceed configured
+    /// Returns `RunFinishError` when a later matching rule would exceed configured
     /// limits.
-    pub(super) fn finish(mut self) -> Result<RunResult, RunError> {
+    pub(super) fn finish(mut self) -> Result<RunResult, RunFinishError> {
         loop {
-            match self.step()? {
+            match self.step().map_err(RunFinishError::from)? {
                 CoreStep::Applied(CoreAppliedRule::Rewrite { .. }) => {}
                 CoreStep::Applied(CoreAppliedRule::Return { step, output, .. }) => {
                     return Ok(RunResult::from_return(output, step));
@@ -327,12 +334,12 @@ impl<P: ProgramOwner> AttemptSession<P> {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if allocating per-run rule state fails.
+    /// Returns `RunStartError` if allocating per-run rule state fails.
     pub(super) fn new(
         program: P,
         seed: RunSeed,
         limit: RuleAttemptLimit,
-    ) -> Result<Self, RunError> {
+    ) -> Result<Self, RunStartError> {
         let cursor = program.program().rule_attempt_cursor();
         let core = RunCore::new(program.program(), seed)?;
         Ok(Self {
@@ -369,8 +376,8 @@ impl<'program> Session<BorrowedProgram<'program>> {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if matching, preparation, or application fails.
-    pub(super) fn step_borrowed(&mut self) -> Result<CoreStep<RuleView<'program>>, RunError> {
+    /// Returns `RunStepError` if matching, preparation, or application fails.
+    pub(super) fn step_borrowed(&mut self) -> Result<CoreStep<RuleView<'program>>, RunStepError> {
         step_with_witness(&mut self.core, self.program.program, Ok)
     }
 }
@@ -380,11 +387,11 @@ impl Session<OwnedProgram> {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if matching, preparation, witness materialization,
+    /// Returns `OwnedRunStepError` if matching, preparation, witness materialization,
     /// or application fails.
-    pub(super) fn step_owned(&mut self) -> Result<CoreStep<OwnedRuleWitness>, RunError> {
+    pub(super) fn step_owned(&mut self) -> Result<CoreStep<OwnedRuleWitness>, OwnedRunStepError> {
         step_with_witness(&mut self.core, &self.program.program, |rule| {
-            Ok(OwnedRuleWitness::from_rule_view(rule)?)
+            OwnedRuleWitness::from_rule_view(rule).map_err(OwnedRunStepError::RuleWitnessAllocation)
         })
     }
 }
@@ -394,11 +401,11 @@ impl<'program> AttemptSession<BorrowedProgram<'program>> {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if rule-attempt matching, preparation, or application
+    /// Returns `RuleAttemptStepError` if rule-attempt matching, preparation, or application
     /// fails.
     pub(super) fn step_borrowed(
         &mut self,
-    ) -> Result<CoreRuleAttempt<RuleView<'program>>, RunError> {
+    ) -> Result<CoreRuleAttempt<RuleView<'program>>, RuleAttemptStepError> {
         let mut context = RuleAttemptContext {
             program: self.program.program,
             core: &mut self.core,
@@ -414,9 +421,11 @@ impl AttemptSession<OwnedProgram> {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` if rule-attempt matching, preparation, witness
+    /// Returns `OwnedRuleAttemptStepError` if rule-attempt matching, preparation, witness
     /// materialization, or application fails.
-    pub(super) fn step_owned(&mut self) -> Result<CoreRuleAttempt<OwnedRuleWitness>, RunError> {
+    pub(super) fn step_owned(
+        &mut self,
+    ) -> Result<CoreRuleAttempt<OwnedRuleWitness>, OwnedRuleAttemptStepError> {
         let mut context = RuleAttemptContext {
             program: &self.program.program,
             core: &mut self.core,
@@ -424,7 +433,8 @@ impl AttemptSession<OwnedProgram> {
             attempt_budget: &mut self.attempt_budget,
         };
         attempt_current_rule_with_witness(&mut context, |rule| {
-            Ok(OwnedRuleWitness::from_rule_view(rule)?)
+            OwnedRuleWitness::from_rule_view(rule)
+                .map_err(OwnedRuleAttemptStepError::RuleWitnessAllocation)
         })
     }
 }
@@ -433,13 +443,16 @@ impl AttemptSession<OwnedProgram> {
 ///
 /// # Errors
 ///
-/// Returns `RunError` if matching, rule preparation, rule-witness materialization,
+/// Returns `Error` if matching, rule preparation, rule-witness materialization,
 /// or rule application fails.
-fn step_with_witness<'program, RuleWitness>(
+fn step_with_witness<'program, RuleWitness, Error>(
     core: &mut RunCore,
     program: &'program Program,
-    make_witness: impl FnOnce(RuleView<'program>) -> Result<RuleWitness, RunError>,
-) -> Result<CoreStep<RuleWitness>, RunError> {
+    make_witness: impl FnOnce(RuleView<'program>) -> Result<RuleWitness, Error>,
+) -> Result<CoreStep<RuleWitness>, Error>
+where
+    Error: From<RunStepError>,
+{
     let matched = match find_next_match(program.rule_slice(), &mut core.once_states, &core.state) {
         RuleSearch::Matched(matched) => matched,
         RuleSearch::Stable => return Ok(CoreStep::Stable(core.budget.completed_steps())),
@@ -457,12 +470,15 @@ fn step_with_witness<'program, RuleWitness>(
 ///
 /// # Errors
 ///
-/// Returns `RunError` if rule-attempt, rule matching, or rule application
+/// Returns `Error` if rule-attempt, rule matching, or rule application
 /// fails.
-fn attempt_current_rule_with_witness<'program, RuleWitness>(
+fn attempt_current_rule_with_witness<'program, RuleWitness, Error>(
     context: &mut RuleAttemptContext<'_, 'program>,
-    make_witness: impl FnOnce(RuleView<'program>) -> Result<RuleWitness, RunError>,
-) -> Result<CoreRuleAttempt<RuleWitness>, RunError> {
+    make_witness: impl FnOnce(RuleView<'program>) -> Result<RuleWitness, Error>,
+) -> Result<CoreRuleAttempt<RuleWitness>, Error>
+where
+    Error: From<RuleAttemptStepError> + From<RunStepError>,
+{
     let Some(active_cursor) = context.cursor.take_active() else {
         return Ok(no_executable_rules(context));
     };
@@ -563,6 +579,8 @@ impl<'program> Session<BorrowedProgram<'program>> {
             match self
                 .core
                 .step_runtime(self.program.program)
+                .map_err(RunFinishError::from)
+                .map_err(RunError::from)
                 .map_err(TracedRunError::Run)?
             {
                 RuntimeStep::Applied(AppliedRule::Rewrite(committed)) => {
@@ -593,6 +611,7 @@ impl<'program> Session<BorrowedProgram<'program>> {
                     return self
                         .core
                         .into_stable_result(steps)
+                        .map_err(RunError::from)
                         .map_err(TracedRunError::Run);
                 }
             }

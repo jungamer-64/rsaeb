@@ -15,8 +15,10 @@
 //! - [`RuntimeInputError`] for raw input bytes rejected before execution and
 //!   runtime-input witness contradictions.
 //! - [`RunAdmissionError`] for validated input rejected as an initial runtime state.
-//! - [`RunError`] for execution-time allocation, internal-invariant,
-//!   state-size, and budget failures.
+//! - [`RunStartError`] for per-run setup failures, [`RunStepError`] and
+//!   rule-attempt step errors for uncommitted step failures, [`RunFinishError`]
+//!   for finishing an already-started run, and [`RunError`] for
+//!   run-to-completion composition.
 //! - [`AllocationError`] for explicit allocation boundaries such as view
 //!   materialization, canonical source construction, final output conversion,
 //!   and trace snapshots. [`AllocationContext`] names the failing boundary, and
@@ -72,5 +74,10 @@ pub use parse::{
     LeftModifierKind, ParseError, ParseErrorKind, ParseErrorLocation, ParseLimitError,
     ParseRepresentationError, PayloadKind, RightActionKind,
 };
-pub use run::{InputColumn, RunAdmissionError, RuntimeInputError};
+pub use run::{
+    InputColumn, OwnedRuleAttemptStepError, OwnedRunStepError, ReturnOutputLimitError,
+    RewriteSizeError, RuleAttemptLimitError, RuleAttemptStepError, RunAdmissionError, RunError,
+    RunFinishError, RunStartError, RunStepError, RuntimeInputError, RuntimeStateLimitError,
+    StepLimitError,
+};
 pub use traced::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};

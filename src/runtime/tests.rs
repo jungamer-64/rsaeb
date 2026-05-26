@@ -4,7 +4,9 @@ use super::once::OnceStateSet;
 use super::rewrite::RewriteScratch;
 use super::state::State;
 use crate::bytes::Payload;
-use crate::error::{LimitError, RunError, RuntimeInputError};
+use crate::error::{
+    ReturnOutputLimitError, RunStepError, RuntimeInputError, RuntimeStateLimitError, StepLimitError,
+};
 use crate::execution::{BorrowedFailedRun, BorrowedStepTransition};
 use crate::input::{RuntimeInput, RuntimeInputSource};
 use crate::limits::{
@@ -54,10 +56,13 @@ fn expect_payload_byte(payload: &Payload, index: usize) -> Result<u8, TestFailur
 /// # Errors
 ///
 /// Returns `TestFailure` if `error` is not a step limit error.
-fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
+fn expect_step_limit(error: RunStepError) -> Result<StepLimitError, TestFailure> {
     match error {
-        RunError::Limit(error @ LimitError::Step { .. }) => Ok(error),
-        RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_) => {
+        RunStepError::StepLimit(error) => Ok(error),
+        RunStepError::Allocation(_)
+        | RunStepError::RewriteSize(_)
+        | RunStepError::RuntimeStateLimit(_)
+        | RunStepError::ReturnOutputLimit(_) => {
             Err(TestFailure::message("expected step limit error"))
         }
     }
@@ -108,7 +113,7 @@ struct OnceRuleFailureExpectation {
     source: &'static str,
     input: &'static [u8],
     limits: TestRunPolicy,
-    error: RunError,
+    error: RunStepError,
     expected_match: &'static str,
     expected_availability: &'static str,
 }
@@ -173,10 +178,10 @@ fn once_rule_failure_preserves_state_before_step_commit() -> TestResult {
     let error = expect_step_error(runtime.step())?;
     ensure_eq!(
         error.error(),
-        &RunError::Limit(LimitError::Return {
-            limit: ReturnByteLimit::new(1),
-            attempted_len: ReturnOutputByteCount::new(2),
-        }),
+        &RunStepError::ReturnOutputLimit(ReturnOutputLimitError::new(
+            ReturnByteLimit::new(1),
+            ReturnOutputByteCount::new(2),
+        )),
     )?;
 
     ensure_eq!(error.completed_steps(), StepCount::ZERO)?;
@@ -222,11 +227,11 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
     let error = expect_step_error(would_match.step())?;
     ensure_eq!(
         expect_step_limit(error.into_error())?,
-        LimitError::Step {
-            max_steps: StepLimit::new(0),
-            completed_steps: StepCount::ZERO,
-            state_len: RuntimeStateByteCount::new(1),
-        },
+        StepLimitError::new(
+            StepLimit::new(0),
+            StepCount::ZERO,
+            RuntimeStateByteCount::new(1),
+        ),
     )?;
     let program = parse_program("a=b")?;
     let would_match = program.start_run(run_seed(b"a", limits)?)?;
@@ -239,11 +244,11 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
 
     ensure_eq!(
         expect_step_limit(error.into_error())?,
-        LimitError::Step {
-            max_steps: StepLimit::new(0),
-            completed_steps: StepCount::ZERO,
-            state_len: RuntimeStateByteCount::new(1),
-        },
+        StepLimitError::new(
+            StepLimit::new(0),
+            StepCount::ZERO,
+            RuntimeStateByteCount::new(1),
+        ),
     )
 }
 
@@ -264,10 +269,10 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     let state_error = expect_step_error(state_limited.step())?;
     ensure_eq!(
         state_error.error(),
-        &RunError::Limit(LimitError::State {
-            limit: RuntimeStateByteLimit::new(2),
-            attempted_len: RuntimeStateByteCount::new(3),
-        }),
+        &RunStepError::RuntimeStateLimit(RuntimeStateLimitError::new(
+            RuntimeStateByteLimit::new(2),
+            RuntimeStateByteCount::new(3),
+        )),
     )?;
     ensure_eq!(state_error.completed_steps(), StepCount::ZERO)?;
     ensure_eq!(
@@ -276,10 +281,10 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     )?;
     ensure_eq!(
         state_error.into_error(),
-        RunError::Limit(LimitError::State {
-            limit: RuntimeStateByteLimit::new(2),
-            attempted_len: RuntimeStateByteCount::new(3),
-        }),
+        RunStepError::RuntimeStateLimit(RuntimeStateLimitError::new(
+            RuntimeStateByteLimit::new(2),
+            RuntimeStateByteCount::new(3),
+        )),
     )?;
 
     let return_limits = TestRunPolicy::new(
@@ -294,10 +299,10 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     let return_error = expect_step_error(return_limited.step())?;
     ensure_eq!(
         return_error.error(),
-        &RunError::Limit(LimitError::Return {
-            limit: ReturnByteLimit::new(1),
-            attempted_len: ReturnOutputByteCount::new(2),
-        }),
+        &RunStepError::ReturnOutputLimit(ReturnOutputLimitError::new(
+            ReturnByteLimit::new(1),
+            ReturnOutputByteCount::new(2),
+        )),
     )?;
     ensure_eq!(return_error.completed_steps(), StepCount::ZERO)?;
     ensure_eq!(
@@ -306,10 +311,10 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     )?;
     ensure_eq!(
         return_error.into_error(),
-        RunError::Limit(LimitError::Return {
-            limit: ReturnByteLimit::new(1),
-            attempted_len: ReturnOutputByteCount::new(2),
-        }),
+        RunStepError::ReturnOutputLimit(ReturnOutputLimitError::new(
+            ReturnByteLimit::new(1),
+            ReturnOutputByteCount::new(2),
+        )),
     )
 }
 
@@ -363,10 +368,10 @@ fn once_limit_failures_do_not_commit_rule() -> TestResult {
                 RuntimeStateByteLimit::new(1),
                 DEFAULT_MAX_RETURN_LEN,
             ),
-            error: RunError::Limit(LimitError::State {
-                limit: RuntimeStateByteLimit::new(1),
-                attempted_len: RuntimeStateByteCount::new(3),
-            }),
+            error: RunStepError::RuntimeStateLimit(RuntimeStateLimitError::new(
+                RuntimeStateByteLimit::new(1),
+                RuntimeStateByteCount::new(3),
+            )),
             expected_match: "expected once rewrite limit failure",
             expected_availability: "expected failed once rewrite to remain available",
         },
@@ -379,11 +384,11 @@ fn once_limit_failures_do_not_commit_rule() -> TestResult {
                 DEFAULT_MAX_STATE_LEN,
                 DEFAULT_MAX_RETURN_LEN,
             ),
-            error: RunError::Limit(LimitError::Step {
-                max_steps: StepLimit::new(0),
-                completed_steps: StepCount::ZERO,
-                state_len: RuntimeStateByteCount::new(1),
-            }),
+            error: RunStepError::StepLimit(StepLimitError::new(
+                StepLimit::new(0),
+                StepCount::ZERO,
+                RuntimeStateByteCount::new(1),
+            )),
             expected_match: "expected once step limit failure",
             expected_availability: "expected failed step reservation to leave once rule available",
         },
@@ -396,10 +401,10 @@ fn once_limit_failures_do_not_commit_rule() -> TestResult {
                 DEFAULT_MAX_STATE_LEN,
                 ReturnByteLimit::new(1),
             ),
-            error: RunError::Limit(LimitError::Return {
-                limit: ReturnByteLimit::new(1),
-                attempted_len: ReturnOutputByteCount::new(2),
-            }),
+            error: RunStepError::ReturnOutputLimit(ReturnOutputLimitError::new(
+                ReturnByteLimit::new(1),
+                ReturnOutputByteCount::new(2),
+            )),
             expected_match: "expected once return limit failure",
             expected_availability: "expected failed once return to remain available",
         },

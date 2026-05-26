@@ -1,5 +1,5 @@
 use crate::bytes::ReturnOutputByteCount;
-use crate::error::RunError;
+use crate::error::RunStepError;
 use crate::limits::StepCount;
 use crate::program::{ReturnOutput, ReturnOutputView};
 use crate::rule::{ParsedRuleAction, Rule};
@@ -155,10 +155,10 @@ impl<'program> PreparedRuleApplication<'program, '_, '_> {
 ///
 /// # Errors
 ///
-/// Returns `RunError` if return-output allocation fails.
+/// Returns `RunStepError` if return-output allocation fails.
 pub(crate) fn materialize_return_output(
     output: ReturnOutputView<'_>,
-) -> Result<ReturnOutput, RunError> {
+) -> Result<ReturnOutput, RunStepError> {
     Ok(ReturnOutput::from_return_output_view(output)?)
 }
 
@@ -166,14 +166,14 @@ pub(crate) fn materialize_return_output(
 ///
 /// # Errors
 ///
-/// Returns `RunError` if the next step cannot be reserved, the rewrite would
+/// Returns `RunStepError` if the next step cannot be reserved, the rewrite would
 /// exceed state limits, return output exceeds limits, or allocation fails.
 pub(crate) fn prepare_matched_rule<'program, 'once, 'budget>(
     scratch: &mut RewriteScratch,
     budget: &'budget mut RuntimeBudgetState,
     state_len: crate::bytes::RuntimeStateByteCount,
     matched: MatchedRuleApplication<'program, '_, 'once>,
-) -> Result<PreparedRuleApplication<'program, 'once, 'budget>, RunError> {
+) -> Result<PreparedRuleApplication<'program, 'once, 'budget>, RunStepError> {
     let (state_match, matched) = matched.into_prepare_parts();
     let step = budget.reserve_next_step(state_len)?;
     match matched.rule().action() {

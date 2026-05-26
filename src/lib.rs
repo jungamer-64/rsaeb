@@ -304,7 +304,7 @@
 //! after the configured number of completed steps:
 //!
 //! ```
-//! use rsaeb::error::{LimitError, RunError};
+//! use rsaeb::error::{RunError, RunFinishError, RunStepError};
 //! use rsaeb::limits::{
 //!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
 //! };
@@ -327,8 +327,8 @@
 //!
 //! if !matches!(
 //!     result,
-//!     Err(RunError::Limit(LimitError::Step { completed_steps, .. }))
-//!         if completed_steps.get() == 0
+//!     Err(RunError::Finish(RunFinishError::Step(RunStepError::StepLimit(error))))
+//!         if error.completed_steps().get() == 0
 //! ) {
 //!     return Err("unexpected step-limit error".into());
 //! }

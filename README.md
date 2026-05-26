@@ -131,7 +131,7 @@ run seed to a `RuleAttemptLimit`. The limit counts consumed executable rule
 lines, including misses.
 
 ```rust
-use rsaeb::error::{LimitError, RunError};
+use rsaeb::error::{RunError, RunFinishError, RunStepError};
 use rsaeb::limits::{
     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
     ExecutionLimits, RuntimeInputLimits, StepLimit,
@@ -153,8 +153,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if !matches!(
         result,
-        Err(RunError::Limit(LimitError::Step { completed_steps, .. }))
-            if completed_steps.get() == 0
+        Err(RunError::Finish(RunFinishError::Step(RunStepError::StepLimit(error))))
+            if error.completed_steps().get() == 0
     ) {
         return Err("unexpected step-limit error".into());
     }
@@ -506,11 +506,13 @@ Runtime witness contradictions that should be unreachable through ordinary
 public inputs are eliminated by construction instead of being exposed as a
 public runtime error variant.
 
-State length arithmetic overflow is separate from allocation failure and is
-reported as `RunError::StateSize`. Configured byte budgets and step budgets are
-reported as `RunError::Limit(LimitError::...)`. Trace snapshot byte limits are
-reported through `TraceSnapshotError`, not `RunError::Limit`, because snapshot
-materialization is outside runtime execution.
+Rewrite length arithmetic overflow is separate from allocation failure and is
+reported as `RunStepError::RewriteSize`. Configured byte budgets and step
+budgets are reported through concrete step errors such as
+`RunStepError::RuntimeStateLimit`, `RunStepError::ReturnOutputLimit`, and
+`RunStepError::StepLimit`. Trace snapshot byte limits are reported through
+`TraceSnapshotError`, because snapshot materialization is outside runtime
+execution.
 
 Filesystem failures are not part of the library error model. External I/O must
 be handled before bytes enter `ProgramSource::from_bytes`,

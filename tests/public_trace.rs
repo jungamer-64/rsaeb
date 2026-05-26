@@ -4,7 +4,10 @@
 mod runtime_support;
 mod support;
 
-use rsaeb::error::{RunError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
+use rsaeb::error::{
+    RunError, RunFinishError, RunStepError, TraceSnapshotError, TraceSnapshotRunError,
+    TracedRunError,
+};
 use rsaeb::execution::OwnedStepTransition;
 use rsaeb::input::RunSeed;
 use rsaeb::limits::{
@@ -373,7 +376,9 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
     ensure_matches(
         matches!(
             runtime_error,
-            TraceSnapshotRunError::Run(RunError::Limit(_))
+            TraceSnapshotRunError::Run(RunError::Finish(RunFinishError::Step(
+                RunStepError::StepLimit(_)
+            )))
         ),
         "expected runtime failure variant",
     )?;

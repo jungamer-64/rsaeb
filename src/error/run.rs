@@ -2,9 +2,233 @@ use core::error::Error;
 
 use crate::allocation::AllocationError;
 use crate::bytes::{
-    NonAsciiInputByte, RuntimeInputByteCount, RuntimeStateByteCount,
+    NonAsciiInputByte, PayloadByteCount, ReturnOutputByteCount, RuntimeInputByteCount,
+    RuntimeStateByteCount,
 };
-use crate::limits::{RuntimeInputByteLimit, RuntimeStateByteLimit};
+use crate::limits::{
+    ReturnByteLimit, RuleAttemptCount, RuleAttemptLimit, RuntimeInputByteLimit,
+    RuntimeStateByteLimit, StepCount, StepLimit,
+};
+
+/// Run-to-completion execution error.
+///
+/// This is the composed error returned by [`Program::run`](crate::program::Program::run)
+/// and traced run APIs. It does not include input validation or run admission,
+/// because those happen before execution starts.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RunError {
+    /// The run could not be started.
+    Start(RunStartError),
+    /// The started run failed before producing a terminal result.
+    Finish(RunFinishError),
+}
+
+impl Error for RunError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Start(error) => Some(error),
+            Self::Finish(error) => Some(error),
+        }
+    }
+}
+
+impl From<RunStartError> for RunError {
+    fn from(value: RunStartError) -> Self {
+        Self::Start(value)
+    }
+}
+
+impl From<RunFinishError> for RunError {
+    fn from(value: RunFinishError) -> Self {
+        Self::Finish(value)
+    }
+}
+
+/// Error while constructing one runtime execution from an admitted seed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunStartError {
+    /// Per-run execution state allocation failed.
+    Allocation(AllocationError),
+}
+
+impl Error for RunStartError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Allocation(error) => Some(error),
+        }
+    }
+}
+
+impl From<AllocationError> for RunStartError {
+    fn from(value: AllocationError) -> Self {
+        Self::Allocation(value)
+    }
+}
+
+/// Error while advancing one ordinary matched-rule step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunStepError {
+    /// Runtime allocation failed while preparing or committing the candidate step.
+    Allocation(AllocationError),
+    /// Rewrite length arithmetic could not be represented.
+    RewriteSize(RewriteSizeError),
+    /// The candidate rewrite would exceed the runtime-state limit.
+    RuntimeStateLimit(RuntimeStateLimitError),
+    /// The candidate `(return)` output would exceed the return-output limit.
+    ReturnOutputLimit(ReturnOutputLimitError),
+    /// The candidate step would exceed the step limit.
+    StepLimit(StepLimitError),
+}
+
+impl Error for RunStepError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Allocation(error) => Some(error),
+            Self::RewriteSize(error) => Some(error),
+            Self::RuntimeStateLimit(error) => Some(error),
+            Self::ReturnOutputLimit(error) => Some(error),
+            Self::StepLimit(error) => Some(error),
+        }
+    }
+}
+
+impl From<AllocationError> for RunStepError {
+    fn from(value: AllocationError) -> Self {
+        Self::Allocation(value)
+    }
+}
+
+impl From<RewriteSizeError> for RunStepError {
+    fn from(value: RewriteSizeError) -> Self {
+        Self::RewriteSize(value)
+    }
+}
+
+impl From<RuntimeStateLimitError> for RunStepError {
+    fn from(value: RuntimeStateLimitError) -> Self {
+        Self::RuntimeStateLimit(value)
+    }
+}
+
+impl From<ReturnOutputLimitError> for RunStepError {
+    fn from(value: ReturnOutputLimitError) -> Self {
+        Self::ReturnOutputLimit(value)
+    }
+}
+
+impl From<StepLimitError> for RunStepError {
+    fn from(value: StepLimitError) -> Self {
+        Self::StepLimit(value)
+    }
+}
+
+/// Error while advancing an owned ordinary step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnedRunStepError {
+    /// Ordinary runtime step preparation failed.
+    Step(RunStepError),
+    /// Retaining the owned rule witness failed.
+    RuleWitnessAllocation(AllocationError),
+}
+
+impl Error for OwnedRunStepError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Step(error) => Some(error),
+            Self::RuleWitnessAllocation(error) => Some(error),
+        }
+    }
+}
+
+impl From<RunStepError> for OwnedRunStepError {
+    fn from(value: RunStepError) -> Self {
+        Self::Step(value)
+    }
+}
+
+/// Error while advancing one rule-attempt step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuleAttemptStepError {
+    /// Matched-rule execution failed.
+    Step(RunStepError),
+    /// The next executable rule-line attempt would exceed the attempt limit.
+    RuleAttemptLimit(RuleAttemptLimitError),
+}
+
+impl Error for RuleAttemptStepError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Step(error) => Some(error),
+            Self::RuleAttemptLimit(error) => Some(error),
+        }
+    }
+}
+
+impl From<RunStepError> for RuleAttemptStepError {
+    fn from(value: RunStepError) -> Self {
+        Self::Step(value)
+    }
+}
+
+impl From<RuleAttemptLimitError> for RuleAttemptStepError {
+    fn from(value: RuleAttemptLimitError) -> Self {
+        Self::RuleAttemptLimit(value)
+    }
+}
+
+/// Error while advancing one owned rule-attempt step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnedRuleAttemptStepError {
+    /// Ordinary borrowed rule-attempt failure domain.
+    Attempt(RuleAttemptStepError),
+    /// Retaining the owned rule witness failed.
+    RuleWitnessAllocation(AllocationError),
+}
+
+impl Error for OwnedRuleAttemptStepError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Attempt(error) => Some(error),
+            Self::RuleWitnessAllocation(error) => Some(error),
+        }
+    }
+}
+
+impl From<RuleAttemptStepError> for OwnedRuleAttemptStepError {
+    fn from(value: RuleAttemptStepError) -> Self {
+        Self::Attempt(value)
+    }
+}
+
+impl From<RunStepError> for OwnedRuleAttemptStepError {
+    fn from(value: RunStepError) -> Self {
+        Self::Attempt(RuleAttemptStepError::Step(value))
+    }
+}
+
+/// Error while finishing a run session that has already started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunFinishError {
+    /// A later matched-rule step failed.
+    Step(RunStepError),
+    /// Stable final-output materialization failed.
+    FinalOutput(AllocationError),
+}
+
+impl Error for RunFinishError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Step(error) => Some(error),
+            Self::FinalOutput(error) => Some(error),
+        }
+    }
+}
+
+impl From<RunStepError> for RunFinishError {
+    fn from(value: RunStepError) -> Self {
+        Self::Step(value)
+    }
+}
 
 /// Runtime input validation boundary error.
 ///
@@ -127,6 +351,216 @@ impl InputColumn {
         self.one_based
     }
 }
+
+/// Rewrite size failure caused by arithmetic overflow.
+///
+/// This is distinct from a configured byte limit. It means the interpreter
+/// could not represent the length of the state that a rewrite would produce.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RewriteSizeError {
+    /// Runtime state length before the rewrite.
+    state: RuntimeStateByteCount,
+    /// Matched left-side payload length being removed.
+    lhs: PayloadByteCount,
+    /// Right-side payload length being inserted.
+    rhs: PayloadByteCount,
+}
+
+impl RewriteSizeError {
+    /// Records the lengths that overflowed rewrite-size arithmetic.
+    pub(crate) const fn new(
+        state_len: RuntimeStateByteCount,
+        lhs_len: PayloadByteCount,
+        rhs_len: PayloadByteCount,
+    ) -> Self {
+        Self {
+            state: state_len,
+            lhs: lhs_len,
+            rhs: rhs_len,
+        }
+    }
+
+    /// Runtime state length before the failing rewrite.
+    #[must_use]
+    pub const fn state_len(&self) -> RuntimeStateByteCount {
+        self.state
+    }
+
+    /// Matched left-side length that would be removed.
+    #[must_use]
+    pub const fn lhs_len(&self) -> PayloadByteCount {
+        self.lhs
+    }
+
+    /// Right-side payload length that would be inserted.
+    #[must_use]
+    pub const fn rhs_len(&self) -> PayloadByteCount {
+        self.rhs
+    }
+}
+
+impl Error for RewriteSizeError {}
+
+/// Runtime state byte-limit failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeStateLimitError {
+    /// Configured maximum runtime state length.
+    limit: RuntimeStateByteLimit,
+    /// State length that would have been accepted without this guard.
+    attempted_len: RuntimeStateByteCount,
+}
+
+impl RuntimeStateLimitError {
+    /// Builds a runtime state limit error.
+    pub(crate) const fn new(
+        limit: RuntimeStateByteLimit,
+        attempted_len: RuntimeStateByteCount,
+    ) -> Self {
+        Self {
+            limit,
+            attempted_len,
+        }
+    }
+
+    /// Configured maximum runtime state length.
+    #[must_use]
+    pub const fn limit(&self) -> RuntimeStateByteLimit {
+        self.limit
+    }
+
+    /// State length rejected by the limit.
+    #[must_use]
+    pub const fn attempted_len(&self) -> RuntimeStateByteCount {
+        self.attempted_len
+    }
+}
+
+impl Error for RuntimeStateLimitError {}
+
+/// Return-output byte-limit failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReturnOutputLimitError {
+    /// Configured maximum `(return)` output length.
+    limit: ReturnByteLimit,
+    /// Return payload length that would have been allocated.
+    attempted_len: ReturnOutputByteCount,
+}
+
+impl ReturnOutputLimitError {
+    /// Builds a return-output limit error.
+    pub(crate) const fn new(limit: ReturnByteLimit, attempted_len: ReturnOutputByteCount) -> Self {
+        Self {
+            limit,
+            attempted_len,
+        }
+    }
+
+    /// Configured maximum return-output length.
+    #[must_use]
+    pub const fn limit(&self) -> ReturnByteLimit {
+        self.limit
+    }
+
+    /// Return-output length rejected by the limit.
+    #[must_use]
+    pub const fn attempted_len(&self) -> ReturnOutputByteCount {
+        self.attempted_len
+    }
+}
+
+impl Error for ReturnOutputLimitError {}
+
+/// Step-limit failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepLimitError {
+    /// Configured maximum step count.
+    max_steps: StepLimit,
+    /// Number of completed execution steps when the next match was found.
+    completed_steps: StepCount,
+    /// Runtime state length when the limit was hit.
+    state_len: RuntimeStateByteCount,
+}
+
+impl StepLimitError {
+    /// Builds a step-limit error.
+    pub(crate) const fn new(
+        max_steps: StepLimit,
+        completed_steps: StepCount,
+        state_len: RuntimeStateByteCount,
+    ) -> Self {
+        Self {
+            max_steps,
+            completed_steps,
+            state_len,
+        }
+    }
+
+    /// Configured maximum step count.
+    #[must_use]
+    pub const fn max_steps(&self) -> StepLimit {
+        self.max_steps
+    }
+
+    /// Number of committed steps before rejection.
+    #[must_use]
+    pub const fn completed_steps(&self) -> StepCount {
+        self.completed_steps
+    }
+
+    /// Runtime state length at rejection.
+    #[must_use]
+    pub const fn state_len(&self) -> RuntimeStateByteCount {
+        self.state_len
+    }
+}
+
+impl Error for StepLimitError {}
+
+/// Rule-attempt-limit failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleAttemptLimitError {
+    /// Configured maximum executable rule-line attempts.
+    max_attempts: RuleAttemptLimit,
+    /// Number of completed rule attempts when the next rule line was reached.
+    completed_attempts: RuleAttemptCount,
+    /// Runtime state length when the limit was hit.
+    state_len: RuntimeStateByteCount,
+}
+
+impl RuleAttemptLimitError {
+    /// Builds a rule-attempt-limit error.
+    pub(crate) const fn new(
+        max_attempts: RuleAttemptLimit,
+        completed_attempts: RuleAttemptCount,
+        state_len: RuntimeStateByteCount,
+    ) -> Self {
+        Self {
+            max_attempts,
+            completed_attempts,
+            state_len,
+        }
+    }
+
+    /// Configured maximum executable rule-line attempts.
+    #[must_use]
+    pub const fn max_attempts(&self) -> RuleAttemptLimit {
+        self.max_attempts
+    }
+
+    /// Number of committed rule attempts before rejection.
+    #[must_use]
+    pub const fn completed_attempts(&self) -> RuleAttemptCount {
+        self.completed_attempts
+    }
+
+    /// Runtime state length at rejection.
+    #[must_use]
+    pub const fn state_len(&self) -> RuntimeStateByteCount {
+        self.state_len
+    }
+}
+
+impl Error for RuleAttemptLimitError {}
 
 #[cfg(test)]
 mod tests {

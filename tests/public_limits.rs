@@ -4,7 +4,10 @@
 mod runtime_support;
 mod support;
 
-use rsaeb::error::{LimitError, ParseErrorKind, ParseLimitError, RunAdmissionError, RunError};
+use rsaeb::error::{
+    ParseErrorKind, ParseLimitError, RunAdmissionError, RunError, RunFinishError, RunStepError,
+    RuntimeStateLimitError, StepLimitError,
+};
 use rsaeb::input::RunSeed;
 use rsaeb::limits::{
     CodeLineByteLimit, DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
@@ -78,10 +81,11 @@ fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFail
 /// # Errors
 ///
 /// Returns `TestFailure` if `error` is not a step limit error.
-fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
+fn expect_step_limit(error: RunError) -> Result<StepLimitError, TestFailure> {
     match error {
-        RunError::Limit(error @ LimitError::Step { .. }) => Ok(error),
-        RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_) => {
+        RunError::Finish(RunFinishError::Step(RunStepError::StepLimit(error))) => Ok(error),
+        RunError::Start(_)
+        | RunError::Finish(RunFinishError::Step(_) | RunFinishError::FinalOutput(_)) => {
             Err(TestFailure::message("expected step limit error"))
         }
     }
@@ -92,10 +96,11 @@ fn expect_step_limit(error: RunError) -> Result<LimitError, TestFailure> {
 /// # Errors
 ///
 /// Returns `TestFailure` if `error` is not a state limit error.
-fn expect_state_limit(error: RunError) -> Result<LimitError, TestFailure> {
+fn expect_state_limit(error: RunError) -> Result<RuntimeStateLimitError, TestFailure> {
     match error {
-        RunError::Limit(error @ LimitError::State { .. }) => Ok(error),
-        RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_) => {
+        RunError::Finish(RunFinishError::Step(RunStepError::RuntimeStateLimit(error))) => Ok(error),
+        RunError::Start(_)
+        | RunError::Finish(RunFinishError::Step(_) | RunFinishError::FinalOutput(_)) => {
             Err(TestFailure::message("expected state limit error"))
         }
     }
@@ -106,18 +111,11 @@ fn expect_state_limit(error: RunError) -> Result<LimitError, TestFailure> {
 /// # Errors
 ///
 /// Returns `TestFailure` if the step-limit details differ.
-fn ensure_step_limit_details(error: &LimitError, message: &'static str) -> TestResult {
+fn ensure_step_limit_details(error: &StepLimitError, message: &'static str) -> TestResult {
     ensure_matches(
-        matches!(
-            error,
-            LimitError::Step {
-                max_steps,
-                completed_steps,
-                state_len,
-            } if *max_steps == StepLimit::new(0)
-                && completed_steps.get() == 0
-                && state_len.get() == 1
-        ),
+        error.max_steps() == StepLimit::new(0)
+            && error.completed_steps().get() == 0
+            && error.state_len().get() == 1,
         message,
     )
 }
@@ -203,27 +201,22 @@ fn ensure_run_limit(case: RunLimitCase) -> TestResult {
     ensure_matches(
         match (error, case.expected) {
             (
-                RunError::Limit(LimitError::State {
-                    limit,
-                    attempted_len,
-                }),
+                RunError::Finish(RunFinishError::Step(RunStepError::RuntimeStateLimit(error))),
                 ExpectedRunLimit::State {
                     limit: expected_limit,
                     attempted_len: expected_len,
                 },
-            ) => limit == expected_limit && attempted_len.get() == expected_len,
+            ) => error.limit() == expected_limit && error.attempted_len().get() == expected_len,
             (
-                RunError::Limit(LimitError::Return {
-                    limit,
-                    attempted_len,
-                }),
+                RunError::Finish(RunFinishError::Step(RunStepError::ReturnOutputLimit(error))),
                 ExpectedRunLimit::Return {
                     limit: expected_limit,
                     attempted_len: expected_len,
                 },
-            ) => limit == expected_limit && attempted_len.get() == expected_len,
+            ) => error.limit() == expected_limit && error.attempted_len().get() == expected_len,
             (
-                RunError::Allocation(_) | RunError::StateSize(_) | RunError::Limit(_),
+                RunError::Start(_)
+                | RunError::Finish(RunFinishError::Step(_) | RunFinishError::FinalOutput(_)),
                 ExpectedRunLimit::State { .. } | ExpectedRunLimit::Return { .. },
             ) => false,
         },
@@ -236,16 +229,9 @@ fn ensure_run_limit(case: RunLimitCase) -> TestResult {
 /// # Errors
 ///
 /// Returns `TestFailure` if the error is not the expected state limit.
-fn ensure_display_state_limit(error: &LimitError) -> TestResult {
+fn ensure_display_state_limit(error: &RuntimeStateLimitError) -> TestResult {
     ensure_matches(
-        matches!(
-            error,
-            LimitError::State {
-                limit,
-                attempted_len,
-            } if *limit == RuntimeStateByteLimit::new(2)
-                && attempted_len.get() == 3
-        ),
+        error.limit() == RuntimeStateByteLimit::new(2) && error.attempted_len().get() == 3,
         "expected rewrite state limit",
     )
 }

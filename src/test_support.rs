@@ -3,7 +3,8 @@
 use alloc::string::{FromUtf8Error, String};
 
 use crate::error::{
-    AllocationError, ParseError, ParseErrorLocation, RunAdmissionError, RunError,
+    AllocationError, OwnedRuleAttemptStepError, OwnedRunStepError, ParseError, ParseErrorLocation,
+    RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError, RunStartError, RunStepError,
     RuntimeInputError, TraceSnapshotRunError,
 };
 use crate::input::{RunSeed, RuntimeInput, RuntimeInputSource};
@@ -21,6 +22,12 @@ pub(crate) enum TestFailure {
     Input(RuntimeInputError),
     Admission(RunAdmissionError),
     Run(RunError),
+    RunStart(RunStartError),
+    RunFinish(RunFinishError),
+    RunStep(RunStepError),
+    OwnedRunStep(OwnedRunStepError),
+    RuleAttemptStep(RuleAttemptStepError),
+    OwnedRuleAttemptStep(OwnedRuleAttemptStepError),
     TraceSnapshot(String),
     Utf8(FromUtf8Error),
     Allocation(AllocationError),
@@ -40,6 +47,20 @@ impl core::fmt::Debug for TestFailure {
             Self::Input(error) => formatter.debug_tuple("Input").field(error).finish(),
             Self::Admission(error) => formatter.debug_tuple("Admission").field(error).finish(),
             Self::Run(error) => formatter.debug_tuple("Run").field(error).finish(),
+            Self::RunStart(error) => formatter.debug_tuple("RunStart").field(error).finish(),
+            Self::RunFinish(error) => formatter.debug_tuple("RunFinish").field(error).finish(),
+            Self::RunStep(error) => formatter.debug_tuple("RunStep").field(error).finish(),
+            Self::OwnedRunStep(error) => {
+                formatter.debug_tuple("OwnedRunStep").field(error).finish()
+            }
+            Self::RuleAttemptStep(error) => formatter
+                .debug_tuple("RuleAttemptStep")
+                .field(error)
+                .finish(),
+            Self::OwnedRuleAttemptStep(error) => formatter
+                .debug_tuple("OwnedRuleAttemptStep")
+                .field(error)
+                .finish(),
             Self::TraceSnapshot(error) => {
                 formatter.debug_tuple("TraceSnapshot").field(error).finish()
             }
@@ -58,6 +79,42 @@ impl From<ParseError> for TestFailure {
 impl From<RunError> for TestFailure {
     fn from(value: RunError) -> Self {
         Self::Run(value)
+    }
+}
+
+impl From<RunStartError> for TestFailure {
+    fn from(value: RunStartError) -> Self {
+        Self::RunStart(value)
+    }
+}
+
+impl From<RunFinishError> for TestFailure {
+    fn from(value: RunFinishError) -> Self {
+        Self::RunFinish(value)
+    }
+}
+
+impl From<RunStepError> for TestFailure {
+    fn from(value: RunStepError) -> Self {
+        Self::RunStep(value)
+    }
+}
+
+impl From<OwnedRunStepError> for TestFailure {
+    fn from(value: OwnedRunStepError) -> Self {
+        Self::OwnedRunStep(value)
+    }
+}
+
+impl From<RuleAttemptStepError> for TestFailure {
+    fn from(value: RuleAttemptStepError) -> Self {
+        Self::RuleAttemptStep(value)
+    }
+}
+
+impl From<OwnedRuleAttemptStepError> for TestFailure {
+    fn from(value: OwnedRuleAttemptStepError) -> Self {
+        Self::OwnedRuleAttemptStep(value)
     }
 }
 

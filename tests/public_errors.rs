@@ -6,6 +6,7 @@ mod support;
 
 use rsaeb::error::{
     ParseErrorKind, ParseErrorLocation, ParseRepresentationError, PayloadKind, RunError,
+    RunFinishError, RunStepError,
 };
 use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
 use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, RuntimeInputLimits};
@@ -126,7 +127,7 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
     ensure_matches(
         matches!(
             expect_run_error(return_error)?,
-            RunError::Limit(rsaeb::error::LimitError::Return { .. })
+            RunError::Finish(RunFinishError::Step(RunStepError::ReturnOutputLimit(_)))
         ),
         "expected return limit error",
     )

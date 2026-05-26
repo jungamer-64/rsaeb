@@ -19,7 +19,7 @@ mod rule_set;
 /// Program-level tracing entrypoints.
 mod tracing;
 
-use crate::error::{ParseError, RunError};
+use crate::error::{ParseError, RunError, RunStartError};
 use crate::execution::{
     BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRuleAttemptSession, OwnedRunSession,
     RuleAttemptSeed,
@@ -121,8 +121,8 @@ impl Program {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` when allocating per-run execution state fails.
-    pub fn start_run(&self, seed: RunSeed) -> Result<BorrowedRunSession<'_>, RunError> {
+    /// Returns `RunStartError` when allocating per-run execution state fails.
+    pub fn start_run(&self, seed: RunSeed) -> Result<BorrowedRunSession<'_>, RunStartError> {
         BorrowedRunSession::new(self, seed)
     }
 
@@ -135,8 +135,8 @@ impl Program {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` when allocating per-run execution state fails.
-    pub fn into_run(self, seed: RunSeed) -> Result<OwnedRunSession, RunError> {
+    /// Returns `RunStartError` when allocating per-run execution state fails.
+    pub fn into_run(self, seed: RunSeed) -> Result<OwnedRunSession, RunStartError> {
         OwnedRunSession::new(self, seed)
     }
 
@@ -148,11 +148,11 @@ impl Program {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` when allocating per-run execution state fails.
+    /// Returns `RunStartError` when allocating per-run execution state fails.
     pub fn start_rule_attempt_run(
         &self,
         seed: RuleAttemptSeed,
-    ) -> Result<BorrowedRuleAttemptSession<'_>, RunError> {
+    ) -> Result<BorrowedRuleAttemptSession<'_>, RunStartError> {
         BorrowedRuleAttemptSession::new(self, seed)
     }
 
@@ -162,11 +162,11 @@ impl Program {
     ///
     /// # Errors
     ///
-    /// Returns `RunError` when allocating per-run execution state fails.
+    /// Returns `RunStartError` when allocating per-run execution state fails.
     pub fn into_rule_attempt_run(
         self,
         seed: RuleAttemptSeed,
-    ) -> Result<OwnedRuleAttemptSession, RunError> {
+    ) -> Result<OwnedRuleAttemptSession, RunStartError> {
         OwnedRuleAttemptSession::new(self, seed)
     }
 
