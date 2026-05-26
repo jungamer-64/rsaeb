@@ -28,10 +28,11 @@ use crate::input::RunSeed;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::limits::ParseLimits;
 use crate::parser::parse_rules_impl;
-use crate::rule::Rule;
 use crate::source::ProgramSource;
 
-pub(crate) use rule_set::{ActiveRuleCursor, RuleCursor, RuleCursorAfterMiss, RuleTarget};
+pub(crate) use rule_set::{
+    ActiveRuleCursor, RuleCursor, RuleCursorAfterMiss, RuleCursorSelection, RuleScan, RuleTarget,
+};
 pub(crate) use rule_set::{RuleSet, RuleSetBuilder};
 
 pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeStateSnapshot};
@@ -107,9 +108,9 @@ impl Program {
         self.rule_set.as_slice().iter().map(RuleView::new)
     }
 
-    /// Borrows the immutable rule table in execution order.
-    pub(crate) fn rule_slice(&self) -> &[Rule] {
-        self.rule_set.as_slice()
+    /// Mints a private runtime scan over the immutable rule table.
+    pub(crate) fn rule_scan(&self) -> RuleScan<'_> {
+        self.rule_set.scan()
     }
 
     /// Starts a stateful run session that borrows this parsed program.

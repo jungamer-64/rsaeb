@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::slice;
 
 use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
 use crate::error::{
@@ -15,6 +16,13 @@ pub(crate) struct RuleSet {
     rules: Vec<Rule>,
     /// Parsed `(once)` slot count assigned while building this rule table.
     once_rule_count: PublicOnceRuleCount,
+}
+
+/// Borrowed executable rule scan minted from one parsed rule table.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RuleScan<'program> {
+    /// Parsed executable rules in execution order.
+    rules: &'program [Rule],
 }
 
 /// Parser-owned rule table builder.
@@ -74,6 +82,15 @@ pub(crate) enum RuleCursorAfterMiss {
     Advanced(ActiveRuleCursor),
     /// The consumed miss was the final executable rule.
     Stable,
+}
+
+/// Selection produced when a rule-attempt cursor is consumed for one step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuleCursorSelection {
+    /// Cursor selected one executable rule line.
+    Active(ActiveRuleCursor),
+    /// The parsed program has no executable rule line for this attempt mode.
+    NoExecutableRules,
 }
 
 /// Rule target selected by a rule-attempt cursor.
@@ -252,6 +269,11 @@ impl RuleSet {
         &self.rules
     }
 
+    /// Starts a runtime scan over this table's executable rules.
+    pub(crate) fn scan(&self) -> RuleScan<'_> {
+        RuleScan { rules: &self.rules }
+    }
+
     /// Starts rule-attempt execution over this table's executable rules.
     pub(crate) fn rule_attempt_cursor(&self) -> RuleCursor {
         let Some(final_rule_index) = RuleIndex::last_for(self.rule_count()) else {
@@ -285,12 +307,19 @@ impl RuleSet {
 }
 
 impl RuleCursor {
-    /// Takes the active cursor state, leaving this cursor exhausted until the attempt commits.
-    pub(crate) fn take_active(&mut self) -> Option<ActiveRuleCursor> {
+    /// Takes the cursor state, leaving this cursor exhausted until the attempt commits.
+    pub(crate) fn select_next(&mut self) -> RuleCursorSelection {
         match core::mem::replace(self, Self::Exhausted) {
-            Self::Active(active) => Some(active),
-            Self::Exhausted => None,
+            Self::Active(active) => RuleCursorSelection::Active(active),
+            Self::Exhausted => RuleCursorSelection::NoExecutableRules,
         }
+    }
+}
+
+impl<'program> RuleScan<'program> {
+    /// Iterates executable rules in parser-owned execution order.
+    pub(crate) fn iter(self) -> slice::Iter<'program, Rule> {
+        self.rules.iter()
     }
 }
 

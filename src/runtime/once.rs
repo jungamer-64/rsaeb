@@ -6,6 +6,7 @@ use crate::allocation::{
 };
 use crate::error::RuleRuntimeStateError;
 use crate::inspect::OnceRuleCount;
+use crate::program::RuleScan;
 use crate::rule::{Rule, RuleAvailability};
 
 /// Per-run execution state for parsed `(once)` slots.
@@ -160,7 +161,7 @@ impl OnceStateSet {
     /// Iterates parsed rules with runtime availability without row-aligned state.
     pub(super) fn runtime_rules_mut<'program, 'once>(
         &'once mut self,
-        rules: &'program [Rule],
+        rules: RuleScan<'program>,
     ) -> RuntimeRulesMut<'program, 'once> {
         RuntimeRulesMut {
             rules: rules.iter(),
@@ -237,7 +238,7 @@ mod tests {
     fn missing_once_rule_state_is_runtime_step_error() -> TestResult {
         let program = parse_program("(once)a=b")?;
         let rule = program
-            .rule_slice()
+            .rule_scan()
             .iter()
             .next()
             .ok_or(TestFailure::message("expected parsed rule"))?;

@@ -5,11 +5,18 @@ use crate::program::{Program, RunResult};
 use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
 
 use super::admission::RuleAttemptSeed;
-use super::construction::{RuleAttemptRunSession, StepwiseRunSession};
-use super::engine::{AttemptSession, BorrowedProgram, OwnedProgram, Session};
+use super::engine::{
+    AttemptSession, BorrowedProgram, CoreAppliedRule, CoreRuleAttempt, CoreStep, OwnedProgram,
+    RunCore, Session,
+};
 use super::transition::{
-    BorrowedRuleAttemptTransition, BorrowedStepTransition, OwnedRuleAttemptTransition,
-    OwnedStepTransition,
+    BorrowedAppliedStep, BorrowedFailedRun, BorrowedMissedRuleAttempt, BorrowedReturnedRun,
+    BorrowedRuleAttemptAppliedStep, BorrowedRuleAttemptFailedRun, BorrowedRuleAttemptReturnedRun,
+    BorrowedRuleAttemptStableRun, BorrowedRuleAttemptTransition, BorrowedStableRun,
+    BorrowedStepTransition, OwnedAppliedStep, OwnedFailedRun, OwnedMissedRuleAttempt,
+    OwnedReturnedRun, OwnedRuleAttemptAppliedStep, OwnedRuleAttemptFailedRun,
+    OwnedRuleAttemptReturnedRun, OwnedRuleAttemptStableRun, OwnedRuleAttemptTransition,
+    OwnedStableRun, OwnedStepTransition,
 };
 
 /// Stateful run session that borrows a reusable parsed program.
@@ -129,7 +136,7 @@ impl<'program> BorrowedRunSession<'program> {
     /// consume the session into terminal typestates.
     #[must_use]
     pub fn step(self) -> BorrowedStepTransition<'program> {
-        self.step_transition()
+        step_borrowed_run(self)
     }
 
     /// Runs this session to completion.
@@ -195,7 +202,7 @@ impl<'program> BorrowedRuleAttemptSession<'program> {
     /// runtime failure consume the session into terminal typestates.
     #[must_use]
     pub fn step(self) -> BorrowedRuleAttemptTransition<'program> {
-        self.step_transition()
+        step_borrowed_rule_attempt_run(self)
     }
 }
 
@@ -249,7 +256,7 @@ impl OwnedRunSession {
     /// parsed program recoverable.
     #[must_use]
     pub fn step(self) -> OwnedStepTransition {
-        self.step_transition()
+        step_owned_run(self)
     }
 
     /// Runs this session to completion.
@@ -322,6 +329,226 @@ impl OwnedRuleAttemptSession {
     /// parsed program recoverable.
     #[must_use]
     pub fn step(self) -> OwnedRuleAttemptTransition {
-        self.step_transition()
+        step_owned_rule_attempt_run(self)
+    }
+}
+
+/// Splits a borrowed run session into the public terminal data.
+fn borrowed_run_terminal_parts(session: BorrowedRunSession<'_>) -> (&Program, RunCore) {
+    let Session { program, core } = session.session;
+    (program.program, core)
+}
+
+/// Splits an owned run session into the public terminal data.
+fn owned_run_terminal_parts(session: OwnedRunSession) -> (Program, RunCore) {
+    session.session.into_program_core()
+}
+
+/// Splits a borrowed rule-attempt session into the public terminal data.
+fn borrowed_rule_attempt_terminal_parts(
+    session: BorrowedRuleAttemptSession<'_>,
+) -> (&Program, RunCore, RuleAttemptCount) {
+    let AttemptSession {
+        program,
+        core,
+        cursor: _,
+        attempt_budget,
+    } = session.session;
+    (program.program, core, attempt_budget.completed_attempts())
+}
+
+/// Splits an owned rule-attempt session into the public terminal data.
+fn owned_rule_attempt_terminal_parts(
+    session: OwnedRuleAttemptSession,
+) -> (Program, RunCore, RuleAttemptCount) {
+    let AttemptSession {
+        program,
+        core,
+        cursor: _,
+        attempt_budget,
+    } = session.session;
+    (program.program, core, attempt_budget.completed_attempts())
+}
+
+/// Advances a borrowed ordinary run and builds the public transition explicitly.
+fn step_borrowed_run<'program>(
+    mut session: BorrowedRunSession<'program>,
+) -> BorrowedStepTransition<'program> {
+    match session.session.step_borrowed() {
+        Ok(CoreStep::Applied(CoreAppliedRule::Rewrite { step, rule })) => {
+            BorrowedStepTransition::Applied(BorrowedAppliedStep {
+                step,
+                rule,
+                session,
+            })
+        }
+        Ok(CoreStep::Applied(CoreAppliedRule::Return { step, rule, output })) => {
+            let (program, _core) = borrowed_run_terminal_parts(session);
+            BorrowedStepTransition::Returned(BorrowedReturnedRun {
+                step,
+                rule,
+                program,
+                output,
+            })
+        }
+        Ok(CoreStep::Stable(steps)) => {
+            let (program, core) = borrowed_run_terminal_parts(session);
+            BorrowedStepTransition::Stable(BorrowedStableRun {
+                steps,
+                program,
+                core,
+            })
+        }
+        Err(error) => {
+            let (program, core) = borrowed_run_terminal_parts(session);
+            BorrowedStepTransition::Failed(BorrowedFailedRun::new(error, program, core))
+        }
+    }
+}
+
+/// Advances an owned ordinary run and builds the public transition explicitly.
+fn step_owned_run(mut session: OwnedRunSession) -> OwnedStepTransition {
+    match session.session.step_owned() {
+        Ok(CoreStep::Applied(CoreAppliedRule::Rewrite { step, rule })) => {
+            OwnedStepTransition::Applied(OwnedAppliedStep {
+                step,
+                rule,
+                session,
+            })
+        }
+        Ok(CoreStep::Applied(CoreAppliedRule::Return { step, rule, output })) => {
+            let (program, _core) = owned_run_terminal_parts(session);
+            OwnedStepTransition::Returned(OwnedReturnedRun {
+                step,
+                rule,
+                program,
+                output,
+            })
+        }
+        Ok(CoreStep::Stable(steps)) => {
+            let (program, core) = owned_run_terminal_parts(session);
+            OwnedStepTransition::Stable(OwnedStableRun {
+                steps,
+                program,
+                core,
+            })
+        }
+        Err(error) => {
+            let (program, core) = owned_run_terminal_parts(session);
+            OwnedStepTransition::Failed(OwnedFailedRun::new(error, program, core))
+        }
+    }
+}
+
+/// Advances a borrowed rule-attempt run and builds the public transition explicitly.
+fn step_borrowed_rule_attempt_run<'program>(
+    mut session: BorrowedRuleAttemptSession<'program>,
+) -> BorrowedRuleAttemptTransition<'program> {
+    match session.session.step_borrowed() {
+        Ok(CoreRuleAttempt::Missed { attempt, miss }) => {
+            BorrowedRuleAttemptTransition::Missed(BorrowedMissedRuleAttempt {
+                attempt,
+                miss,
+                session,
+            })
+        }
+        Ok(CoreRuleAttempt::Applied {
+            attempt,
+            applied: CoreAppliedRule::Rewrite { step, rule },
+        }) => BorrowedRuleAttemptTransition::Applied(BorrowedRuleAttemptAppliedStep {
+            attempt,
+            step,
+            rule,
+            session,
+        }),
+        Ok(CoreRuleAttempt::Applied {
+            attempt,
+            applied: CoreAppliedRule::Return { step, rule, output },
+        }) => {
+            let (program, _core, _attempts) = borrowed_rule_attempt_terminal_parts(session);
+            BorrowedRuleAttemptTransition::Returned(BorrowedRuleAttemptReturnedRun {
+                attempt,
+                step,
+                rule,
+                program,
+                output,
+            })
+        }
+        Ok(CoreRuleAttempt::Stable {
+            attempts,
+            steps,
+            stable_reason,
+        }) => {
+            let (program, core, _completed_attempts) =
+                borrowed_rule_attempt_terminal_parts(session);
+            BorrowedRuleAttemptTransition::Stable(BorrowedRuleAttemptStableRun {
+                attempts,
+                steps,
+                stable_reason,
+                program,
+                core,
+            })
+        }
+        Err(error) => {
+            let (program, core, attempts) = borrowed_rule_attempt_terminal_parts(session);
+            BorrowedRuleAttemptTransition::Failed(BorrowedRuleAttemptFailedRun::new(
+                error, attempts, program, core,
+            ))
+        }
+    }
+}
+
+/// Advances an owned rule-attempt run and builds the public transition explicitly.
+fn step_owned_rule_attempt_run(mut session: OwnedRuleAttemptSession) -> OwnedRuleAttemptTransition {
+    match session.session.step_owned() {
+        Ok(CoreRuleAttempt::Missed { attempt, miss }) => {
+            OwnedRuleAttemptTransition::Missed(OwnedMissedRuleAttempt {
+                attempt,
+                miss,
+                session,
+            })
+        }
+        Ok(CoreRuleAttempt::Applied {
+            attempt,
+            applied: CoreAppliedRule::Rewrite { step, rule },
+        }) => OwnedRuleAttemptTransition::Applied(OwnedRuleAttemptAppliedStep {
+            attempt,
+            step,
+            rule,
+            session,
+        }),
+        Ok(CoreRuleAttempt::Applied {
+            attempt,
+            applied: CoreAppliedRule::Return { step, rule, output },
+        }) => {
+            let (program, _core, _attempts) = owned_rule_attempt_terminal_parts(session);
+            OwnedRuleAttemptTransition::Returned(OwnedRuleAttemptReturnedRun {
+                attempt,
+                step,
+                rule,
+                program,
+                output,
+            })
+        }
+        Ok(CoreRuleAttempt::Stable {
+            attempts,
+            steps,
+            stable_reason,
+        }) => {
+            let (program, core, _completed_attempts) = owned_rule_attempt_terminal_parts(session);
+            OwnedRuleAttemptTransition::Stable(OwnedRuleAttemptStableRun {
+                attempts,
+                steps,
+                stable_reason,
+                program,
+                core,
+            })
+        }
+        Err(error) => {
+            let (program, core, attempts) = owned_rule_attempt_terminal_parts(session);
+            OwnedRuleAttemptTransition::Failed(OwnedRuleAttemptFailedRun::new(
+                error, attempts, program, core,
+            ))
+        }
     }
 }

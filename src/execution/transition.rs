@@ -65,8 +65,10 @@ pub struct BorrowedReturnedRun<'program> {
 pub struct BorrowedFailedRun<'program> {
     /// Runtime error that stopped the candidate step before commit.
     pub(super) error: RunStepError,
-    /// Uncommitted borrowed session retained for diagnostic inspection.
-    pub(super) session: BorrowedRunSession<'program>,
+    /// Parsed program borrowed by the failed terminal state.
+    pub(super) program: &'program Program,
+    /// Uncommitted runtime core retained for diagnostic inspection.
+    pub(super) core: RunCore,
 }
 
 /// Result of advancing a borrowed rule-attempt session once.
@@ -141,8 +143,12 @@ pub struct BorrowedRuleAttemptReturnedRun<'program> {
 pub struct BorrowedRuleAttemptFailedRun<'program> {
     /// Runtime error that stopped the candidate attempt before commit.
     pub(super) error: RuleAttemptStepError,
-    /// Uncommitted borrowed session retained for diagnostic inspection.
-    pub(super) session: BorrowedRuleAttemptSession<'program>,
+    /// Number of rule attempts consumed before the failure was reported.
+    pub(super) attempts: RuleAttemptCount,
+    /// Parsed program borrowed by the failed terminal state.
+    pub(super) program: &'program Program,
+    /// Uncommitted runtime core retained for diagnostic inspection.
+    pub(super) core: RunCore,
 }
 
 /// Result of advancing an owned run session once.
@@ -196,8 +202,10 @@ pub struct OwnedReturnedRun {
 pub struct OwnedFailedRun {
     /// Runtime error that stopped the candidate step before commit.
     pub(super) error: OwnedRunStepError,
-    /// Uncommitted owned session retained for diagnostic inspection.
-    pub(super) session: OwnedRunSession,
+    /// Parsed program retained by the failed terminal state.
+    pub(super) program: Program,
+    /// Uncommitted runtime core retained for diagnostic inspection.
+    pub(super) core: RunCore,
 }
 
 /// Result of advancing an owned rule-attempt session once.
@@ -271,8 +279,12 @@ pub struct OwnedRuleAttemptReturnedRun {
 pub struct OwnedRuleAttemptFailedRun {
     /// Runtime error that stopped the candidate attempt before commit.
     pub(super) error: OwnedRuleAttemptStepError,
-    /// Uncommitted owned session retained for diagnostic inspection.
-    pub(super) session: OwnedRuleAttemptSession,
+    /// Number of rule attempts consumed before the failure was reported.
+    pub(super) attempts: RuleAttemptCount,
+    /// Parsed program retained by the failed terminal state.
+    pub(super) program: Program,
+    /// Uncommitted runtime core retained for diagnostic inspection.
+    pub(super) core: RunCore,
 }
 
 impl<'program> BorrowedAppliedStep<'program> {
@@ -802,8 +814,12 @@ impl OwnedRuleAttemptReturnedRun {
 
 impl<'program> BorrowedFailedRun<'program> {
     /// Captures a failed borrowed session without committing the attempted step.
-    pub(super) fn new(error: RunStepError, session: BorrowedRunSession<'program>) -> Self {
-        Self { error, session }
+    pub(super) fn new(error: RunStepError, program: &'program Program, core: RunCore) -> Self {
+        Self {
+            error,
+            program,
+            core,
+        }
     }
 
     /// Runtime error that prevented the step from committing.
@@ -815,19 +831,19 @@ impl<'program> BorrowedFailedRun<'program> {
     /// Number of execution steps that completed before the failed step attempt.
     #[must_use]
     pub const fn completed_steps(&self) -> StepCount {
-        self.session.completed_steps()
+        self.core.completed_steps()
     }
 
     /// Borrow the parsed program used by this failed session.
     #[must_use]
     pub fn program(&self) -> &'program Program {
-        self.session.program()
+        self.program
     }
 
     /// Borrow the uncommitted runtime state preserved by this error.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
-        self.session.state()
+        self.core.state()
     }
 
     /// Discard the uncommitted run session and return the runtime error.
@@ -856,9 +872,16 @@ impl<'program> BorrowedRuleAttemptFailedRun<'program> {
     /// Captures a failed borrowed rule-attempt session without committing runtime state.
     pub(super) fn new(
         error: RuleAttemptStepError,
-        session: BorrowedRuleAttemptSession<'program>,
+        attempts: RuleAttemptCount,
+        program: &'program Program,
+        core: RunCore,
     ) -> Self {
-        Self { error, session }
+        Self {
+            error,
+            attempts,
+            program,
+            core,
+        }
     }
 
     /// Runtime error that prevented the rule attempt from completing.
@@ -870,25 +893,25 @@ impl<'program> BorrowedRuleAttemptFailedRun<'program> {
     /// Number of rule attempts consumed before the failure was reported.
     #[must_use]
     pub const fn completed_attempts(&self) -> RuleAttemptCount {
-        self.session.completed_attempts()
+        self.attempts
     }
 
     /// Number of execution steps that completed before the failed rule attempt.
     #[must_use]
     pub const fn completed_steps(&self) -> StepCount {
-        self.session.completed_steps()
+        self.core.completed_steps()
     }
 
     /// Borrow the parsed program used by this failed session.
     #[must_use]
     pub fn program(&self) -> &'program Program {
-        self.session.program()
+        self.program
     }
 
     /// Borrow the uncommitted runtime state preserved by this error.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
-        self.session.state()
+        self.core.state()
     }
 
     /// Discard the uncommitted run session and return the runtime error.
@@ -912,8 +935,12 @@ impl core::error::Error for BorrowedRuleAttemptFailedRun<'_> {
 
 impl OwnedFailedRun {
     /// Captures a failed owned session without committing the attempted step.
-    pub(super) fn new(error: OwnedRunStepError, session: OwnedRunSession) -> Self {
-        Self { error, session }
+    pub(super) fn new(error: OwnedRunStepError, program: Program, core: RunCore) -> Self {
+        Self {
+            error,
+            program,
+            core,
+        }
     }
 
     /// Runtime error that prevented the step from committing.
@@ -925,19 +952,19 @@ impl OwnedFailedRun {
     /// Number of execution steps that completed before the failed step attempt.
     #[must_use]
     pub const fn completed_steps(&self) -> StepCount {
-        self.session.completed_steps()
+        self.core.completed_steps()
     }
 
     /// Borrow the parsed program owned by this failed session.
     #[must_use]
     pub fn program(&self) -> &Program {
-        self.session.program()
+        &self.program
     }
 
     /// Borrow the uncommitted runtime state preserved by this error.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
-        self.session.state()
+        self.core.state()
     }
 
     /// Discard the uncommitted run session and return the runtime error.
@@ -952,21 +979,30 @@ impl OwnedFailedRun {
     /// callers cannot resume the failed step by recovering a session.
     #[must_use]
     pub fn into_program(self) -> Program {
-        self.session.into_program()
+        self.program
     }
 
     /// Splits this failed transition into its runtime error and parsed program.
     #[must_use]
     pub fn into_parts(self) -> (OwnedRunStepError, Program) {
-        let program = self.session.into_program();
-        (self.error, program)
+        (self.error, self.program)
     }
 }
 
 impl OwnedRuleAttemptFailedRun {
     /// Captures a failed owned rule-attempt session without committing runtime state.
-    pub(super) fn new(error: OwnedRuleAttemptStepError, session: OwnedRuleAttemptSession) -> Self {
-        Self { error, session }
+    pub(super) fn new(
+        error: OwnedRuleAttemptStepError,
+        attempts: RuleAttemptCount,
+        program: Program,
+        core: RunCore,
+    ) -> Self {
+        Self {
+            error,
+            attempts,
+            program,
+            core,
+        }
     }
 
     /// Runtime error that prevented the rule attempt from completing.
@@ -978,25 +1014,25 @@ impl OwnedRuleAttemptFailedRun {
     /// Number of rule attempts consumed before the failure was reported.
     #[must_use]
     pub const fn completed_attempts(&self) -> RuleAttemptCount {
-        self.session.completed_attempts()
+        self.attempts
     }
 
     /// Number of execution steps that completed before the failed rule attempt.
     #[must_use]
     pub const fn completed_steps(&self) -> StepCount {
-        self.session.completed_steps()
+        self.core.completed_steps()
     }
 
     /// Borrow the parsed program owned by this failed session.
     #[must_use]
     pub fn program(&self) -> &Program {
-        self.session.program()
+        &self.program
     }
 
     /// Borrow the uncommitted runtime state preserved by this error.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
-        self.session.state()
+        self.core.state()
     }
 
     /// Discard the uncommitted run session and return the runtime error.
@@ -1012,14 +1048,13 @@ impl OwnedRuleAttemptFailedRun {
     /// session.
     #[must_use]
     pub fn into_program(self) -> Program {
-        self.session.into_program()
+        self.program
     }
 
     /// Splits this failed transition into its runtime error and parsed program.
     #[must_use]
     pub fn into_parts(self) -> (OwnedRuleAttemptStepError, Program) {
-        let program = self.session.into_program();
-        (self.error, program)
+        (self.error, self.program)
     }
 }
 

@@ -1,7 +1,7 @@
 use super::once::{MatchedRuleCommit, OnceRuleReadiness, OnceStateSet, RuntimeRule};
 use super::state::{State, StateMatch};
 use crate::error::RuleRuntimeStateError;
-use crate::program::RuleTarget;
+use crate::program::{RuleScan, RuleTarget};
 use crate::rule::{Rule, RuleAnchorSyntax};
 
 /// Outcome of scanning the rule table for the next applicable rule.
@@ -162,7 +162,7 @@ impl<'program> CommittedRule<'program> {
 /// Returns `RuleRuntimeStateError` if parsed rule metadata and per-run
 /// once-state slots no longer align.
 pub(crate) fn find_next_match<'program, 'state, 'once>(
-    rules: &'program [Rule],
+    rules: RuleScan<'program>,
     once_states: &'once mut OnceStateSet,
     state: &'state State,
 ) -> Result<RuleSearch<'program, 'state, 'once>, RuleRuntimeStateError> {

@@ -134,7 +134,7 @@ fn ensure_once_rule_failure_does_not_commit_rule(
     let mut scratch = RewriteScratch::new();
     let mut once_states = OnceStateSet::new(program.once_rule_count())?;
 
-    let matched = match find_next_match(program.rule_slice(), &mut once_states, &state)
+    let matched = match find_next_match(program.rule_scan(), &mut once_states, &state)
         .map_err(RunStepError::from)?
     {
         RuleSearch::Matched(matched) => matched,
@@ -156,7 +156,7 @@ fn ensure_once_rule_failure_does_not_commit_rule(
 
     ensure_matches(
         matches!(
-            find_next_match(program.rule_slice(), &mut once_states, &state)
+            find_next_match(program.rule_scan(), &mut once_states, &state)
                 .map_err(RunStepError::from)?,
             RuleSearch::Matched(_)
         ),
@@ -440,7 +440,7 @@ fn once_state_set_is_constructed_from_parser_assigned_slots() -> TestResult {
 
     ensure_matches(
         matches!(
-            find_next_match(program.rule_slice(), &mut once_states, &state)
+            find_next_match(program.rule_scan(), &mut once_states, &state)
                 .map_err(RunStepError::from)?,
             RuleSearch::Matched(_)
         ),
@@ -522,7 +522,7 @@ fn runtime_input_error_is_structured_at_the_runtime_boundary() -> TestResult {
 fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
     let program = parse_program("a=b")?;
     let payload = program
-        .rule_slice()
+        .rule_scan()
         .iter()
         .next()
         .ok_or(TestFailure::message("expected parsed rule"))?

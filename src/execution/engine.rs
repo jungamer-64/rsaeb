@@ -6,7 +6,8 @@ use crate::input::RunSeed;
 use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, RuleAttemptLimit, StepCount};
 use crate::program::{
-    ActiveRuleCursor, Program, ReturnOutput, RuleCursor, RuleCursorAfterMiss, RunResult,
+    ActiveRuleCursor, Program, ReturnOutput, RuleCursor, RuleCursorAfterMiss, RuleCursorSelection,
+    RunResult,
 };
 use crate::runtime::action::{AppliedRule, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
@@ -244,7 +245,7 @@ impl RunCore {
         program: &'program Program,
     ) -> Result<RuntimeStep<'program>, RunStepError> {
         let matched =
-            match find_next_match(program.rule_slice(), &mut self.once_states, &self.state)? {
+            match find_next_match(program.rule_scan(), &mut self.once_states, &self.state)? {
                 RuleSearch::Matched(matched) => matched,
                 RuleSearch::Stable => {
                     return Ok(RuntimeStep::Stable(self.budget.completed_steps()));
@@ -453,7 +454,7 @@ fn step_with_witness<'program, RuleWitness, Error>(
 where
     Error: From<RunStepError>,
 {
-    let matched = match find_next_match(program.rule_slice(), &mut core.once_states, &core.state)
+    let matched = match find_next_match(program.rule_scan(), &mut core.once_states, &core.state)
         .map_err(RunStepError::from)?
     {
         RuleSearch::Matched(matched) => matched,
@@ -481,8 +482,9 @@ fn attempt_current_rule_with_witness<'program, RuleWitness, Error>(
 where
     Error: From<RuleAttemptStepError> + From<RunStepError>,
 {
-    let Some(active_cursor) = context.cursor.take_active() else {
-        return Ok(no_executable_rules(context));
+    let active_cursor = match context.cursor.select_next() {
+        RuleCursorSelection::Active(active_cursor) => active_cursor,
+        RuleCursorSelection::NoExecutableRules => return Ok(no_executable_rules(context)),
     };
     let target = context
         .program
