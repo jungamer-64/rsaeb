@@ -156,6 +156,11 @@ impl<'program> CommittedRule<'program> {
 }
 
 /// Finds the first currently available rule that matches `state`.
+///
+/// # Errors
+///
+/// Returns `RuleRuntimeStateError` if parsed rule metadata and per-run
+/// once-state slots no longer align.
 pub(crate) fn find_next_match<'program, 'state, 'once>(
     rules: &'program [Rule],
     once_states: &'once mut OnceStateSet,
@@ -200,6 +205,11 @@ pub(crate) fn attempt_rule<'program, 'state, 'once>(
 }
 
 /// Pairs a rule-attempt target with aligned runtime state.
+///
+/// # Errors
+///
+/// Returns `RuleRuntimeStateError` if the targeted parsed rule refers to a
+/// missing per-run once-state slot.
 pub(crate) fn runtime_rule_for_target<'program, 'once>(
     once_states: &'once mut OnceStateSet,
     target: RuleTarget<'program>,

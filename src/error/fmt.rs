@@ -5,10 +5,11 @@ use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind}
 use super::{
     InputColumn, LeftModifierKind, OwnedRuleAttemptStepError, OwnedRunStepError, ParseError,
     ParseErrorKind, ParseErrorLocation, ParseRepresentationError, PayloadKind,
-    ReturnOutputLimitError, RewriteSizeError, RightActionKind, RuleAttemptLimitError,
-    RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError, RunStartError, RunStepError,
-    RuntimeInputError, RuntimeStateLimitError, StepLimitError, TraceSnapshotError,
-    TraceSnapshotRunError, TracedRunError,
+    ReturnOutputLimitError, RewriteSizeError, RightActionKind, RuleAttemptCursorError,
+    RuleAttemptLimitError, RuleAttemptStepError, RuleRuntimeStateError, RunAdmissionError,
+    RunError, RunFinishError, RunStartError, RunStepError, RuntimeInputError,
+    RuntimeStateLimitError, StepLimitError, TraceSnapshotError, TraceSnapshotRunError,
+    TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -216,6 +217,7 @@ impl fmt::Display for RunStepError {
             Self::RuntimeStateLimit(error) => error.fmt(f),
             Self::ReturnOutputLimit(error) => error.fmt(f),
             Self::StepLimit(error) => error.fmt(f),
+            Self::RuleRuntimeState(error) => error.fmt(f),
         }
     }
 }
@@ -236,6 +238,7 @@ impl fmt::Display for RuleAttemptStepError {
         match self {
             Self::Step(error) => error.fmt(f),
             Self::RuleAttemptLimit(error) => error.fmt(f),
+            Self::RuleCursor(error) => error.fmt(f),
         }
     }
 }
@@ -339,6 +342,26 @@ impl fmt::Display for RunAdmissionError {
                 limit.get()
             ),
         }
+    }
+}
+
+impl fmt::Display for RuleRuntimeStateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "missing runtime once-rule state for rule {}",
+            self.rule().number().get()
+        )
+    }
+}
+
+impl fmt::Display for RuleAttemptCursorError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "rule-attempt cursor points at missing rule {}",
+            self.rule().number().get()
+        )
     }
 }
 

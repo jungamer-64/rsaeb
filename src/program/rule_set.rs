@@ -265,6 +265,11 @@ impl RuleSet {
     }
 
     /// Selects the parsed rule pointed at by an active rule-attempt cursor.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RuleAttemptCursorError` if the cursor points outside this parsed
+    /// rule table.
     pub(crate) fn target_for_cursor(
         &self,
         active_cursor: ActiveRuleCursor,
@@ -272,7 +277,9 @@ impl RuleSet {
         let rule = self
             .rules
             .get(active_cursor.current_index().get())
-            .ok_or_else(|| RuleAttemptCursorError::missing_rule(active_cursor.current_position()))?;
+            .ok_or_else(|| {
+                RuleAttemptCursorError::missing_rule(active_cursor.current_position())
+            })?;
         Ok(RuleTarget { rule })
     }
 }
@@ -368,5 +375,37 @@ impl<'program> RuleTarget<'program> {
     /// Parsed rule selected by the cursor.
     pub(crate) const fn rule(self) -> &'program Rule {
         self.rule
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::RuleAttemptStepError;
+    use crate::test_support::{TestFailure, TestResult, ensure_eq};
+
+    /// # Errors
+    ///
+    /// Returns `TestFailure` if an active cursor pointing outside the rule table
+    /// is folded into an executable-rule absence instead of a cursor error.
+    #[test]
+    fn missing_cursor_rule_is_rule_attempt_step_error() -> TestResult {
+        let rule_set = RuleSet {
+            rules: Vec::new(),
+            once_rule_count: PublicOnceRuleCount::ZERO,
+        };
+        let cursor = ActiveRuleCursor {
+            next_rule_index: RuleIndex::first(),
+            final_rule_index: RuleIndex::first(),
+        };
+
+        let Err(RuleAttemptStepError::RuleCursor(error)) = rule_set
+            .target_for_cursor(cursor)
+            .map_err(RuleAttemptStepError::from)
+        else {
+            return Err(TestFailure::message("expected missing cursor rule error"));
+        };
+
+        ensure_eq!(error.rule(), RulePosition::FIRST)
     }
 }

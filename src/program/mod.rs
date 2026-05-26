@@ -191,6 +191,11 @@ impl Program {
     }
 
     /// Resolves an active rule-attempt cursor to the selected parsed rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RuleAttemptCursorError` if the cursor points outside this parsed
+    /// program.
     pub(crate) fn target_for_cursor(
         &self,
         cursor: ActiveRuleCursor,

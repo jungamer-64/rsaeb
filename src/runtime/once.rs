@@ -135,6 +135,11 @@ impl OnceStateSet {
     }
 
     /// Pairs one parsed rule with its parser-assigned runtime availability.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RuleRuntimeStateError` if a parsed `(once)` rule refers to a
+    /// missing per-run once-state slot.
     pub(super) fn runtime_rule_mut<'program, 'once>(
         &'once mut self,
         rule: &'program Rule,
@@ -142,10 +147,9 @@ impl OnceStateSet {
         let availability = match rule.availability() {
             RuleAvailability::Always => RuntimeRuleAvailability::Always,
             RuleAvailability::Once(slot) => {
-                let state = self
-                    .states
-                    .get_mut(slot.index())
-                    .ok_or_else(|| RuleRuntimeStateError::missing_once_rule_state(rule.position()))?;
+                let state = self.states.get_mut(slot.index()).ok_or_else(|| {
+                    RuleRuntimeStateError::missing_once_rule_state(rule.position())
+                })?;
                 RuntimeRuleAvailability::Once(state)
             }
         };
@@ -216,5 +220,36 @@ impl OnceMatchPermit<'_> {
             linearity: _linearity,
         } = self;
         *state = OnceRuleState::Consumed;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::RunStepError;
+    use crate::test_support::{TestFailure, TestResult, ensure_eq, parse_program};
+
+    /// # Errors
+    ///
+    /// Returns `TestFailure` if a missing parser-assigned once slot is not
+    /// surfaced through the runtime step error domain.
+    #[test]
+    fn missing_once_rule_state_is_runtime_step_error() -> TestResult {
+        let program = parse_program("(once)a=b")?;
+        let rule = program
+            .rule_slice()
+            .iter()
+            .next()
+            .ok_or(TestFailure::message("expected parsed rule"))?;
+        let mut once_states = OnceStateSet { states: Vec::new() };
+
+        let Err(RunStepError::RuleRuntimeState(error)) = once_states
+            .runtime_rule_mut(rule)
+            .map_err(RunStepError::from)
+        else {
+            return Err(TestFailure::message("expected missing once-state error"));
+        };
+
+        ensure_eq!(error.rule(), rule.position())
     }
 }
