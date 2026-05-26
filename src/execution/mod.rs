@@ -71,8 +71,6 @@
 mod admission;
 /// Rule miss and stable-reason values.
 mod attempt;
-/// Internal transition constructors from engine states.
-mod construction;
 /// Manual debug formatting for public typestates.
 mod debug;
 /// Shared mutable execution engine behind the public typestates.
