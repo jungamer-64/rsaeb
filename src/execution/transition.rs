@@ -4,10 +4,7 @@ use crate::error::{
 };
 use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, StepCount};
-use crate::policy::{
-    DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuleAttemptPolicy, ExecutionPolicy,
-    ParsePolicy, RuleAttemptPolicy,
-};
+use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::program::{Program, ReturnOutput, RunResult};
 use crate::trace::RuntimeStateView;
 
@@ -22,11 +19,7 @@ use super::witness::OwnedRuleWitness;
 ///
 /// Only [`BorrowedStepTransition::Applied`] carries a continuation session. Stable,
 /// returned, and failed transitions are terminal.
-pub enum BorrowedStepTransition<
-    'program,
-    P: ParsePolicy = DefaultParsePolicy,
-    E: ExecutionPolicy = DefaultExecutionPolicy,
-> {
+pub enum BorrowedStepTransition<'program, P: ParsePolicy, E: ExecutionPolicy> {
     /// One ordinary rewrite rule was applied and execution can continue.
     Applied(BorrowedAppliedStep<'program, P, E>),
     /// No rule matched the final runtime state.
@@ -38,11 +31,7 @@ pub enum BorrowedStepTransition<
 }
 
 /// One committed non-terminal rule application in a borrowed session.
-pub struct BorrowedAppliedStep<
-    'program,
-    P: ParsePolicy = DefaultParsePolicy,
-    E: ExecutionPolicy = DefaultExecutionPolicy,
-> {
+pub struct BorrowedAppliedStep<'program, P: ParsePolicy, E: ExecutionPolicy> {
     /// Step number committed by this transition.
     pub(super) step: StepCount,
     /// Borrowed rewrite rule committed by this transition.
@@ -52,11 +41,7 @@ pub struct BorrowedAppliedStep<
 }
 
 /// Terminal borrowed run state reached by no matching rule.
-pub struct BorrowedStableRun<
-    'program,
-    P: ParsePolicy = DefaultParsePolicy,
-    E: ExecutionPolicy = DefaultExecutionPolicy,
-> {
+pub struct BorrowedStableRun<'program, P: ParsePolicy, E: ExecutionPolicy> {
     /// Number of committed steps before no rule matched.
     pub(super) steps: StepCount,
     /// Parsed program borrowed by the terminal state.
@@ -66,7 +51,7 @@ pub struct BorrowedStableRun<
 }
 
 /// Terminal borrowed run state reached by `(return)`.
-pub struct BorrowedReturnedRun<'program, P: ParsePolicy = DefaultParsePolicy> {
+pub struct BorrowedReturnedRun<'program, P: ParsePolicy> {
     /// Step number that executed the return action.
     pub(super) step: StepCount,
     /// Borrowed return rule committed by this transition.
@@ -78,11 +63,7 @@ pub struct BorrowedReturnedRun<'program, P: ParsePolicy = DefaultParsePolicy> {
 }
 
 /// Runtime failure that preserves uncommitted borrowed state for inspection.
-pub struct BorrowedFailedRun<
-    'program,
-    P: ParsePolicy = DefaultParsePolicy,
-    E: ExecutionPolicy = DefaultExecutionPolicy,
-> {
+pub struct BorrowedFailedRun<'program, P: ParsePolicy, E: ExecutionPolicy> {
     /// Runtime error that stopped the candidate step before commit.
     pub(super) error: RunStepError,
     /// Parsed program borrowed by the failed terminal state.
@@ -98,9 +79,9 @@ pub struct BorrowedFailedRun<
 /// terminal.
 pub enum BorrowedRuleAttemptTransition<
     'program,
-    P: ParsePolicy = DefaultParsePolicy,
-    E: ExecutionPolicy = DefaultExecutionPolicy,
-    A: RuleAttemptPolicy = DefaultRuleAttemptPolicy,
+    P: ParsePolicy,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
 > {
     /// One executable rule line was consumed without applying.
     Missed(BorrowedMissedRuleAttempt<'program, P, E, A>),
@@ -117,9 +98,9 @@ pub enum BorrowedRuleAttemptTransition<
 /// One consumed non-applying rule line in a borrowed rule-attempt session.
 pub struct BorrowedMissedRuleAttempt<
     'program,
-    P: ParsePolicy = DefaultParsePolicy,
-    E: ExecutionPolicy = DefaultExecutionPolicy,
-    A: RuleAttemptPolicy = DefaultRuleAttemptPolicy,
+    P: ParsePolicy,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
 > {
     /// Rule-attempt count committed by this transition.
     pub(super) attempt: RuleAttemptCount,
@@ -132,9 +113,9 @@ pub struct BorrowedMissedRuleAttempt<
 /// One committed non-terminal rule application in a borrowed rule-attempt session.
 pub struct BorrowedRuleAttemptAppliedStep<
     'program,
-    P: ParsePolicy = DefaultParsePolicy,
-    E: ExecutionPolicy = DefaultExecutionPolicy,
-    A: RuleAttemptPolicy = DefaultRuleAttemptPolicy,
+    P: ParsePolicy,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
 > {
     /// Rule-attempt count committed by this transition.
     pub(super) attempt: RuleAttemptCount,
@@ -147,11 +128,7 @@ pub struct BorrowedRuleAttemptAppliedStep<
 }
 
 /// Terminal borrowed rule-attempt run state reached by no matching rule.
-pub struct BorrowedRuleAttemptStableRun<
-    'program,
-    P: ParsePolicy = DefaultParsePolicy,
-    E: ExecutionPolicy = DefaultExecutionPolicy,
-> {
+pub struct BorrowedRuleAttemptStableRun<'program, P: ParsePolicy, E: ExecutionPolicy> {
     /// Number of consumed rule attempts before stability.
     pub(super) attempts: RuleAttemptCount,
     /// Number of committed execution steps before stability.
@@ -165,7 +142,7 @@ pub struct BorrowedRuleAttemptStableRun<
 }
 
 /// Terminal borrowed rule-attempt run state reached by `(return)`.
-pub struct BorrowedRuleAttemptReturnedRun<'program, P: ParsePolicy = DefaultParsePolicy> {
+pub struct BorrowedRuleAttemptReturnedRun<'program, P: ParsePolicy> {
     /// Rule-attempt count committed by this transition.
     pub(super) attempt: RuleAttemptCount,
     /// Step number that executed the return action.
@@ -179,11 +156,7 @@ pub struct BorrowedRuleAttemptReturnedRun<'program, P: ParsePolicy = DefaultPars
 }
 
 /// Runtime failure that preserves uncommitted borrowed rule-attempt state for inspection.
-pub struct BorrowedRuleAttemptFailedRun<
-    'program,
-    P: ParsePolicy = DefaultParsePolicy,
-    E: ExecutionPolicy = DefaultExecutionPolicy,
-> {
+pub struct BorrowedRuleAttemptFailedRun<'program, P: ParsePolicy, E: ExecutionPolicy> {
     /// Runtime error that stopped the candidate attempt before commit.
     pub(super) error: RuleAttemptStepError,
     /// Number of rule attempts consumed before the failure was reported.
@@ -198,10 +171,7 @@ pub struct BorrowedRuleAttemptFailedRun<
 ///
 /// This mirrors [`BorrowedStepTransition`] while preserving ownership of the parsed
 /// program through owned terminal and failed states.
-pub enum OwnedStepTransition<
-    P: ParsePolicy = DefaultParsePolicy,
-    E: ExecutionPolicy = DefaultExecutionPolicy,
-> {
+pub enum OwnedStepTransition<P: ParsePolicy, E: ExecutionPolicy> {
     /// One ordinary rewrite rule was applied and execution can continue.
     Applied(OwnedAppliedStep<P, E>),
     /// No rule matched the final runtime state.
@@ -213,10 +183,7 @@ pub enum OwnedStepTransition<
 }
 
 /// One committed non-terminal rule application.
-pub struct OwnedAppliedStep<
-    P: ParsePolicy = DefaultParsePolicy,
-    E: ExecutionPolicy = DefaultExecutionPolicy,
-> {
+pub struct OwnedAppliedStep<P: ParsePolicy, E: ExecutionPolicy> {
     /// Step number committed by this transition.
     pub(super) step: StepCount,
     /// Owned rewrite rule witness committed by this transition.
@@ -226,10 +193,7 @@ pub struct OwnedAppliedStep<
 }
 
 /// Terminal run state reached by no matching rule.
-pub struct OwnedStableRun<
-    P: ParsePolicy = DefaultParsePolicy,
-    E: ExecutionPolicy = DefaultExecutionPolicy,
-> {
+pub struct OwnedStableRun<P: ParsePolicy, E: ExecutionPolicy> {
     /// Number of committed steps before no rule matched.
     pub(super) steps: StepCount,
     /// Parsed program retained by the owned terminal state.
@@ -239,7 +203,7 @@ pub struct OwnedStableRun<
 }
 
 /// Terminal run state reached by `(return)`.
-pub struct OwnedReturnedRun<P: ParsePolicy = DefaultParsePolicy> {
+pub struct OwnedReturnedRun<P: ParsePolicy> {
     /// Step number that executed the return action.
     pub(super) step: StepCount,
     /// Owned return rule witness committed by this transition.
@@ -251,10 +215,7 @@ pub struct OwnedReturnedRun<P: ParsePolicy = DefaultParsePolicy> {
 }
 
 /// Runtime failure that preserves uncommitted state for inspection.
-pub struct OwnedFailedRun<
-    P: ParsePolicy = DefaultParsePolicy,
-    E: ExecutionPolicy = DefaultExecutionPolicy,
-> {
+pub struct OwnedFailedRun<P: ParsePolicy, E: ExecutionPolicy> {
     /// Runtime error that stopped the candidate step before commit.
     pub(super) error: OwnedRunStepError,
     /// Parsed program retained by the failed terminal state.
@@ -267,11 +228,7 @@ pub struct OwnedFailedRun<
 ///
 /// This mirrors [`BorrowedRuleAttemptTransition`] while preserving ownership of the
 /// parsed program through owned terminal and failed states.
-pub enum OwnedRuleAttemptTransition<
-    P: ParsePolicy = DefaultParsePolicy,
-    E: ExecutionPolicy = DefaultExecutionPolicy,
-    A: RuleAttemptPolicy = DefaultRuleAttemptPolicy,
-> {
+pub enum OwnedRuleAttemptTransition<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     /// One executable rule line was consumed without applying.
     Missed(OwnedMissedRuleAttempt<P, E, A>),
     /// One ordinary rewrite rule was applied and execution can continue.
@@ -285,11 +242,7 @@ pub enum OwnedRuleAttemptTransition<
 }
 
 /// One consumed non-applying rule line.
-pub struct OwnedMissedRuleAttempt<
-    P: ParsePolicy = DefaultParsePolicy,
-    E: ExecutionPolicy = DefaultExecutionPolicy,
-    A: RuleAttemptPolicy = DefaultRuleAttemptPolicy,
-> {
+pub struct OwnedMissedRuleAttempt<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     /// Rule-attempt count committed by this transition.
     pub(super) attempt: RuleAttemptCount,
     /// Non-applying rule information.
@@ -299,11 +252,7 @@ pub struct OwnedMissedRuleAttempt<
 }
 
 /// One committed non-terminal rule application.
-pub struct OwnedRuleAttemptAppliedStep<
-    P: ParsePolicy = DefaultParsePolicy,
-    E: ExecutionPolicy = DefaultExecutionPolicy,
-    A: RuleAttemptPolicy = DefaultRuleAttemptPolicy,
-> {
+pub struct OwnedRuleAttemptAppliedStep<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     /// Rule-attempt count committed by this transition.
     pub(super) attempt: RuleAttemptCount,
     /// Step number committed by this transition.
@@ -315,10 +264,7 @@ pub struct OwnedRuleAttemptAppliedStep<
 }
 
 /// Terminal owned rule-attempt run state reached by no matching rule.
-pub struct OwnedRuleAttemptStableRun<
-    P: ParsePolicy = DefaultParsePolicy,
-    E: ExecutionPolicy = DefaultExecutionPolicy,
-> {
+pub struct OwnedRuleAttemptStableRun<P: ParsePolicy, E: ExecutionPolicy> {
     /// Number of consumed rule attempts before stability.
     pub(super) attempts: RuleAttemptCount,
     /// Number of committed execution steps before stability.
@@ -332,7 +278,7 @@ pub struct OwnedRuleAttemptStableRun<
 }
 
 /// Terminal owned rule-attempt run state reached by `(return)`.
-pub struct OwnedRuleAttemptReturnedRun<P: ParsePolicy = DefaultParsePolicy> {
+pub struct OwnedRuleAttemptReturnedRun<P: ParsePolicy> {
     /// Rule-attempt count committed by this transition.
     pub(super) attempt: RuleAttemptCount,
     /// Step number that executed the return action.
@@ -346,10 +292,7 @@ pub struct OwnedRuleAttemptReturnedRun<P: ParsePolicy = DefaultParsePolicy> {
 }
 
 /// Runtime failure that preserves uncommitted owned rule-attempt state for inspection.
-pub struct OwnedRuleAttemptFailedRun<
-    P: ParsePolicy = DefaultParsePolicy,
-    E: ExecutionPolicy = DefaultExecutionPolicy,
-> {
+pub struct OwnedRuleAttemptFailedRun<P: ParsePolicy, E: ExecutionPolicy> {
     /// Runtime error that stopped the candidate attempt before commit.
     pub(super) error: OwnedRuleAttemptStepError,
     /// Number of rule attempts consumed before the failure was reported.

@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
     let seed = RunSeed::<DefaultExecutionPolicy>::admit(input)?;
-    let result = program.run(seed)?;
+    let result = program.execute::<_, rsaeb::execution::Complete>(seed)?;
 
     if !matches!(
         result.outcome(),
@@ -80,13 +80,13 @@ The crate intentionally contains no filesystem, process, argument parsing,
 environment access, stdout/stderr, or lossy display boundary. Hosts perform I/O
 outside the interpreter and pass already-loaded bytes into typed boundaries.
 
-`Program::run` is the borrowed run-to-completion API. `Program::start_run` is
-the borrowed stepwise API for hosts that keep a reusable parsed program.
-`Program::into_run` is the explicit ownership-transfer stepwise API for cases
-where the execution session must own the parsed program. Rule-attempt execution
-is separate: `Program::start_rule_attempt_run` and `Program::into_rule_attempt_run`
-observe executable rule-line attempts, including misses, without changing normal
-committed-step semantics.
+`Program::execute::<E, Complete>` is the borrowed run-to-completion API.
+`Program::execute::<E, Stepwise>` is the borrowed stepwise API for hosts that
+keep a reusable parsed program. `Program::into_execute::<E, Stepwise>` is the
+explicit ownership-transfer stepwise API for cases where the execution session
+must own the parsed program. Rule-attempt execution is selected as
+`RuleAttempts<A>`, so the rule-attempt policy is fixed by the mode type instead
+of a separate runtime witness value.
 
 The exact typestate names, transition variants, owned recovery methods, tracing
 events, and error variants are documented in rustdoc.

@@ -12,11 +12,11 @@
 //! checked per event.
 //!
 //! ```
-//! use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
+//! use rsaeb::trace::{SnapshotEvents, TraceSnapshotEffect, TraceSnapshotEvent};
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
 //!     DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
-//!     StaticTraceSnapshotPolicy, TraceSnapshotPolicyWitness,
+//!     StaticTraceSnapshotPolicy,
 //! };
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
@@ -30,10 +30,7 @@
 //! let seed = RunSeed::<TenSteps>::admit(input)?;
 //! let mut retained = Vec::new();
 //!
-//! program.run_with_trace_snapshots(
-//!     seed,
-//!     TraceSnapshotPolicyWitness::<SnapshotBytes>::new(),
-//!     |event| {
+//! program.trace::<TenSteps, SnapshotEvents<SnapshotBytes>, _, _>(seed, |event| {
 //!         match event {
 //!             TraceSnapshotEvent::Initial { state } => retained.push(state.into_raw_bytes()),
 //!             TraceSnapshotEvent::Step {
@@ -46,8 +43,7 @@
 //!             } => retained.push(output.into_raw_bytes()),
 //!         }
 //!         Ok::<(), core::convert::Infallible>(())
-//!     },
-//! )?;
+//!     })?;
 //!
 //! if retained != [b"a".to_vec(), b"b".to_vec(), b"ok".to_vec()] {
 //!     return Err("unexpected trace snapshots".into());
@@ -62,10 +58,11 @@
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
 //!     DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
-//!     StaticTraceSnapshotPolicy, TraceSnapshotPolicyWitness,
+//!     StaticTraceSnapshotPolicy,
 //! };
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
+//! use rsaeb::trace::SnapshotEvents;
 //!
 //! type TenSteps = StaticExecutionPolicy<10, 16_777_216, 16_777_216>;
 //! type EmptySnapshot = StaticTraceSnapshotPolicy<0>;
@@ -75,9 +72,8 @@
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let seed = RunSeed::<TenSteps>::admit(input)?;
 //!
-//! let result = program.run_with_trace_snapshots(
+//! let result = program.trace::<TenSteps, SnapshotEvents<EmptySnapshot>, _, _>(
 //!     seed,
-//!     TraceSnapshotPolicyWitness::<EmptySnapshot>::new(),
 //!     |_event| Ok::<(), Infallible>(()),
 //! );
 //!
@@ -95,16 +91,105 @@
 //! ```
 
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
 use crate::bytes::{RuntimeByte, RuntimeStateByteCount, TraceSnapshotByteCount};
-use crate::error::TraceSnapshotError;
+use crate::error::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
+use crate::input::RunSeed;
 use crate::inspect::RuleView;
 use crate::limits::{StepCount, TraceSnapshotByteLimit};
-use crate::policy::{TraceSnapshotPolicy, TraceSnapshotPolicyWitness};
-use crate::program::{ReturnOutput, ReturnOutputView, RuntimeStateSnapshot};
+use crate::policy::{ExecutionPolicy, ParsePolicy, TraceSnapshotPolicy};
+use crate::program::{Program, ReturnOutput, ReturnOutputView, RunResult, RuntimeStateSnapshot};
+
+/// Trace mode that emits borrowed events without per-event snapshot allocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BorrowedEvents;
+
+/// Trace mode that materializes bounded owned event snapshots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapshotEvents<T: TraceSnapshotPolicy> {
+    /// Snapshot policy selected by this mode.
+    policy: PhantomData<fn() -> T>,
+}
+
+/// Trace behavior selected by a mode type.
+pub trait TraceMode<'program, P: ParsePolicy, E: ExecutionPolicy, F, TraceError>:
+    private::Sealed
+{
+    /// Failure type produced by this trace mode.
+    type Error;
+
+    /// Runs the selected trace mode.
+    #[doc(hidden)]
+    fn trace(
+        program: &'program Program<P>,
+        seed: RunSeed<E>,
+        trace: F,
+    ) -> Result<RunResult, Self::Error>;
+}
+
+/// Trace callback failure split used while borrowed events become snapshots.
+enum SnapshotTraceCallbackError<E> {
+    /// Snapshot materialization failed before the user callback ran.
+    Snapshot(TraceSnapshotError),
+    /// User callback rejected a materialized snapshot event.
+    Trace(E),
+}
+
+impl<'program, P, E, F, TraceError> TraceMode<'program, P, E, F, TraceError> for BorrowedEvents
+where
+    P: ParsePolicy,
+    E: ExecutionPolicy,
+    F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), TraceError>,
+{
+    type Error = TracedRunError<TraceError>;
+
+    fn trace(
+        program: &'program Program<P>,
+        seed: RunSeed<E>,
+        trace: F,
+    ) -> Result<RunResult, Self::Error> {
+        crate::execution::trace_borrowed_events(program, seed, trace)
+    }
+}
+
+impl<'program, P, E, T, F, TraceError> TraceMode<'program, P, E, F, TraceError>
+    for SnapshotEvents<T>
+where
+    P: ParsePolicy,
+    E: ExecutionPolicy,
+    T: TraceSnapshotPolicy,
+    F: FnMut(TraceSnapshotEvent<'program>) -> Result<(), TraceError>,
+{
+    type Error = TraceSnapshotRunError<TraceError>;
+
+    fn trace(
+        program: &'program Program<P>,
+        seed: RunSeed<E>,
+        mut trace: F,
+    ) -> Result<RunResult, Self::Error> {
+        let result = crate::execution::trace_borrowed_events(program, seed, |event| {
+            let snapshot = event
+                .to_snapshot::<T>()
+                .map_err(SnapshotTraceCallbackError::Snapshot)?;
+            trace(snapshot).map_err(SnapshotTraceCallbackError::Trace)
+        });
+
+        match result {
+            Ok(result) => Ok(result),
+            Err(TracedRunError::Run(error)) => Err(TraceSnapshotRunError::Run(error)),
+            Err(TracedRunError::Trace(SnapshotTraceCallbackError::Snapshot(error))) => {
+                Err(TraceSnapshotRunError::Snapshot(error))
+            }
+            Err(TracedRunError::Trace(SnapshotTraceCallbackError::Trace(error))) => {
+                Err(TraceSnapshotRunError::Trace(error))
+            }
+        }
+    }
+}
 
 /// Borrowed view of runtime-state bytes.
 ///
@@ -245,7 +330,6 @@ impl TraceEffect<RuntimeStateView<'_>, ReturnOutputView<'_>> {
     /// allocation fails.
     fn to_snapshot<T: TraceSnapshotPolicy>(
         self,
-        _policy: TraceSnapshotPolicyWitness<T>,
     ) -> Result<TraceSnapshotEffect, TraceSnapshotError> {
         ensure_trace_len(self.byte_count(), T::TRACE_SNAPSHOT_BYTE_LIMIT)?;
         match self {
@@ -333,7 +417,6 @@ impl<'program> TraceEvent<'program, RuntimeStateView<'_>, BorrowedTraceEffect<'p
     /// Returns `TraceSnapshotError::Allocation` if snapshot allocation fails.
     pub fn to_snapshot<T: TraceSnapshotPolicy>(
         self,
-        policy: TraceSnapshotPolicyWitness<T>,
     ) -> Result<TraceSnapshotEvent<'program>, TraceSnapshotError> {
         match self {
             Self::Initial { state } => {
@@ -348,10 +431,19 @@ impl<'program> TraceEvent<'program, RuntimeStateView<'_>, BorrowedTraceEffect<'p
             Self::Step { step, rule, effect } => Ok(TraceSnapshotEvent::Step {
                 step,
                 rule,
-                effect: effect.to_snapshot(policy)?,
+                effect: effect.to_snapshot::<T>()?,
             }),
         }
     }
+}
+
+/// Private sealing boundary for trace mode traits.
+mod private {
+    /// Marker trait implemented only by built-in trace modes.
+    pub trait Sealed {}
+
+    impl Sealed for super::BorrowedEvents {}
+    impl<T: crate::policy::TraceSnapshotPolicy> Sealed for super::SnapshotEvents<T> {}
 }
 
 /// Checks whether a trace snapshot byte count is within its limit.

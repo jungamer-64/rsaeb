@@ -31,7 +31,9 @@ fn expect_stable_bytes(result: &RunResult, expected: &[u8]) -> TestResult {
 /// # Errors
 ///
 /// Returns `RuntimeInputError` if validation rejects the bytes.
-fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
+fn runtime_input(
+    bytes: &[u8],
+) -> Result<RuntimeInput<DefaultRuntimeInputPolicy>, rsaeb::error::RuntimeInputError> {
     RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(bytes))
 }
 
@@ -49,30 +51,29 @@ fn runtime_input_moves_owned_bytes_into_execution() -> TestResult {
     ensure_matches(!input.is_empty(), "expected non-empty owned input")?;
 
     let program = parse_program("a=b")?;
-    let result = program.run(RunSeed::<DefaultExecutionPolicy>::admit(input)?)?;
+    let result = program.execute::<_, rsaeb::execution::Complete>(RunSeed::<
+        DefaultExecutionPolicy,
+    >::admit(input)?)?;
     expect_stable_bytes(&result, b"b=()# ")
 }
 
 /// # Errors
 ///
 /// Returns `TestFailure` if domain-specific default policies stop supporting
-/// default generic inference or explicit default names.
+/// explicit default names.
 #[test]
-fn domain_default_policies_support_inference_and_explicit_names() -> TestResult {
-    let inferred_program: Program = Program::parse(ProgramSource::from_text("a=b"))?;
+fn domain_default_policies_support_explicit_names() -> TestResult {
     let explicit_program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
 
-    let inferred_input: RuntimeInput =
-        RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"))?;
     let explicit_input =
         RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 
-    let inferred_seed: RunSeed = RunSeed::admit(inferred_input)?;
-    let inferred_result = inferred_program.run(inferred_seed)?;
-    let explicit_result =
-        explicit_program.run(RunSeed::<DefaultExecutionPolicy>::admit(explicit_input)?)?;
+    let explicit_result = explicit_program.execute::<_, rsaeb::execution::Complete>(RunSeed::<
+        DefaultExecutionPolicy,
+    >::admit(
+        explicit_input,
+    )?)?;
 
-    expect_stable_bytes(&inferred_result, b"b")?;
     expect_stable_bytes(&explicit_result, b"b")
 }
 
@@ -87,7 +88,9 @@ fn runtime_input_validates_ascii_boundary() -> TestResult {
     let runtime_input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(
         RuntimeInputSource::from_bytes(&input),
     )?;
-    let result = program.run(RunSeed::<DefaultExecutionPolicy>::admit(runtime_input)?)?;
+    let result = program.execute::<_, rsaeb::execution::Complete>(RunSeed::<
+        DefaultExecutionPolicy,
+    >::admit(runtime_input)?)?;
     expect_stable_bytes(&result, input.as_slice())?;
     ensure_eq!(result.steps().get(), 0)?;
 

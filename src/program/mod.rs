@@ -19,10 +19,13 @@ mod rule_set;
 use core::marker::PhantomData;
 
 use crate::error::ParseError;
+use crate::execution::{BorrowedExecutionMode, OwnedExecutionMode};
+use crate::input::RunSeed;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::parser::parse_rules_impl;
-use crate::policy::{DefaultParsePolicy, ParsePolicy};
+use crate::policy::{ExecutionPolicy, ParsePolicy};
 use crate::source::ProgramSource;
+use crate::trace::TraceMode;
 
 pub(crate) use rule_set::{
     RuleAttemptTargetSelection, RuleCursor, RuleCursorAfterMiss, RuleScan, RuleTarget,
@@ -38,7 +41,7 @@ pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeS
 /// [`Program`] start from fresh rule availability. Running a program requires
 /// an already admitted [`RunSeed`], so parsing never accepts raw runtime input
 /// or detached execution policy values.
-pub struct Program<P: ParsePolicy = DefaultParsePolicy> {
+pub struct Program<P: ParsePolicy> {
     /// Immutable rule table plus parsed `(once)` metadata.
     rule_set: RuleSet,
     /// Compile-time parser policy selected for this program.
@@ -111,6 +114,60 @@ impl<P: ParsePolicy> Program<P> {
     /// Mints a private runtime scan over the immutable rule table.
     pub(crate) fn rule_scan(&self) -> RuleScan<'_> {
         self.rule_set.scan()
+    }
+
+    /// Executes this program with borrowed ownership according to the selected mode type.
+    ///
+    /// The execution policy and mode are both selected by generic arguments,
+    /// so the API surface cannot receive a runtime mode flag or a detached
+    /// policy witness.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error type associated with the selected mode.
+    pub fn execute<'program, E, M>(&'program self, seed: RunSeed<E>) -> Result<M::Output, M::Error>
+    where
+        E: ExecutionPolicy,
+        M: BorrowedExecutionMode<'program, P, E>,
+    {
+        M::execute(self, seed)
+    }
+
+    /// Executes this program with owned program ownership according to the selected mode type.
+    ///
+    /// Only modes that can produce an owned continuation implement this
+    /// boundary. Run-to-completion execution intentionally stays borrowed,
+    /// because it does not need to consume the parsed program.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error type associated with the selected mode.
+    pub fn into_execute<E, M>(self, seed: RunSeed<E>) -> Result<M::Output, M::Error>
+    where
+        E: ExecutionPolicy,
+        M: OwnedExecutionMode<P, E>,
+    {
+        M::execute(self, seed)
+    }
+
+    /// Runs this program while emitting trace events selected by a type-level trace mode.
+    ///
+    /// Borrowed and snapshot tracing share one entrypoint, but the callback
+    /// event shape and error type are fixed by the `M` mode parameter.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error type associated with the selected trace mode.
+    pub fn trace<'program, E, M, F, TraceError>(
+        &'program self,
+        seed: RunSeed<E>,
+        trace: F,
+    ) -> Result<RunResult, M::Error>
+    where
+        E: ExecutionPolicy,
+        M: TraceMode<'program, P, E, F, TraceError>,
+    {
+        M::trace(self, seed, trace)
     }
 
     /// Starts a rule-attempt cursor minted from this parsed rule table.

@@ -14,8 +14,8 @@ use crate::error::{
 use crate::input::{RunSeed, RuntimeInput, RuntimeInputSource};
 use crate::limits::{ReturnByteLimit, RuntimeInputByteLimit, RuntimeStateByteLimit, StepLimit};
 use crate::policy::{
-    DefaultExecutionPolicy, DefaultRuntimeInputPolicy, ExecutionPolicy, RuntimeInputPolicy,
-    StaticExecutionPolicy, StaticRuntimeInputPolicy,
+    DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy, ExecutionPolicy,
+    RuntimeInputPolicy, StaticExecutionPolicy, StaticRuntimeInputPolicy,
 };
 use crate::program::Program;
 use crate::source::{ProgramSource, SourceColumn, SourceLineNumber, SourcePosition};
@@ -264,7 +264,7 @@ pub(crate) fn run_seed<I: RuntimeInputPolicy, E: ExecutionPolicy>(
 ///
 /// Returns `ParseError` if the source violates parser syntax, resource, or
 /// allocation constraints.
-pub(crate) fn parse_program(source: &str) -> Result<Program, ParseError> {
+pub(crate) fn parse_program(source: &str) -> Result<Program<DefaultParsePolicy>, ParseError> {
     Program::parse(ProgramSource::from_text(source))
 }
 
@@ -274,7 +274,9 @@ pub(crate) fn parse_program(source: &str) -> Result<Program, ParseError> {
 ///
 /// Returns `ParseError` if the source violates parser syntax, resource, or
 /// allocation constraints.
-pub(crate) fn parse_program_bytes(source: &[u8]) -> Result<Program, ParseError> {
+pub(crate) fn parse_program_bytes(
+    source: &[u8],
+) -> Result<Program<DefaultParsePolicy>, ParseError> {
     Program::parse(ProgramSource::from_bytes(source))
 }
 

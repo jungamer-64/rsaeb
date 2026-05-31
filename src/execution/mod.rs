@@ -59,6 +59,8 @@ mod attempt;
 mod debug;
 /// Shared mutable execution engine behind the public typestates.
 mod engine;
+/// Type-level execution mode selection.
+mod mode;
 /// Public run-session typestates.
 mod session;
 /// Public step and terminal transition typestates.
@@ -67,6 +69,7 @@ mod transition;
 mod witness;
 
 pub use attempt::{RuleAttemptStableReason, RuleMiss, RuleMissReason};
+pub use mode::{BorrowedExecutionMode, Complete, OwnedExecutionMode, RuleAttempts, Stepwise};
 pub use session::{
     BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRuleAttemptSession, OwnedRunSession,
 };
@@ -81,4 +84,4 @@ pub use transition::{
 };
 pub use witness::{OwnedRulePayload, OwnedRuleWitness};
 
-pub(crate) use session::{finish_borrowed_run, run_with_borrowed_trace};
+pub(crate) use session::trace_borrowed_events;

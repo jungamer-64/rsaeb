@@ -122,7 +122,8 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
     )?;
 
     let return_limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, 1>::new();
-    let return_error = parse_program("a=(return)ok")?.run(runtime_input(b"a", return_limits)?);
+    let return_error = parse_program("a=(return)ok")?
+        .execute::<_, rsaeb::execution::Complete>(runtime_input(b"a", return_limits)?);
     ensure_matches(
         matches!(
             expect_run_error(return_error)?,

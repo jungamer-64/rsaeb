@@ -52,9 +52,7 @@ use core::{fmt, marker::PhantomData};
 use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeInputByte, RuntimeInputByteCount, RuntimeStateByteCount};
 use crate::error::{RunAdmissionError, RuntimeInputError};
-use crate::policy::{
-    DefaultExecutionPolicy, DefaultRuntimeInputPolicy, ExecutionPolicy, RuntimeInputPolicy,
-};
+use crate::policy::{ExecutionPolicy, RuntimeInputPolicy};
 use crate::runtime::budget::RuntimeBudgetState;
 
 /// Borrowed runtime input source at the validation boundary.
@@ -99,7 +97,7 @@ impl<'input> RuntimeInputSource<'input> {
 /// another run means validating another [`RuntimeInputSource`], not cloning a
 /// previously admitted execution state.
 #[derive(PartialEq, Eq)]
-pub struct RuntimeInput<I: RuntimeInputPolicy = DefaultRuntimeInputPolicy> {
+pub struct RuntimeInput<I: RuntimeInputPolicy> {
     /// Owned bytes classified for mutable runtime state.
     bytes: Vec<RuntimeByte>,
     /// Compile-time runtime-input policy selected for this value.
@@ -197,10 +195,10 @@ impl<I: RuntimeInputPolicy> RuntimeInput<I> {
 ///
 /// A seed is the only public value accepted by execution entrypoints. It
 /// carries both the initial runtime-state bytes and the already checked budget
-/// state, so `Program::run`, `Program::start_run`, and `Program::into_run` do
-/// not need to reinterpret raw input or detached execution policy values.
+/// state, so execution entrypoints do not need to reinterpret raw input or
+/// detached execution policy values.
 #[derive(Debug, PartialEq, Eq)]
-pub struct RunSeed<E: ExecutionPolicy = DefaultExecutionPolicy> {
+pub struct RunSeed<E: ExecutionPolicy> {
     /// Runtime-domain bytes admitted as the initial execution state.
     initial_state: InitialStateBytes,
     /// Execution budgets already tied to this admitted run.

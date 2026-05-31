@@ -36,14 +36,13 @@
 //!   [`input::RunSeed`] admits validated input under a
 //!   [`policy::ExecutionPolicy`], and [`policy::TraceSnapshotPolicy`] bounds
 //!   trace snapshot materialization.
-//! - [`program::Program::run`] runs to completion while borrowing the parsed
-//!   program, [`program::Program::start_run`] returns a borrowed typestate
-//!   execution, [`program::Program::start_rule_attempt_run`] returns a borrowed
-//!   rule-line attempt typestate execution, and the `into_*` variants return
-//!   explicit owned typestate executions.
-//! - [`program::Program::run_with_borrowed_trace`] observes borrowed trace events without
-//!   per-event allocation; [`program::Program::run_with_trace_snapshots`] materializes
-//!   bounded owned trace events.
+//! - [`program::Program::execute`] selects borrowed run-to-completion,
+//!   stepwise, or rule-attempt execution by a type-level mode from
+//!   [`execution`].
+//! - [`program::Program::into_execute`] selects owned stepwise or
+//!   rule-attempt execution by the same type-level mode family.
+//! - [`program::Program::trace`] selects borrowed or snapshot trace events by
+//!   a type-level mode from [`trace`].
 //! - [`inspect`] exposes borrowed structured rule views, and [`error`] exposes
 //!   structured parse, input, runtime, and trace errors.
 //!
@@ -60,8 +59,8 @@
 //! validated [`input::RuntimeInput`] under an [`policy::ExecutionPolicy`],
 //! checks the initial runtime-state budget, and prevents a later execution API
 //! from receiving raw bytes or detached budget values.
-//! [`execution::RuleAttemptSeed`] extends that admission witness with a
-//! [`policy::RuleAttemptPolicy`] when a host needs rule-line attempt stepping.
+//! [`execution::RuleAttempts`] carries the [`policy::RuleAttemptPolicy`] type
+//! when a host needs rule-line attempt stepping.
 //!
 //! # Basic execution
 //!
@@ -78,7 +77,7 @@
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let seed = RunSeed::<DefaultExecutionPolicy>::admit(input)?;
-//! let result = program.run(seed)?;
+//! let result = program.execute::<_, rsaeb::execution::Complete>(seed)?;
 //!
 //! if !matches!(
 //!     result.outcome(),
@@ -108,8 +107,8 @@
 //! let first_input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"aa"))?;
 //! let second_input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"aa"))?;
 //!
-//! let first = program.run(RunSeed::<ShortRun>::admit(first_input)?)?;
-//! let second = program.run(RunSeed::<ShortRun>::admit(second_input)?)?;
+//! let first = program.execute::<_, rsaeb::execution::Complete>(RunSeed::<ShortRun>::admit(first_input)?)?;
+//! let second = program.execute::<_, rsaeb::execution::Complete>(RunSeed::<ShortRun>::admit(second_input)?)?;
 //!
 //! if !matches!(
 //!     first.outcome(),
@@ -147,7 +146,7 @@
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
 //! let input = RuntimeInput::<TinyInput>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let seed = RunSeed::<NoSteps>::admit(input)?;
-//! let result = program.run(seed);
+//! let result = program.execute::<_, rsaeb::execution::Complete>(seed);
 //!
 //! if !matches!(
 //!     result,
@@ -162,7 +161,7 @@
 //!
 //! # Stepwise execution
 //!
-//! Use [`program::Program::start_run`] when a host wants to wait after each
+//! Use [`program::Program::execute`] with [`execution::Stepwise`] when a host wants to wait after each
 //! applied rule while keeping the parsed program reusable:
 //!
 //! ```
@@ -178,7 +177,7 @@
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b\nb=c"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let seed = RunSeed::<TenSteps>::admit(input)?;
-//! let execution = program.start_run(seed)?;
+//! let execution = program.execute::<_, rsaeb::execution::Stepwise>(seed)?;
 //!
 //! let execution = match execution.step() {
 //!     BorrowedStepTransition::Applied(applied) => {
@@ -241,12 +240,12 @@
 //! expose `into_parts` methods so callers can keep the owned witness and the
 //! continuation session together.
 //!
-//! Use [`program::Program::start_rule_attempt_run`] when the host needs to
+//! Use [`program::Program::execute`] with [`execution::RuleAttempts`] when the host needs to
 //! observe every executable rule line, including lines that do not apply to the
 //! current runtime state:
 //!
 //! ```
-//! use rsaeb::execution::{BorrowedRuleAttemptTransition, RuleAttemptSeed, RuleMissReason};
+//! use rsaeb::execution::{BorrowedRuleAttemptTransition, RuleAttempts, RuleMissReason};
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
 //!     DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
@@ -262,8 +261,7 @@
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("z=x\na=b"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let seed = RunSeed::<TenSteps>::admit(input)?;
-//! let attempt_seed = RuleAttemptSeed::<TenSteps, TenAttempts>::new(seed);
-//! let execution = program.start_rule_attempt_run(attempt_seed)?;
+//! let execution = program.execute::<TenSteps, RuleAttempts<TenAttempts>>(seed)?;
 //!
 //! let execution = match execution.step() {
 //!     BorrowedRuleAttemptTransition::Missed(missed) => {
@@ -366,7 +364,7 @@
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let seed = RunSeed::<TenSteps>::admit(input)?;
 //!
-//! program.run_with_borrowed_trace(
+//! program.trace::<_, rsaeb::trace::BorrowedEvents, _, _>(
 //!     seed,
 //!     |event| {
 //!         byte_counts.push(event.byte_count().get());
@@ -388,12 +386,11 @@
 //! byte budget, which lets the caller retain events after each callback returns:
 //!
 //! ```
-//! use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
+//! use rsaeb::trace::{SnapshotEvents, TraceSnapshotEffect, TraceSnapshotEvent};
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
 //!     DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
 //!     StaticTraceSnapshotPolicy,
-//!     TraceSnapshotPolicyWitness,
 //! };
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
@@ -408,9 +405,8 @@
 //! let mut states = Vec::new();
 //! let mut returns = Vec::new();
 //!
-//! program.run_with_trace_snapshots(
+//! program.trace::<TenSteps, SnapshotEvents<SnapshotBytes>, _, _>(
 //!     seed,
-//!     TraceSnapshotPolicyWitness::<SnapshotBytes>::new(),
 //!     |event| {
 //!         match event {
 //!             TraceSnapshotEvent::Initial { state } => states.push(state.into_raw_bytes()),

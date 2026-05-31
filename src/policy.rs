@@ -35,6 +35,31 @@
 //!
 //! let _program = Program::<ExecutionOnly>::parse(ProgramSource::from_text("a=b"));
 //! ```
+//!
+//! Public boundary types no longer infer default policy domains. The policy
+//! type must be named at construction:
+//!
+//! ```compile_fail
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
+//!
+//! let _program: Program = Program::parse(ProgramSource::from_text("a=b")).unwrap();
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//!
+//! let _input: RuntimeInput = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a")).unwrap();
+//! ```
+//!
+//! Runtime witness values for selecting trace or rule-attempt policy cannot be
+//! constructed:
+//!
+//! ```compile_fail
+//! use rsaeb::policy::{DefaultTraceSnapshotPolicy, TraceSnapshotPolicyWitness};
+//!
+//! let _witness = TraceSnapshotPolicyWitness::<DefaultTraceSnapshotPolicy>::new();
+//! ```
 
 use crate::limits::{
     CodeLineByteLimit, PayloadByteLimit, ReturnByteLimit, RuleAttemptLimit, RuleLimit,

@@ -2,6 +2,7 @@ use crate::error::{
     LeftModifierKind, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind,
 };
 use crate::inspect::{RuleAction, RuleAnchor, RuleCount, RuleRepeat};
+use crate::policy::DefaultParsePolicy;
 use crate::program::Program;
 use crate::test_support::{
     TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_error_position,
@@ -14,7 +15,7 @@ use crate::test_support::{
 ///
 /// Returns `TestFailure` if the program has no rule at `index`.
 fn expect_rule(
-    program: &Program,
+    program: &Program<DefaultParsePolicy>,
     index: usize,
 ) -> Result<crate::inspect::RuleView<'_>, TestFailure> {
     program
