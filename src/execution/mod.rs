@@ -1,8 +1,8 @@
 //! Public stepwise run typestates.
 //!
-//! [`Program::execute`](crate::program::Program::execute) selects borrowed
-//! execution behavior by a type-level mode. [`Program::into_execute`](crate::program::Program::into_execute)
-//! is the explicit owned variant for hosts that need a `'static` session.
+//! Concrete [`Program`](crate::program::Program) entrypoints select borrowed,
+//! owned, and rule-attempt execution. The public API exposes the actual
+//! execution boundary directly instead of routing through mode marker types.
 //!
 //! A step transition is a typestate value, not a status flag. Applied steps
 //! carry the continuation session. Stable and returned states are terminal.
@@ -18,7 +18,7 @@
 //! ```
 //! use rsaeb::error::RunStepError;
 //! use rsaeb::execution::BorrowedStepTransition;
-//! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy};
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
@@ -28,9 +28,7 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=aaaa"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
-//! let session = program.execute::<TinyState, rsaeb::execution::Stepwise>(
-//!     RunSeed::<TinyState>::admit(input)?,
-//! )?;
+//! let session = program.start(AdmittedRun::<TinyState>::admit(input)?)?;
 //!
 //! let BorrowedStepTransition::Failed(failed) = session.step() else {
 //!     return Err("expected oversized rewrite to fail before commit".into());
@@ -59,8 +57,6 @@ mod attempt;
 mod debug;
 /// Shared mutable execution engine behind the public typestates.
 mod engine;
-/// Type-level execution mode selection.
-mod mode;
 /// Public run-session typestates.
 mod session;
 /// Public step and terminal transition typestates.
@@ -69,7 +65,6 @@ mod transition;
 mod witness;
 
 pub use attempt::{RuleAttemptStableReason, RuleMiss, RuleMissReason};
-pub use mode::{BorrowedExecutionMode, Complete, OwnedExecutionMode, RuleAttempts, Stepwise};
 pub use session::{
     BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRuleAttemptSession, OwnedRunSession,
 };

@@ -2,7 +2,7 @@
 //!
 //! Host bytes enter the interpreter as [`RuntimeInputSource`], then
 //! [`RuntimeInput::validate`] checks the runtime input contract before storing
-//! owned runtime-domain bytes. Execution consumes a [`RunSeed`] admitted from
+//! owned runtime-domain bytes. Execution consumes an [`AdmittedRun`] admitted from
 //! validated input under an execution policy, so input validation and execution
 //! budgets cannot be conflated.
 //!
@@ -12,7 +12,7 @@
 //!   proven ASCII validity and it owns nothing.
 //! - [`RuntimeInput`] owns bytes after the runtime-input contract has been
 //!   checked. It still has no step, state, or return-output budget.
-//! - [`RunSeed`] consumes validated input under an execution policy and proves that
+//! - [`AdmittedRun`] consumes validated input under an execution policy and proves that
 //!   the initial runtime state may be created for exactly one execution.
 //!
 //! Admission is deliberately separate from validation. Input construction can
@@ -22,7 +22,7 @@
 //!
 //! ```
 //! use rsaeb::error::RunAdmissionError;
-//! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{StaticExecutionPolicy, StaticRuntimeInputPolicy};
 //!
 //! type Input8 = StaticRuntimeInputPolicy<8>;
@@ -31,7 +31,7 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let input = RuntimeInput::<Input8>::validate(RuntimeInputSource::from_bytes(b"abcd"))?;
 //!
-//! let Err(error) = RunSeed::<State3>::admit(input) else {
+//! let Err(error) = AdmittedRun::<State3>::admit(input) else {
 //!     return Err("expected run admission to reject the initial state".into());
 //! };
 //!
@@ -93,7 +93,7 @@ impl<'input> RuntimeInputSource<'input> {
 /// Runtime input is a separate byte domain from program source. It may contain
 /// ASCII whitespace, control bytes, and reserved syntax bytes, but it cannot
 /// contain non-ASCII bytes. This value owns validated bytes only; execution
-/// budgets are admitted later by [`RunSeed`]. Reusing equivalent bytes for
+/// budgets are admitted later by [`AdmittedRun`]. Reusing equivalent bytes for
 /// another run means validating another [`RuntimeInputSource`], not cloning a
 /// previously admitted execution state.
 #[derive(PartialEq, Eq)]
@@ -198,14 +198,14 @@ impl<I: RuntimeInputPolicy> RuntimeInput<I> {
 /// state, so execution entrypoints do not need to reinterpret raw input or
 /// detached execution policy values.
 #[derive(Debug, PartialEq, Eq)]
-pub struct RunSeed<E: ExecutionPolicy> {
+pub struct AdmittedRun<E: ExecutionPolicy> {
     /// Runtime-domain bytes admitted as the initial execution state.
     initial_state: InitialStateBytes,
     /// Execution budgets already tied to this admitted run.
     budget: RuntimeBudgetState<E>,
 }
 
-impl<E: ExecutionPolicy> RunSeed<E> {
+impl<E: ExecutionPolicy> AdmittedRun<E> {
     /// Admits validated runtime input for execution under an execution policy.
     ///
     /// This consumes the validated input. A successful seed represents one

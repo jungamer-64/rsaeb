@@ -91,105 +91,15 @@
 //! ```
 
 use alloc::vec::Vec;
-use core::marker::PhantomData;
-
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
 use crate::bytes::{RuntimeByte, RuntimeStateByteCount, TraceSnapshotByteCount};
-use crate::error::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
-use crate::input::RunSeed;
+use crate::error::TraceSnapshotError;
 use crate::inspect::RuleView;
 use crate::limits::{StepCount, TraceSnapshotByteLimit};
-use crate::policy::{ExecutionPolicy, ParsePolicy, TraceSnapshotPolicy};
-use crate::program::{Program, ReturnOutput, ReturnOutputView, RunResult, RuntimeStateSnapshot};
-
-/// Trace mode that emits borrowed events without per-event snapshot allocation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BorrowedEvents;
-
-/// Trace mode that materializes bounded owned event snapshots.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SnapshotEvents<T: TraceSnapshotPolicy> {
-    /// Snapshot policy selected by this mode.
-    policy: PhantomData<fn() -> T>,
-}
-
-/// Trace behavior selected by a mode type.
-pub trait TraceMode<'program, P: ParsePolicy, E: ExecutionPolicy, F, TraceError>:
-    private::Sealed
-{
-    /// Failure type produced by this trace mode.
-    type Error;
-
-    /// Runs the selected trace mode.
-    #[doc(hidden)]
-    fn trace(
-        program: &'program Program<P>,
-        seed: RunSeed<E>,
-        trace: F,
-    ) -> Result<RunResult, Self::Error>;
-}
-
-/// Trace callback failure split used while borrowed events become snapshots.
-enum SnapshotTraceCallbackError<E> {
-    /// Snapshot materialization failed before the user callback ran.
-    Snapshot(TraceSnapshotError),
-    /// User callback rejected a materialized snapshot event.
-    Trace(E),
-}
-
-impl<'program, P, E, F, TraceError> TraceMode<'program, P, E, F, TraceError> for BorrowedEvents
-where
-    P: ParsePolicy,
-    E: ExecutionPolicy,
-    F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), TraceError>,
-{
-    type Error = TracedRunError<TraceError>;
-
-    fn trace(
-        program: &'program Program<P>,
-        seed: RunSeed<E>,
-        trace: F,
-    ) -> Result<RunResult, Self::Error> {
-        crate::execution::trace_borrowed_events(program, seed, trace)
-    }
-}
-
-impl<'program, P, E, T, F, TraceError> TraceMode<'program, P, E, F, TraceError>
-    for SnapshotEvents<T>
-where
-    P: ParsePolicy,
-    E: ExecutionPolicy,
-    T: TraceSnapshotPolicy,
-    F: FnMut(TraceSnapshotEvent<'program>) -> Result<(), TraceError>,
-{
-    type Error = TraceSnapshotRunError<TraceError>;
-
-    fn trace(
-        program: &'program Program<P>,
-        seed: RunSeed<E>,
-        mut trace: F,
-    ) -> Result<RunResult, Self::Error> {
-        let result = crate::execution::trace_borrowed_events(program, seed, |event| {
-            let snapshot = event
-                .to_snapshot::<T>()
-                .map_err(SnapshotTraceCallbackError::Snapshot)?;
-            trace(snapshot).map_err(SnapshotTraceCallbackError::Trace)
-        });
-
-        match result {
-            Ok(result) => Ok(result),
-            Err(TracedRunError::Run(error)) => Err(TraceSnapshotRunError::Run(error)),
-            Err(TracedRunError::Trace(SnapshotTraceCallbackError::Snapshot(error))) => {
-                Err(TraceSnapshotRunError::Snapshot(error))
-            }
-            Err(TracedRunError::Trace(SnapshotTraceCallbackError::Trace(error))) => {
-                Err(TraceSnapshotRunError::Trace(error))
-            }
-        }
-    }
-}
+use crate::policy::TraceSnapshotPolicy;
+use crate::program::{ReturnOutput, ReturnOutputView, RuntimeStateSnapshot};
 
 /// Borrowed view of runtime-state bytes.
 ///
@@ -435,15 +345,6 @@ impl<'program> TraceEvent<'program, RuntimeStateView<'_>, BorrowedTraceEffect<'p
             }),
         }
     }
-}
-
-/// Private sealing boundary for trace mode traits.
-mod private {
-    /// Marker trait implemented only by built-in trace modes.
-    pub trait Sealed {}
-
-    impl Sealed for super::BorrowedEvents {}
-    impl<T: crate::policy::TraceSnapshotPolicy> Sealed for super::SnapshotEvents<T> {}
 }
 
 /// Checks whether a trace snapshot byte count is within its limit.
