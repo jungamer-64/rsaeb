@@ -36,6 +36,7 @@ one execution under an execution policy, then run:
 
 ```rust
 use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+use rsaeb::execution::CompleteRun;
 use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
 use rsaeb::program::{Program, RunOutcome};
 use rsaeb::source::ProgramSource;
@@ -44,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
     let admitted = input.admit::<DefaultExecutionPolicy>()?;
-    let result = program.run(admitted)?;
+    let result = program.execute::<CompleteRun, _>(admitted)?;
 
     if !matches!(
         result.outcome(),
@@ -80,13 +81,14 @@ The crate intentionally contains no filesystem, process, argument parsing,
 environment access, stdout/stderr, or lossy display boundary. Hosts perform I/O
 outside the interpreter and pass already-loaded bytes into typed boundaries.
 
-`Program::run(admitted)` is the run-to-completion API.
-`Program::start(admitted)` starts a borrowed stepwise run for hosts that keep a
-reusable parsed program. `Program::into_start(admitted)` transfers ownership of
-the parsed program into the stepwise session. Rule-attempt stepping is explicit:
-use `Program::start_rule_attempts::<A>(admitted)` or
-`Program::into_rule_attempts::<A>(admitted)` so the rule-attempt policy is fixed
-by the entrypoint type parameter instead of a runtime mode selector.
+`Program::execute::<CompleteRun, _>(admitted)` is the run-to-completion API.
+`Program::execute::<BorrowedSteps, _>(admitted)` starts a borrowed stepwise run
+for hosts that keep a reusable parsed program.
+`Program::into_execute::<OwnedSteps, _>(admitted)` transfers ownership of the
+parsed program into the stepwise session. Rule-attempt stepping is explicit:
+use `BorrowedRuleAttempts<A>` or `OwnedRuleAttempts<A>` as the execution mode so
+both the execution policy and rule-attempt policy stay visible in the session
+type.
 
 The exact typestate names, transition variants, owned recovery methods, tracing
 events, and error variants are documented in rustdoc.

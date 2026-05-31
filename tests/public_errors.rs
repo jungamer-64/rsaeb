@@ -8,6 +8,7 @@ use rsaeb::error::{
     ParseErrorKind, ParseErrorLocation, ParseRepresentationError, PayloadKind, RunError,
     RunFinishError, RunStepError,
 };
+use rsaeb::execution::CompleteRun;
 use rsaeb::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
 use rsaeb::policy::DefaultRuntimeInputPolicy;
 use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
@@ -122,7 +123,8 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
     )?;
 
     let return_limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, 1>::new();
-    let return_error = parse_program("a=(return)ok")?.run(runtime_input(b"a", return_limits)?);
+    let return_error = parse_program("a=(return)ok")?
+        .execute::<CompleteRun, _>(runtime_input(b"a", return_limits)?);
     ensure_matches(
         matches!(
             expect_run_error(return_error)?,

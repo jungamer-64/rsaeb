@@ -3,6 +3,7 @@
 mod support;
 
 use rsaeb::error::RunAdmissionError;
+use rsaeb::execution::CompleteRun;
 use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 use rsaeb::limits::{RuntimeInputByteLimit, RuntimeStateByteLimit};
 use rsaeb::policy::{
@@ -51,7 +52,7 @@ fn runtime_input_moves_owned_bytes_into_execution() -> TestResult {
     ensure_matches(!input.is_empty(), "expected non-empty owned input")?;
 
     let program = parse_program("a=b")?;
-    let result = program.run(input.admit::<DefaultExecutionPolicy>()?)?;
+    let result = program.execute::<CompleteRun, _>(input.admit::<DefaultExecutionPolicy>()?)?;
     expect_stable_bytes(&result, b"b=()# ")
 }
 
@@ -66,8 +67,8 @@ fn domain_default_policies_support_explicit_names() -> TestResult {
     let explicit_input =
         RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 
-    let explicit_result =
-        explicit_program.run(explicit_input.admit::<DefaultExecutionPolicy>()?)?;
+    let explicit_result = explicit_program
+        .execute::<CompleteRun, _>(explicit_input.admit::<DefaultExecutionPolicy>()?)?;
 
     expect_stable_bytes(&explicit_result, b"b")
 }
@@ -83,7 +84,8 @@ fn runtime_input_validates_ascii_boundary() -> TestResult {
     let runtime_input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(
         RuntimeInputSource::from_bytes(&input),
     )?;
-    let result = program.run(runtime_input.admit::<DefaultExecutionPolicy>()?)?;
+    let result =
+        program.execute::<CompleteRun, _>(runtime_input.admit::<DefaultExecutionPolicy>()?)?;
     expect_stable_bytes(&result, input.as_slice())?;
     ensure_eq!(result.steps().get(), 0)?;
 

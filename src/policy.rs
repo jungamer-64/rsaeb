@@ -60,6 +60,20 @@
 //!
 //! let _witness = TraceSnapshotPolicyWitness::<DefaultTraceSnapshotPolicy>::new();
 //! ```
+//!
+//! Deleted execution entrypoints cannot be called through a policy fallback:
+//!
+//! ```compile_fail
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
+//!
+//! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b")).unwrap();
+//! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a")).unwrap();
+//! let admitted = input.admit::<DefaultExecutionPolicy>().unwrap();
+//! let _result = program.run(admitted).unwrap();
+//! ```
 
 use crate::limits::{
     CodeLineByteLimit, PayloadByteLimit, ReturnByteLimit, RuleAttemptLimit, RuleLimit,

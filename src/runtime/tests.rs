@@ -7,7 +7,7 @@ use crate::bytes::Payload;
 use crate::error::{
     ReturnOutputLimitError, RunStepError, RuntimeInputError, RuntimeStateLimitError, StepLimitError,
 };
-use crate::execution::{BorrowedFailedRun, BorrowedStepTransition};
+use crate::execution::{BorrowedFailedRun, BorrowedStepTransition, BorrowedSteps, CompleteRun};
 use crate::input::{RuntimeInput, RuntimeInputSource};
 use crate::limits::{
     ReturnByteLimit, ReturnOutputByteCount, RuntimeInputByteCount, RuntimeInputByteLimit,
@@ -173,7 +173,7 @@ fn once_rule_failure_preserves_state_before_step_commit() -> TestResult {
     let program = parse_program("(once)a=(return)ok")?;
     let limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, 1>::new();
     let input = admitted_run(b"a", limits)?;
-    let runtime = program.start(input)?;
+    let runtime = program.execute::<BorrowedSteps, _>(input)?;
     let error = expect_step_error(runtime.step())?;
     ensure_eq!(
         error.error(),
@@ -199,7 +199,7 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
     let program = parse_program("a=b")?;
     let limits = DefaultInputRunPolicy::<0, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     let no_match_input = admitted_run(b"x", limits)?;
-    let no_match = program.start(no_match_input)?;
+    let no_match = program.execute::<BorrowedSteps, _>(no_match_input)?;
     match expect_step_transition(no_match.step())? {
         BorrowedStepTransition::Stable(stable) => {
             ensure_eq!(stable.steps().get(), 0)?;
@@ -217,7 +217,7 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
 
     let program = parse_program("a=b")?;
     let would_match_input = admitted_run(b"a", limits)?;
-    let would_match = program.start(would_match_input)?;
+    let would_match = program.execute::<BorrowedSteps, _>(would_match_input)?;
     let error = expect_step_error(would_match.step())?;
     ensure_eq!(
         expect_step_limit(error.into_error())?,
@@ -228,7 +228,7 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
         ),
     )?;
     let program = parse_program("a=b")?;
-    let would_match = program.start(admitted_run(b"a", limits)?)?;
+    let would_match = program.execute::<BorrowedSteps, _>(admitted_run(b"a", limits)?)?;
     let error = expect_step_error(would_match.step())?;
     ensure_eq!(error.completed_steps(), StepCount::ZERO)?;
     ensure_eq!(
@@ -254,7 +254,7 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     let state_limits = DefaultInputRunPolicy::<1, 2, 10>::new();
     let state_program = parse_program("=a")?;
     let state_input = admitted_run(b"aa", state_limits)?;
-    let state_limited = state_program.start(state_input)?;
+    let state_limited = state_program.execute::<BorrowedSteps, _>(state_input)?;
     let state_error = expect_step_error(state_limited.step())?;
     ensure_eq!(
         state_error.error(),
@@ -279,7 +279,7 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
     let return_limits = DefaultInputRunPolicy::<1, 10, 1>::new();
     let return_program = parse_program("a=(return)ok")?;
     let return_input = admitted_run(b"a", return_limits)?;
-    let return_limited = return_program.start(return_input)?;
+    let return_limited = return_program.execute::<BorrowedSteps, _>(return_input)?;
     let return_error = expect_step_error(return_limited.step())?;
     ensure_eq!(
         return_error.error(),
@@ -310,7 +310,7 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
 fn return_action_bypasses_rewrite_state_mutation_path() -> TestResult {
     let program = parse_program("a=(return)ok")?;
     let limits = DefaultInputRunPolicy::<1, 1, 2>::new();
-    let session = program.start(admitted_run(b"a", limits)?)?;
+    let session = program.execute::<BorrowedSteps, _>(admitted_run(b"a", limits)?)?;
 
     match expect_step_transition(session.step())? {
         BorrowedStepTransition::Returned(returned) => {
@@ -470,7 +470,7 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
     ensure_eq!(expect_runtime_byte(&state, 2)?, b'(')?;
     ensure_eq!(expect_runtime_byte(&state, 5)?, b' ')?;
 
-    let result = program.run(admitted_run(b"a=()# ", limits)?)?;
+    let result = program.execute::<CompleteRun, _>(admitted_run(b"a=()# ", limits)?)?;
     ensure_matches(
         matches!(
             result.outcome(),
@@ -488,7 +488,7 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
 fn once_rule_commit_proof_allows_only_one_successful_application() -> TestResult {
     let program = parse_program("(once)a=a\na=b")?;
     let limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
-    let result = program.run(admitted_run(b"a", limits)?)?;
+    let result = program.execute::<CompleteRun, _>(admitted_run(b"a", limits)?)?;
 
     ensure_eq!(result.steps().get(), 2)?;
     ensure_matches(
@@ -512,7 +512,8 @@ fn rewrite_action_variants_preserve_runtime_placement() -> TestResult {
         ("a=(end)x", b"ab".as_slice(), b"bx".as_slice()),
     ] {
         let limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
-        let result = parse_program(source)?.run(admitted_run(input, limits)?)?;
+        let result =
+            parse_program(source)?.execute::<CompleteRun, _>(admitted_run(input, limits)?)?;
 
         ensure_matches(
             matches!(
@@ -539,7 +540,7 @@ fn empty_payload_matches_keep_anchor_specific_span_placement() -> TestResult {
     ] {
         let program = parse_program(source)?;
         let limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
-        let session = program.start(admitted_run(b"ab", limits)?)?;
+        let session = program.execute::<BorrowedSteps, _>(admitted_run(b"ab", limits)?)?;
 
         match expect_step_transition(session.step())? {
             BorrowedStepTransition::Applied(applied) => {

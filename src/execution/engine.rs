@@ -617,7 +617,7 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<BorrowedProgram<'prog
     ///
     /// Returns `TracedRunError::Trace` if the trace sink fails. Returns
     /// `TracedRunError::Run` if runtime execution fails.
-    pub(super) fn trace_borrowed_events<F, TraceError>(
+    pub(super) fn trace_events<F, TraceError>(
         mut self,
         mut trace: F,
     ) -> Result<RunResult, TracedRunError<TraceError>>

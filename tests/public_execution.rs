@@ -7,9 +7,10 @@ mod support;
 use rsaeb::error::{OwnedRunStepError, RuleAttemptStepError, RunStepError};
 use rsaeb::execution::{
     BorrowedAppliedStep, BorrowedFailedRun, BorrowedReturnedRun, BorrowedRuleAttemptSession,
-    BorrowedRuleAttemptTransition, BorrowedRunSession, BorrowedStableRun, BorrowedStepTransition,
-    OwnedRuleAction, OwnedRuleAttemptSession, OwnedRuleAttemptTransition, OwnedRuleWitness,
-    OwnedStepTransition, RuleAttemptStableReason, RuleMissReason,
+    BorrowedRuleAttemptTransition, BorrowedRuleAttempts, BorrowedRunSession, BorrowedStableRun,
+    BorrowedStepTransition, BorrowedSteps, CompleteRun, OwnedRuleAction, OwnedRuleAttemptSession,
+    OwnedRuleAttemptTransition, OwnedRuleAttempts, OwnedRuleWitness, OwnedStepTransition,
+    OwnedSteps, RuleAttemptStableReason, RuleMissReason,
 };
 use rsaeb::input::AdmittedRun;
 use rsaeb::inspect::{RuleAnchor, RuleRepeat};
@@ -388,7 +389,7 @@ fn borrowed_rule_attempt_signatures<const ATTEMPTS: usize>(
     program: &Program<DefaultParsePolicy>,
     input: &'static [u8],
 ) -> Result<Vec<BorrowedRuleAttemptSignature>, TestFailure> {
-    let execution = program.start_rule_attempts::<StaticRuleAttemptPolicy<ATTEMPTS>>(
+    let execution = program.execute::<BorrowedRuleAttempts<StaticRuleAttemptPolicy<ATTEMPTS>>, _>(
         runtime_input(input, default_test_run_policy())?,
     )?;
     finish_borrowed_rule_attempt_signatures(execution)
@@ -544,27 +545,27 @@ fn execution_rewrite_semantics_follow_public_contract() -> TestResult {
     let limits = DefaultInputRunPolicy::<10_000, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
 
     let program = parse_program("aa=x\na=y")?;
-    let result = program.run(runtime_input(b"aaaa", limits)?)?;
+    let result = program.execute::<CompleteRun, _>(runtime_input(b"aaaa", limits)?)?;
     expect_stable_bytes(&result, b"xx")?;
 
     let program = parse_program("(start)a=x")?;
-    let result = program.run(runtime_input(b"aba", limits)?)?;
+    let result = program.execute::<CompleteRun, _>(runtime_input(b"aba", limits)?)?;
     expect_stable_bytes(&result, b"xba")?;
 
     let program = parse_program("(end)a=x")?;
-    let result = program.run(runtime_input(b"aba", limits)?)?;
+    let result = program.execute::<CompleteRun, _>(runtime_input(b"aba", limits)?)?;
     expect_stable_bytes(&result, b"abx")?;
 
     let program = parse_program("(once)a=b\na=c")?;
-    let result = program.run(runtime_input(b"aa", limits)?)?;
+    let result = program.execute::<CompleteRun, _>(runtime_input(b"aa", limits)?)?;
     expect_stable_bytes(&result, b"bc")?;
 
     let program = parse_program("ab=x")?;
-    let result = program.run(runtime_input(b"a=b", limits)?)?;
+    let result = program.execute::<CompleteRun, _>(runtime_input(b"a=b", limits)?)?;
     expect_stable_bytes(&result, b"a=b")?;
 
     let program = parse_program("a= b")?;
-    let result = program.run(runtime_input(b"a bc", limits)?)?;
+    let result = program.execute::<CompleteRun, _>(runtime_input(b"a bc", limits)?)?;
     expect_stable_bytes(&result, b"b bc")
 }
 
@@ -577,7 +578,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
     let limits = default_test_run_policy();
     let program = parse_program("a=b\nb=c")?;
     let input = runtime_input(b"a", limits)?;
-    let execution = program.start(input)?;
+    let execution = program.execute::<BorrowedSteps, _>(input)?;
     ensure_eq!(execution.completed_steps().get(), 0)?;
 
     let execution = match expect_step_transition(execution.step())? {
@@ -669,8 +670,11 @@ fn execution_rule_attempt_surface_reports_misses_and_resets_after_apply() -> Tes
 #[test]
 fn execution_owned_rule_attempt_surface_reports_misses_resets_and_returns() -> TestResult {
     let limits = default_test_run_policy();
-    let execution = parse_program("z=x\na=b\nb=(return)ok")?
-        .into_rule_attempts::<StaticRuleAttemptPolicy<20>>(runtime_input(b"a", limits)?)?;
+    let execution = parse_program("z=x\na=b\nb=(return)ok")?.into_execute::<OwnedRuleAttempts<
+        StaticRuleAttemptPolicy<20>,
+    >, _>(runtime_input(
+        b"a", limits,
+    )?)?;
     ensure_eq!(
         finish_owned_rule_attempt_signatures(execution)?,
         [
@@ -713,7 +717,8 @@ fn execution_rule_attempt_stable_reason_is_typed() -> TestResult {
     let limits = default_test_run_policy();
     let program = parse_program("a=b")?;
     let input = runtime_input(b"z", limits)?;
-    let execution = program.start_rule_attempts::<StaticRuleAttemptPolicy<10>>(input)?;
+    let execution =
+        program.execute::<BorrowedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(input)?;
 
     match expect_rule_attempt_transition(execution.step())? {
         BorrowedRuleAttemptTransition::Stable(stable) => {
@@ -737,8 +742,9 @@ fn execution_rule_attempt_stable_reason_is_typed() -> TestResult {
         }
     }
     let program = parse_program("# no executable rules")?;
-    let execution =
-        program.start_rule_attempts::<StaticRuleAttemptPolicy<10>>(runtime_input(b"z", limits)?)?;
+    let execution = program.execute::<BorrowedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(
+        runtime_input(b"z", limits)?,
+    )?;
 
     match expect_rule_attempt_transition(execution.step())? {
         BorrowedRuleAttemptTransition::Stable(stable) => {
@@ -801,7 +807,8 @@ fn execution_rule_attempt_limit_is_independent_from_step_limit() -> TestResult {
     let limits = DefaultInputRunPolicy::<0, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     let program = parse_program("x=y\na=b")?;
     let input = runtime_input(b"a", limits)?;
-    let execution = program.start_rule_attempts::<StaticRuleAttemptPolicy<1>>(input)?;
+    let execution =
+        program.execute::<BorrowedRuleAttempts<StaticRuleAttemptPolicy<1>>, _>(input)?;
 
     let execution = match expect_rule_attempt_transition(execution.step())? {
         BorrowedRuleAttemptTransition::Missed(missed) => {
@@ -844,7 +851,8 @@ fn execution_rule_attempt_preparation_failure_drops_attempt_reservation() -> Tes
     let limits = DefaultInputRunPolicy::<10, 1, DEFAULT_BYTE_BUDGET>::new();
     let program = parse_program("a=aa")?;
     let input = runtime_input(b"a", limits)?;
-    let execution = program.start_rule_attempts::<StaticRuleAttemptPolicy<10>>(input)?;
+    let execution =
+        program.execute::<BorrowedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(input)?;
 
     let failed = expect_failed_rule_attempt(execution.step())?;
     ensure_eq!(failed.completed_attempts().get(), 0)?;
@@ -873,7 +881,7 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
     let limits = default_test_run_policy();
     let program = parse_program("a=b")?;
     let input = runtime_input(b"a", limits)?;
-    let execution = program.start(input)?;
+    let execution = program.execute::<BorrowedSteps, _>(input)?;
 
     ensure_eq!(
         runtime_view_bytes(execution.state())?.as_slice(),
@@ -910,9 +918,9 @@ fn execution_consumes_runtime_input_without_session_leakage() -> TestResult {
     let limits = default_test_run_policy();
     let source = "(once)a=b\na=c";
     let program = parse_program(source)?;
-    let first = program.start(runtime_input(b"aa", limits)?)?;
-    let second = program.start(runtime_input(b"aa", limits)?)?;
-    let third = program.start(runtime_input(b"aa", limits)?)?;
+    let first = program.execute::<BorrowedSteps, _>(runtime_input(b"aa", limits)?)?;
+    let second = program.execute::<BorrowedSteps, _>(runtime_input(b"aa", limits)?)?;
+    let third = program.execute::<BorrowedSteps, _>(runtime_input(b"aa", limits)?)?;
 
     ensure_eq!(
         finish_step_signatures(first)?,
@@ -948,9 +956,10 @@ fn execution_borrowed_run_and_owned_session_share_contract() -> TestResult {
     let source = "a=b\nb=(return)ok";
     let limits = default_test_run_policy();
 
-    let borrowed = parse_program(source)?.run(runtime_input(b"a", limits)?)?;
+    let borrowed =
+        parse_program(source)?.execute::<CompleteRun, _>(runtime_input(b"a", limits)?)?;
     let owned = parse_program(source)?
-        .into_start(runtime_input(b"a", limits)?)?
+        .into_execute::<OwnedSteps, _>(runtime_input(b"a", limits)?)?
         .finish()?;
 
     ensure_eq!(borrowed, owned)
@@ -964,7 +973,8 @@ fn execution_borrowed_run_and_owned_session_share_contract() -> TestResult {
 fn execution_owned_terminals_can_return_program() -> TestResult {
     let limits = default_test_run_policy();
 
-    let stable_session = parse_program("a=b")?.into_start(runtime_input(b"a", limits)?)?;
+    let stable_session =
+        parse_program("a=b")?.into_execute::<OwnedSteps, _>(runtime_input(b"a", limits)?)?;
     let stable_session = match stable_session.step() {
         OwnedStepTransition::Applied(applied) => applied.into_session(),
         OwnedStepTransition::Stable(_)
@@ -984,7 +994,7 @@ fn execution_owned_terminals_can_return_program() -> TestResult {
     ensure_eq!(stable_program.rule_count().get(), 1)?;
 
     let returned_program = match parse_program("a=(return)ok")?
-        .into_start(runtime_input(b"a", limits)?)?
+        .into_execute::<OwnedSteps, _>(runtime_input(b"a", limits)?)?
         .step()
     {
         OwnedStepTransition::Returned(returned) => returned.into_program(),
@@ -998,7 +1008,7 @@ fn execution_owned_terminals_can_return_program() -> TestResult {
 
     let failed_limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, 1>::new();
     let (error, failed_program) = match parse_program("a=(return)ok")?
-        .into_start(runtime_input(b"a", failed_limits)?)?
+        .into_execute::<OwnedSteps, _>(runtime_input(b"a", failed_limits)?)?
         .step()
     {
         OwnedStepTransition::Failed(failed) => failed.into_parts(),
@@ -1038,7 +1048,8 @@ fn execution_owned_transitions_retain_rule_witnesses() -> TestResult {
 fn ensure_owned_run_witnesses<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolicy>(
     limits: TestRunPolicy<I, E>,
 ) -> TestResult {
-    let execution = parse_program("a=b\nb=(return)ok")?.into_start(runtime_input(b"a", limits)?)?;
+    let execution = parse_program("a=b\nb=(return)ok")?
+        .into_execute::<OwnedSteps, _>(runtime_input(b"a", limits)?)?;
     let execution = match execution.step() {
         OwnedStepTransition::Applied(applied) => {
             let (step, rule, next_execution) = applied.into_parts();
@@ -1088,7 +1099,9 @@ fn ensure_owned_rule_attempt_witnesses<I: rsaeb::policy::RuntimeInputPolicy, E: 
     limits: TestRunPolicy<I, E>,
 ) -> TestResult {
     let attempt = parse_program("z=x\na=b")?
-        .into_rule_attempts::<StaticRuleAttemptPolicy<10>>(runtime_input(b"a", limits)?)?;
+        .into_execute::<OwnedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(runtime_input(
+            b"a", limits,
+        )?)?;
     let attempt = ensure_owned_attempt_witness(
         attempt,
         ExpectedOwnedAttemptWitness::Missed {
@@ -1117,7 +1130,9 @@ fn ensure_owned_rule_attempt_witnesses<I: rsaeb::policy::RuntimeInputPolicy, E: 
     )?;
 
     let final_attempt = parse_program("z=x")?
-        .into_rule_attempts::<StaticRuleAttemptPolicy<10>>(runtime_input(b"a", limits)?)?;
+        .into_execute::<OwnedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(runtime_input(
+            b"a", limits,
+        )?)?;
     ensure_owned_final_miss_witness(final_attempt)
 }
 
@@ -1223,7 +1238,9 @@ fn execution_owned_rule_attempt_terminals_can_return_program() -> TestResult {
     let limits = default_test_run_policy();
 
     let stable_program = match parse_program("a=b")?
-        .into_rule_attempts::<StaticRuleAttemptPolicy<10>>(runtime_input(b"z", limits)?)?
+        .into_execute::<OwnedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(runtime_input(
+            b"z", limits,
+        )?)?
         .step()
     {
         OwnedRuleAttemptTransition::Stable(stable) => stable.into_program(),
@@ -1237,7 +1254,9 @@ fn execution_owned_rule_attempt_terminals_can_return_program() -> TestResult {
     ensure_eq!(stable_program.rule_count().get(), 1)?;
 
     let returned_program = match parse_program("a=(return)ok")?
-        .into_rule_attempts::<StaticRuleAttemptPolicy<10>>(runtime_input(b"a", limits)?)?
+        .into_execute::<OwnedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(runtime_input(
+            b"a", limits,
+        )?)?
         .step()
     {
         OwnedRuleAttemptTransition::Returned(returned) => returned.into_program(),
@@ -1259,7 +1278,7 @@ fn execution_owned_rule_attempt_terminals_can_return_program() -> TestResult {
 fn execution_step_failure_is_terminal_transition() -> TestResult {
     let program = parse_program("a=(return)ok")?;
     let limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, 1>::new();
-    let execution = program.start(runtime_input(b"a", limits)?)?;
+    let execution = program.execute::<BorrowedSteps, _>(runtime_input(b"a", limits)?)?;
 
     let failed = expect_failed_transition(execution.step())?;
     ensure_eq!(failed.completed_steps().get(), 0)?;
@@ -1286,7 +1305,7 @@ fn execution_step_failure_is_terminal_transition() -> TestResult {
 fn execution_step_failure_preserves_current_progress() -> TestResult {
     let program = parse_program("a=b\nb=c")?;
     let limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
-    let execution = program.start(runtime_input(b"a", limits)?)?;
+    let execution = program.execute::<BorrowedSteps, _>(runtime_input(b"a", limits)?)?;
 
     let running = match expect_step_transition(execution.step())? {
         BorrowedStepTransition::Applied(applied) => applied.into_session(),

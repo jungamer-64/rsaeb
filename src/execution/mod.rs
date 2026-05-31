@@ -1,8 +1,10 @@
-//! Public stepwise run typestates.
+//! Public execution mode markers and stepwise run typestates.
 //!
-//! Concrete [`Program`](crate::program::Program) entrypoints select borrowed,
-//! owned, and rule-attempt execution. The public API exposes the actual
-//! execution boundary directly instead of routing through mode marker types.
+//! [`Program::execute`](crate::program::Program::execute) and
+//! [`Program::into_execute`](crate::program::Program::into_execute) select
+//! execution through sealed mode marker types. Borrowed and owned modes are
+//! intentionally different traits, so the public API rejects ownership-domain
+//! mixups at compile time.
 //!
 //! A step transition is a typestate value, not a status flag. Applied steps
 //! carry the continuation session. Stable and returned states are terminal.
@@ -28,7 +30,9 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=aaaa"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
-//! let session = program.start(input.admit::<TinyState>()?)?;
+//! let session = program.execute::<rsaeb::execution::BorrowedSteps, _>(
+//!     input.admit::<TinyState>()?,
+//! )?;
 //!
 //! let BorrowedStepTransition::Failed(failed) = session.step() else {
 //!     return Err("expected oversized rewrite to fail before commit".into());
@@ -57,6 +61,8 @@ mod attempt;
 mod debug;
 /// Shared mutable execution engine behind the public typestates.
 mod engine;
+/// Type-level execution mode selection.
+mod mode;
 /// Public run-session typestates.
 mod session;
 /// Public step and terminal transition typestates.
@@ -65,6 +71,10 @@ mod transition;
 mod witness;
 
 pub use attempt::{RuleAttemptStableReason, RuleMiss, RuleMissReason};
+pub use mode::{
+    BorrowedExecutionMode, BorrowedRuleAttempts, BorrowedSteps, CompleteRun, OwnedExecutionMode,
+    OwnedRuleAttempts, OwnedSteps,
+};
 pub use session::{
     BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRuleAttemptSession, OwnedRunSession,
 };
@@ -79,4 +89,4 @@ pub use transition::{
 };
 pub use witness::{OwnedRuleAction, OwnedRulePayload, OwnedRuleWitness};
 
-pub(crate) use session::{finish_borrowed_run, trace_borrowed_events};
+pub(crate) use session::trace_events;

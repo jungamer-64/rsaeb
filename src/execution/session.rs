@@ -23,7 +23,8 @@ use super::transition::{
 /// Stateful run session that borrows a reusable parsed program.
 ///
 /// This is the stepwise form returned by
-/// [`Program::start`](crate::program::Program::start). It consumes itself on
+/// [`Program::execute`](crate::program::Program::execute) with
+/// [`BorrowedSteps`](crate::execution::BorrowedSteps). It consumes itself on
 /// every step so callers must handle the returned [`BorrowedStepTransition`]
 /// before they can continue.
 pub struct BorrowedRunSession<'program, P: ParsePolicy, E: ExecutionPolicy> {
@@ -34,10 +35,11 @@ pub struct BorrowedRunSession<'program, P: ParsePolicy, E: ExecutionPolicy> {
 /// Stateful run session that owns its parsed program.
 ///
 /// This is the stepwise form returned by
-/// [`Program::into_start`](crate::program::Program::into_start). It is useful
-/// when the session must move independently of a borrowed [`Program`]. Owned
-/// terminal and failed states retain a way to recover the parsed program
-/// instead of leaking ownership through a parallel API.
+/// [`Program::into_execute`](crate::program::Program::into_execute) with
+/// [`OwnedSteps`](crate::execution::OwnedSteps). It is useful when the session
+/// must move independently of a borrowed [`Program`]. Owned terminal and failed
+/// states retain a way to recover the parsed program instead of leaking
+/// ownership through a parallel API.
 pub struct OwnedRunSession<P: ParsePolicy, E: ExecutionPolicy> {
     /// Internal session using the public owned program boundary.
     pub(super) session: Session<OwnedProgram<P>, E>,
@@ -217,7 +219,7 @@ pub(crate) fn finish_borrowed_run<P: ParsePolicy, E: ExecutionPolicy>(
 ///
 /// Returns `TracedRunError::Run` for runtime failures and
 /// `TracedRunError::Trace` for user callback failures.
-pub(crate) fn trace_borrowed_events<'program, P, E, F, TraceError>(
+pub(crate) fn trace_events<'program, P, E, F, TraceError>(
     program: &'program Program<P>,
     admitted: AdmittedRun<E>,
     trace: F,
@@ -230,7 +232,7 @@ where
     Session::new(BorrowedProgram { program }, admitted)
         .map_err(RunError::from)
         .map_err(TracedRunError::Run)?
-        .trace_borrowed_events(trace)
+        .trace_events(trace)
 }
 
 impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedRunSession<'program, P, E> {

@@ -36,25 +36,21 @@
 //!   [`input::AdmittedRun`] admits validated input under a
 //!   [`policy::ExecutionPolicy`], and [`policy::TraceSnapshotPolicy`] bounds
 //!   trace snapshot materialization.
-//! - [`program::Program::run`] runs to completion.
-//! - [`program::Program::start`] starts borrowed stepwise execution.
-//! - [`program::Program::into_start`] starts owned stepwise execution.
-//! - [`program::Program::start_rule_attempts`] starts borrowed rule-attempt
-//!   execution under a [`policy::RuleAttemptPolicy`].
-//! - [`program::Program::into_rule_attempts`] starts owned rule-attempt
-//!   execution under a [`policy::RuleAttemptPolicy`].
-//! - [`program::Program::trace_borrowed`] emits borrowed trace events, and
-//!   [`program::Program::trace_snapshots`] emits materialized snapshot events.
+//! - [`program::Program::execute`] selects borrowed run-to-completion,
+//!   borrowed stepwise, or borrowed rule-attempt execution by type.
+//! - [`program::Program::into_execute`] selects owned stepwise or owned
+//!   rule-attempt execution by type.
+//! - [`program::Program::trace`] emits borrowed or materialized snapshot trace
+//!   events from a typed trace request.
 //! - [`inspect`] exposes borrowed structured rule views, and [`error`] exposes
 //!   structured parse, input, runtime, and trace errors.
 //!
 //! # Compile-time API guards
 //!
-//! Runtime execution mode selectors are not part of the public API. The old
-//! mode-shaped entrypoints are intentionally absent:
+//! Runtime execution mode selectors and old method-shaped entrypoints are not
+//! part of the public API:
 //!
 //! ```compile_fail
-//! use rsaeb::execution::{Complete, Stepwise};
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
 //! use rsaeb::program::Program;
@@ -64,10 +60,25 @@
 //!     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
 //!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
-//!     let _ = core::mem::size_of::<Stepwise>();
-//!     let _ = core::mem::size_of::<rsaeb::execution::RuleAttempts<rsaeb::policy::DefaultRuleAttemptPolicy>>();
-//!     let _ = core::mem::size_of::<rsaeb::trace::SnapshotEvents<rsaeb::policy::DefaultTraceSnapshotPolicy>>();
-//!     let _ = program.execute::<DefaultExecutionPolicy, Complete>(admitted)?;
+//!     let _ = program.run(admitted)?;
+//!     Ok(())
+//! }
+//! ```
+//!
+//! Borrowed and owned execution modes are different compile-time domains:
+//!
+//! ```compile_fail
+//! use rsaeb::execution::BorrowedSteps;
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
+//!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
+//!     let _ = program.into_execute::<BorrowedSteps, _>(admitted)?;
 //!     Ok(())
 //! }
 //! ```
@@ -76,6 +87,7 @@
 //! directly:
 //!
 //! ```compile_fail
+//! use rsaeb::execution::CompleteRun;
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy};
 //! use rsaeb::program::Program;
@@ -84,7 +96,7 @@
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
 //!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
-//!     let _ = program.run(input)?;
+//!     let _ = program.execute::<CompleteRun, _>(input)?;
 //!     Ok(())
 //! }
 //! ```
@@ -93,7 +105,7 @@
 //! stepped again:
 //!
 //! ```compile_fail
-//! use rsaeb::execution::BorrowedStepTransition;
+//! use rsaeb::execution::{BorrowedStepTransition, BorrowedSteps};
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
 //! use rsaeb::program::Program;
@@ -103,7 +115,7 @@
 //!     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text(""))?;
 //!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
-//!     let terminal = match program.start(admitted)?.step() {
+//!     let terminal = match program.execute::<BorrowedSteps, _>(admitted)?.step() {
 //!         BorrowedStepTransition::Stable(stable) => stable,
 //!         _ => return Ok(()),
 //!     };
@@ -156,6 +168,7 @@
 //! admit an [`input::AdmittedRun`] before running:
 //!
 //! ```
+//! use rsaeb::execution::CompleteRun;
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
 //! use rsaeb::program::{Program, RunOutcome};
@@ -165,7 +178,7 @@
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<DefaultExecutionPolicy>()?;
-//! let result = program.run(admitted)?;
+//! let result = program.execute::<CompleteRun, _>(admitted)?;
 //!
 //! if !matches!(
 //!     result.outcome(),
@@ -182,6 +195,7 @@
 //! owns only those per-run slot states rather than mutating the parsed program:
 //!
 //! ```
+//! use rsaeb::execution::CompleteRun;
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy};
 //! use rsaeb::program::{Program, RunOutcome};
@@ -195,8 +209,8 @@
 //! let first_input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"aa"))?;
 //! let second_input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"aa"))?;
 //!
-//! let first = program.run(first_input.admit::<ShortRun>()?)?;
-//! let second = program.run(second_input.admit::<ShortRun>()?)?;
+//! let first = program.execute::<CompleteRun, _>(first_input.admit::<ShortRun>()?)?;
+//! let second = program.execute::<CompleteRun, _>(second_input.admit::<ShortRun>()?)?;
 //!
 //! if !matches!(
 //!     first.outcome(),
@@ -222,6 +236,7 @@
 //!
 //! ```
 //! use rsaeb::error::{RunError, RunFinishError, RunStepError};
+//! use rsaeb::execution::CompleteRun;
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultParsePolicy, StaticExecutionPolicy, StaticRuntimeInputPolicy};
 //! use rsaeb::program::Program;
@@ -234,7 +249,7 @@
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
 //! let input = RuntimeInput::<TinyInput>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<NoSteps>()?;
-//! let result = program.run(admitted);
+//! let result = program.execute::<CompleteRun, _>(admitted);
 //!
 //! if !matches!(
 //!     result,
@@ -249,11 +264,11 @@
 //!
 //! # Step Execution
 //!
-//! Use [`program::Program::start`] when a host wants to wait after each applied
-//! rule while keeping the parsed program reusable:
+//! Use [`program::Program::execute`] with [`execution::BorrowedSteps`] when a
+//! host wants to wait after each applied rule while keeping the parsed program reusable:
 //!
 //! ```
-//! use rsaeb::execution::BorrowedStepTransition;
+//! use rsaeb::execution::{BorrowedSteps, BorrowedStepTransition};
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy};
 //! use rsaeb::program::Program;
@@ -265,7 +280,7 @@
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b\nb=c"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<TenSteps>()?;
-//! let execution = program.start(admitted)?;
+//! let execution = program.execute::<BorrowedSteps, _>(admitted)?;
 //!
 //! let execution = match execution.step() {
 //!     BorrowedStepTransition::Applied(applied) => {
@@ -328,12 +343,12 @@
 //! expose `into_parts` methods so callers can keep the owned witness and the
 //! continuation session together.
 //!
-//! Use [`program::Program::start_rule_attempts`] when the host needs to observe
-//! every executable rule line, including lines that do not apply to the current
-//! runtime state:
+//! Use [`program::Program::execute`] with
+//! [`execution::BorrowedRuleAttempts`] when the host needs to observe every
+//! executable rule line, including lines that do not apply to the current runtime state:
 //!
 //! ```
-//! use rsaeb::execution::{BorrowedRuleAttemptTransition, RuleMissReason};
+//! use rsaeb::execution::{BorrowedRuleAttempts, BorrowedRuleAttemptTransition, RuleMissReason};
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
 //!     DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
@@ -349,7 +364,7 @@
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("z=x\na=b"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<TenSteps>()?;
-//! let execution = program.start_rule_attempts::<TenAttempts>(admitted)?;
+//! let execution = program.execute::<BorrowedRuleAttempts<TenAttempts>, _>(admitted)?;
 //!
 //! let execution = match execution.step() {
 //!     BorrowedRuleAttemptTransition::Missed(missed) => {
@@ -438,7 +453,7 @@
 //!
 //! ```
 //! use core::convert::Infallible;
-//! use rsaeb::trace::BorrowedTraceEvent;
+//! use rsaeb::trace::{BorrowedTrace, BorrowedTraceEvent};
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy};
 //! use rsaeb::program::Program;
@@ -452,15 +467,15 @@
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<TenSteps>()?;
 //!
-//! program.trace_borrowed(
+//! program.trace(
 //!     admitted,
-//!     |event| {
+//!     BorrowedTrace::new(|event| {
 //!         byte_counts.push(event.byte_count().get());
 //!         if let BorrowedTraceEvent::Step { rule, .. } = event {
 //!             let _line = rule.line_number();
 //!         }
 //!         Ok::<(), Infallible>(())
-//!     },
+//!     }),
 //! )?;
 //!
 //! if byte_counts != [1, 1, 2] {
@@ -474,7 +489,7 @@
 //! byte budget, which lets the caller retain events after each callback returns:
 //!
 //! ```
-//! use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
+//! use rsaeb::trace::{SnapshotTrace, TraceSnapshotEffect, TraceSnapshotEvent};
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
 //!     DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
@@ -493,9 +508,9 @@
 //! let mut states = Vec::new();
 //! let mut returns = Vec::new();
 //!
-//! program.trace_snapshots::<TenSteps, SnapshotBytes, _, _>(
+//! program.trace(
 //!     admitted,
-//!     |event| {
+//!     SnapshotTrace::<SnapshotBytes, _>::new(|event| {
 //!         match event {
 //!             TraceSnapshotEvent::Initial { state } => states.push(state.into_raw_bytes()),
 //!             TraceSnapshotEvent::Step {
@@ -508,7 +523,7 @@
 //!             } => returns.push(output.into_raw_bytes()),
 //!         }
 //!         Ok::<(), core::convert::Infallible>(())
-//!     },
+//!     }),
 //! )?;
 //!
 //! if states != [b"a".to_vec(), b"b".to_vec()] {
