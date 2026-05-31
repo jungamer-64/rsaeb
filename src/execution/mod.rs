@@ -1,15 +1,8 @@
 //! Public stepwise run typestates.
 //!
-//! [`Program::start_run`](crate::program::Program::start_run) borrows a parsed
-//! program into a [`BorrowedRunSession`]. [`Program::into_run`](crate::program::Program::into_run)
+//! [`Program::execute`](crate::program::Program::execute) selects borrowed
+//! execution behavior by a type-level mode. [`Program::into_execute`](crate::program::Program::into_execute)
 //! is the explicit owned variant for hosts that need a `'static` session.
-//! [`Program::run`](crate::program::Program::run) is the borrowed
-//! run-to-completion shortcut over the same admitted
-//! [`RunSeed`](crate::input::RunSeed) boundary.
-//! [`Program::start_rule_attempt_run`](crate::program::Program::start_rule_attempt_run)
-//! and [`Program::into_rule_attempt_run`](crate::program::Program::into_rule_attempt_run)
-//! use a separate rule-attempt typestate that can pause after non-matching
-//! executable rule lines.
 //!
 //! A step transition is a typestate value, not a status flag. Applied steps
 //! carry the continuation session. Stable and returned states are terminal.
@@ -19,10 +12,8 @@
 //! additionally let the caller recover the owned parsed program or split it
 //! from the error.
 //! Rule-attempt transitions additionally expose typed miss reasons through
-//! [`RuleMissReason`], expose stable reasons through
-//! [`RuleAttemptStableReason`], and
-//! consume [`RuleAttemptSeed`] under a
-//! [`RuleAttemptPolicy`](crate::policy::RuleAttemptPolicy).
+//! [`RuleMissReason`] and expose stable reasons through
+//! [`RuleAttemptStableReason`].
 //!
 //! ```
 //! use rsaeb::error::RunStepError;
@@ -37,7 +28,9 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=aaaa"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
-//! let session = program.start_run(RunSeed::<TinyState>::admit(input)?)?;
+//! let session = program.execute::<TinyState, rsaeb::execution::Stepwise>(
+//!     RunSeed::<TinyState>::admit(input)?,
+//! )?;
 //!
 //! let BorrowedStepTransition::Failed(failed) = session.step() else {
 //!     return Err("expected oversized rewrite to fail before commit".into());
@@ -60,8 +53,6 @@
 //! # }
 //! ```
 
-/// Rule-attempt admission witness.
-mod admission;
 /// Rule miss and stable-reason values.
 mod attempt;
 /// Manual debug formatting for public typestates.
@@ -75,7 +66,6 @@ mod transition;
 /// Owned execution rule witnesses.
 mod witness;
 
-pub use admission::RuleAttemptSeed;
 pub use attempt::{RuleAttemptStableReason, RuleMiss, RuleMissReason};
 pub use session::{
     BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRuleAttemptSession, OwnedRunSession,

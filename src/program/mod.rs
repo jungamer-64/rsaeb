@@ -16,20 +16,12 @@ pub(crate) mod limits;
 mod result;
 /// Parsed rule table storage.
 mod rule_set;
-/// Program-level tracing entrypoints.
-mod tracing;
-
 use core::marker::PhantomData;
 
-use crate::error::{ParseError, RunError, RunStartError};
-use crate::execution::{
-    BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRuleAttemptSession, OwnedRunSession,
-    RuleAttemptSeed,
-};
-use crate::input::RunSeed;
+use crate::error::ParseError;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::parser::parse_rules_impl;
-use crate::policy::{DefaultParsePolicy, ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
+use crate::policy::{DefaultParsePolicy, ParsePolicy};
 use crate::source::ProgramSource;
 
 pub(crate) use rule_set::{
@@ -119,85 +111,6 @@ impl<P: ParsePolicy> Program<P> {
     /// Mints a private runtime scan over the immutable rule table.
     pub(crate) fn rule_scan(&self) -> RuleScan<'_> {
         self.rule_set.scan()
-    }
-
-    /// Starts a stateful run session that borrows this parsed program.
-    ///
-    /// The parsed rule table stays reusable while per-run state lives in the
-    /// returned execution session. Use this when the caller can keep the parsed
-    /// program outside the session and wants to inspect or pause after each
-    /// applied step.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunStartError` when allocating per-run execution state fails.
-    pub fn start_run<E: ExecutionPolicy>(
-        &self,
-        seed: RunSeed<E>,
-    ) -> Result<BorrowedRunSession<'_, P, E>, RunStartError> {
-        BorrowedRunSession::new(self, seed)
-    }
-
-    /// Starts a stateful run session that owns this parsed program.
-    ///
-    /// Use this when the execution session must carry the parsed program with
-    /// it, for example across a `'static` task boundary. Use
-    /// [`Program::start_run`] when the host keeps the reusable parsed program
-    /// separately.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunStartError` when allocating per-run execution state fails.
-    pub fn into_run<E: ExecutionPolicy>(
-        self,
-        seed: RunSeed<E>,
-    ) -> Result<OwnedRunSession<P, E>, RunStartError> {
-        OwnedRunSession::new(self, seed)
-    }
-
-    /// Starts a stateful borrowed run session that advances by executable rule attempt.
-    ///
-    /// Unlike [`Program::start_run`], this mode reports non-matching rule lines
-    /// before continuing to the next rule. Matching rewrites still reset the
-    /// rule cursor to the first executable rule.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunStartError` when allocating per-run execution state fails.
-    pub fn start_rule_attempt_run<E: ExecutionPolicy, A: RuleAttemptPolicy>(
-        &self,
-        seed: RuleAttemptSeed<E, A>,
-    ) -> Result<BorrowedRuleAttemptSession<'_, P, E, A>, RunStartError> {
-        BorrowedRuleAttemptSession::new(self, seed)
-    }
-
-    /// Starts a stateful owned run session that advances by executable rule attempt.
-    ///
-    /// This is the owned counterpart to [`Program::start_rule_attempt_run`].
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunStartError` when allocating per-run execution state fails.
-    pub fn into_rule_attempt_run<E: ExecutionPolicy, A: RuleAttemptPolicy>(
-        self,
-        seed: RuleAttemptSeed<E, A>,
-    ) -> Result<OwnedRuleAttemptSession<P, E, A>, RunStartError> {
-        OwnedRuleAttemptSession::new(self, seed)
-    }
-
-    /// Runs this program with admitted runtime seed.
-    ///
-    /// This is the borrowed run-to-completion API. Use [`Program::start_run`]
-    /// when the host needs stepwise control while keeping this parsed program
-    /// reusable. Use [`Program::into_run`] when the session must own the parsed
-    /// program.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` when allocation fails, state-size arithmetic
-    /// overflows, or a configured execution budget would be exceeded.
-    pub fn run<E: ExecutionPolicy>(&self, seed: RunSeed<E>) -> Result<RunResult, RunError> {
-        crate::execution::finish_borrowed_run(self, seed)
     }
 
     /// Starts a rule-attempt cursor minted from this parsed rule table.

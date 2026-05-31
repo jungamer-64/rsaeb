@@ -36,8 +36,6 @@
 //! let _program = Program::<ExecutionOnly>::parse(ProgramSource::from_text("a=b"));
 //! ```
 
-use core::marker::PhantomData;
-
 use crate::limits::{
     CodeLineByteLimit, PayloadByteLimit, ReturnByteLimit, RuleAttemptLimit, RuleLimit,
     RuntimeInputByteLimit, RuntimeStateByteLimit, SourceByteLimit, StepLimit,
@@ -137,37 +135,6 @@ pub struct StaticRuleAttemptPolicy<const ATTEMPTS: usize>;
 /// Const-generic trace snapshot policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StaticTraceSnapshotPolicy<const SNAPSHOT_BYTES: usize>;
-
-/// Zero-sized witness selecting a trace snapshot policy.
-#[derive(Debug, PartialEq, Eq)]
-pub struct TraceSnapshotPolicyWitness<T: TraceSnapshotPolicy = DefaultTraceSnapshotPolicy> {
-    /// Compile-time snapshot policy selected by this witness.
-    policy: PhantomData<T>,
-}
-
-impl<T: TraceSnapshotPolicy> Clone for TraceSnapshotPolicyWitness<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T: TraceSnapshotPolicy> Copy for TraceSnapshotPolicyWitness<T> {}
-
-impl<T: TraceSnapshotPolicy> TraceSnapshotPolicyWitness<T> {
-    /// Selects a trace snapshot policy for one snapshot-tracing call.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            policy: PhantomData,
-        }
-    }
-}
-
-impl<T: TraceSnapshotPolicy> Default for TraceSnapshotPolicyWitness<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 impl ParsePolicy for DefaultParsePolicy {
     const SOURCE_BYTE_LIMIT: SourceByteLimit = SourceByteLimit::new(DEFAULT_BYTE_BUDGET);
