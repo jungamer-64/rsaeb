@@ -13,7 +13,7 @@ use crate::limits::{
     ReturnByteLimit, ReturnOutputByteCount, RuntimeInputByteCount, RuntimeInputByteLimit,
     RuntimeStateByteCount, RuntimeStateByteLimit, StepCount, StepLimit,
 };
-use crate::policy::{DefaultPolicy, ExecutionPolicy, RuntimeInputPolicy};
+use crate::policy::{DefaultRuntimeInputPolicy, ExecutionPolicy, RuntimeInputPolicy};
 use crate::program::RunOutcome;
 use crate::runtime::action::prepare_matched_rule;
 use crate::test_support::{
@@ -432,9 +432,9 @@ fn runtime_input_error_is_structured_at_the_runtime_boundary() -> TestResult {
         },
     )?;
 
-    let Err(error) = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(
-        "a\u{80}".as_bytes(),
-    )) else {
+    let Err(error) = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(
+        RuntimeInputSource::from_bytes("a\u{80}".as_bytes()),
+    ) else {
         return Err(TestFailure::message("expected input error"));
     };
 

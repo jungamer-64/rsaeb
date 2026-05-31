@@ -1,7 +1,10 @@
 use crate::error::{RunError, RunFinishError, RunStartError, TracedRunError};
 use crate::input::RunSeed;
 use crate::limits::{RuleAttemptCount, StepCount};
-use crate::policy::{DefaultPolicy, ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
+use crate::policy::{
+    DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuleAttemptPolicy, ExecutionPolicy,
+    ParsePolicy, RuleAttemptPolicy,
+};
 use crate::program::{Program, ReturnOutput, RunResult};
 use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
 
@@ -29,8 +32,8 @@ use super::transition::{
 /// [`BorrowedStepTransition`] before they can continue.
 pub struct BorrowedRunSession<
     'program,
-    P: ParsePolicy = DefaultPolicy,
-    E: ExecutionPolicy = DefaultPolicy,
+    P: ParsePolicy = DefaultParsePolicy,
+    E: ExecutionPolicy = DefaultExecutionPolicy,
 > {
     /// Internal session using the public borrowed program boundary.
     pub(super) session: Session<BorrowedProgram<'program, P>, E>,
@@ -43,7 +46,10 @@ pub struct BorrowedRunSession<
 /// the session must move independently of a borrowed [`Program`]. Owned
 /// terminal and failed states retain a way to recover the parsed program
 /// instead of leaking ownership through a parallel API.
-pub struct OwnedRunSession<P: ParsePolicy = DefaultPolicy, E: ExecutionPolicy = DefaultPolicy> {
+pub struct OwnedRunSession<
+    P: ParsePolicy = DefaultParsePolicy,
+    E: ExecutionPolicy = DefaultExecutionPolicy,
+> {
     /// Internal session using the public owned program boundary.
     pub(super) session: Session<OwnedProgram<P>, E>,
 }
@@ -55,9 +61,9 @@ pub struct OwnedRunSession<P: ParsePolicy = DefaultPolicy, E: ExecutionPolicy = 
 /// cursor to the first executable rule.
 pub struct BorrowedRuleAttemptSession<
     'program,
-    P: ParsePolicy = DefaultPolicy,
-    E: ExecutionPolicy = DefaultPolicy,
-    A: RuleAttemptPolicy = DefaultPolicy,
+    P: ParsePolicy = DefaultParsePolicy,
+    E: ExecutionPolicy = DefaultExecutionPolicy,
+    A: RuleAttemptPolicy = DefaultRuleAttemptPolicy,
 > {
     /// Internal rule-attempt session using the public borrowed program boundary.
     pub(super) session: AttemptSession<BorrowedProgram<'program, P>, E, A>,
@@ -67,9 +73,9 @@ pub struct BorrowedRuleAttemptSession<
 ///
 /// This is the owned counterpart to [`BorrowedRuleAttemptSession`].
 pub struct OwnedRuleAttemptSession<
-    P: ParsePolicy = DefaultPolicy,
-    E: ExecutionPolicy = DefaultPolicy,
-    A: RuleAttemptPolicy = DefaultPolicy,
+    P: ParsePolicy = DefaultParsePolicy,
+    E: ExecutionPolicy = DefaultExecutionPolicy,
+    A: RuleAttemptPolicy = DefaultRuleAttemptPolicy,
 > {
     /// Internal rule-attempt session using the public owned program boundary.
     pub(super) session: AttemptSession<OwnedProgram<P>, E, A>,

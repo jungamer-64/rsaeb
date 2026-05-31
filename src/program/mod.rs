@@ -29,7 +29,7 @@ use crate::execution::{
 use crate::input::RunSeed;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::parser::parse_rules_impl;
-use crate::policy::{DefaultPolicy, ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
+use crate::policy::{DefaultParsePolicy, ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::source::ProgramSource;
 
 pub(crate) use rule_set::{
@@ -46,7 +46,7 @@ pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeS
 /// [`Program`] start from fresh rule availability. Running a program requires
 /// an already admitted [`RunSeed`], so parsing never accepts raw runtime input
 /// or detached execution policy values.
-pub struct Program<P: ParsePolicy = DefaultPolicy> {
+pub struct Program<P: ParsePolicy = DefaultParsePolicy> {
     /// Immutable rule table plus parsed `(once)` metadata.
     rule_set: RuleSet,
     /// Compile-time parser policy selected for this program.
@@ -208,7 +208,7 @@ impl<P: ParsePolicy> Program<P> {
     /// Selects the next checked rule-attempt target.
     pub(crate) fn select_attempt_target(
         &self,
-        cursor: &mut RuleCursor,
+        cursor: RuleCursor,
     ) -> RuleAttemptTargetSelection<'_> {
         self.rule_set.select_attempt_target(cursor)
     }

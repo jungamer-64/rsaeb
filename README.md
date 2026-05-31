@@ -36,14 +36,14 @@ a run seed under an execution policy, then run:
 
 ```rust
 use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
-use rsaeb::policy::DefaultPolicy;
+use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
 use rsaeb::program::{Program, RunOutcome};
 use rsaeb::source::ProgramSource;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("a=b"))?;
-    let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
-    let seed = RunSeed::<DefaultPolicy>::admit(input)?;
+    let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
+    let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+    let seed = RunSeed::<DefaultExecutionPolicy>::admit(input)?;
     let result = program.run(seed)?;
 
     if !matches!(

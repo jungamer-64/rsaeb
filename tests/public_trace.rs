@@ -11,7 +11,9 @@ use rsaeb::error::{
 use rsaeb::execution::OwnedStepTransition;
 use rsaeb::input::RunSeed;
 use rsaeb::limits::TraceSnapshotByteLimit;
-use rsaeb::policy::{DefaultPolicy, StaticTraceSnapshotPolicy, TraceSnapshotPolicyWitness};
+use rsaeb::policy::{
+    DefaultTraceSnapshotPolicy, StaticTraceSnapshotPolicy, TraceSnapshotPolicyWitness,
+};
 use rsaeb::program::{Program, RunOutcome, RunResult};
 use rsaeb::trace::{
     BorrowedTraceEffect, BorrowedTraceEvent, TraceSnapshotEffect, TraceSnapshotEvent,
@@ -46,7 +48,7 @@ fn trace_snapshot_example(
     let limits = DefaultInputRunPolicy::<10_000, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     let result = program.run_with_trace_snapshots(
         runtime_input(b"a", limits)?,
-        TraceSnapshotPolicyWitness::<DefaultPolicy>::new(),
+        TraceSnapshotPolicyWitness::<DefaultTraceSnapshotPolicy>::new(),
         |event| {
             events.push(event);
             Ok::<(), TestFailure>(())
@@ -404,7 +406,7 @@ fn trace_final_event_matches_run_result() -> TestResult {
 
     let result = program.run_with_trace_snapshots(
         runtime_input(b"a", limits)?,
-        TraceSnapshotPolicyWitness::<DefaultPolicy>::new(),
+        TraceSnapshotPolicyWitness::<DefaultTraceSnapshotPolicy>::new(),
         |event| {
             events.push(event);
             Ok::<(), TestFailure>(())

@@ -9,7 +9,7 @@ use rsaeb::error::{
     RunFinishError, RunStepError,
 };
 use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
-use rsaeb::policy::DefaultPolicy;
+use rsaeb::policy::DefaultRuntimeInputPolicy;
 use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
@@ -110,7 +110,9 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
     )?;
 
     let Err(input_error) =
-        RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(&[0xff]))
+        RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(&[
+            0xff,
+        ]))
     else {
         return Err(TestFailure::message("expected input error"));
     };

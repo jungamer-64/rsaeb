@@ -1,8 +1,10 @@
 //! Compile-time resource policy types.
 //!
 //! Hosts choose parser, input, execution, rule-attempt, and trace snapshot
-//! budgets by selecting policy types. Runtime entrypoints do not accept policy
-//! value bags; the selected type is the resource contract.
+//! budgets by selecting policy types. Each policy domain has its own default
+//! type, so a parser default cannot accidentally satisfy an execution or input
+//! boundary. Runtime entrypoints do not accept policy value bags; the selected
+//! type is the resource contract.
 //!
 //! Deleted runtime policy bags cannot be constructed:
 //!
@@ -10,16 +12,28 @@
 //! use rsaeb::limits::{ExecutionLimits, RuntimeInputLimits};
 //! ```
 //!
-//! Policy domains are intentionally separate. A parse policy cannot be used to
-//! validate runtime input:
+//! Policy domains are intentionally separate. The parser default cannot be used
+//! to validate runtime input:
 //!
 //! ```compile_fail
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
-//! use rsaeb::policy::StaticParsePolicy;
+//! use rsaeb::policy::DefaultParsePolicy;
 //!
-//! type ParseOnly = StaticParsePolicy<8, 8, 8, 1>;
+//! type ParseOnly = DefaultParsePolicy;
 //!
 //! let _input = RuntimeInput::<ParseOnly>::validate(RuntimeInputSource::from_bytes(b"a"));
+//! ```
+//!
+//! The execution default cannot be used to parse programs:
+//!
+//! ```compile_fail
+//! use rsaeb::policy::DefaultExecutionPolicy;
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
+//!
+//! type ExecutionOnly = DefaultExecutionPolicy;
+//!
+//! let _program = Program::<ExecutionOnly>::parse(ProgramSource::from_text("a=b"));
 //! ```
 
 use core::marker::PhantomData;
@@ -75,6 +89,26 @@ pub trait TraceSnapshotPolicy {
     const TRACE_SNAPSHOT_BYTE_LIMIT: TraceSnapshotByteLimit;
 }
 
+/// Crate default parser resource policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DefaultParsePolicy;
+
+/// Crate default runtime-input validation policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DefaultRuntimeInputPolicy;
+
+/// Crate default execution resource policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DefaultExecutionPolicy;
+
+/// Crate default rule-attempt resource policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DefaultRuleAttemptPolicy;
+
+/// Crate default trace snapshot resource policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DefaultTraceSnapshotPolicy;
+
 /// Const-generic parser policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StaticParsePolicy<
@@ -106,7 +140,7 @@ pub struct StaticTraceSnapshotPolicy<const SNAPSHOT_BYTES: usize>;
 
 /// Zero-sized witness selecting a trace snapshot policy.
 #[derive(Debug, PartialEq, Eq)]
-pub struct TraceSnapshotPolicyWitness<T: TraceSnapshotPolicy = DefaultPolicy> {
+pub struct TraceSnapshotPolicyWitness<T: TraceSnapshotPolicy = DefaultTraceSnapshotPolicy> {
     /// Compile-time snapshot policy selected by this witness.
     policy: PhantomData<T>,
 }
@@ -133,6 +167,32 @@ impl<T: TraceSnapshotPolicy> Default for TraceSnapshotPolicyWitness<T> {
     fn default() -> Self {
         Self::new()
     }
+}
+
+impl ParsePolicy for DefaultParsePolicy {
+    const SOURCE_BYTE_LIMIT: SourceByteLimit = SourceByteLimit::new(DEFAULT_BYTE_BUDGET);
+    const CODE_LINE_BYTE_LIMIT: CodeLineByteLimit = CodeLineByteLimit::new(DEFAULT_BYTE_BUDGET);
+    const PAYLOAD_BYTE_LIMIT: PayloadByteLimit = PayloadByteLimit::new(DEFAULT_BYTE_BUDGET);
+    const RULE_LIMIT: RuleLimit = RuleLimit::new(DEFAULT_COUNT_BUDGET);
+}
+
+impl RuntimeInputPolicy for DefaultRuntimeInputPolicy {
+    const INPUT_BYTE_LIMIT: RuntimeInputByteLimit = RuntimeInputByteLimit::new(DEFAULT_BYTE_BUDGET);
+}
+
+impl ExecutionPolicy for DefaultExecutionPolicy {
+    const STEP_LIMIT: StepLimit = StepLimit::new(DEFAULT_COUNT_BUDGET);
+    const STATE_BYTE_LIMIT: RuntimeStateByteLimit = RuntimeStateByteLimit::new(DEFAULT_BYTE_BUDGET);
+    const RETURN_BYTE_LIMIT: ReturnByteLimit = ReturnByteLimit::new(DEFAULT_BYTE_BUDGET);
+}
+
+impl RuleAttemptPolicy for DefaultRuleAttemptPolicy {
+    const RULE_ATTEMPT_LIMIT: RuleAttemptLimit = RuleAttemptLimit::new(DEFAULT_COUNT_BUDGET);
+}
+
+impl TraceSnapshotPolicy for DefaultTraceSnapshotPolicy {
+    const TRACE_SNAPSHOT_BYTE_LIMIT: TraceSnapshotByteLimit =
+        TraceSnapshotByteLimit::new(DEFAULT_BYTE_BUDGET);
 }
 
 impl<

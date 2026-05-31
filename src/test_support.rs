@@ -14,8 +14,8 @@ use crate::error::{
 use crate::input::{RunSeed, RuntimeInput, RuntimeInputSource};
 use crate::limits::{ReturnByteLimit, RuntimeInputByteLimit, RuntimeStateByteLimit, StepLimit};
 use crate::policy::{
-    DefaultPolicy, ExecutionPolicy, RuntimeInputPolicy, StaticExecutionPolicy,
-    StaticRuntimeInputPolicy,
+    DefaultExecutionPolicy, DefaultRuntimeInputPolicy, ExecutionPolicy, RuntimeInputPolicy,
+    StaticExecutionPolicy, StaticRuntimeInputPolicy,
 };
 use crate::program::Program;
 use crate::source::{ProgramSource, SourceColumn, SourceLineNumber, SourcePosition};
@@ -42,10 +42,10 @@ pub(crate) type DefaultInputRunPolicy<
     const STEPS: usize,
     const STATE_BYTES: usize,
     const RETURN_BYTES: usize,
-> = TestRunPolicy<DefaultPolicy, TestExecutionPolicy<STEPS, STATE_BYTES, RETURN_BYTES>>;
+> = TestRunPolicy<DefaultRuntimeInputPolicy, TestExecutionPolicy<STEPS, STATE_BYTES, RETURN_BYTES>>;
 pub(crate) type DefaultExecutionRunPolicy<const INPUT_BYTES: usize> =
-    TestRunPolicy<TestInputPolicy<INPUT_BYTES>, DefaultPolicy>;
-pub(crate) type DefaultRunPolicy = TestRunPolicy<DefaultPolicy, DefaultPolicy>;
+    TestRunPolicy<TestInputPolicy<INPUT_BYTES>, DefaultExecutionPolicy>;
+pub(crate) type DefaultRunPolicy = TestRunPolicy<DefaultRuntimeInputPolicy, DefaultExecutionPolicy>;
 
 pub(crate) enum TestFailure {
     Message(String),
@@ -185,8 +185,8 @@ impl From<RunAdmissionError> for TestFailure {
 pub(crate) type TestResult = Result<(), TestFailure>;
 
 pub(crate) struct TestRunPolicy<
-    I: RuntimeInputPolicy = DefaultPolicy,
-    E: ExecutionPolicy = DefaultPolicy,
+    I: RuntimeInputPolicy = DefaultRuntimeInputPolicy,
+    E: ExecutionPolicy = DefaultExecutionPolicy,
 > {
     policy: PhantomData<(I, E)>,
 }

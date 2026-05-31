@@ -1,7 +1,9 @@
 use core::marker::PhantomData;
 
 use crate::input::RunSeed;
-use crate::policy::{DefaultPolicy, ExecutionPolicy, RuleAttemptPolicy};
+use crate::policy::{
+    DefaultExecutionPolicy, DefaultRuleAttemptPolicy, ExecutionPolicy, RuleAttemptPolicy,
+};
 
 /// Run-start witness for rule-attempt execution.
 ///
@@ -9,8 +11,10 @@ use crate::policy::{DefaultPolicy, ExecutionPolicy, RuleAttemptPolicy};
 /// execution, plus a separate rule-attempt policy. Grouping them prevents
 /// callers from selecting a detached policy beside an unrelated run seed.
 #[derive(Debug, PartialEq, Eq)]
-pub struct RuleAttemptSeed<E: ExecutionPolicy = DefaultPolicy, A: RuleAttemptPolicy = DefaultPolicy>
-{
+pub struct RuleAttemptSeed<
+    E: ExecutionPolicy = DefaultExecutionPolicy,
+    A: RuleAttemptPolicy = DefaultRuleAttemptPolicy,
+> {
     /// Admitted runtime input and execution policy.
     seed: RunSeed<E>,
     /// Compile-time rule-attempt policy selected for this value.

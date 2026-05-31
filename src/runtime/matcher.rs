@@ -1,4 +1,6 @@
-use super::once::{MatchedRuleCommit, OnceRuleReadiness, OnceStateSet, RuntimeRule};
+use super::once::{
+    MatchedRuleCommit, OnceRuleReadiness, OnceStateSet, RuntimeRule, ScannedRuleReadiness,
+};
 use super::state::{State, StateMatch};
 use crate::program::{RuleScan, RuleTarget};
 use crate::rule::{Rule, RuleAnchorSyntax};
@@ -164,11 +166,11 @@ pub(crate) fn find_next_match<'program, 'state, 'once>(
         let Some(candidate) = matched_candidate_for_rule(rule, state) else {
             continue;
         };
-        if once_states.is_rule_consumed(rule) {
-            continue;
-        }
-
-        let commit = once_states.commit_for_fresh_rule(rule);
+        let commit = match once_states.scanned_rule_readiness(rule) {
+            ScannedRuleReadiness::Available(commit) => commit,
+            ScannedRuleReadiness::Consumed => continue,
+        };
+        let commit = commit.into_matched_commit(once_states);
         return RuleSearch::Matched(candidate.into_application(commit));
     }
 

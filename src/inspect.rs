@@ -13,12 +13,12 @@
 //!
 //! ```
 //! use rsaeb::inspect::{RuleAction, RuleAnchor, RuleRepeat};
-//! use rsaeb::policy::DefaultPolicy;
+//! use rsaeb::policy::DefaultParsePolicy;
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text(
+//! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text(
 //!     "(once)(start)a=(return)done",
 //! ))?;
 //! let rule = program.rules().next().ok_or("missing rule")?;

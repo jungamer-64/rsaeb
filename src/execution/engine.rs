@@ -532,7 +532,7 @@ fn attempt_current_rule_with_witness<
 where
     Error: From<RuleAttemptStepError> + From<RunStepError>,
 {
-    let target = match context.program.select_attempt_target(context.cursor) {
+    let target = match context.program.select_attempt_target(*context.cursor) {
         RuleAttemptTargetSelection::Target(target) => target,
         RuleAttemptTargetSelection::NoExecutableRules => return Ok(no_executable_rules(context)),
     };

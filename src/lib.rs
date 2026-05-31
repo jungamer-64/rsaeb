@@ -70,14 +70,14 @@
 //!
 //! ```
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
-//! use rsaeb::policy::DefaultPolicy;
+//! use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
 //! use rsaeb::program::{Program, RunOutcome};
 //! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("a=b"))?;
-//! let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
-//! let seed = RunSeed::<DefaultPolicy>::admit(input)?;
+//! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
+//! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let seed = RunSeed::<DefaultExecutionPolicy>::admit(input)?;
 //! let result = program.run(seed)?;
 //!
 //! if !matches!(
@@ -96,17 +96,17 @@
 //!
 //! ```
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
-//! use rsaeb::policy::{DefaultPolicy, StaticExecutionPolicy};
+//! use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy};
 //! use rsaeb::program::{Program, RunOutcome};
 //! use rsaeb::source::ProgramSource;
 //!
 //! type ShortRun = StaticExecutionPolicy<10_000, 16_777_216, 16_777_216>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("(once)a=b\na=c"))?;
+//! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("(once)a=b\na=c"))?;
 //!
-//! let first_input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"aa"))?;
-//! let second_input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"aa"))?;
+//! let first_input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"aa"))?;
+//! let second_input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"aa"))?;
 //!
 //! let first = program.run(RunSeed::<ShortRun>::admit(first_input)?)?;
 //! let second = program.run(RunSeed::<ShortRun>::admit(second_input)?)?;
@@ -136,7 +136,7 @@
 //! ```
 //! use rsaeb::error::{RunError, RunFinishError, RunStepError};
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
-//! use rsaeb::policy::{DefaultPolicy, StaticExecutionPolicy, StaticRuntimeInputPolicy};
+//! use rsaeb::policy::{DefaultParsePolicy, StaticExecutionPolicy, StaticRuntimeInputPolicy};
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
@@ -144,7 +144,7 @@
 //! type NoSteps = StaticExecutionPolicy<0, 4, 4>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("a=b"))?;
+//! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
 //! let input = RuntimeInput::<TinyInput>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let seed = RunSeed::<NoSteps>::admit(input)?;
 //! let result = program.run(seed);
@@ -168,15 +168,15 @@
 //! ```
 //! use rsaeb::execution::BorrowedStepTransition;
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
-//! use rsaeb::policy::{DefaultPolicy, StaticExecutionPolicy};
+//! use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy};
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
 //! type TenSteps = StaticExecutionPolicy<10, 16_777_216, 16_777_216>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("a=b\nb=c"))?;
-//! let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b\nb=c"))?;
+//! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let seed = RunSeed::<TenSteps>::admit(input)?;
 //! let execution = program.start_run(seed)?;
 //!
@@ -248,7 +248,10 @@
 //! ```
 //! use rsaeb::execution::{BorrowedRuleAttemptTransition, RuleAttemptSeed, RuleMissReason};
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
-//! use rsaeb::policy::{DefaultPolicy, StaticExecutionPolicy, StaticRuleAttemptPolicy};
+//! use rsaeb::policy::{
+//!     DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
+//!     StaticRuleAttemptPolicy,
+//! };
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
@@ -256,8 +259,8 @@
 //! type TenAttempts = StaticRuleAttemptPolicy<10>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("z=x\na=b"))?;
-//! let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("z=x\na=b"))?;
+//! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let seed = RunSeed::<TenSteps>::admit(input)?;
 //! let attempt_seed = RuleAttemptSeed::<TenSteps, TenAttempts>::new(seed);
 //! let execution = program.start_rule_attempt_run(attempt_seed)?;
@@ -308,12 +311,12 @@
 //!
 //! ```
 //! use rsaeb::inspect::{RuleAction, RuleAnchor, RuleRepeat};
-//! use rsaeb::policy::DefaultPolicy;
+//! use rsaeb::policy::DefaultParsePolicy;
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("( once ) ( start ) a = ( end ) b # comment"))?;
+//! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("( once ) ( start ) a = ( end ) b # comment"))?;
 //! let rule = program.rules().next().ok_or("missing parsed rule")?;
 //!
 //! if rule.repeat() != RuleRepeat::Once {
@@ -351,16 +354,16 @@
 //! use core::convert::Infallible;
 //! use rsaeb::trace::BorrowedTraceEvent;
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
-//! use rsaeb::policy::{DefaultPolicy, StaticExecutionPolicy};
+//! use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy};
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
 //! type TenSteps = StaticExecutionPolicy<10, 16_777_216, 16_777_216>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("a=b\nb=(return)ok"))?;
+//! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b\nb=(return)ok"))?;
 //! let mut byte_counts = Vec::new();
-//! let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let seed = RunSeed::<TenSteps>::admit(input)?;
 //!
 //! program.run_with_borrowed_trace(
@@ -388,7 +391,8 @@
 //! use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
-//!     DefaultPolicy, StaticExecutionPolicy, StaticTraceSnapshotPolicy,
+//!     DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
+//!     StaticTraceSnapshotPolicy,
 //!     TraceSnapshotPolicyWitness,
 //! };
 //! use rsaeb::program::Program;
@@ -398,8 +402,8 @@
 //! type SnapshotBytes = StaticTraceSnapshotPolicy<16_777_216>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("a=b\nb=(return)ok"))?;
-//! let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b\nb=(return)ok"))?;
+//! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let seed = RunSeed::<TenSteps>::admit(input)?;
 //! let mut states = Vec::new();
 //! let mut returns = Vec::new();

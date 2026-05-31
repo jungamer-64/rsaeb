@@ -6,7 +6,7 @@ mod support;
 
 use rsaeb::input::RunSeed;
 use rsaeb::inspect::OnceRuleCount;
-use rsaeb::policy::DefaultPolicy;
+use rsaeb::policy::DefaultParsePolicy;
 use rsaeb::program::{Program, RunOutcome, RunResult};
 use rsaeb::source::ProgramSource;
 use runtime_support::{
@@ -73,7 +73,7 @@ fn program_parse_accepts_text_and_byte_sources() -> TestResult {
     expect_stable_bytes(&result, b"b")?;
     ensure_matches(result.steps().get() == 1, "expected one execution step")?;
 
-    let program = Program::<DefaultPolicy>::parse(ProgramSource::from_bytes(b"a=b#\xff"))?;
+    let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_bytes(b"a=b#\xff"))?;
     let input = runtime_input(b"a", limits)?;
     let result = program.run(input)?;
     expect_stable_bytes(&result, b"b")?;

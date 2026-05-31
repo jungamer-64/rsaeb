@@ -5,8 +5,12 @@ mod support;
 use rsaeb::error::RunAdmissionError;
 use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
 use rsaeb::limits::{RuntimeInputByteLimit, RuntimeStateByteLimit};
-use rsaeb::policy::{DefaultPolicy, StaticExecutionPolicy, StaticRuntimeInputPolicy};
-use rsaeb::program::{RunOutcome, RunResult};
+use rsaeb::policy::{
+    DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
+    StaticRuntimeInputPolicy,
+};
+use rsaeb::program::{Program, RunOutcome, RunResult};
+use rsaeb::source::ProgramSource;
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns stable output bytes when they match `expected`.
@@ -28,7 +32,7 @@ fn expect_stable_bytes(result: &RunResult, expected: &[u8]) -> TestResult {
 ///
 /// Returns `RuntimeInputError` if validation rejects the bytes.
 fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
-    RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(bytes))
+    RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(bytes))
 }
 
 /// # Errors
@@ -37,14 +41,39 @@ fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInpu
 /// consumed by execution.
 #[test]
 fn runtime_input_moves_owned_bytes_into_execution() -> TestResult {
-    let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a=()# "))?;
+    let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(
+        RuntimeInputSource::from_bytes(b"a=()# "),
+    )?;
 
     ensure_eq!(input.byte_count().get(), 6)?;
     ensure_matches(!input.is_empty(), "expected non-empty owned input")?;
 
     let program = parse_program("a=b")?;
-    let result = program.run(RunSeed::<DefaultPolicy>::admit(input)?)?;
+    let result = program.run(RunSeed::<DefaultExecutionPolicy>::admit(input)?)?;
     expect_stable_bytes(&result, b"b=()# ")
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if domain-specific default policies stop supporting
+/// default generic inference or explicit default names.
+#[test]
+fn domain_default_policies_support_inference_and_explicit_names() -> TestResult {
+    let inferred_program: Program = Program::parse(ProgramSource::from_text("a=b"))?;
+    let explicit_program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
+
+    let inferred_input: RuntimeInput =
+        RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"))?;
+    let explicit_input =
+        RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+
+    let inferred_seed: RunSeed = RunSeed::admit(inferred_input)?;
+    let inferred_result = inferred_program.run(inferred_seed)?;
+    let explicit_result =
+        explicit_program.run(RunSeed::<DefaultExecutionPolicy>::admit(explicit_input)?)?;
+
+    expect_stable_bytes(&inferred_result, b"b")?;
+    expect_stable_bytes(&explicit_result, b"b")
 }
 
 /// # Errors
@@ -55,16 +84,19 @@ fn runtime_input_moves_owned_bytes_into_execution() -> TestResult {
 fn runtime_input_validates_ascii_boundary() -> TestResult {
     let input: Vec<u8> = (0x00..=0x7f).collect();
     let program = parse_program("# no executable rules")?;
-    let runtime_input =
-        RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(&input))?;
-    let result = program.run(RunSeed::<DefaultPolicy>::admit(runtime_input)?)?;
+    let runtime_input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(
+        RuntimeInputSource::from_bytes(&input),
+    )?;
+    let result = program.run(RunSeed::<DefaultExecutionPolicy>::admit(runtime_input)?)?;
     expect_stable_bytes(&result, input.as_slice())?;
     ensure_eq!(result.steps().get(), 0)?;
 
     for byte in 0x80..=0xff {
         ensure_matches(
-            RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(&[byte]))
-                .is_err(),
+            RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(&[
+                byte,
+            ]))
+            .is_err(),
             "byte should be rejected",
         )?;
     }

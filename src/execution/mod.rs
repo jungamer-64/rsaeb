@@ -28,15 +28,15 @@
 //! use rsaeb::error::RunStepError;
 //! use rsaeb::execution::BorrowedStepTransition;
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
-//! use rsaeb::policy::{DefaultPolicy, StaticExecutionPolicy};
+//! use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy};
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
 //! type TinyState = StaticExecutionPolicy<10, 1, 16_777_216>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("a=aaaa"))?;
-//! let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=aaaa"))?;
+//! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let session = program.start_run(RunSeed::<TinyState>::admit(input)?)?;
 //!
 //! let BorrowedStepTransition::Failed(failed) = session.step() else {

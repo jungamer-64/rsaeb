@@ -15,8 +15,8 @@
 //! use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
-//!     DefaultPolicy, StaticExecutionPolicy, StaticTraceSnapshotPolicy,
-//!     TraceSnapshotPolicyWitness,
+//!     DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
+//!     StaticTraceSnapshotPolicy, TraceSnapshotPolicyWitness,
 //! };
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
@@ -25,8 +25,8 @@
 //! type SnapshotBytes = StaticTraceSnapshotPolicy<16_777_216>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("a=b\nb=(return)ok"))?;
-//! let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b\nb=(return)ok"))?;
+//! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let seed = RunSeed::<TenSteps>::admit(input)?;
 //! let mut retained = Vec::new();
 //!
@@ -61,8 +61,8 @@
 //! use rsaeb::error::{TraceSnapshotError, TraceSnapshotRunError};
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
-//!     DefaultPolicy, StaticExecutionPolicy, StaticTraceSnapshotPolicy,
-//!     TraceSnapshotPolicyWitness,
+//!     DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
+//!     StaticTraceSnapshotPolicy, TraceSnapshotPolicyWitness,
 //! };
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
@@ -71,8 +71,8 @@
 //! type EmptySnapshot = StaticTraceSnapshotPolicy<0>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("a=b"))?;
-//! let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
+//! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let seed = RunSeed::<TenSteps>::admit(input)?;
 //!
 //! let result = program.run_with_trace_snapshots(

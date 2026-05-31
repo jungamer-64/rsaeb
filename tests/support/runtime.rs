@@ -8,8 +8,8 @@ use core::marker::PhantomData;
 use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
 use rsaeb::limits::{ReturnByteLimit, RuntimeInputByteLimit, RuntimeStateByteLimit, StepLimit};
 use rsaeb::policy::{
-    DefaultPolicy, ExecutionPolicy, RuntimeInputPolicy, StaticExecutionPolicy,
-    StaticRuntimeInputPolicy,
+    DefaultExecutionPolicy, DefaultRuntimeInputPolicy, ExecutionPolicy, RuntimeInputPolicy,
+    StaticExecutionPolicy, StaticRuntimeInputPolicy,
 };
 
 use crate::support::TestFailure;
@@ -35,13 +35,15 @@ pub type DefaultInputRunPolicy<
     const STEPS: usize,
     const STATE_BYTES: usize,
     const RETURN_BYTES: usize,
-> = TestRunPolicy<DefaultPolicy, TestExecutionPolicy<STEPS, STATE_BYTES, RETURN_BYTES>>;
+> = TestRunPolicy<DefaultRuntimeInputPolicy, TestExecutionPolicy<STEPS, STATE_BYTES, RETURN_BYTES>>;
 pub type DefaultExecutionRunPolicy<const INPUT_BYTES: usize> =
-    TestRunPolicy<TestInputPolicy<INPUT_BYTES>, DefaultPolicy>;
-pub type DefaultRunPolicy = TestRunPolicy<DefaultPolicy, DefaultPolicy>;
+    TestRunPolicy<TestInputPolicy<INPUT_BYTES>, DefaultExecutionPolicy>;
+pub type DefaultRunPolicy = TestRunPolicy<DefaultRuntimeInputPolicy, DefaultExecutionPolicy>;
 
-pub struct TestRunPolicy<I: RuntimeInputPolicy = DefaultPolicy, E: ExecutionPolicy = DefaultPolicy>
-{
+pub struct TestRunPolicy<
+    I: RuntimeInputPolicy = DefaultRuntimeInputPolicy,
+    E: ExecutionPolicy = DefaultExecutionPolicy,
+> {
     policy: PhantomData<(I, E)>,
 }
 

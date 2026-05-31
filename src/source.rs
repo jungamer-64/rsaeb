@@ -11,13 +11,13 @@
 //! boundary.
 //!
 //! ```
-//! use rsaeb::policy::DefaultPolicy;
+//! use rsaeb::policy::DefaultParsePolicy;
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let source = ProgramSource::from_bytes(b"a=b # arbitrary comment bytes: \xff");
-//! let program = Program::<DefaultPolicy>::parse(source)?;
+//! let program = Program::<DefaultParsePolicy>::parse(source)?;
 //!
 //! if program.rule_count().get() != 1 {
 //!     return Err("unexpected rule count".into());

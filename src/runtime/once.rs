@@ -31,6 +31,24 @@ pub(super) enum OnceRuleReadiness<'once> {
     Consumed,
 }
 
+/// Availability of a scanned parsed rule without reserving mutable once state yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ScannedRuleReadiness {
+    /// Rule is available and carries the data needed to mint its commit action.
+    Available(ScannedRuleCommit),
+    /// Rule has already committed during this runtime invocation.
+    Consumed,
+}
+
+/// Commit seed for a scanned rule already proven available.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ScannedRuleCommit {
+    /// Rule has no once-state side effect.
+    Always,
+    /// Rule owns this fresh parser-assigned `(once)` slot.
+    Once(OnceRuleSlot),
+}
+
 /// Private permit that consumes one fresh once-rule state on commit.
 #[derive(Debug)]
 pub(super) struct OnceMatchPermit<'once> {
@@ -131,22 +149,13 @@ impl OnceStateSet {
         RuntimeRule { rule, availability }
     }
 
-    /// Returns whether a parsed rule is unavailable because its `(once)` slot
-    /// has already committed.
-    pub(super) fn is_rule_consumed(&self, rule: &Rule) -> bool {
+    /// Returns the scanned rule's readiness without reserving mutable once state.
+    pub(super) fn scanned_rule_readiness(&self, rule: &Rule) -> ScannedRuleReadiness {
         match rule.availability() {
-            RuleAvailability::Always => false,
-            RuleAvailability::Once(slot) => self.contains(slot),
-        }
-    }
-
-    /// Creates the linear commit action for a rule already known to be fresh.
-    pub(super) fn commit_for_fresh_rule(&mut self, rule: &Rule) -> MatchedRuleCommit<'_> {
-        match rule.availability() {
-            RuleAvailability::Always => MatchedRuleCommit::Always,
+            RuleAvailability::Always => ScannedRuleReadiness::Available(ScannedRuleCommit::Always),
+            RuleAvailability::Once(slot) if self.contains(slot) => ScannedRuleReadiness::Consumed,
             RuleAvailability::Once(slot) => {
-                debug_assert!(!self.contains(slot));
-                MatchedRuleCommit::Once(OnceMatchPermit::new(self, slot))
+                ScannedRuleReadiness::Available(ScannedRuleCommit::Once(slot))
             }
         }
     }
@@ -175,6 +184,16 @@ impl<'program, 'once> RuntimeRule<'program, 'once> {
             RuntimeRuleAvailability::Once { consumed, slot } => OnceRuleReadiness::Available(
                 MatchedRuleCommit::Once(OnceMatchPermit::new(consumed, slot)),
             ),
+        }
+    }
+}
+
+impl ScannedRuleCommit {
+    /// Mints the linear commit action for this already selected rule.
+    pub(super) fn into_matched_commit(self, consumed: &mut OnceStateSet) -> MatchedRuleCommit<'_> {
+        match self {
+            Self::Always => MatchedRuleCommit::Always,
+            Self::Once(slot) => MatchedRuleCommit::Once(OnceMatchPermit::new(consumed, slot)),
         }
     }
 }

@@ -267,7 +267,7 @@ impl RuleSet {
     /// Selects the next rule-attempt target from a cursor minted by this table.
     pub(crate) fn select_attempt_target(
         &self,
-        cursor: &mut RuleCursor,
+        cursor: RuleCursor,
     ) -> RuleAttemptTargetSelection<'_> {
         let rule_index = cursor.next_rule_index;
         let Some(rule) = self.rules.get(rule_index) else {
@@ -275,9 +275,6 @@ impl RuleSet {
         };
 
         let next_index = rule_index.saturating_add(1);
-        *cursor = RuleCursor {
-            next_rule_index: self.rules.len(),
-        };
         let after_miss = if next_index < self.rules.len() {
             RuleCursorAfterMiss::Advanced(RuleCursor {
                 next_rule_index: next_index,
