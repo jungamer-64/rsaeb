@@ -75,10 +75,6 @@ pub trait TraceSnapshotPolicy {
     const TRACE_SNAPSHOT_BYTE_LIMIT: TraceSnapshotByteLimit;
 }
 
-/// Crate default resource policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DefaultPolicy;
-
 /// Const-generic parser policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StaticParsePolicy<
@@ -137,32 +133,6 @@ impl<T: TraceSnapshotPolicy> Default for TraceSnapshotPolicyWitness<T> {
     fn default() -> Self {
         Self::new()
     }
-}
-
-impl ParsePolicy for DefaultPolicy {
-    const SOURCE_BYTE_LIMIT: SourceByteLimit = SourceByteLimit::new(DEFAULT_BYTE_BUDGET);
-    const CODE_LINE_BYTE_LIMIT: CodeLineByteLimit = CodeLineByteLimit::new(DEFAULT_BYTE_BUDGET);
-    const PAYLOAD_BYTE_LIMIT: PayloadByteLimit = PayloadByteLimit::new(DEFAULT_BYTE_BUDGET);
-    const RULE_LIMIT: RuleLimit = RuleLimit::new(DEFAULT_COUNT_BUDGET);
-}
-
-impl RuntimeInputPolicy for DefaultPolicy {
-    const INPUT_BYTE_LIMIT: RuntimeInputByteLimit = RuntimeInputByteLimit::new(DEFAULT_BYTE_BUDGET);
-}
-
-impl ExecutionPolicy for DefaultPolicy {
-    const STEP_LIMIT: StepLimit = StepLimit::new(DEFAULT_COUNT_BUDGET);
-    const STATE_BYTE_LIMIT: RuntimeStateByteLimit = RuntimeStateByteLimit::new(DEFAULT_BYTE_BUDGET);
-    const RETURN_BYTE_LIMIT: ReturnByteLimit = ReturnByteLimit::new(DEFAULT_BYTE_BUDGET);
-}
-
-impl RuleAttemptPolicy for DefaultPolicy {
-    const RULE_ATTEMPT_LIMIT: RuleAttemptLimit = RuleAttemptLimit::new(DEFAULT_COUNT_BUDGET);
-}
-
-impl TraceSnapshotPolicy for DefaultPolicy {
-    const TRACE_SNAPSHOT_BYTE_LIMIT: TraceSnapshotByteLimit =
-        TraceSnapshotByteLimit::new(DEFAULT_BYTE_BUDGET);
 }
 
 impl<
