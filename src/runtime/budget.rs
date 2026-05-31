@@ -68,7 +68,7 @@ impl<E: ExecutionPolicy> RuntimeBudgetState<E> {
         attempted_len: RuntimeStateByteCount,
     ) -> Result<(), RunStepError> {
         let limit = E::STATE_BYTE_LIMIT;
-        if limit.accepts(attempted_len) {
+        if limit.admit(attempted_len).is_some() {
             return Ok(());
         }
 
@@ -86,7 +86,7 @@ impl<E: ExecutionPolicy> RuntimeBudgetState<E> {
         attempted_len: ReturnOutputByteCount,
     ) -> Result<(), RunStepError> {
         let limit = E::RETURN_BYTE_LIMIT;
-        if limit.accepts(attempted_len) {
+        if limit.admit(attempted_len).is_some() {
             return Ok(());
         }
 

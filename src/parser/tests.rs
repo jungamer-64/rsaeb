@@ -1,7 +1,7 @@
 use crate::error::{
     LeftModifierKind, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind,
 };
-use crate::inspect::{RuleAction, RuleAnchor, RuleCount, RuleRepeat};
+use crate::inspect::{RuleActionView, RuleAnchor, RuleCount, RuleRepeat};
 use crate::policy::DefaultParsePolicy;
 use crate::program::Program;
 use crate::test_support::{
@@ -244,10 +244,10 @@ fn spaced_source_and_compact_source_parse_to_the_same_rule_view() -> TestResult 
     ensure_eq!(spaced_rule.anchor(), RuleAnchor::Start)?;
     ensure_eq!(spaced_rule.lhs().materialize()?.as_slice(), b"a".as_slice())?;
     match spaced_rule.action() {
-        RuleAction::MoveEnd(payload) => {
+        RuleActionView::MoveEnd(payload) => {
             ensure_eq!(payload.materialize()?.as_slice(), b"b".as_slice())?;
         }
-        RuleAction::Replace(_) | RuleAction::MoveStart(_) | RuleAction::Return(_) => {
+        RuleActionView::Replace(_) | RuleActionView::MoveStart(_) | RuleActionView::Return(_) => {
             return Err(TestFailure::message("expected move-end action"));
         }
     }

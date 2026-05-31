@@ -12,7 +12,7 @@
 //! cannot allocate.
 //!
 //! ```
-//! use rsaeb::inspect::{RuleAction, RuleAnchor, RuleRepeat};
+//! use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
 //! use rsaeb::policy::DefaultParsePolicy;
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
@@ -36,12 +36,12 @@
 //!     return Err("unexpected left side".into());
 //! }
 //! match rule.action() {
-//!     RuleAction::Return(output) => {
+//!     RuleActionView::Return(output) => {
 //!         if output.materialize()?.as_slice() != b"done" {
 //!             return Err("unexpected return output".into());
 //!         }
 //!     }
-//!     RuleAction::Replace(_) | RuleAction::MoveStart(_) | RuleAction::MoveEnd(_) => {
+//!     RuleActionView::Replace(_) | RuleActionView::MoveStart(_) | RuleActionView::MoveEnd(_) => {
 //!         return Err("expected return action".into());
 //!     }
 //! }
@@ -159,7 +159,7 @@ impl RulePosition {
 /// Rule repeat policy.
 ///
 /// Repeat policy is per runtime invocation. A `(once)` rule can be used again
-/// by a later call to [`program::Program::execute`](crate::program::Program::execute).
+/// by a later call to [`program::Program::run`](crate::program::Program::run).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleRepeat {
     /// The rule may apply every time it matches.
@@ -321,27 +321,27 @@ impl fmt::Debug for PayloadView<'_> {
     }
 }
 
-/// Structured rule action carrying a caller-selected payload witness.
+/// Structured borrowed rule action.
 ///
 /// Each variant carries the right-side payload in the domain implied by the
 /// parsed action token. There is no boolean flag that can confuse ordinary
 /// replacement, movement, and return behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuleAction<Payload> {
+pub enum RuleActionView<'program> {
     /// Replace the matched bytes with the payload.
-    Replace(Payload),
+    Replace(PayloadView<'program>),
     /// Remove the matched bytes and insert the payload at the start.
-    MoveStart(Payload),
+    MoveStart(PayloadView<'program>),
     /// Remove the matched bytes and append the payload at the end.
-    MoveEnd(Payload),
+    MoveEnd(PayloadView<'program>),
     /// Stop execution and return the payload as output.
-    Return(Payload),
+    Return(PayloadView<'program>),
 }
 
-impl<Payload> RuleAction<Payload> {
+impl<'program> RuleActionView<'program> {
     /// Borrow the payload carried by this action.
     #[must_use]
-    pub const fn payload(&self) -> &Payload {
+    pub const fn payload(self) -> PayloadView<'program> {
         match self {
             Self::Replace(payload)
             | Self::MoveStart(payload)
@@ -427,7 +427,7 @@ impl<'program> RuleView<'program> {
 
     /// Right-side action.
     #[must_use]
-    pub fn action(self) -> RuleAction<PayloadView<'program>> {
+    pub fn action(self) -> RuleActionView<'program> {
         self.rule.action().view()
     }
 

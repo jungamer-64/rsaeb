@@ -22,7 +22,7 @@
 //!
 //! ```
 //! use rsaeb::error::RunAdmissionError;
-//! use rsaeb::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{StaticExecutionPolicy, StaticRuntimeInputPolicy};
 //!
 //! type Input8 = StaticRuntimeInputPolicy<8>;
@@ -31,7 +31,7 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let input = RuntimeInput::<Input8>::validate(RuntimeInputSource::from_bytes(b"abcd"))?;
 //!
-//! let Err(error) = AdmittedRun::<State3>::admit(input) else {
+//! let Err(error) = input.admit::<State3>() else {
 //!     return Err("expected run admission to reject the initial state".into());
 //! };
 //!
@@ -88,7 +88,7 @@ impl<'input> RuntimeInputSource<'input> {
     }
 }
 
-/// Runtime input admitted after validation.
+/// Runtime input after validation and before execution admission.
 ///
 /// Runtime input is a separate byte domain from program source. It may contain
 /// ASCII whitespace, control bytes, and reserved syntax bytes, but it cannot
@@ -143,7 +143,7 @@ impl<I: RuntimeInputPolicy> RuntimeInput<I> {
     pub fn validate(input: RuntimeInputSource<'_>) -> Result<Self, RuntimeInputError> {
         let byte_count = RuntimeInputByteCount::new(input.as_bytes().len());
         let limit = I::INPUT_BYTE_LIMIT;
-        if !limit.accepts(byte_count) {
+        if limit.admit(byte_count).is_none() {
             return Err(RuntimeInputError::input_limit(limit, byte_count));
         }
 
@@ -189,11 +189,24 @@ impl<I: RuntimeInputPolicy> RuntimeInput<I> {
     fn into_runtime_bytes(self) -> Vec<RuntimeByte> {
         self.bytes
     }
+
+    /// Admits this validated input for one execution under an execution policy.
+    ///
+    /// This consumes the validated input. A successful value represents one
+    /// admitted execution start; it is not a reusable input buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunAdmissionError` if the validated input would exceed the
+    /// initial runtime-state budget.
+    pub fn admit<E: ExecutionPolicy>(self) -> Result<AdmittedRun<E>, RunAdmissionError> {
+        AdmittedRun::from_runtime_input(self)
+    }
 }
 
 /// Run-start witness tying checked input to an execution policy.
 ///
-/// A seed is the only public value accepted by execution entrypoints. It
+/// This is the only public value accepted by execution entrypoints. It
 /// carries both the initial runtime-state bytes and the already checked budget
 /// state, so execution entrypoints do not need to reinterpret raw input or
 /// detached execution policy values.
@@ -206,19 +219,18 @@ pub struct AdmittedRun<E: ExecutionPolicy> {
 }
 
 impl<E: ExecutionPolicy> AdmittedRun<E> {
-    /// Admits validated runtime input for execution under an execution policy.
-    ///
-    /// This consumes the validated input. A successful seed represents one
-    /// admitted execution start; it is not a reusable input buffer.
+    /// Admits validated runtime input after the public `RuntimeInput` boundary.
     ///
     /// # Errors
     ///
     /// Returns `RunAdmissionError` if the validated input would exceed the
     /// initial runtime-state budget.
-    pub fn admit<I: RuntimeInputPolicy>(input: RuntimeInput<I>) -> Result<Self, RunAdmissionError> {
+    fn from_runtime_input<I: RuntimeInputPolicy>(
+        input: RuntimeInput<I>,
+    ) -> Result<Self, RunAdmissionError> {
         let initial_state_len = RuntimeStateByteCount::from_runtime_input_count(input.byte_count());
         let limit = E::STATE_BYTE_LIMIT;
-        if !limit.accepts(initial_state_len) {
+        if limit.admit(initial_state_len).is_none() {
             return Err(RunAdmissionError::initial_state_limit(
                 limit,
                 initial_state_len,
@@ -233,7 +245,7 @@ impl<E: ExecutionPolicy> AdmittedRun<E> {
         })
     }
 
-    /// Splits the admitted run seed into runtime state bytes and budget state.
+    /// Splits the admitted run into runtime state bytes and budget state.
     pub(crate) fn into_runtime_parts(self) -> (InitialStateBytes, RuntimeBudgetState<E>) {
         (self.initial_state, self.budget)
     }

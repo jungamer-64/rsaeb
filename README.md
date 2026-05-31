@@ -32,10 +32,10 @@ types live under their domain modules, such as `source`, `input`, `program`,
 ## Quick Start
 
 Parse source into an immutable `Program`, validate runtime input, admit it into
-a run seed under an execution policy, then run:
+one execution under an execution policy, then run:
 
 ```rust
-use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
 use rsaeb::program::{Program, RunOutcome};
 use rsaeb::source::ProgramSource;
@@ -43,8 +43,8 @@ use rsaeb::source::ProgramSource;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
-    let seed = RunSeed::<DefaultExecutionPolicy>::admit(input)?;
-    let result = program.execute::<_, rsaeb::execution::Complete>(seed)?;
+    let admitted = input.admit::<DefaultExecutionPolicy>()?;
+    let result = program.run(admitted)?;
 
     if !matches!(
         result.outcome(),
@@ -72,7 +72,7 @@ The normal host flow is:
 3. Parse with `Program::parse`.
 4. Label host input bytes with `RuntimeInputSource::from_bytes`.
 5. Validate with `RuntimeInput::validate`.
-6. Admit with `RunSeed::admit` under an `ExecutionPolicy`.
+6. Admit with `RuntimeInput::admit::<E>()` under an `ExecutionPolicy`.
 7. Execute through run-to-completion, stepwise execution, tracing, or
    rule-attempt stepping.
 
@@ -80,13 +80,13 @@ The crate intentionally contains no filesystem, process, argument parsing,
 environment access, stdout/stderr, or lossy display boundary. Hosts perform I/O
 outside the interpreter and pass already-loaded bytes into typed boundaries.
 
-`Program::execute::<E, Complete>` is the borrowed run-to-completion API.
-`Program::execute::<E, Stepwise>` is the borrowed stepwise API for hosts that
-keep a reusable parsed program. `Program::into_execute::<E, Stepwise>` is the
-explicit ownership-transfer stepwise API for cases where the execution session
-must own the parsed program. Rule-attempt execution is selected as
-`RuleAttempts<A>`, so the rule-attempt policy is fixed by the mode type instead
-of a separate runtime witness value.
+`Program::run(admitted)` is the run-to-completion API.
+`Program::start(admitted)` starts a borrowed stepwise run for hosts that keep a
+reusable parsed program. `Program::into_start(admitted)` transfers ownership of
+the parsed program into the stepwise session. Rule-attempt stepping is explicit:
+use `Program::start_rule_attempts::<A>(admitted)` or
+`Program::into_rule_attempts::<A>(admitted)` so the rule-attempt policy is fixed
+by the entrypoint type parameter instead of a runtime mode selector.
 
 The exact typestate names, transition variants, owned recovery methods, tracing
 events, and error variants are documented in rustdoc.

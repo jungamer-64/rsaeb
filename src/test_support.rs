@@ -11,7 +11,7 @@ use crate::error::{
     RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError, RunStartError, RunStepError,
     RuntimeInputError, TraceSnapshotRunError,
 };
-use crate::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+use crate::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
 use crate::limits::{ReturnByteLimit, RuntimeInputByteLimit, RuntimeStateByteLimit, StepLimit};
 use crate::policy::{
     DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy, ExecutionPolicy,
@@ -246,16 +246,16 @@ pub(crate) fn runtime_input<I: RuntimeInputPolicy, E: ExecutionPolicy>(
     RuntimeInput::<I>::validate(RuntimeInputSource::from_bytes(bytes))
 }
 
-/// Validates and admits test input into a run seed.
+/// Validates and admits test input into an execution witness.
 ///
 /// # Errors
 ///
 /// Returns `TestFailure` if validation or run admission fails.
-pub(crate) fn run_seed<I: RuntimeInputPolicy, E: ExecutionPolicy>(
+pub(crate) fn admitted_run<I: RuntimeInputPolicy, E: ExecutionPolicy>(
     bytes: &[u8],
     policy: TestRunPolicy<I, E>,
-) -> Result<RunSeed<E>, TestFailure> {
-    Ok(RunSeed::<E>::admit(runtime_input(bytes, policy)?)?)
+) -> Result<AdmittedRun<E>, TestFailure> {
+    Ok(runtime_input(bytes, policy)?.admit::<E>()?)
 }
 
 /// Parses source text with the default parser limits.

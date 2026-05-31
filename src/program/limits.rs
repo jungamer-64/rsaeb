@@ -80,11 +80,19 @@ impl SourceByteLimit {
         self.value
     }
 
-    /// Checks whether a measured source length exceeds this parser budget.
-    pub(crate) const fn accepts(self, attempted_len: SourceByteCount) -> bool {
-        attempted_len.get() <= self.value
+    /// Admits a measured source length into this parser budget.
+    pub(crate) const fn admit(self, attempted_len: SourceByteCount) -> Option<SourceBytePermit> {
+        if attempted_len.get() <= self.value {
+            Some(SourceBytePermit)
+        } else {
+            None
+        }
     }
 }
+
+/// Permit proving a source byte count fits its parser budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SourceBytePermit;
 
 /// Maximum executable code-line length accepted by [`program::Program::parse`](crate::program::Program::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -106,11 +114,22 @@ impl CodeLineByteLimit {
         self.value
     }
 
-    /// Checks whether a measured executable line length exceeds this parser budget.
-    pub(crate) const fn accepts(self, attempted_len: CodeLineByteCount) -> bool {
-        attempted_len.get() <= self.value
+    /// Admits a measured executable line length into this parser budget.
+    pub(crate) const fn admit(
+        self,
+        attempted_len: CodeLineByteCount,
+    ) -> Option<CodeLineBytePermit> {
+        if attempted_len.get() <= self.value {
+            Some(CodeLineBytePermit)
+        } else {
+            None
+        }
     }
 }
+
+/// Permit proving an executable code line fits its parser budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CodeLineBytePermit;
 
 /// Maximum parsed payload length accepted by [`program::Program::parse`](crate::program::Program::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -132,11 +151,19 @@ impl PayloadByteLimit {
         self.value
     }
 
-    /// Checks whether a measured payload length exceeds this parser budget.
-    pub(crate) const fn accepts(self, attempted_len: PayloadByteCount) -> bool {
-        attempted_len.get() <= self.value
+    /// Admits a measured payload length into this parser budget.
+    pub(crate) const fn admit(self, attempted_len: PayloadByteCount) -> Option<PayloadBytePermit> {
+        if attempted_len.get() <= self.value {
+            Some(PayloadBytePermit)
+        } else {
+            None
+        }
     }
 }
+
+/// Permit proving a parsed payload fits its parser budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PayloadBytePermit;
 
 /// Maximum executable rule count accepted by [`program::Program::parse`](crate::program::Program::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -158,11 +185,19 @@ impl RuleLimit {
         self.value
     }
 
-    /// Checks whether a parsed-rule count remains inside this parser budget.
-    pub(crate) const fn accepts(self, attempted_count: RuleCount) -> bool {
-        attempted_count.get() <= self.value
+    /// Admits a parsed-rule count into this parser budget.
+    pub(crate) const fn admit(self, attempted_count: RuleCount) -> Option<RuleCountPermit> {
+        if attempted_count.get() <= self.value {
+            Some(RuleCountPermit)
+        } else {
+            None
+        }
     }
 }
+
+/// Permit proving a parsed-rule count fits its parser budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuleCountPermit;
 
 /// Maximum number of committed execution steps allowed before the next matching rule fails.
 ///
@@ -245,11 +280,22 @@ impl RuntimeStateByteLimit {
         self.value
     }
 
-    /// Checks whether a runtime-state length remains inside this execution budget.
-    pub(crate) const fn accepts(self, attempted_len: RuntimeStateByteCount) -> bool {
-        attempted_len.get() <= self.value
+    /// Admits a runtime-state length into this execution budget.
+    pub(crate) const fn admit(
+        self,
+        attempted_len: RuntimeStateByteCount,
+    ) -> Option<RuntimeStateBytePermit> {
+        if attempted_len.get() <= self.value {
+            Some(RuntimeStateBytePermit)
+        } else {
+            None
+        }
     }
 }
+
+/// Permit proving a runtime-state length fits its execution budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeStateBytePermit;
 
 /// Maximum runtime input length accepted before owned byte classification.
 ///
@@ -275,11 +321,22 @@ impl RuntimeInputByteLimit {
         self.value
     }
 
-    /// Checks whether a runtime-input length remains inside this input budget.
-    pub(crate) const fn accepts(self, attempted_len: RuntimeInputByteCount) -> bool {
-        attempted_len.get() <= self.value
+    /// Admits a runtime-input length into this input budget.
+    pub(crate) const fn admit(
+        self,
+        attempted_len: RuntimeInputByteCount,
+    ) -> Option<RuntimeInputBytePermit> {
+        if attempted_len.get() <= self.value {
+            Some(RuntimeInputBytePermit)
+        } else {
+            None
+        }
     }
 }
+
+/// Permit proving a runtime-input length fits its input budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeInputBytePermit;
 
 /// Maximum `(return)` output length in bytes.
 ///
@@ -304,11 +361,22 @@ impl ReturnByteLimit {
         self.value
     }
 
-    /// Checks whether a return-output length remains inside this execution budget.
-    pub(crate) const fn accepts(self, attempted_len: ReturnOutputByteCount) -> bool {
-        attempted_len.get() <= self.value
+    /// Admits a return-output length into this execution budget.
+    pub(crate) const fn admit(
+        self,
+        attempted_len: ReturnOutputByteCount,
+    ) -> Option<ReturnOutputBytePermit> {
+        if attempted_len.get() <= self.value {
+            Some(ReturnOutputBytePermit)
+        } else {
+            None
+        }
     }
 }
+
+/// Permit proving a return-output length fits its execution budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReturnOutputBytePermit;
 
 /// Maximum state/output bytes materialized for one trace snapshot event.
 ///
@@ -333,11 +401,22 @@ impl TraceSnapshotByteLimit {
         self.value
     }
 
-    /// Checks whether one materialized trace event remains inside this snapshot budget.
-    pub(crate) const fn accepts(self, attempted_len: TraceSnapshotByteCount) -> bool {
-        attempted_len.get() <= self.value
+    /// Admits one materialized trace event into this snapshot budget.
+    pub(crate) const fn admit(
+        self,
+        attempted_len: TraceSnapshotByteCount,
+    ) -> Option<TraceSnapshotBytePermit> {
+        if attempted_len.get() <= self.value {
+            Some(TraceSnapshotBytePermit)
+        } else {
+            None
+        }
     }
 }
+
+/// Permit proving a trace-snapshot event fits its trace budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TraceSnapshotBytePermit;
 
 /// Number of committed execution steps.
 ///

@@ -2,13 +2,13 @@
 //!
 //! [`Program`] is the immutable parsed A=B rule table. Hosts parse typed
 //! [`ProgramSource`] under a [`ParsePolicy`], then
-//! run with an admitted [`AdmittedRun`](crate::input::AdmittedRun). Runtime budget and byte-count types live
-//! in [`limits`](crate::limits); runtime input lives in [`input`](crate::input).
+//! run with an admitted [`AdmittedRun`]. Runtime budget and byte-count types
+//! live in [`limits`](crate::limits); runtime input lives in [`input`](crate::input).
 //!
 //! A parsed program owns syntax and rule metadata only. Per-run `(once)` state,
 //! runtime bytes, completed-step counts, and execution budgets are created from
-//! an [`AdmittedRun`](crate::input::AdmittedRun) each time execution starts. This keeps parsed source reuse
-//! separate from mutable runtime progress.
+//! an [`AdmittedRun`] each time execution starts. This keeps parsed source
+//! reuse separate from mutable runtime progress.
 
 /// Parser limit value types and defaults.
 pub(crate) mod limits;
@@ -18,11 +18,16 @@ mod result;
 mod rule_set;
 use core::marker::PhantomData;
 
-use crate::error::ParseError;
+use crate::error::{ParseError, RunError, RunStartError, TraceSnapshotRunError, TracedRunError};
+use crate::execution::{
+    BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRuleAttemptSession, OwnedRunSession,
+};
+use crate::input::AdmittedRun;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::parser::parse_rules_impl;
-use crate::policy::ParsePolicy;
+use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy, TraceSnapshotPolicy};
 use crate::source::ProgramSource;
+use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
 pub(crate) use rule_set::{
     RuleAttemptTargetSelection, RuleCursor, RuleCursorAfterMiss, RuleScan, RuleTarget,
@@ -31,12 +36,20 @@ pub(crate) use rule_set::{RuleSet, RuleSetBuilder};
 
 pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeStateSnapshot};
 
+/// Trace callback failure split used while borrowed events become snapshots.
+enum SnapshotTraceCallbackError<E> {
+    /// Snapshot materialization failed before the user callback ran.
+    Snapshot(crate::error::TraceSnapshotError),
+    /// User callback rejected a materialized snapshot event.
+    Trace(E),
+}
+
 /// Parsed A=B rewrite program.
 ///
 /// A parsed program is immutable and reusable. Per-run `(once)` state lives in
 /// the runtime invocation, not in this value, so repeated runs with the same
 /// [`Program`] start from fresh rule availability. Running a program requires
-/// an already admitted [`AdmittedRun`](crate::input::AdmittedRun), so parsing
+/// an already admitted [`AdmittedRun`], so parsing
 /// never accepts raw runtime input or detached execution policy values.
 pub struct Program<P: ParsePolicy> {
     /// Immutable rule table plus parsed `(once)` metadata.
@@ -111,6 +124,133 @@ impl<P: ParsePolicy> Program<P> {
     /// Mints a private runtime scan over the immutable rule table.
     pub(crate) fn rule_scan(&self) -> RuleScan<'_> {
         self.rule_set.scan()
+    }
+
+    /// Runs this program to completion with borrowed program ownership.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` if execution setup fails, a matching rule exceeds
+    /// configured limits, or final state materialization fails.
+    pub fn run<E>(&self, admitted: AdmittedRun<E>) -> Result<RunResult, RunError>
+    where
+        E: ExecutionPolicy,
+    {
+        crate::execution::finish_borrowed_run(self, admitted)
+    }
+
+    /// Starts borrowed stepwise execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunStartError` if per-run rule state allocation fails.
+    pub fn start<E>(
+        &self,
+        admitted: AdmittedRun<E>,
+    ) -> Result<BorrowedRunSession<'_, P, E>, RunStartError>
+    where
+        E: ExecutionPolicy,
+    {
+        BorrowedRunSession::new(self, admitted)
+    }
+
+    /// Starts owned stepwise execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunStartError` if per-run rule state allocation fails.
+    pub fn into_start<E>(
+        self,
+        admitted: AdmittedRun<E>,
+    ) -> Result<OwnedRunSession<P, E>, RunStartError>
+    where
+        E: ExecutionPolicy,
+    {
+        OwnedRunSession::new(self, admitted)
+    }
+
+    /// Starts borrowed rule-attempt execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunStartError` if per-run rule state allocation fails.
+    pub fn start_rule_attempts<A>(
+        &self,
+        admitted: AdmittedRun<impl ExecutionPolicy>,
+    ) -> Result<BorrowedRuleAttemptSession<'_, P, impl ExecutionPolicy, A>, RunStartError>
+    where
+        A: RuleAttemptPolicy,
+    {
+        BorrowedRuleAttemptSession::new(self, admitted)
+    }
+
+    /// Starts owned rule-attempt execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunStartError` if per-run rule state allocation fails.
+    pub fn into_rule_attempts<A>(
+        self,
+        admitted: AdmittedRun<impl ExecutionPolicy>,
+    ) -> Result<OwnedRuleAttemptSession<P, impl ExecutionPolicy, A>, RunStartError>
+    where
+        A: RuleAttemptPolicy,
+    {
+        OwnedRuleAttemptSession::new(self, admitted)
+    }
+
+    /// Runs this program while emitting borrowed trace events.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TracedRunError::Run` for runtime failures and
+    /// `TracedRunError::Trace` for user callback failures.
+    pub fn trace_borrowed<'program, E, F, TraceError>(
+        &'program self,
+        admitted: AdmittedRun<E>,
+        trace: F,
+    ) -> Result<RunResult, TracedRunError<TraceError>>
+    where
+        E: ExecutionPolicy,
+        F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), TraceError>,
+    {
+        crate::execution::trace_borrowed_events(self, admitted, trace)
+    }
+
+    /// Runs this program while emitting materialized trace snapshot events.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TraceSnapshotRunError::Run` for runtime failures,
+    /// `TraceSnapshotRunError::Snapshot` for snapshot materialization failures,
+    /// and `TraceSnapshotRunError::Trace` for user callback failures.
+    pub fn trace_snapshots<'program, E, T, F, TraceError>(
+        &'program self,
+        admitted: AdmittedRun<E>,
+        mut trace: F,
+    ) -> Result<RunResult, TraceSnapshotRunError<TraceError>>
+    where
+        E: ExecutionPolicy,
+        T: TraceSnapshotPolicy,
+        F: FnMut(TraceSnapshotEvent<'program>) -> Result<(), TraceError>,
+    {
+        let result = self.trace_borrowed(admitted, |event| {
+            let snapshot = event
+                .to_snapshot::<T>()
+                .map_err(SnapshotTraceCallbackError::Snapshot)?;
+            trace(snapshot).map_err(SnapshotTraceCallbackError::Trace)
+        });
+
+        match result {
+            Ok(result) => Ok(result),
+            Err(TracedRunError::Run(error)) => Err(TraceSnapshotRunError::Run(error)),
+            Err(TracedRunError::Trace(SnapshotTraceCallbackError::Snapshot(error))) => {
+                Err(TraceSnapshotRunError::Snapshot(error))
+            }
+            Err(TracedRunError::Trace(SnapshotTraceCallbackError::Trace(error))) => {
+                Err(TraceSnapshotRunError::Trace(error))
+            }
+        }
     }
 
     /// Starts a rule-attempt cursor minted from this parsed rule table.

@@ -28,7 +28,7 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=aaaa"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
-//! let session = program.start(AdmittedRun::<TinyState>::admit(input)?)?;
+//! let session = program.start(input.admit::<TinyState>()?)?;
 //!
 //! let BorrowedStepTransition::Failed(failed) = session.step() else {
 //!     return Err("expected oversized rewrite to fail before commit".into());
@@ -77,6 +77,6 @@ pub use transition::{
     OwnedRuleAttemptReturnedRun, OwnedRuleAttemptStableRun, OwnedRuleAttemptTransition,
     OwnedStableRun, OwnedStepTransition,
 };
-pub use witness::{OwnedRulePayload, OwnedRuleWitness};
+pub use witness::{OwnedRuleAction, OwnedRulePayload, OwnedRuleWitness};
 
-pub(crate) use session::trace_borrowed_events;
+pub(crate) use session::{finish_borrowed_run, trace_borrowed_events};

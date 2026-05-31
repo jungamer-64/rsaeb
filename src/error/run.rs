@@ -13,7 +13,7 @@ use crate::limits::{
 /// Run-to-completion execution error.
 ///
 /// This is the composed error returned by run-to-completion
-/// [`Program::execute`](crate::program::Program::execute)
+/// [`Program::run`](crate::program::Program::run)
 /// and traced run APIs. It does not include input validation or run admission,
 /// because those happen before execution starts.
 #[derive(Debug, PartialEq, Eq)]

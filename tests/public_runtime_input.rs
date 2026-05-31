@@ -3,7 +3,7 @@
 mod support;
 
 use rsaeb::error::RunAdmissionError;
-use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 use rsaeb::limits::{RuntimeInputByteLimit, RuntimeStateByteLimit};
 use rsaeb::policy::{
     DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
@@ -51,9 +51,7 @@ fn runtime_input_moves_owned_bytes_into_execution() -> TestResult {
     ensure_matches(!input.is_empty(), "expected non-empty owned input")?;
 
     let program = parse_program("a=b")?;
-    let result = program.execute::<_, rsaeb::execution::Complete>(RunSeed::<
-        DefaultExecutionPolicy,
-    >::admit(input)?)?;
+    let result = program.run(input.admit::<DefaultExecutionPolicy>()?)?;
     expect_stable_bytes(&result, b"b=()# ")
 }
 
@@ -68,11 +66,8 @@ fn domain_default_policies_support_explicit_names() -> TestResult {
     let explicit_input =
         RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 
-    let explicit_result = explicit_program.execute::<_, rsaeb::execution::Complete>(RunSeed::<
-        DefaultExecutionPolicy,
-    >::admit(
-        explicit_input,
-    )?)?;
+    let explicit_result =
+        explicit_program.run(explicit_input.admit::<DefaultExecutionPolicy>()?)?;
 
     expect_stable_bytes(&explicit_result, b"b")
 }
@@ -88,9 +83,7 @@ fn runtime_input_validates_ascii_boundary() -> TestResult {
     let runtime_input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(
         RuntimeInputSource::from_bytes(&input),
     )?;
-    let result = program.execute::<_, rsaeb::execution::Complete>(RunSeed::<
-        DefaultExecutionPolicy,
-    >::admit(runtime_input)?)?;
+    let result = program.run(runtime_input.admit::<DefaultExecutionPolicy>()?)?;
     expect_stable_bytes(&result, input.as_slice())?;
     ensure_eq!(result.steps().get(), 0)?;
 
@@ -157,7 +150,7 @@ fn runtime_input_reports_public_limit_errors() -> TestResult {
 fn runtime_input_reports_public_admission_errors() -> TestResult {
     type SmallStateExecution = StaticExecutionPolicy<1, 1, 16_777_216>;
     let admitted_input = runtime_input(b"aa")?;
-    let Err(state_limit_error) = RunSeed::<SmallStateExecution>::admit(admitted_input) else {
+    let Err(state_limit_error) = admitted_input.admit::<SmallStateExecution>() else {
         return Err(TestFailure::message(
             "expected initial state admission limit error",
         ));

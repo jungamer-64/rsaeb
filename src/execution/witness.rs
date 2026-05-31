@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use crate::allocation::AllocationError;
 use crate::bytes::PayloadByteCount;
-use crate::inspect::{RuleAction, RuleAnchor, RulePosition, RuleRepeat, RuleView};
+use crate::inspect::{RuleActionView, RuleAnchor, RulePosition, RuleRepeat, RuleView};
 use crate::materialized::{MaterializedBytes, OwnedRuleWitnessPayloadDomain};
 use crate::source::SourceLineNumber;
 
@@ -39,6 +39,32 @@ impl OwnedRulePayload {
     }
 }
 
+/// Owned right-side action retained by owned execution rule witnesses.
+#[derive(Debug, PartialEq, Eq)]
+pub enum OwnedRuleAction {
+    /// Replace the matched bytes with the payload.
+    Replace(OwnedRulePayload),
+    /// Remove the matched bytes and insert the payload at the start.
+    MoveStart(OwnedRulePayload),
+    /// Remove the matched bytes and append the payload at the end.
+    MoveEnd(OwnedRulePayload),
+    /// Stop execution and return the payload as output.
+    Return(OwnedRulePayload),
+}
+
+impl OwnedRuleAction {
+    /// Borrow the payload carried by this action.
+    #[must_use]
+    pub const fn payload(&self) -> &OwnedRulePayload {
+        match self {
+            Self::Replace(payload)
+            | Self::MoveStart(payload)
+            | Self::MoveEnd(payload)
+            | Self::Return(payload) => payload,
+        }
+    }
+}
+
 /// Owned parsed-rule witness retained by owned execution transitions.
 #[derive(Debug, PartialEq, Eq)]
 pub struct OwnedRuleWitness {
@@ -53,7 +79,7 @@ pub struct OwnedRuleWitness {
     /// Materialized left-side match payload.
     lhs: OwnedRulePayload,
     /// Materialized right-side action payload.
-    action: RuleAction<OwnedRulePayload>,
+    action: OwnedRuleAction,
 }
 
 impl OwnedRuleWitness {
@@ -66,17 +92,17 @@ impl OwnedRuleWitness {
     pub(crate) fn from_rule_view(rule: RuleView<'_>) -> Result<Self, AllocationError> {
         let lhs = materialize_owned_rule_payload(rule.lhs())?;
         let action = match rule.action() {
-            RuleAction::Replace(payload) => {
-                RuleAction::Replace(materialize_owned_rule_payload(payload)?)
+            RuleActionView::Replace(payload) => {
+                OwnedRuleAction::Replace(materialize_owned_rule_payload(payload)?)
             }
-            RuleAction::MoveStart(payload) => {
-                RuleAction::MoveStart(materialize_owned_rule_payload(payload)?)
+            RuleActionView::MoveStart(payload) => {
+                OwnedRuleAction::MoveStart(materialize_owned_rule_payload(payload)?)
             }
-            RuleAction::MoveEnd(payload) => {
-                RuleAction::MoveEnd(materialize_owned_rule_payload(payload)?)
+            RuleActionView::MoveEnd(payload) => {
+                OwnedRuleAction::MoveEnd(materialize_owned_rule_payload(payload)?)
             }
-            RuleAction::Return(payload) => {
-                RuleAction::Return(materialize_owned_rule_payload(payload)?)
+            RuleActionView::Return(payload) => {
+                OwnedRuleAction::Return(materialize_owned_rule_payload(payload)?)
             }
         };
 
@@ -122,7 +148,7 @@ impl OwnedRuleWitness {
 
     /// Materialized right-side action payload.
     #[must_use]
-    pub const fn action(&self) -> &RuleAction<OwnedRulePayload> {
+    pub const fn action(&self) -> &OwnedRuleAction {
         &self.action
     }
 }

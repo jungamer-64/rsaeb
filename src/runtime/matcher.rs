@@ -69,6 +69,14 @@ struct MatchedRuleCandidate<'program, 'state> {
     state_match: StateMatch<'state>,
 }
 
+/// Domain result of comparing one rule's left side with the runtime state.
+enum RuleStateMatch<'program, 'state> {
+    /// Rule left side matched and carries the matched state span.
+    Matched(MatchedRuleCandidate<'program, 'state>),
+    /// Rule left side did not match the runtime state.
+    Mismatched,
+}
+
 /// Rule view after all runtime side effects have committed.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CommittedRule<'program> {
@@ -163,8 +171,9 @@ pub(crate) fn find_next_match<'program, 'state, 'once>(
     state: &'state State,
 ) -> RuleSearch<'program, 'state, 'once> {
     for rule in rules.iter() {
-        let Some(candidate) = matched_candidate_for_rule(rule, state) else {
-            continue;
+        let candidate = match match_rule_state(rule, state) {
+            RuleStateMatch::Matched(candidate) => candidate,
+            RuleStateMatch::Mismatched => continue,
         };
         let commit = match once_states.scanned_rule_readiness(rule) {
             ScannedRuleReadiness::Available(commit) => commit,
@@ -183,16 +192,20 @@ pub(crate) fn attempt_rule<'program, 'state, 'once>(
     state: &'state State,
 ) -> RuleAttempt<'program, 'state, 'once> {
     let rule = runtime_rule.rule();
-    let commit = match runtime_rule.readiness() {
-        OnceRuleReadiness::Available(commit) => commit,
+    let commit_seed = match runtime_rule.readiness() {
+        OnceRuleReadiness::Available(commit_seed) => commit_seed,
         OnceRuleReadiness::Consumed => {
             return RuleAttempt::Missed(RuleAttemptMiss::new(rule, RuleMissReason::OnceConsumed));
         }
     };
 
-    let Some(candidate) = matched_candidate_for_rule(rule, state) else {
-        return RuleAttempt::Missed(RuleAttemptMiss::new(rule, RuleMissReason::StateMismatch));
+    let candidate = match match_rule_state(rule, state) {
+        RuleStateMatch::Matched(candidate) => candidate,
+        RuleStateMatch::Mismatched => {
+            return RuleAttempt::Missed(RuleAttemptMiss::new(rule, RuleMissReason::StateMismatch));
+        }
     };
+    let commit = commit_seed.into_matched_commit();
 
     RuleAttempt::Matched(candidate.into_application(commit))
 }
@@ -205,13 +218,15 @@ pub(crate) fn runtime_rule_for_target<'program, 'once>(
     once_states.runtime_rule_mut(target.rule())
 }
 
-/// Builds a committed-rule candidate for a single parsed rule.
-fn matched_candidate_for_rule<'program, 'state>(
+/// Compares a single parsed rule with the current runtime state.
+fn match_rule_state<'program, 'state>(
     rule: &'program Rule,
     state: &'state State,
-) -> Option<MatchedRuleCandidate<'program, 'state>> {
-    let state_match = find_match(state, rule)?;
-    Some(MatchedRuleCandidate::new(rule, state_match))
+) -> RuleStateMatch<'program, 'state> {
+    match find_match(state, rule) {
+        Some(state_match) => RuleStateMatch::Matched(MatchedRuleCandidate::new(rule, state_match)),
+        None => RuleStateMatch::Mismatched,
+    }
 }
 
 /// Finds this rule's match span in the current state.

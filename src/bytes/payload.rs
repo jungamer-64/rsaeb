@@ -65,7 +65,7 @@ impl<'code> PayloadSyntax<'code> {
             line_number,
             payload_kind,
         };
-        if limit.accepts(syntax.byte_count()) {
+        if limit.admit(syntax.byte_count()).is_some() {
             return Ok(syntax);
         }
 

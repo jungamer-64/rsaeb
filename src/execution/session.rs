@@ -1,5 +1,5 @@
 use crate::error::{RunError, RunFinishError, RunStartError, TracedRunError};
-use crate::input::RunSeed;
+use crate::input::AdmittedRun;
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::program::{Program, ReturnOutput, RunResult};
@@ -23,10 +23,9 @@ use super::transition::{
 /// Stateful run session that borrows a reusable parsed program.
 ///
 /// This is the stepwise form returned by
-/// [`Program::execute`](crate::program::Program::execute) with
-/// [`Stepwise`](crate::execution::Stepwise). It consumes
-/// itself on every step so callers must handle the returned
-/// [`BorrowedStepTransition`] before they can continue.
+/// [`Program::start`](crate::program::Program::start). It consumes itself on
+/// every step so callers must handle the returned [`BorrowedStepTransition`]
+/// before they can continue.
 pub struct BorrowedRunSession<'program, P: ParsePolicy, E: ExecutionPolicy> {
     /// Internal session using the public borrowed program boundary.
     pub(super) session: Session<BorrowedProgram<'program, P>, E>,
@@ -35,9 +34,8 @@ pub struct BorrowedRunSession<'program, P: ParsePolicy, E: ExecutionPolicy> {
 /// Stateful run session that owns its parsed program.
 ///
 /// This is the stepwise form returned by
-/// [`Program::into_execute`](crate::program::Program::into_execute) with
-/// [`Stepwise`](crate::execution::Stepwise). It is useful when
-/// the session must move independently of a borrowed [`Program`]. Owned
+/// [`Program::into_start`](crate::program::Program::into_start). It is useful
+/// when the session must move independently of a borrowed [`Program`]. Owned
 /// terminal and failed states retain a way to recover the parsed program
 /// instead of leaking ownership through a parallel API.
 pub struct OwnedRunSession<P: ParsePolicy, E: ExecutionPolicy> {
@@ -205,9 +203,9 @@ enum RuleAttemptStepParts<Continuation, Terminal, RuleWitness, StepError> {
 /// exceed configured limits.
 pub(crate) fn finish_borrowed_run<P: ParsePolicy, E: ExecutionPolicy>(
     program: &Program<P>,
-    seed: RunSeed<E>,
+    admitted: AdmittedRun<E>,
 ) -> Result<RunResult, RunError> {
-    Session::new(BorrowedProgram { program }, seed)
+    Session::new(BorrowedProgram { program }, admitted)
         .map_err(RunError::from)?
         .finish()
         .map_err(RunError::from)
@@ -221,7 +219,7 @@ pub(crate) fn finish_borrowed_run<P: ParsePolicy, E: ExecutionPolicy>(
 /// `TracedRunError::Trace` for user callback failures.
 pub(crate) fn trace_borrowed_events<'program, P, E, F, TraceError>(
     program: &'program Program<P>,
-    seed: RunSeed<E>,
+    admitted: AdmittedRun<E>,
     trace: F,
 ) -> Result<RunResult, TracedRunError<TraceError>>
 where
@@ -229,7 +227,7 @@ where
     E: ExecutionPolicy,
     F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), TraceError>,
 {
-    Session::new(BorrowedProgram { program }, seed)
+    Session::new(BorrowedProgram { program }, admitted)
         .map_err(RunError::from)
         .map_err(TracedRunError::Run)?
         .trace_borrowed_events(trace)
@@ -237,17 +235,17 @@ where
 
 impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedRunSession<'program, P, E> {
     /// Starts a new borrowed run session for a parsed program and admitted run
-    /// seed.
+    /// witness.
     ///
     /// # Errors
     ///
     /// Returns `RunStartError` if allocating per-run rule state fails.
     pub(crate) fn new(
         program: &'program Program<P>,
-        seed: RunSeed<E>,
+        admitted: AdmittedRun<E>,
     ) -> Result<Self, RunStartError> {
         Ok(Self {
-            session: Session::new(BorrowedProgram { program }, seed)?,
+            session: Session::new(BorrowedProgram { program }, admitted)?,
         })
     }
 
@@ -298,17 +296,17 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedRunSession<'program, 
 impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
     BorrowedRuleAttemptSession<'program, P, E, A>
 {
-    /// Starts a new borrowed rule-attempt run session for a parsed program and admitted run seed.
+    /// Starts a new borrowed rule-attempt run session for a parsed program and admitted run witness.
     ///
     /// # Errors
     ///
     /// Returns `RunStartError` if allocating per-run rule state fails.
     pub(crate) fn new(
         program: &'program Program<P>,
-        seed: RunSeed<E>,
+        admitted: AdmittedRun<E>,
     ) -> Result<Self, RunStartError> {
         Ok(Self {
-            session: AttemptSession::new(BorrowedProgram { program }, seed)?,
+            session: AttemptSession::new(BorrowedProgram { program }, admitted)?,
         })
     }
 
@@ -353,14 +351,17 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
 }
 
 impl<P: ParsePolicy, E: ExecutionPolicy> OwnedRunSession<P, E> {
-    /// Starts a new owned run session for a parsed program and admitted run seed.
+    /// Starts a new owned run session for a parsed program and admitted run witness.
     ///
     /// # Errors
     ///
     /// Returns `RunStartError` if allocating per-run rule state fails.
-    pub(crate) fn new(program: Program<P>, seed: RunSeed<E>) -> Result<Self, RunStartError> {
+    pub(crate) fn new(
+        program: Program<P>,
+        admitted: AdmittedRun<E>,
+    ) -> Result<Self, RunStartError> {
         Ok(Self {
-            session: Session::new(OwnedProgram { program }, seed)?,
+            session: Session::new(OwnedProgram { program }, admitted)?,
         })
     }
 
@@ -417,14 +418,17 @@ impl<P: ParsePolicy, E: ExecutionPolicy> OwnedRunSession<P, E> {
 }
 
 impl<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> OwnedRuleAttemptSession<P, E, A> {
-    /// Starts a new owned rule-attempt run session for a parsed program and admitted run seed.
+    /// Starts a new owned rule-attempt run session for a parsed program and admitted run witness.
     ///
     /// # Errors
     ///
     /// Returns `RunStartError` if allocating per-run rule state fails.
-    pub(crate) fn new(program: Program<P>, seed: RunSeed<E>) -> Result<Self, RunStartError> {
+    pub(crate) fn new(
+        program: Program<P>,
+        admitted: AdmittedRun<E>,
+    ) -> Result<Self, RunStartError> {
         Ok(Self {
-            session: AttemptSession::new(OwnedProgram { program }, seed)?,
+            session: AttemptSession::new(OwnedProgram { program }, admitted)?,
         })
     }
 

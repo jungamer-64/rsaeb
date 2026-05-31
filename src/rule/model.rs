@@ -1,6 +1,6 @@
 use crate::bytes::Payload;
 use crate::inspect::{
-    OnceRuleCount, PayloadView, RuleAction, RuleAnchor, RulePosition, RuleRepeat,
+    OnceRuleCount, PayloadView, RuleActionView, RuleAnchor, RulePosition, RuleRepeat,
 };
 use crate::source::SourceLineNumber;
 
@@ -15,10 +15,10 @@ pub(crate) enum ParsedRuleAction {
 
 impl ParsedRuleAction {
     /// Borrows the runtime state as a public byte view.
-    pub(crate) fn view(&self) -> RuleAction<PayloadView<'_>> {
+    pub(crate) fn view(&self) -> RuleActionView<'_> {
         match self {
             Self::Rewrite(action) => action.view(),
-            Self::Return(payload) => RuleAction::Return(PayloadView::new(payload)),
+            Self::Return(payload) => RuleActionView::Return(PayloadView::new(payload)),
         }
     }
 
@@ -44,11 +44,11 @@ pub(crate) enum RewriteAction {
 
 impl RewriteAction {
     /// Borrows the runtime state as a public byte view.
-    pub(crate) fn view(&self) -> RuleAction<PayloadView<'_>> {
+    pub(crate) fn view(&self) -> RuleActionView<'_> {
         match self {
-            Self::Replace(payload) => RuleAction::Replace(PayloadView::new(payload)),
-            Self::MoveStart(payload) => RuleAction::MoveStart(PayloadView::new(payload)),
-            Self::MoveEnd(payload) => RuleAction::MoveEnd(PayloadView::new(payload)),
+            Self::Replace(payload) => RuleActionView::Replace(PayloadView::new(payload)),
+            Self::MoveStart(payload) => RuleActionView::MoveStart(PayloadView::new(payload)),
+            Self::MoveEnd(payload) => RuleActionView::MoveEnd(PayloadView::new(payload)),
         }
     }
 
@@ -198,6 +198,11 @@ impl OnceRuleSlot {
         Self {
             zero_based: count.get(),
         }
+    }
+
+    /// Returns the table index assigned by the parser.
+    pub(crate) const fn index(self) -> usize {
+        self.zero_based
     }
 }
 

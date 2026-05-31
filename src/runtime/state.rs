@@ -21,7 +21,7 @@ pub(crate) struct State {
 }
 
 impl State {
-    /// Initializes runtime state with bytes admitted by `RunSeed`.
+    /// Initializes runtime state with bytes admitted by `AdmittedRun`.
     pub(crate) fn from_input(input: InitialStateBytes) -> Self {
         Self {
             bytes: input.into_runtime_bytes(),
@@ -76,12 +76,10 @@ impl State {
                     StateIndex::ending_match_start(self.byte_count(), needle.byte_count())?;
 
                 for position in StateSearchRange::from_start_to(last_start) {
-                    let first_byte_matches = self
-                        .bytes
-                        .get(position.get())
-                        .copied()
-                        .and_then(RuntimeByte::program_byte)
-                        == Some(needle.first_byte());
+                    let first_byte_matches =
+                        self.bytes.get(position.get()).copied().is_some_and(|byte| {
+                            byte.projection().matches_program_byte(needle.first_byte())
+                        });
                     if !first_byte_matches {
                         continue;
                     }
@@ -105,7 +103,7 @@ impl State {
         let matches = state_match
             .matched_bytes()
             .zip(needle.program_bytes().iter().copied())
-            .all(|(actual, expected)| actual.program_byte() == Some(expected));
+            .all(|(actual, expected)| actual.projection().matches_program_byte(expected));
         matches.then_some(state_match)
     }
 

@@ -8,7 +8,7 @@ use rsaeb::error::{
     ParseErrorKind, ParseLimitError, RunAdmissionError, RunError, RunFinishError, RunStepError,
     RuntimeStateLimitError, StepLimitError,
 };
-use rsaeb::input::RunSeed;
+use rsaeb::input::AdmittedRun;
 use rsaeb::limits::{
     CodeLineByteLimit, PayloadByteLimit, ReturnByteLimit, RuleLimit, RuntimeStateByteLimit,
     SourceByteLimit, StepLimit,
@@ -129,8 +129,7 @@ fn ensure_step_limit_run<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolic
     limits: TestRunPolicy<I, E>,
     message: &'static str,
 ) -> TestResult {
-    let result = parse_program(program_source)?
-        .execute::<_, rsaeb::execution::Complete>(runtime_input(b"a", limits)?);
+    let result = parse_program(program_source)?.run(runtime_input(b"a", limits)?);
     let error = expect_step_limit(expect_run_error(result)?)?;
     ensure_step_limit_details(&error, message)
 }
@@ -198,8 +197,7 @@ fn ensure_parse_limit_error<P: ParsePolicy>(case: ParseLimitCase) -> TestResult 
 fn ensure_run_limit<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolicy>(
     case: RunLimitCase<I, E>,
 ) -> TestResult {
-    let result = parse_program(case.program_source)?
-        .execute::<_, rsaeb::execution::Complete>(runtime_input(case.input, case.limits)?);
+    let result = parse_program(case.program_source)?.run(runtime_input(case.input, case.limits)?);
     let error = expect_run_error(result)?;
     ensure_matches(
         match (error, case.expected) {
@@ -247,8 +245,8 @@ fn ensure_display_state_limit(error: &RuntimeStateLimitError) -> TestResult {
 fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolicy>(
     bytes: &[u8],
     limits: TestRunPolicy<I, E>,
-) -> Result<RunSeed<E>, TestFailure> {
-    runtime_support::run_seed(bytes, limits)
+) -> Result<AdmittedRun<E>, TestFailure> {
+    runtime_support::admitted_run(bytes, limits)
 }
 
 /// # Errors
@@ -409,8 +407,7 @@ fn limits_display_output_names_public_contexts() -> TestResult {
     )?;
 
     let rewrite_limits = DefaultInputRunPolicy::<1, 2, 10>::new();
-    let rewrite_error = parse_program("=a")?
-        .execute::<_, rsaeb::execution::Complete>(runtime_input(b"aa", rewrite_limits)?);
+    let rewrite_error = parse_program("=a")?.run(runtime_input(b"aa", rewrite_limits)?);
     let rewrite_error = expect_state_limit(expect_run_error(rewrite_error)?)?;
     ensure_display_state_limit(&rewrite_error)?;
     ensure_eq!(
@@ -419,8 +416,7 @@ fn limits_display_output_names_public_contexts() -> TestResult {
     )?;
 
     let step_limits = DefaultInputRunPolicy::<0, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
-    let step_error = parse_program("a=b")?
-        .execute::<_, rsaeb::execution::Complete>(runtime_input(b"a", step_limits)?);
+    let step_error = parse_program("a=b")?.run(runtime_input(b"a", step_limits)?);
     let step_error = expect_step_limit(expect_run_error(step_error)?)?;
     ensure_eq!(
         step_error.to_string(),

@@ -5,7 +5,7 @@
 
 use core::marker::PhantomData;
 
-use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+use rsaeb::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
 use rsaeb::limits::{ReturnByteLimit, RuntimeInputByteLimit, RuntimeStateByteLimit, StepLimit};
 use rsaeb::policy::{
     DefaultExecutionPolicy, DefaultRuntimeInputPolicy, ExecutionPolicy, RuntimeInputPolicy,
@@ -84,15 +84,15 @@ impl<I: RuntimeInputPolicy, E: ExecutionPolicy> TestRunPolicy<I, E> {
     }
 }
 
-/// Validates and admits test input into a run seed.
+/// Validates and admits test input into an execution witness.
 ///
 /// # Errors
 ///
 /// Returns `TestFailure` if validation or run admission fails.
-pub fn run_seed<I: RuntimeInputPolicy, E: ExecutionPolicy>(
+pub fn admitted_run<I: RuntimeInputPolicy, E: ExecutionPolicy>(
     bytes: &[u8],
     _policy: TestRunPolicy<I, E>,
-) -> Result<RunSeed<E>, TestFailure> {
+) -> Result<AdmittedRun<E>, TestFailure> {
     let input = RuntimeInput::<I>::validate(RuntimeInputSource::from_bytes(bytes))?;
-    Ok(RunSeed::<E>::admit(input)?)
+    Ok(input.admit::<E>()?)
 }

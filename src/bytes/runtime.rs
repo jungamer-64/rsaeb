@@ -114,6 +114,15 @@ pub(crate) enum RuntimeByte {
     Opaque(NonProgramAsciiByte),
 }
 
+/// Runtime byte projection used by executable payload matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeByteProjection {
+    /// Byte can be matched by program payload syntax.
+    Program(ProgramByte),
+    /// Byte is visible to runtime output but opaque to payload matching.
+    Opaque,
+}
+
 impl RuntimeByte {
     /// Lifts a program payload byte into the runtime-state domain.
     pub(crate) const fn from_program(byte: ProgramByte) -> Self {
@@ -136,11 +145,21 @@ impl RuntimeByte {
         }
     }
 
-    /// Returns the executable payload byte when this state byte is matchable.
-    pub(crate) const fn program_byte(self) -> Option<ProgramByte> {
+    /// Projects this runtime byte into the program-matching domain.
+    pub(crate) const fn projection(self) -> RuntimeByteProjection {
         match self {
-            Self::ProgramConstructible(byte) => Some(byte),
-            Self::Opaque(_) => None,
+            Self::ProgramConstructible(byte) => RuntimeByteProjection::Program(byte),
+            Self::Opaque(_) => RuntimeByteProjection::Opaque,
+        }
+    }
+}
+
+impl RuntimeByteProjection {
+    /// Returns whether this projected byte is the supplied program byte.
+    pub(crate) const fn matches_program_byte(self, expected: ProgramByte) -> bool {
+        match self {
+            Self::Program(byte) => byte.get() == expected.get(),
+            Self::Opaque => false,
         }
     }
 }

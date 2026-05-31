@@ -105,7 +105,7 @@ impl RuleInsertionPermit {
         })?;
         let attempted_rule_count = RuleCount::new(attempted_rule_count);
 
-        if !limit.accepts(attempted_rule_count) {
+        if limit.admit(attempted_rule_count).is_none() {
             return Err(ParseError::at_line(
                 line_number,
                 ParseErrorKind::Limit(ParseLimitError::rules(limit, attempted_rule_count)),

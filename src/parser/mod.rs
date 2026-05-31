@@ -14,7 +14,7 @@ use crate::policy::ParsePolicy;
 use crate::program::{RuleSet, RuleSetBuilder};
 use crate::source::{ProgramSource, SourceLineNumber};
 
-use line::RawSourceLine;
+use line::{CompactCodeLineKind, RawSourceLine};
 use location::source_line_number;
 
 /// Parses source bytes into a typed program.
@@ -36,8 +36,9 @@ pub(crate) fn parse_rules_impl<P: ParsePolicy>(
             .into_code_line()?
             .into_compact_line()?;
 
-        let Some(non_empty_code) = compact_code.into_non_empty() else {
-            continue;
+        let non_empty_code = match compact_code.classify() {
+            CompactCodeLineKind::Blank => continue,
+            CompactCodeLineKind::Rule(line) => line,
         };
 
         let parsed_rule = non_empty_code
@@ -58,12 +59,12 @@ pub(crate) fn parse_rules_impl<P: ParsePolicy>(
 fn ensure_source_within_limit<P: ParsePolicy>(source: ProgramSource<'_>) -> Result<(), ParseError> {
     let attempted_len = SourceByteCount::new(source.as_bytes().len());
     let limit = P::SOURCE_BYTE_LIMIT;
-    if limit.accepts(attempted_len) {
-        return Ok(());
+    if limit.admit(attempted_len).is_some() {
+        Ok(())
+    } else {
+        Err(ParseError::at_line(
+            SourceLineNumber::ONE,
+            ParseErrorKind::Limit(ParseLimitError::source(limit, attempted_len)),
+        ))
     }
-
-    Err(ParseError::at_line(
-        SourceLineNumber::ONE,
-        ParseErrorKind::Limit(ParseLimitError::source(limit, attempted_len)),
-    ))
 }

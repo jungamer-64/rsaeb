@@ -12,8 +12,8 @@
 //! checked per event.
 //!
 //! ```
-//! use rsaeb::trace::{SnapshotEvents, TraceSnapshotEffect, TraceSnapshotEvent};
-//! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
 //!     DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
 //!     StaticTraceSnapshotPolicy,
@@ -27,10 +27,10 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b\nb=(return)ok"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
-//! let seed = RunSeed::<TenSteps>::admit(input)?;
+//! let admitted = input.admit::<TenSteps>()?;
 //! let mut retained = Vec::new();
 //!
-//! program.trace::<TenSteps, SnapshotEvents<SnapshotBytes>, _, _>(seed, |event| {
+//! program.trace_snapshots::<TenSteps, SnapshotBytes, _, _>(admitted, |event| {
 //!         match event {
 //!             TraceSnapshotEvent::Initial { state } => retained.push(state.into_raw_bytes()),
 //!             TraceSnapshotEvent::Step {
@@ -55,14 +55,13 @@
 //! ```
 //! use core::convert::Infallible;
 //! use rsaeb::error::{TraceSnapshotError, TraceSnapshotRunError};
-//! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
 //!     DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
 //!     StaticTraceSnapshotPolicy,
 //! };
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
-//! use rsaeb::trace::SnapshotEvents;
 //!
 //! type TenSteps = StaticExecutionPolicy<10, 16_777_216, 16_777_216>;
 //! type EmptySnapshot = StaticTraceSnapshotPolicy<0>;
@@ -70,10 +69,10 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
-//! let seed = RunSeed::<TenSteps>::admit(input)?;
+//! let admitted = input.admit::<TenSteps>()?;
 //!
-//! let result = program.trace::<TenSteps, SnapshotEvents<EmptySnapshot>, _, _>(
-//!     seed,
+//! let result = program.trace_snapshots::<TenSteps, EmptySnapshot, _, _>(
+//!     admitted,
 //!     |_event| Ok::<(), Infallible>(()),
 //! );
 //!
@@ -90,7 +89,6 @@
 //! # }
 //! ```
 
-use alloc::vec::Vec;
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
@@ -100,6 +98,7 @@ use crate::inspect::RuleView;
 use crate::limits::{StepCount, TraceSnapshotByteLimit};
 use crate::policy::TraceSnapshotPolicy;
 use crate::program::{ReturnOutput, ReturnOutputView, RuntimeStateSnapshot};
+use alloc::vec::Vec;
 
 /// Borrowed view of runtime-state bytes.
 ///
@@ -177,39 +176,43 @@ impl core::fmt::Debug for RuntimeStateView<'_> {
     }
 }
 
-/// Trace effect emitted by step trace events.
-///
-/// `State` and `Output` decide whether the effect borrows runtime bytes or owns
-/// materialized snapshots. The effect semantics are otherwise single-sourced:
-/// a step either continues with a runtime state or returns an output payload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TraceEffect<State, Output> {
-    /// The step produced the next runtime state and execution may continue.
-    Continue {
-        /// Runtime state after a non-terminal applied step.
-        state: State,
-    },
-    /// The step executed `(return)` and produced final output bytes.
-    Return {
-        /// `(return)` output bytes.
-        output: Output,
-    },
-}
-
 /// Borrowed trace effect emitted by borrowed tracing APIs.
 ///
 /// Borrowed effects avoid allocation by borrowing the post-step state or parsed
 /// return payload for the duration of the callback.
-pub type BorrowedTraceEffect<'program, 'run> =
-    TraceEffect<RuntimeStateView<'run>, ReturnOutputView<'program>>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BorrowedTraceEffect<'program, 'run> {
+    /// The step produced the next runtime state and execution may continue.
+    Continue {
+        /// Runtime state after a non-terminal applied step.
+        state: RuntimeStateView<'run>,
+    },
+    /// The step executed `(return)` and produced final output bytes.
+    Return {
+        /// `(return)` output bytes.
+        output: ReturnOutputView<'program>,
+    },
+}
 
 /// Owned trace effect emitted by trace snapshot APIs.
 ///
 /// Continuation steps materialize the post-step runtime state. Return steps
 /// materialize the final `(return)` output instead of a state.
-pub type TraceSnapshotEffect = TraceEffect<RuntimeStateSnapshot, ReturnOutput>;
+#[derive(Debug, PartialEq, Eq)]
+pub enum TraceSnapshotEffect {
+    /// The step produced the next runtime state and execution may continue.
+    Continue {
+        /// Runtime state after a non-terminal applied step.
+        state: RuntimeStateSnapshot,
+    },
+    /// The step executed `(return)` and produced final output bytes.
+    Return {
+        /// `(return)` output bytes.
+        output: ReturnOutput,
+    },
+}
 
-impl TraceEffect<RuntimeStateView<'_>, ReturnOutputView<'_>> {
+impl BorrowedTraceEffect<'_, '_> {
     /// Byte length that would be materialized by snapshot tracing.
     #[must_use]
     pub fn byte_count(self) -> TraceSnapshotByteCount {
@@ -253,30 +256,6 @@ impl TraceEffect<RuntimeStateView<'_>, ReturnOutputView<'_>> {
     }
 }
 
-/// Trace event emitted by tracing APIs.
-///
-/// `State` and `Effect` decide whether event bytes are borrowed for the
-/// callback or materialized into owned snapshots. Step events always borrow the
-/// structured rule view from `Program`, so they cannot outlive the parsed
-/// program they describe.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TraceEvent<'program, State, Effect> {
-    /// Initial runtime state before any execution step.
-    Initial {
-        /// Initial runtime state.
-        state: State,
-    },
-    /// One applied rule.
-    Step {
-        /// One-based applied step count.
-        step: StepCount,
-        /// Structured view of the applied rule.
-        rule: RuleView<'program>,
-        /// Structured result of the execution step.
-        effect: Effect,
-    },
-}
-
 /// Trace event emitted by borrowed tracing APIs.
 ///
 /// The event borrows runtime bytes only for the duration of the callback. This
@@ -285,8 +264,23 @@ pub enum TraceEvent<'program, State, Effect> {
 /// [`TraceSnapshotByteLimit`]. The event also borrows parsed rule views from
 /// the parsed program, so it cannot become a retained log record without an
 /// explicit copy.
-pub type BorrowedTraceEvent<'program, 'run> =
-    TraceEvent<'program, RuntimeStateView<'run>, BorrowedTraceEffect<'program, 'run>>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BorrowedTraceEvent<'program, 'run> {
+    /// Initial runtime state before any execution step.
+    Initial {
+        /// Initial runtime state.
+        state: RuntimeStateView<'run>,
+    },
+    /// One applied rule.
+    Step {
+        /// One-based applied step count.
+        step: StepCount,
+        /// Structured view of the applied rule.
+        rule: RuleView<'program>,
+        /// Structured result of the execution step.
+        effect: BorrowedTraceEffect<'program, 'run>,
+    },
+}
 
 /// Trace event emitted by trace snapshot APIs.
 ///
@@ -295,10 +289,25 @@ pub type BorrowedTraceEvent<'program, 'run> =
 /// forgetting to inspect a boolean flag. Parsed rule views still borrow from
 /// the program so callers retain bytes, not an independent copy of rule
 /// metadata.
-pub type TraceSnapshotEvent<'program> =
-    TraceEvent<'program, RuntimeStateSnapshot, TraceSnapshotEffect>;
+#[derive(Debug, PartialEq, Eq)]
+pub enum TraceSnapshotEvent<'program> {
+    /// Initial runtime state before any execution step.
+    Initial {
+        /// Initial runtime state.
+        state: RuntimeStateSnapshot,
+    },
+    /// One applied rule.
+    Step {
+        /// One-based applied step count.
+        step: StepCount,
+        /// Structured view of the applied rule.
+        rule: RuleView<'program>,
+        /// Structured result of the execution step.
+        effect: TraceSnapshotEffect,
+    },
+}
 
-impl<'program> TraceEvent<'program, RuntimeStateView<'_>, BorrowedTraceEffect<'program, '_>> {
+impl<'program> BorrowedTraceEvent<'program, '_> {
     /// Byte length that would be materialized by snapshot tracing.
     #[must_use]
     pub fn byte_count(self) -> TraceSnapshotByteCount {
@@ -356,7 +365,7 @@ fn ensure_trace_len(
     len: TraceSnapshotByteCount,
     limit: TraceSnapshotByteLimit,
 ) -> Result<(), TraceSnapshotError> {
-    if !limit.accepts(len) {
+    if limit.admit(len).is_none() {
         return Err(TraceSnapshotError::Limit {
             limit,
             attempted_len: len,

@@ -8,7 +8,7 @@ use rsaeb::error::{
     ParseErrorKind, ParseErrorLocation, ParseRepresentationError, PayloadKind, RunError,
     RunFinishError, RunStepError,
 };
-use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+use rsaeb::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
 use rsaeb::policy::DefaultRuntimeInputPolicy;
 use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
@@ -33,8 +33,8 @@ fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFail
 fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: rsaeb::policy::ExecutionPolicy>(
     bytes: &[u8],
     limits: TestRunPolicy<I, E>,
-) -> Result<RunSeed<E>, TestFailure> {
-    runtime_support::run_seed(bytes, limits)
+) -> Result<AdmittedRun<E>, TestFailure> {
+    runtime_support::admitted_run(bytes, limits)
 }
 
 /// # Errors
@@ -122,8 +122,7 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
     )?;
 
     let return_limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, 1>::new();
-    let return_error = parse_program("a=(return)ok")?
-        .execute::<_, rsaeb::execution::Complete>(runtime_input(b"a", return_limits)?);
+    let return_error = parse_program("a=(return)ok")?.run(runtime_input(b"a", return_limits)?);
     ensure_matches(
         matches!(
             expect_run_error(return_error)?,

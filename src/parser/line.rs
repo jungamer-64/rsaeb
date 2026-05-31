@@ -47,7 +47,7 @@ impl<'source> RawSourceLine<'source> {
             .unwrap_or(self.bytes);
 
         let attempted_len = CodeLineByteCount::new(code_bytes.len());
-        if !self.code_line_limit.accepts(attempted_len) {
+        if self.code_line_limit.admit(attempted_len).is_none() {
             return Err(ParseError::at_line(
                 self.line_number,
                 ParseErrorKind::Limit(ParseLimitError::code_line(
@@ -176,13 +176,26 @@ pub(super) struct CompactCodeLine {
 }
 
 impl CompactCodeLine {
-    /// Discards blank/comment-only lines before rule parsing.
-    pub(super) fn into_non_empty(self) -> Option<NonEmptyCompactCodeLine> {
-        (!self.bytes.is_empty()).then_some(NonEmptyCompactCodeLine {
-            line_number: self.line_number,
-            bytes: self.bytes,
-        })
+    /// Classifies a compact source line before rule parsing.
+    pub(super) fn classify(self) -> CompactCodeLineKind {
+        if self.bytes.is_empty() {
+            CompactCodeLineKind::Blank
+        } else {
+            CompactCodeLineKind::Rule(NonEmptyCompactCodeLine {
+                line_number: self.line_number,
+                bytes: self.bytes,
+            })
+        }
     }
+}
+
+/// Domain classification after code-line compaction.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum CompactCodeLineKind {
+    /// Source line has no executable rule bytes.
+    Blank,
+    /// Source line contains executable rule syntax.
+    Rule(NonEmptyCompactCodeLine),
 }
 
 /// Internal non empty compact code line.

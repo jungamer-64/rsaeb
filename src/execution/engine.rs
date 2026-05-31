@@ -2,7 +2,7 @@ use crate::error::{
     OwnedRuleAttemptStepError, OwnedRunStepError, RuleAttemptStepError, RunError, RunFinishError,
     RunStartError, RunStepError, TracedRunError,
 };
-use crate::input::RunSeed;
+use crate::input::AdmittedRun;
 use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
@@ -247,8 +247,11 @@ impl<E: ExecutionPolicy> RunCore<E> {
     /// # Errors
     ///
     /// Returns `RunStartError` if per-run rule state allocation fails.
-    fn new<P: ParsePolicy>(program: &Program<P>, seed: RunSeed<E>) -> Result<Self, RunStartError> {
-        let (input, budget) = seed.into_runtime_parts();
+    fn new<P: ParsePolicy>(
+        program: &Program<P>,
+        admitted: AdmittedRun<E>,
+    ) -> Result<Self, RunStartError> {
+        let (input, budget) = admitted.into_runtime_parts();
         let state = State::from_input(input);
         let once_states = OnceStateSet::new(program.once_rule_count())?;
         Ok(Self {
@@ -324,13 +327,13 @@ impl<E: ExecutionPolicy> RunCore<E> {
 }
 
 impl<P: ProgramOwner, E: ExecutionPolicy> Session<P, E> {
-    /// Starts a new run session for a parsed program and admitted run seed.
+    /// Starts a new run session for a parsed program and admitted run witness.
     ///
     /// # Errors
     ///
     /// Returns `RunStartError` if allocating per-run rule state fails.
-    pub(super) fn new(program: P, seed: RunSeed<E>) -> Result<Self, RunStartError> {
-        let core = RunCore::new(program.program(), seed)?;
+    pub(super) fn new(program: P, admitted: AdmittedRun<E>) -> Result<Self, RunStartError> {
+        let core = RunCore::new(program.program(), admitted)?;
         Ok(Self { program, core })
     }
 
@@ -378,14 +381,14 @@ impl<P: ProgramOwner, E: ExecutionPolicy> Session<P, E> {
 }
 
 impl<P: ProgramOwner, E: ExecutionPolicy, A: RuleAttemptPolicy> AttemptSession<P, E, A> {
-    /// Starts a new rule-attempt session for a parsed program and admitted run seed.
+    /// Starts a new rule-attempt session for a parsed program and admitted run witness.
     ///
     /// # Errors
     ///
     /// Returns `RunStartError` if allocating per-run rule state fails.
-    pub(super) fn new(program: P, seed: RunSeed<E>) -> Result<Self, RunStartError> {
+    pub(super) fn new(program: P, admitted: AdmittedRun<E>) -> Result<Self, RunStartError> {
         let cursor = program.program().rule_attempt_cursor();
-        let core = RunCore::new(program.program(), seed)?;
+        let core = RunCore::new(program.program(), admitted)?;
         Ok(Self {
             program,
             core,
