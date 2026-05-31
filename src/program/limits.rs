@@ -6,41 +6,6 @@ use crate::bytes::{
 };
 use crate::inspect::RuleCount;
 
-/// Documents the internal default byte budget item.
-const DEFAULT_BYTE_BUDGET: usize = 16_777_216;
-
-/// Default program-source byte budget for callers that want the crate policy value.
-pub const DEFAULT_MAX_SOURCE_LEN: SourceByteLimit = SourceByteLimit::new(DEFAULT_BYTE_BUDGET);
-/// Default executable code-line byte budget for callers that want the crate policy value.
-pub const DEFAULT_MAX_CODE_LINE_LEN: CodeLineByteLimit =
-    CodeLineByteLimit::new(DEFAULT_BYTE_BUDGET);
-/// Default executable payload byte budget for callers that want the crate policy value.
-pub const DEFAULT_MAX_PAYLOAD_LEN: PayloadByteLimit = PayloadByteLimit::new(DEFAULT_BYTE_BUDGET);
-/// Default parsed-rule budget for callers that want the crate policy value.
-pub const DEFAULT_MAX_RULES: RuleLimit = RuleLimit::new(1_000_000);
-/// Default execution-step budget for callers that want the crate policy value.
-pub const DEFAULT_MAX_STEPS: StepLimit = StepLimit::new(1_000_000);
-/// Default rule-attempt budget for callers that want the crate policy value.
-pub const DEFAULT_MAX_RULE_ATTEMPTS: RuleAttemptLimit = RuleAttemptLimit::new(1_000_000);
-/// Default runtime-state byte budget for callers that want the crate policy value.
-pub const DEFAULT_MAX_STATE_LEN: RuntimeStateByteLimit =
-    RuntimeStateByteLimit::new(DEFAULT_BYTE_BUDGET);
-/// Default runtime-input byte budget for callers that want the crate policy value.
-pub const DEFAULT_MAX_INPUT_LEN: RuntimeInputByteLimit =
-    RuntimeInputByteLimit::new(DEFAULT_BYTE_BUDGET);
-/// Default `(return)` output byte budget for callers that want the crate policy value.
-pub const DEFAULT_MAX_RETURN_LEN: ReturnByteLimit = ReturnByteLimit::new(DEFAULT_BYTE_BUDGET);
-/// Default trace snapshot byte budget for callers that want the crate default.
-pub const DEFAULT_MAX_TRACE_SNAPSHOT_LEN: TraceSnapshotByteLimit =
-    TraceSnapshotByteLimit::new(DEFAULT_BYTE_BUDGET);
-/// Default parser budgets for callers that want the crate policy value.
-pub const DEFAULT_PARSE_LIMITS: ParseLimits = ParseLimits::new(
-    DEFAULT_MAX_SOURCE_LEN,
-    DEFAULT_MAX_CODE_LINE_LEN,
-    DEFAULT_MAX_PAYLOAD_LEN,
-    DEFAULT_MAX_RULES,
-);
-
 /// Source byte length measured before parsing starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceByteCount {
@@ -196,64 +161,6 @@ impl RuleLimit {
     /// Checks whether a parsed-rule count remains inside this parser budget.
     pub(crate) const fn accepts(self, attempted_count: RuleCount) -> bool {
         attempted_count.get() <= self.value
-    }
-}
-
-/// Resource limits for one parser invocation.
-///
-/// Parser limits are host policy. They are checked before parser-owned
-/// allocations grow beyond the declared source, line, payload, or rule budgets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ParseLimits {
-    /// Source byte budget.
-    source_len: SourceByteLimit,
-    /// Per-line executable byte budget.
-    code_line_len: CodeLineByteLimit,
-    /// Per-payload executable byte budget.
-    payload_len: PayloadByteLimit,
-    /// Parsed rule-count budget.
-    rules: RuleLimit,
-}
-
-impl ParseLimits {
-    /// Creates parser limits with every budget specified explicitly.
-    #[must_use]
-    pub const fn new(
-        max_source_len: SourceByteLimit,
-        max_code_line_len: CodeLineByteLimit,
-        max_payload_len: PayloadByteLimit,
-        max_rules: RuleLimit,
-    ) -> Self {
-        Self {
-            source_len: max_source_len,
-            code_line_len: max_code_line_len,
-            payload_len: max_payload_len,
-            rules: max_rules,
-        }
-    }
-
-    /// Maximum source bytes accepted before line parsing starts.
-    #[must_use]
-    pub const fn source_byte_limit(self) -> SourceByteLimit {
-        self.source_len
-    }
-
-    /// Maximum bytes accepted in one executable code line before whitespace compaction.
-    #[must_use]
-    pub const fn code_line_byte_limit(self) -> CodeLineByteLimit {
-        self.code_line_len
-    }
-
-    /// Maximum bytes accepted in one executable payload.
-    #[must_use]
-    pub const fn payload_byte_limit(self) -> PayloadByteLimit {
-        self.payload_len
-    }
-
-    /// Maximum executable rules accepted in one parsed program.
-    #[must_use]
-    pub const fn rule_limit(self) -> RuleLimit {
-        self.rules
     }
 }
 
@@ -484,84 +391,5 @@ impl RuleAttemptCount {
     pub(crate) fn checked_next(self) -> Option<Self> {
         let value = self.value.checked_add(1)?;
         Some(Self { value })
-    }
-}
-
-/// Resource limits for runtime input validation.
-///
-/// Input limits are host policy for raw runtime input only. They do not carry
-/// execution budgets, so validated input cannot accidentally decide how a run is
-/// executed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuntimeInputLimits {
-    /// Raw input byte budget checked before owned classification.
-    input_len: RuntimeInputByteLimit,
-}
-
-impl RuntimeInputLimits {
-    /// Creates runtime input limits with every input budget specified explicitly.
-    #[must_use]
-    pub const fn new(max_input_len: RuntimeInputByteLimit) -> Self {
-        Self {
-            input_len: max_input_len,
-        }
-    }
-
-    /// Maximum runtime input bytes accepted before owned classification.
-    #[must_use]
-    pub const fn input_byte_limit(self) -> RuntimeInputByteLimit {
-        self.input_len
-    }
-}
-
-/// Resource limits for one execution invocation.
-///
-/// The interpreter checks these limits before allocating oversized runtime
-/// states or return outputs. Step limits alone are not enough for a rewriting
-/// system because a tiny number of steps can still expand into a very large
-/// state. Initial state admission is checked by
-/// [`input::RunSeed::admit`](crate::input::RunSeed::admit); later rewrite and
-/// return checks use the same policy after execution starts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExecutionLimits {
-    /// Budget for committed execution steps.
-    steps: StepLimit,
-    /// Budget for initial and rewritten runtime states.
-    state_len: RuntimeStateByteLimit,
-    /// Budget for materialized `(return)` output.
-    return_len: ReturnByteLimit,
-}
-
-impl ExecutionLimits {
-    /// Creates execution limits with every runtime execution budget specified explicitly.
-    #[must_use]
-    pub const fn new(
-        max_steps: StepLimit,
-        max_state_len: RuntimeStateByteLimit,
-        max_return_len: ReturnByteLimit,
-    ) -> Self {
-        Self {
-            steps: max_steps,
-            state_len: max_state_len,
-            return_len: max_return_len,
-        }
-    }
-
-    /// Maximum number of execution steps that may be committed.
-    #[must_use]
-    pub const fn step_limit(self) -> StepLimit {
-        self.steps
-    }
-
-    /// Maximum runtime state length, including initial input and rewrite results.
-    #[must_use]
-    pub const fn state_byte_limit(self) -> RuntimeStateByteLimit {
-        self.state_len
-    }
-
-    /// Maximum byte length accepted for `(return)` output.
-    #[must_use]
-    pub const fn return_byte_limit(self) -> ReturnByteLimit {
-        self.return_len
     }
 }

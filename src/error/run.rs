@@ -79,8 +79,6 @@ pub enum RunStepError {
     ReturnOutputLimit(ReturnOutputLimitError),
     /// The candidate step would exceed the step limit.
     StepLimit(StepLimitError),
-    /// Runtime rule metadata and per-run rule state no longer align.
-    RuleRuntimeState(RuleRuntimeStateError),
 }
 
 impl Error for RunStepError {
@@ -91,7 +89,6 @@ impl Error for RunStepError {
             Self::RuntimeStateLimit(error) => Some(error),
             Self::ReturnOutputLimit(error) => Some(error),
             Self::StepLimit(error) => Some(error),
-            Self::RuleRuntimeState(error) => Some(error),
         }
     }
 }
@@ -126,12 +123,6 @@ impl From<StepLimitError> for RunStepError {
     }
 }
 
-impl From<RuleRuntimeStateError> for RunStepError {
-    fn from(value: RuleRuntimeStateError) -> Self {
-        Self::RuleRuntimeState(value)
-    }
-}
-
 /// Error while advancing an owned ordinary step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OwnedRunStepError {
@@ -163,8 +154,6 @@ pub enum RuleAttemptStepError {
     Step(RunStepError),
     /// The next executable rule-line attempt would exceed the attempt limit.
     RuleAttemptLimit(RuleAttemptLimitError),
-    /// The rule-attempt cursor no longer points at a parsed rule.
-    RuleCursor(RuleAttemptCursorError),
 }
 
 impl Error for RuleAttemptStepError {
@@ -172,7 +161,6 @@ impl Error for RuleAttemptStepError {
         match self {
             Self::Step(error) => Some(error),
             Self::RuleAttemptLimit(error) => Some(error),
-            Self::RuleCursor(error) => Some(error),
         }
     }
 }
@@ -186,12 +174,6 @@ impl From<RunStepError> for RuleAttemptStepError {
 impl From<RuleAttemptLimitError> for RuleAttemptStepError {
     fn from(value: RuleAttemptLimitError) -> Self {
         Self::RuleAttemptLimit(value)
-    }
-}
-
-impl From<RuleAttemptCursorError> for RuleAttemptStepError {
-    fn from(value: RuleAttemptCursorError) -> Self {
-        Self::RuleCursor(value)
     }
 }
 
@@ -346,56 +328,6 @@ impl RunAdmissionError {
 }
 
 impl Error for RunAdmissionError {}
-
-/// Runtime rule-state mismatch.
-///
-/// This is an internal contradiction surfaced as a structured runtime error
-/// instead of being folded into successful stability.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuleRuntimeStateError {
-    /// Parsed rule whose runtime state was missing.
-    rule: RulePosition,
-}
-
-impl RuleRuntimeStateError {
-    /// Builds the missing once-rule state error.
-    pub(crate) const fn missing_once_rule_state(rule: RulePosition) -> Self {
-        Self { rule }
-    }
-
-    /// Parsed rule whose `(once)` runtime state was missing.
-    #[must_use]
-    pub const fn rule(&self) -> RulePosition {
-        self.rule
-    }
-}
-
-impl Error for RuleRuntimeStateError {}
-
-/// Rule-attempt cursor mismatch.
-///
-/// This is an internal contradiction surfaced as a structured rule-attempt
-/// error instead of being folded into `NoExecutableRules`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuleAttemptCursorError {
-    /// Rule position the active cursor attempted to select.
-    rule: RulePosition,
-}
-
-impl RuleAttemptCursorError {
-    /// Builds the missing rule error.
-    pub(crate) const fn missing_rule(rule: RulePosition) -> Self {
-        Self { rule }
-    }
-
-    /// Rule position that was missing from the parsed program.
-    #[must_use]
-    pub const fn rule(&self) -> RulePosition {
-        self.rule
-    }
-}
-
-impl Error for RuleAttemptCursorError {}
 
 /// One-based runtime input column.
 ///
