@@ -12,43 +12,42 @@
 //! checked per event.
 //!
 //! ```
-//! use rsaeb::limits::{
-//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
-//!     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit,
-//! };
 //! use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
-//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
-//! use rsaeb::input::RunSeed;
-//! use rsaeb::limits::{ExecutionLimits, RuntimeInputLimits};
+//! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::{
+//!     DefaultPolicy, StaticExecutionPolicy, StaticTraceSnapshotPolicy,
+//!     TraceSnapshotPolicyWitness,
+//! };
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
+//! type TenSteps = StaticExecutionPolicy<10, 16_777_216, 16_777_216>;
+//! type SnapshotBytes = StaticTraceSnapshotPolicy<16_777_216>;
+//!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_text("a=b\nb=(return)ok"), DEFAULT_PARSE_LIMITS)?;
-//! let input_limits = RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN);
-//! let execution_limits = ExecutionLimits::new(
-//!     StepLimit::new(10),
-//!     DEFAULT_MAX_STATE_LEN,
-//!     DEFAULT_MAX_RETURN_LEN,
-//! );
-//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), input_limits)?;
-//! let seed = RunSeed::admit(input, execution_limits)?;
+//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("a=b\nb=(return)ok"))?;
+//! let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let seed = RunSeed::<TenSteps>::admit(input)?;
 //! let mut retained = Vec::new();
 //!
-//! program.run_with_trace_snapshots(seed, DEFAULT_MAX_TRACE_SNAPSHOT_LEN, |event| {
-//!     match event {
-//!         TraceSnapshotEvent::Initial { state } => retained.push(state.into_raw_bytes()),
-//!         TraceSnapshotEvent::Step {
-//!             effect: TraceSnapshotEffect::Continue { state },
-//!             ..
-//!         } => retained.push(state.into_raw_bytes()),
-//!         TraceSnapshotEvent::Step {
-//!             effect: TraceSnapshotEffect::Return { output },
-//!             ..
-//!         } => retained.push(output.into_raw_bytes()),
-//!     }
-//!     Ok::<(), core::convert::Infallible>(())
-//! })?;
+//! program.run_with_trace_snapshots(
+//!     seed,
+//!     TraceSnapshotPolicyWitness::<SnapshotBytes>::new(),
+//!     |event| {
+//!         match event {
+//!             TraceSnapshotEvent::Initial { state } => retained.push(state.into_raw_bytes()),
+//!             TraceSnapshotEvent::Step {
+//!                 effect: TraceSnapshotEffect::Continue { state },
+//!                 ..
+//!             } => retained.push(state.into_raw_bytes()),
+//!             TraceSnapshotEvent::Step {
+//!                 effect: TraceSnapshotEffect::Return { output },
+//!                 ..
+//!             } => retained.push(output.into_raw_bytes()),
+//!         }
+//!         Ok::<(), core::convert::Infallible>(())
+//!     },
+//! )?;
 //!
 //! if retained != [b"a".to_vec(), b"b".to_vec(), b"ok".to_vec()] {
 //!     return Err("unexpected trace snapshots".into());
@@ -61,27 +60,24 @@
 //! use core::convert::Infallible;
 //! use rsaeb::error::{TraceSnapshotError, TraceSnapshotRunError};
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
-//! use rsaeb::limits::{
-//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_PARSE_LIMITS,
-//!     ExecutionLimits, RuntimeInputLimits, StepLimit, TraceSnapshotByteLimit,
+//! use rsaeb::policy::{
+//!     DefaultPolicy, StaticExecutionPolicy, StaticTraceSnapshotPolicy,
+//!     TraceSnapshotPolicyWitness,
 //! };
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
+//! type TenSteps = StaticExecutionPolicy<10, 16_777_216, 16_777_216>;
+//! type EmptySnapshot = StaticTraceSnapshotPolicy<0>;
+//!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?;
-//! let input_limits = RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN);
-//! let execution_limits = ExecutionLimits::new(
-//!     StepLimit::new(10),
-//!     DEFAULT_MAX_STATE_LEN,
-//!     DEFAULT_MAX_RETURN_LEN,
-//! );
-//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), input_limits)?;
-//! let seed = RunSeed::admit(input, execution_limits)?;
+//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("a=b"))?;
+//! let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let seed = RunSeed::<TenSteps>::admit(input)?;
 //!
 //! let result = program.run_with_trace_snapshots(
 //!     seed,
-//!     TraceSnapshotByteLimit::new(0),
+//!     TraceSnapshotPolicyWitness::<EmptySnapshot>::new(),
 //!     |_event| Ok::<(), Infallible>(()),
 //! );
 //!
@@ -107,6 +103,7 @@ use crate::bytes::{RuntimeByte, RuntimeStateByteCount, TraceSnapshotByteCount};
 use crate::error::TraceSnapshotError;
 use crate::inspect::RuleView;
 use crate::limits::{StepCount, TraceSnapshotByteLimit};
+use crate::policy::{TraceSnapshotPolicy, TraceSnapshotPolicyWitness};
 use crate::program::{ReturnOutput, ReturnOutputView, RuntimeStateSnapshot};
 
 /// Borrowed view of runtime-state bytes.
@@ -246,11 +243,11 @@ impl TraceEffect<RuntimeStateView<'_>, ReturnOutputView<'_>> {
     ///
     /// Returns `TraceSnapshotError` if the effect exceeds `limit` or snapshot
     /// allocation fails.
-    fn to_snapshot(
+    fn to_snapshot<T: TraceSnapshotPolicy>(
         self,
-        limit: TraceSnapshotByteLimit,
+        _policy: TraceSnapshotPolicyWitness<T>,
     ) -> Result<TraceSnapshotEffect, TraceSnapshotError> {
-        ensure_trace_len(self.byte_count(), limit)?;
+        ensure_trace_len(self.byte_count(), T::TRACE_SNAPSHOT_BYTE_LIMIT)?;
         match self {
             Self::Continue { state } => Ok(TraceSnapshotEffect::Continue {
                 state: RuntimeStateSnapshot::from_trace_state_view(state)?,
@@ -334,15 +331,15 @@ impl<'program> TraceEvent<'program, RuntimeStateView<'_>, BorrowedTraceEffect<'p
     ///
     /// Returns `TraceSnapshotError::Limit` if the event bytes exceed `limit`.
     /// Returns `TraceSnapshotError::Allocation` if snapshot allocation fails.
-    pub fn to_snapshot(
+    pub fn to_snapshot<T: TraceSnapshotPolicy>(
         self,
-        limit: TraceSnapshotByteLimit,
+        policy: TraceSnapshotPolicyWitness<T>,
     ) -> Result<TraceSnapshotEvent<'program>, TraceSnapshotError> {
         match self {
             Self::Initial { state } => {
                 ensure_trace_len(
                     TraceSnapshotByteCount::from_runtime_state_count(state.byte_count()),
-                    limit,
+                    T::TRACE_SNAPSHOT_BYTE_LIMIT,
                 )?;
                 Ok(TraceSnapshotEvent::Initial {
                     state: RuntimeStateSnapshot::from_trace_state_view(state)?,
@@ -351,7 +348,7 @@ impl<'program> TraceEvent<'program, RuntimeStateView<'_>, BorrowedTraceEffect<'p
             Self::Step { step, rule, effect } => Ok(TraceSnapshotEvent::Step {
                 step,
                 rule,
-                effect: effect.to_snapshot(limit)?,
+                effect: effect.to_snapshot(policy)?,
             }),
         }
     }

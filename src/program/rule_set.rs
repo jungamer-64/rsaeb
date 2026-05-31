@@ -2,9 +2,7 @@ use alloc::vec::Vec;
 use core::slice;
 
 use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
-use crate::error::{
-    ParseError, ParseErrorKind, ParseLimitError, ParseRepresentationError, RuleAttemptCursorError,
-};
+use crate::error::{ParseError, ParseErrorKind, ParseLimitError, ParseRepresentationError};
 use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePosition};
 use crate::limits::RuleLimit;
 use crate::rule::{OnceRuleSlot, ParsedRule, Rule, RuleAvailability, RuleRepeatSyntax};
@@ -48,49 +46,20 @@ struct RuleInsertionPermit {
     position: RulePosition,
 }
 
-/// Zero-based executable rule index minted from a concrete rule set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct RuleIndex {
-    /// Zero-based rule-table offset.
-    zero_based: usize,
-    /// Public one-based rule position for diagnostics.
-    position: RulePosition,
-}
-
 /// Cursor pointing to the next executable rule line in one rule-attempt run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuleCursor {
-    /// Cursor points at the next executable rule index.
-    Active(ActiveRuleCursor),
-    /// No executable rule remains in this pass.
-    Exhausted,
-}
-
-/// Active cursor state for rule-attempt execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ActiveRuleCursor {
-    /// Zero-based rule index to evaluate next.
-    next_rule_index: RuleIndex,
-    /// Final executable rule index in this program.
-    final_rule_index: RuleIndex,
+pub(crate) struct RuleCursor {
+    /// Zero-based rule-table offset selected on the next attempt.
+    next_rule_index: usize,
 }
 
 /// Cursor movement after a non-applying rule line has been consumed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuleCursorAfterMiss {
     /// Cursor advanced to the next executable rule.
-    Advanced(ActiveRuleCursor),
+    Advanced(RuleCursor),
     /// The consumed miss was the final executable rule.
     Stable,
-}
-
-/// Selection produced when a rule-attempt cursor is consumed for one step.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuleCursorSelection {
-    /// Cursor selected one executable rule line.
-    Active(ActiveRuleCursor),
-    /// The parsed program has no executable rule line for this attempt mode.
-    NoExecutableRules,
 }
 
 /// Checked rule-attempt selection produced by a cursor and its owning rule table.
@@ -103,8 +72,8 @@ pub(crate) enum RuleAttemptTargetSelection<'program> {
 
 /// Active rule-attempt cursor paired with the checked target it selected.
 pub(crate) struct RuleAttemptTarget<'program> {
-    /// Cursor state that selected this target.
-    active_cursor: ActiveRuleCursor,
+    /// Cursor movement allowed if this target misses.
+    after_miss: RuleCursorAfterMiss,
     /// Parsed rule selected by the cursor from the same rule table.
     target: RuleTarget<'program>,
 }
@@ -292,66 +261,35 @@ impl RuleSet {
 
     /// Starts rule-attempt execution over this table's executable rules.
     pub(crate) fn rule_attempt_cursor(&self) -> RuleCursor {
-        let Some(final_rule_index) = RuleIndex::last_for(self.rule_count()) else {
-            return RuleCursor::Exhausted;
-        };
-
-        RuleCursor::Active(ActiveRuleCursor {
-            next_rule_index: RuleIndex::first(),
-            final_rule_index,
-        })
-    }
-
-    /// Selects the parsed rule pointed at by an active rule-attempt cursor.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RuleAttemptCursorError` if the cursor points outside this parsed
-    /// rule table.
-    fn target_for_cursor(
-        &self,
-        active_cursor: ActiveRuleCursor,
-    ) -> Result<RuleTarget<'_>, RuleAttemptCursorError> {
-        let rule = self
-            .rules
-            .get(active_cursor.current_index().get())
-            .ok_or_else(|| {
-                RuleAttemptCursorError::missing_rule(active_cursor.current_position())
-            })?;
-        Ok(RuleTarget { rule })
+        RuleCursor { next_rule_index: 0 }
     }
 
     /// Selects the next rule-attempt target from a cursor minted by this table.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RuleAttemptCursorError` if the active cursor no longer points
-    /// at a rule in this table.
     pub(crate) fn select_attempt_target(
         &self,
         cursor: &mut RuleCursor,
-    ) -> Result<RuleAttemptTargetSelection<'_>, RuleAttemptCursorError> {
-        let active_cursor = match cursor.select_next() {
-            RuleCursorSelection::Active(active_cursor) => active_cursor,
-            RuleCursorSelection::NoExecutableRules => {
-                return Ok(RuleAttemptTargetSelection::NoExecutableRules);
-            }
+    ) -> RuleAttemptTargetSelection<'_> {
+        let rule_index = cursor.next_rule_index;
+        let Some(rule) = self.rules.get(rule_index) else {
+            return RuleAttemptTargetSelection::NoExecutableRules;
         };
 
-        Ok(RuleAttemptTargetSelection::Target(RuleAttemptTarget {
-            active_cursor,
-            target: self.target_for_cursor(active_cursor)?,
-        }))
-    }
-}
+        let next_index = rule_index.saturating_add(1);
+        *cursor = RuleCursor {
+            next_rule_index: self.rules.len(),
+        };
+        let after_miss = if next_index < self.rules.len() {
+            RuleCursorAfterMiss::Advanced(RuleCursor {
+                next_rule_index: next_index,
+            })
+        } else {
+            RuleCursorAfterMiss::Stable
+        };
 
-impl RuleCursor {
-    /// Takes the cursor state, leaving this cursor exhausted until the attempt commits.
-    fn select_next(&mut self) -> RuleCursorSelection {
-        match core::mem::replace(self, Self::Exhausted) {
-            Self::Active(active) => RuleCursorSelection::Active(active),
-            Self::Exhausted => RuleCursorSelection::NoExecutableRules,
-        }
+        RuleAttemptTargetSelection::Target(RuleAttemptTarget {
+            after_miss,
+            target: RuleTarget { rule },
+        })
     }
 }
 
@@ -362,80 +300,10 @@ impl<'program> RuleScan<'program> {
     }
 }
 
-impl ActiveRuleCursor {
-    /// Current zero-based rule index.
-    pub(crate) const fn current_index(self) -> RuleIndex {
-        self.next_rule_index
-    }
-
-    /// Current public rule position.
-    pub(crate) const fn current_position(self) -> RulePosition {
-        self.next_rule_index.position()
-    }
-
-    /// Advances after a miss or reports that the pass is stable.
-    pub(crate) fn advance_after_miss(self) -> RuleCursorAfterMiss {
-        if self.next_rule_index >= self.final_rule_index {
-            return RuleCursorAfterMiss::Stable;
-        }
-
-        if let Some(next_rule_index) = self.next_rule_index.checked_next() {
-            RuleCursorAfterMiss::Advanced(Self {
-                next_rule_index,
-                final_rule_index: self.final_rule_index,
-            })
-        } else {
-            RuleCursorAfterMiss::Stable
-        }
-    }
-
-    /// Resets to the first executable rule after a committed match.
-    pub(crate) const fn reset_to_first(self) -> Self {
-        Self {
-            next_rule_index: RuleIndex::first(),
-            final_rule_index: self.final_rule_index,
-        }
-    }
-}
-
-impl RuleIndex {
-    /// First executable rule index.
-    const fn first() -> Self {
-        Self {
-            zero_based: 0,
-            position: RulePosition::FIRST,
-        }
-    }
-
-    /// Builds an index from a zero-based rule-table offset.
-    fn from_zero_based(zero_based: usize) -> Option<Self> {
-        let position = RulePosition::from_zero_based(zero_based)?;
-        Some(Self {
-            zero_based,
-            position,
-        })
-    }
-
-    /// Final executable rule index for a parsed rule count.
-    fn last_for(rule_count: RuleCount) -> Option<Self> {
-        let zero_based = rule_count.get().checked_sub(1)?;
-        Self::from_zero_based(zero_based)
-    }
-
-    /// Returns the checked next index.
-    fn checked_next(self) -> Option<Self> {
-        let zero_based = self.zero_based.checked_add(1)?;
-        Self::from_zero_based(zero_based)
-    }
-
-    /// Zero-based rule-table offset.
-    pub(crate) const fn get(self) -> usize {
-        self.zero_based
-    }
-
-    /// Public one-based rule position.
-    const fn position(self) -> RulePosition {
-        self.position
+impl RuleCursor {
+    /// First executable rule cursor for a fresh pass.
+    pub(crate) const fn first() -> Self {
+        Self { next_rule_index: 0 }
     }
 }
 
@@ -448,39 +316,7 @@ impl<'program> RuleTarget<'program> {
 
 impl<'program> RuleAttemptTarget<'program> {
     /// Splits the checked target into cursor progress and selected rule.
-    pub(crate) const fn into_parts(self) -> (ActiveRuleCursor, RuleTarget<'program>) {
-        (self.active_cursor, self.target)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::error::RuleAttemptStepError;
-    use crate::test_support::{TestFailure, TestResult, ensure_eq};
-
-    /// # Errors
-    ///
-    /// Returns `TestFailure` if an active cursor pointing outside the rule table
-    /// is folded into an executable-rule absence instead of a cursor error.
-    #[test]
-    fn missing_cursor_rule_is_rule_attempt_step_error() -> TestResult {
-        let rule_set = RuleSet {
-            rules: Vec::new(),
-            once_rule_count: PublicOnceRuleCount::ZERO,
-        };
-        let cursor = ActiveRuleCursor {
-            next_rule_index: RuleIndex::first(),
-            final_rule_index: RuleIndex::first(),
-        };
-
-        let Err(RuleAttemptStepError::RuleCursor(error)) = rule_set
-            .target_for_cursor(cursor)
-            .map_err(RuleAttemptStepError::from)
-        else {
-            return Err(TestFailure::message("expected missing cursor rule error"));
-        };
-
-        ensure_eq!(error.rule(), RulePosition::FIRST)
+    pub(crate) const fn into_parts(self) -> (RuleCursorAfterMiss, RuleTarget<'program>) {
+        (self.after_miss, self.target)
     }
 }

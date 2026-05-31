@@ -8,7 +8,6 @@ use rsaeb::error::{
     RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError, RunStartError, RunStepError,
     RuntimeInputError, TraceSnapshotRunError,
 };
-use rsaeb::limits::DEFAULT_PARSE_LIMITS;
 use rsaeb::program::Program;
 use rsaeb::source::ProgramSource;
 
@@ -156,7 +155,7 @@ pub type TestResult = Result<(), TestFailure>;
 /// Returns `ParseError` if the source violates parser syntax, resource, or
 /// allocation constraints.
 pub fn parse_program(source: &str) -> Result<Program, ParseError> {
-    Program::parse(ProgramSource::from_text(source), DEFAULT_PARSE_LIMITS)
+    Program::parse(ProgramSource::from_text(source))
 }
 
 /// Converts a pattern-match assertion into the shared test result type.

@@ -21,30 +21,23 @@
 //! Rule-attempt transitions additionally expose typed miss reasons through
 //! [`RuleMissReason`], expose stable reasons through
 //! [`RuleAttemptStableReason`], and
-//! consume [`RuleAttemptSeed`] instead of accepting a detached
-//! [`RuleAttemptLimit`](crate::limits::RuleAttemptLimit).
+//! consume [`RuleAttemptSeed`] under a
+//! [`RuleAttemptPolicy`](crate::policy::RuleAttemptPolicy).
 //!
 //! ```
 //! use rsaeb::error::RunStepError;
 //! use rsaeb::execution::BorrowedStepTransition;
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
-//! use rsaeb::limits::{
-//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_PARSE_LIMITS, ExecutionLimits,
-//!     RuntimeInputLimits, RuntimeStateByteLimit, StepLimit,
-//! };
+//! use rsaeb::policy::{DefaultPolicy, StaticExecutionPolicy};
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
+//! type TinyState = StaticExecutionPolicy<10, 1, 16_777_216>;
+//!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_text("a=aaaa"), DEFAULT_PARSE_LIMITS)?;
-//! let input_limits = RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN);
-//! let execution_limits = ExecutionLimits::new(
-//!     StepLimit::new(10),
-//!     RuntimeStateByteLimit::new(1),
-//!     DEFAULT_MAX_RETURN_LEN,
-//! );
-//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), input_limits)?;
-//! let session = program.start_run(RunSeed::admit(input, execution_limits)?)?;
+//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("a=aaaa"))?;
+//! let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let session = program.start_run(RunSeed::<TinyState>::admit(input)?)?;
 //!
 //! let BorrowedStepTransition::Failed(failed) = session.step() else {
 //!     return Err("expected oversized rewrite to fail before commit".into());

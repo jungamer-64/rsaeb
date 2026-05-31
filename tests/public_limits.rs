@@ -10,13 +10,13 @@ use rsaeb::error::{
 };
 use rsaeb::input::RunSeed;
 use rsaeb::limits::{
-    CodeLineByteLimit, DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
-    DEFAULT_PARSE_LIMITS, ParseLimits, PayloadByteLimit, ReturnByteLimit, RuleLimit,
-    RuntimeStateByteLimit, SourceByteLimit, StepLimit,
+    CodeLineByteLimit, PayloadByteLimit, ReturnByteLimit, RuleLimit, RuntimeStateByteLimit,
+    SourceByteLimit, StepLimit,
 };
+use rsaeb::policy::{ExecutionPolicy, ParsePolicy, StaticParsePolicy};
 use rsaeb::program::Program;
 use rsaeb::source::ProgramSource;
-use runtime_support::TestRunPolicy;
+use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 enum ExpectedParseLimit {
@@ -51,15 +51,14 @@ enum ExpectedRunLimit {
 
 struct ParseLimitCase {
     source: &'static str,
-    limits: ParseLimits,
     expected: ExpectedParseLimit,
     message: &'static str,
 }
 
-struct RunLimitCase {
+struct RunLimitCase<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolicy> {
     program_source: &'static str,
     input: &'static [u8],
-    limits: TestRunPolicy,
+    limits: TestRunPolicy<I, E>,
     expected: ExpectedRunLimit,
     message: &'static str,
 }
@@ -125,9 +124,9 @@ fn ensure_step_limit_details(error: &StepLimitError, message: &'static str) -> T
 /// # Errors
 ///
 /// Returns `TestFailure` if execution does not fail with the expected step-limit details.
-fn ensure_step_limit_run(
+fn ensure_step_limit_run<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolicy>(
     program_source: &'static str,
-    limits: TestRunPolicy,
+    limits: TestRunPolicy<I, E>,
     message: &'static str,
 ) -> TestResult {
     let result = parse_program(program_source)?.run(runtime_input(b"a", limits)?);
@@ -140,8 +139,8 @@ fn ensure_step_limit_run(
 /// # Errors
 ///
 /// Returns `TestFailure` if parsing succeeds or reports another error domain.
-fn ensure_parse_limit_error(case: ParseLimitCase) -> TestResult {
-    let Err(error) = Program::parse(ProgramSource::from_text(case.source), case.limits) else {
+fn ensure_parse_limit_error<P: ParsePolicy>(case: ParseLimitCase) -> TestResult {
+    let Err(error) = Program::<P>::parse(ProgramSource::from_text(case.source)) else {
         return Err(TestFailure::message(case.message));
     };
     let matches_expected = match (error.kind(), case.expected) {
@@ -195,7 +194,9 @@ fn ensure_parse_limit_error(case: ParseLimitCase) -> TestResult {
 /// # Errors
 ///
 /// Returns `TestFailure` if execution succeeds or reports another limit domain.
-fn ensure_run_limit(case: RunLimitCase) -> TestResult {
+fn ensure_run_limit<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolicy>(
+    case: RunLimitCase<I, E>,
+) -> TestResult {
     let result = parse_program(case.program_source)?.run(runtime_input(case.input, case.limits)?);
     let error = expect_run_error(result)?;
     ensure_matches(
@@ -241,7 +242,10 @@ fn ensure_display_state_limit(error: &RuntimeStateLimitError) -> TestResult {
 /// # Errors
 ///
 /// Returns `RuntimeInputError` if the bytes are not valid runtime input.
-fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFailure> {
+fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolicy>(
+    bytes: &[u8],
+    limits: TestRunPolicy<I, E>,
+) -> Result<RunSeed<E>, TestFailure> {
     runtime_support::run_seed(bytes, limits)
 }
 
@@ -251,66 +255,46 @@ fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFai
 /// structured parse-limit errors.
 #[test]
 fn parse_resource_limit_errors_are_structured() -> TestResult {
-    for case in [
-        ParseLimitCase {
-            source: "a=b\n",
-            limits: ParseLimits::new(
-                SourceByteLimit::new(3),
-                DEFAULT_PARSE_LIMITS.code_line_byte_limit(),
-                DEFAULT_PARSE_LIMITS.payload_byte_limit(),
-                DEFAULT_PARSE_LIMITS.rule_limit(),
-            ),
-            expected: ExpectedParseLimit::Source {
-                limit: SourceByteLimit::new(3),
-                attempted_len: 4,
-            },
-            message: "expected source limit error",
+    ensure_parse_limit_error::<
+        StaticParsePolicy<3, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET, 1_000_000>,
+    >(ParseLimitCase {
+        source: "a=b\n",
+        expected: ExpectedParseLimit::Source {
+            limit: SourceByteLimit::new(3),
+            attempted_len: 4,
         },
-        ParseLimitCase {
-            source: "ab=c",
-            limits: ParseLimits::new(
-                DEFAULT_PARSE_LIMITS.source_byte_limit(),
-                CodeLineByteLimit::new(3),
-                DEFAULT_PARSE_LIMITS.payload_byte_limit(),
-                DEFAULT_PARSE_LIMITS.rule_limit(),
-            ),
-            expected: ExpectedParseLimit::CodeLine {
-                limit: CodeLineByteLimit::new(3),
-                attempted_len: 4,
-            },
-            message: "expected code-line limit error",
+        message: "expected source limit error",
+    })?;
+    ensure_parse_limit_error::<
+        StaticParsePolicy<DEFAULT_BYTE_BUDGET, 3, DEFAULT_BYTE_BUDGET, 1_000_000>,
+    >(ParseLimitCase {
+        source: "ab=c",
+        expected: ExpectedParseLimit::CodeLine {
+            limit: CodeLineByteLimit::new(3),
+            attempted_len: 4,
         },
-        ParseLimitCase {
-            source: "ab=c",
-            limits: ParseLimits::new(
-                DEFAULT_PARSE_LIMITS.source_byte_limit(),
-                DEFAULT_PARSE_LIMITS.code_line_byte_limit(),
-                PayloadByteLimit::new(1),
-                DEFAULT_PARSE_LIMITS.rule_limit(),
-            ),
-            expected: ExpectedParseLimit::Payload {
-                limit: PayloadByteLimit::new(1),
-                attempted_len: 2,
-            },
-            message: "expected payload limit error",
+        message: "expected code-line limit error",
+    })?;
+    ensure_parse_limit_error::<
+        StaticParsePolicy<DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET, 1, 1_000_000>,
+    >(ParseLimitCase {
+        source: "ab=c",
+        expected: ExpectedParseLimit::Payload {
+            limit: PayloadByteLimit::new(1),
+            attempted_len: 2,
         },
-        ParseLimitCase {
-            source: "a=b\nb=c",
-            limits: ParseLimits::new(
-                DEFAULT_PARSE_LIMITS.source_byte_limit(),
-                DEFAULT_PARSE_LIMITS.code_line_byte_limit(),
-                DEFAULT_PARSE_LIMITS.payload_byte_limit(),
-                RuleLimit::new(1),
-            ),
-            expected: ExpectedParseLimit::Rules {
-                limit: RuleLimit::new(1),
-                attempted_count: 2,
-            },
-            message: "expected rule limit error",
+        message: "expected payload limit error",
+    })?;
+    ensure_parse_limit_error::<
+        StaticParsePolicy<DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET, 1>,
+    >(ParseLimitCase {
+        source: "a=b\nb=c",
+        expected: ExpectedParseLimit::Rules {
+            limit: RuleLimit::new(1),
+            attempted_count: 2,
         },
-    ] {
-        ensure_parse_limit_error(case)?;
-    }
+        message: "expected rule limit error",
+    })?;
     Ok(())
 }
 
@@ -320,12 +304,7 @@ fn parse_resource_limit_errors_are_structured() -> TestResult {
 /// public domain details.
 #[test]
 fn step_limit_preserves_public_domain_details() -> TestResult {
-    let step_limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(0),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
+    let step_limits = DefaultInputRunPolicy::<0, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     ensure_step_limit_run("a=b", step_limits, "expected step limit details")
 }
 
@@ -335,12 +314,7 @@ fn step_limit_preserves_public_domain_details() -> TestResult {
 /// exhaustion.
 #[test]
 fn step_limit_precedes_rewrite_state_growth() -> TestResult {
-    let oversized_rewrite = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(0),
-        RuntimeStateByteLimit::new(1),
-        DEFAULT_MAX_RETURN_LEN,
-    );
+    let oversized_rewrite = DefaultInputRunPolicy::<0, 1, DEFAULT_BYTE_BUDGET>::new();
     ensure_step_limit_run(
         "a=aaa",
         oversized_rewrite,
@@ -354,12 +328,7 @@ fn step_limit_precedes_rewrite_state_growth() -> TestResult {
 /// budget exhaustion.
 #[test]
 fn step_limit_precedes_return_materialization() -> TestResult {
-    let oversized_return = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(0),
-        DEFAULT_MAX_STATE_LEN,
-        ReturnByteLimit::new(1),
-    );
+    let oversized_return = DefaultInputRunPolicy::<0, DEFAULT_BYTE_BUDGET, 1>::new();
     ensure_step_limit_run(
         "a=(return)ok",
         oversized_return,
@@ -373,12 +342,7 @@ fn step_limit_precedes_return_materialization() -> TestResult {
 /// the public state-size domain.
 #[test]
 fn initial_state_admission_preserves_public_domain_details() -> TestResult {
-    let initial_state_limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(10),
-        RuntimeStateByteLimit::new(1),
-        ReturnByteLimit::new(10),
-    );
+    let initial_state_limits = DefaultInputRunPolicy::<10, 1, 10>::new();
     let Err(initial_state_limited) = runtime_input(b"aa", initial_state_limits) else {
         return Err(TestFailure::message(
             "expected initial state admission error",
@@ -404,40 +368,26 @@ fn initial_state_admission_preserves_public_domain_details() -> TestResult {
 /// their public typed domains.
 #[test]
 fn runtime_limit_errors_preserve_public_domain_details() -> TestResult {
-    for case in [
-        RunLimitCase {
-            program_source: "=a",
-            input: b"aa",
-            limits: TestRunPolicy::new(
-                DEFAULT_MAX_INPUT_LEN,
-                StepLimit::new(1),
-                RuntimeStateByteLimit::new(2),
-                ReturnByteLimit::new(10),
-            ),
-            expected: ExpectedRunLimit::State {
-                limit: RuntimeStateByteLimit::new(2),
-                attempted_len: 3,
-            },
-            message: "expected rewrite state limit",
+    ensure_run_limit(RunLimitCase {
+        program_source: "=a",
+        input: b"aa",
+        limits: DefaultInputRunPolicy::<1, 2, 10>::new(),
+        expected: ExpectedRunLimit::State {
+            limit: RuntimeStateByteLimit::new(2),
+            attempted_len: 3,
         },
-        RunLimitCase {
-            program_source: "a=(return)ok",
-            input: b"a",
-            limits: TestRunPolicy::new(
-                DEFAULT_MAX_INPUT_LEN,
-                StepLimit::new(1),
-                RuntimeStateByteLimit::new(10),
-                ReturnByteLimit::new(1),
-            ),
-            expected: ExpectedRunLimit::Return {
-                limit: ReturnByteLimit::new(1),
-                attempted_len: 2,
-            },
-            message: "expected return limit details",
+        message: "expected rewrite state limit",
+    })?;
+    ensure_run_limit(RunLimitCase {
+        program_source: "a=(return)ok",
+        input: b"a",
+        limits: DefaultInputRunPolicy::<1, 10, 1>::new(),
+        expected: ExpectedRunLimit::Return {
+            limit: ReturnByteLimit::new(1),
+            attempted_len: 2,
         },
-    ] {
-        ensure_run_limit(case)?;
-    }
+        message: "expected return limit details",
+    })?;
     Ok(())
 }
 
@@ -447,12 +397,7 @@ fn runtime_limit_errors_preserve_public_domain_details() -> TestResult {
 /// public domain details.
 #[test]
 fn limits_display_output_names_public_contexts() -> TestResult {
-    let input_limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(10),
-        RuntimeStateByteLimit::new(1),
-        ReturnByteLimit::new(10),
-    );
+    let input_limits = DefaultInputRunPolicy::<10, 1, 10>::new();
     let Err(input_error) = runtime_input(b"aa", input_limits) else {
         return Err(TestFailure::message("expected input admission error"));
     };
@@ -461,12 +406,7 @@ fn limits_display_output_names_public_contexts() -> TestResult {
         "expected admission error details",
     )?;
 
-    let rewrite_limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(1),
-        RuntimeStateByteLimit::new(2),
-        ReturnByteLimit::new(10),
-    );
+    let rewrite_limits = DefaultInputRunPolicy::<1, 2, 10>::new();
     let rewrite_error = parse_program("=a")?.run(runtime_input(b"aa", rewrite_limits)?);
     let rewrite_error = expect_state_limit(expect_run_error(rewrite_error)?)?;
     ensure_display_state_limit(&rewrite_error)?;
@@ -475,12 +415,7 @@ fn limits_display_output_names_public_contexts() -> TestResult {
         "rewrite state limit exceeded; attempted length: 3, limit: 2",
     )?;
 
-    let step_limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(0),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
+    let step_limits = DefaultInputRunPolicy::<0, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     let step_error = parse_program("a=b")?.run(runtime_input(b"a", step_limits)?);
     let step_error = expect_step_limit(expect_run_error(step_error)?)?;
     ensure_eq!(

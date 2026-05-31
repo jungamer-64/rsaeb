@@ -6,8 +6,8 @@ use super::{
     InputColumn, LeftModifierKind, OwnedRuleAttemptStepError, OwnedRunStepError, ParseError,
     ParseErrorKind, ParseErrorLocation, ParseRepresentationError, PayloadKind,
     ReturnOutputLimitError, RewriteSizeError, RightActionKind, RuleAttemptLimitError,
-    RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError, RunStartError,
-    RunStepError, RuntimeInputError, RuntimeStateLimitError, StepLimitError, TraceSnapshotError,
+    RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError, RunStartError, RunStepError,
+    RuntimeInputError, RuntimeStateLimitError, StepLimitError, TraceSnapshotError,
     TraceSnapshotRunError, TracedRunError,
 };
 

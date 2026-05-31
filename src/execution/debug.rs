@@ -1,3 +1,5 @@
+use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
+
 use super::session::{
     BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRuleAttemptSession, OwnedRunSession,
 };
@@ -11,7 +13,7 @@ use super::transition::{
     OwnedStableRun, OwnedStepTransition,
 };
 
-impl core::fmt::Debug for BorrowedRunSession<'_> {
+impl<P: ParsePolicy, E: ExecutionPolicy> core::fmt::Debug for BorrowedRunSession<'_, P, E> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("BorrowedRunSession")
@@ -21,7 +23,7 @@ impl core::fmt::Debug for BorrowedRunSession<'_> {
     }
 }
 
-impl core::fmt::Debug for OwnedRunSession {
+impl<P: ParsePolicy, E: ExecutionPolicy> core::fmt::Debug for OwnedRunSession<P, E> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("OwnedRunSession")
@@ -31,7 +33,9 @@ impl core::fmt::Debug for OwnedRunSession {
     }
 }
 
-impl core::fmt::Debug for BorrowedRuleAttemptSession<'_> {
+impl<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> core::fmt::Debug
+    for BorrowedRuleAttemptSession<'_, P, E, A>
+{
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("BorrowedRuleAttemptSession")
@@ -42,7 +46,9 @@ impl core::fmt::Debug for BorrowedRuleAttemptSession<'_> {
     }
 }
 
-impl core::fmt::Debug for OwnedRuleAttemptSession {
+impl<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> core::fmt::Debug
+    for OwnedRuleAttemptSession<P, E, A>
+{
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("OwnedRuleAttemptSession")
@@ -53,7 +59,7 @@ impl core::fmt::Debug for OwnedRuleAttemptSession {
     }
 }
 
-impl core::fmt::Debug for BorrowedStepTransition<'_> {
+impl<P: ParsePolicy, E: ExecutionPolicy> core::fmt::Debug for BorrowedStepTransition<'_, P, E> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Applied(applied) => formatter.debug_tuple("Applied").field(applied).finish(),
@@ -64,7 +70,7 @@ impl core::fmt::Debug for BorrowedStepTransition<'_> {
     }
 }
 
-impl core::fmt::Debug for OwnedStepTransition {
+impl<P: ParsePolicy, E: ExecutionPolicy> core::fmt::Debug for OwnedStepTransition<P, E> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Applied(applied) => formatter.debug_tuple("Applied").field(applied).finish(),
@@ -75,19 +81,9 @@ impl core::fmt::Debug for OwnedStepTransition {
     }
 }
 
-impl core::fmt::Debug for BorrowedRuleAttemptTransition<'_> {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::Missed(missed) => formatter.debug_tuple("Missed").field(missed).finish(),
-            Self::Applied(applied) => formatter.debug_tuple("Applied").field(applied).finish(),
-            Self::Stable(stable) => formatter.debug_tuple("Stable").field(stable).finish(),
-            Self::Returned(returned) => formatter.debug_tuple("Returned").field(returned).finish(),
-            Self::Failed(failed) => formatter.debug_tuple("Failed").field(failed).finish(),
-        }
-    }
-}
-
-impl core::fmt::Debug for OwnedRuleAttemptTransition {
+impl<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> core::fmt::Debug
+    for BorrowedRuleAttemptTransition<'_, P, E, A>
+{
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Missed(missed) => formatter.debug_tuple("Missed").field(missed).finish(),
@@ -99,7 +95,21 @@ impl core::fmt::Debug for OwnedRuleAttemptTransition {
     }
 }
 
-impl core::fmt::Debug for BorrowedAppliedStep<'_> {
+impl<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> core::fmt::Debug
+    for OwnedRuleAttemptTransition<P, E, A>
+{
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Missed(missed) => formatter.debug_tuple("Missed").field(missed).finish(),
+            Self::Applied(applied) => formatter.debug_tuple("Applied").field(applied).finish(),
+            Self::Stable(stable) => formatter.debug_tuple("Stable").field(stable).finish(),
+            Self::Returned(returned) => formatter.debug_tuple("Returned").field(returned).finish(),
+            Self::Failed(failed) => formatter.debug_tuple("Failed").field(failed).finish(),
+        }
+    }
+}
+
+impl<P: ParsePolicy, E: ExecutionPolicy> core::fmt::Debug for BorrowedAppliedStep<'_, P, E> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("BorrowedAppliedStep")
@@ -110,7 +120,7 @@ impl core::fmt::Debug for BorrowedAppliedStep<'_> {
     }
 }
 
-impl core::fmt::Debug for OwnedAppliedStep {
+impl<P: ParsePolicy, E: ExecutionPolicy> core::fmt::Debug for OwnedAppliedStep<P, E> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("OwnedAppliedStep")
@@ -121,7 +131,9 @@ impl core::fmt::Debug for OwnedAppliedStep {
     }
 }
 
-impl core::fmt::Debug for BorrowedMissedRuleAttempt<'_> {
+impl<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> core::fmt::Debug
+    for BorrowedMissedRuleAttempt<'_, P, E, A>
+{
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("BorrowedMissedRuleAttempt")
@@ -132,7 +144,9 @@ impl core::fmt::Debug for BorrowedMissedRuleAttempt<'_> {
     }
 }
 
-impl core::fmt::Debug for OwnedMissedRuleAttempt {
+impl<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> core::fmt::Debug
+    for OwnedMissedRuleAttempt<P, E, A>
+{
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("OwnedMissedRuleAttempt")
@@ -143,7 +157,7 @@ impl core::fmt::Debug for OwnedMissedRuleAttempt {
     }
 }
 
-impl core::fmt::Debug for BorrowedStableRun<'_> {
+impl<P: ParsePolicy, E: ExecutionPolicy> core::fmt::Debug for BorrowedStableRun<'_, P, E> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("BorrowedStableRun")
@@ -153,7 +167,7 @@ impl core::fmt::Debug for BorrowedStableRun<'_> {
     }
 }
 
-impl core::fmt::Debug for OwnedStableRun {
+impl<P: ParsePolicy, E: ExecutionPolicy> core::fmt::Debug for OwnedStableRun<P, E> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("OwnedStableRun")
@@ -163,7 +177,9 @@ impl core::fmt::Debug for OwnedStableRun {
     }
 }
 
-impl core::fmt::Debug for BorrowedRuleAttemptAppliedStep<'_> {
+impl<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> core::fmt::Debug
+    for BorrowedRuleAttemptAppliedStep<'_, P, E, A>
+{
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("BorrowedRuleAttemptAppliedStep")
@@ -175,7 +191,9 @@ impl core::fmt::Debug for BorrowedRuleAttemptAppliedStep<'_> {
     }
 }
 
-impl core::fmt::Debug for OwnedRuleAttemptAppliedStep {
+impl<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> core::fmt::Debug
+    for OwnedRuleAttemptAppliedStep<P, E, A>
+{
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("OwnedRuleAttemptAppliedStep")
@@ -187,7 +205,9 @@ impl core::fmt::Debug for OwnedRuleAttemptAppliedStep {
     }
 }
 
-impl core::fmt::Debug for BorrowedRuleAttemptStableRun<'_> {
+impl<P: ParsePolicy, E: ExecutionPolicy> core::fmt::Debug
+    for BorrowedRuleAttemptStableRun<'_, P, E>
+{
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("BorrowedRuleAttemptStableRun")
@@ -199,7 +219,7 @@ impl core::fmt::Debug for BorrowedRuleAttemptStableRun<'_> {
     }
 }
 
-impl core::fmt::Debug for OwnedRuleAttemptStableRun {
+impl<P: ParsePolicy, E: ExecutionPolicy> core::fmt::Debug for OwnedRuleAttemptStableRun<P, E> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("OwnedRuleAttemptStableRun")
@@ -211,7 +231,7 @@ impl core::fmt::Debug for OwnedRuleAttemptStableRun {
     }
 }
 
-impl core::fmt::Debug for BorrowedReturnedRun<'_> {
+impl<P: ParsePolicy> core::fmt::Debug for BorrowedReturnedRun<'_, P> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("BorrowedReturnedRun")
@@ -222,7 +242,7 @@ impl core::fmt::Debug for BorrowedReturnedRun<'_> {
     }
 }
 
-impl core::fmt::Debug for OwnedReturnedRun {
+impl<P: ParsePolicy> core::fmt::Debug for OwnedReturnedRun<P> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("OwnedReturnedRun")
@@ -233,7 +253,7 @@ impl core::fmt::Debug for OwnedReturnedRun {
     }
 }
 
-impl core::fmt::Debug for BorrowedRuleAttemptReturnedRun<'_> {
+impl<P: ParsePolicy> core::fmt::Debug for BorrowedRuleAttemptReturnedRun<'_, P> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("BorrowedRuleAttemptReturnedRun")
@@ -245,7 +265,7 @@ impl core::fmt::Debug for BorrowedRuleAttemptReturnedRun<'_> {
     }
 }
 
-impl core::fmt::Debug for OwnedRuleAttemptReturnedRun {
+impl<P: ParsePolicy> core::fmt::Debug for OwnedRuleAttemptReturnedRun<P> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("OwnedRuleAttemptReturnedRun")
@@ -257,7 +277,7 @@ impl core::fmt::Debug for OwnedRuleAttemptReturnedRun {
     }
 }
 
-impl core::fmt::Debug for BorrowedFailedRun<'_> {
+impl<P: ParsePolicy, E: ExecutionPolicy> core::fmt::Debug for BorrowedFailedRun<'_, P, E> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("BorrowedFailedRun")
@@ -268,7 +288,7 @@ impl core::fmt::Debug for BorrowedFailedRun<'_> {
     }
 }
 
-impl core::fmt::Debug for OwnedFailedRun {
+impl<P: ParsePolicy, E: ExecutionPolicy> core::fmt::Debug for OwnedFailedRun<P, E> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("OwnedFailedRun")
@@ -279,7 +299,9 @@ impl core::fmt::Debug for OwnedFailedRun {
     }
 }
 
-impl core::fmt::Debug for BorrowedRuleAttemptFailedRun<'_> {
+impl<P: ParsePolicy, E: ExecutionPolicy> core::fmt::Debug
+    for BorrowedRuleAttemptFailedRun<'_, P, E>
+{
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("BorrowedRuleAttemptFailedRun")
@@ -291,7 +313,7 @@ impl core::fmt::Debug for BorrowedRuleAttemptFailedRun<'_> {
     }
 }
 
-impl core::fmt::Debug for OwnedRuleAttemptFailedRun {
+impl<P: ParsePolicy, E: ExecutionPolicy> core::fmt::Debug for OwnedRuleAttemptFailedRun<P, E> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("OwnedRuleAttemptFailedRun")

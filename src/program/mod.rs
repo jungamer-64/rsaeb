@@ -1,9 +1,9 @@
 //! Parsed program and run-to-completion result types.
 //!
 //! [`Program`] is the immutable parsed A=B rule table. Hosts parse typed
-//! [`ProgramSource`] under [`ParseLimits`], then run with an admitted
-//! [`RunSeed`]. Runtime budget and byte-count types live in
-//! [`limits`](crate::limits); runtime input lives in [`input`](crate::input).
+//! [`ProgramSource`] under a [`ParsePolicy`], then
+//! run with an admitted [`RunSeed`]. Runtime budget and byte-count types live
+//! in [`limits`](crate::limits); runtime input lives in [`input`](crate::input).
 //!
 //! A parsed program owns syntax and rule metadata only. Per-run `(once)` state,
 //! runtime bytes, completed-step counts, and execution budgets are created from
@@ -19,20 +19,21 @@ mod rule_set;
 /// Program-level tracing entrypoints.
 mod tracing;
 
-use crate::error::{ParseError, RuleAttemptCursorError, RunError, RunStartError};
+use core::marker::PhantomData;
+
+use crate::error::{ParseError, RunError, RunStartError};
 use crate::execution::{
     BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRuleAttemptSession, OwnedRunSession,
     RuleAttemptSeed,
 };
 use crate::input::RunSeed;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
-use crate::limits::ParseLimits;
 use crate::parser::parse_rules_impl;
+use crate::policy::{DefaultPolicy, ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::source::ProgramSource;
 
 pub(crate) use rule_set::{
-    ActiveRuleCursor, RuleAttemptTargetSelection, RuleCursor, RuleCursorAfterMiss, RuleScan,
-    RuleTarget,
+    RuleAttemptTargetSelection, RuleCursor, RuleCursorAfterMiss, RuleScan, RuleTarget,
 };
 pub(crate) use rule_set::{RuleSet, RuleSetBuilder};
 
@@ -44,13 +45,15 @@ pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeS
 /// the runtime invocation, not in this value, so repeated runs with the same
 /// [`Program`] start from fresh rule availability. Running a program requires
 /// an already admitted [`RunSeed`], so parsing never accepts raw runtime input
-/// or detached execution limits.
-pub struct Program {
+/// or detached execution policy values.
+pub struct Program<P: ParsePolicy = DefaultPolicy> {
     /// Immutable rule table plus parsed `(once)` metadata.
     rule_set: RuleSet,
+    /// Compile-time parser policy selected for this program.
+    policy: PhantomData<P>,
 }
 
-impl core::fmt::Debug for Program {
+impl<P: ParsePolicy> core::fmt::Debug for Program<P> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("Program")
@@ -60,17 +63,21 @@ impl core::fmt::Debug for Program {
     }
 }
 
-impl Program {
+impl<P: ParsePolicy> Program<P> {
     /// Wraps a parser-built rule set as a reusable program.
     pub(crate) fn from_rule_set(rule_set: RuleSet) -> Self {
-        Self { rule_set }
+        Self {
+            rule_set,
+            policy: PhantomData,
+        }
     }
 
     /// Parses typed program source into a reusable program value.
     ///
-    /// [`ProgramSource`] marks the source boundary, while [`ParseLimits`]
-    /// carries the host's parser resource policy. This method performs the
-    /// actual A=B syntax validation and builds the immutable rule table.
+    /// [`ProgramSource`] marks the source boundary, while this program's
+    /// [`ParsePolicy`] carries the parser resource
+    /// policy. This method performs the actual A=B syntax validation and builds
+    /// the immutable rule table.
     ///
     /// # Errors
     ///
@@ -78,8 +85,8 @@ impl Program {
     /// is not ASCII printable syntax, a non-empty code line does not contain
     /// exactly one `=`, reserved syntax appears as payload data, or allocation
     /// fails while building the parsed program.
-    pub fn parse(source: ProgramSource<'_>, limits: ParseLimits) -> Result<Self, ParseError> {
-        Ok(Self::from_rule_set(parse_rules_impl(source, limits)?))
+    pub fn parse(source: ProgramSource<'_>) -> Result<Self, ParseError> {
+        Ok(Self::from_rule_set(parse_rules_impl::<P>(source)?))
     }
 
     /// Returns the number of executable rules in the parsed program.
@@ -124,7 +131,10 @@ impl Program {
     /// # Errors
     ///
     /// Returns `RunStartError` when allocating per-run execution state fails.
-    pub fn start_run(&self, seed: RunSeed) -> Result<BorrowedRunSession<'_>, RunStartError> {
+    pub fn start_run<E: ExecutionPolicy>(
+        &self,
+        seed: RunSeed<E>,
+    ) -> Result<BorrowedRunSession<'_, P, E>, RunStartError> {
         BorrowedRunSession::new(self, seed)
     }
 
@@ -138,7 +148,10 @@ impl Program {
     /// # Errors
     ///
     /// Returns `RunStartError` when allocating per-run execution state fails.
-    pub fn into_run(self, seed: RunSeed) -> Result<OwnedRunSession, RunStartError> {
+    pub fn into_run<E: ExecutionPolicy>(
+        self,
+        seed: RunSeed<E>,
+    ) -> Result<OwnedRunSession<P, E>, RunStartError> {
         OwnedRunSession::new(self, seed)
     }
 
@@ -151,10 +164,10 @@ impl Program {
     /// # Errors
     ///
     /// Returns `RunStartError` when allocating per-run execution state fails.
-    pub fn start_rule_attempt_run(
+    pub fn start_rule_attempt_run<E: ExecutionPolicy, A: RuleAttemptPolicy>(
         &self,
-        seed: RuleAttemptSeed,
-    ) -> Result<BorrowedRuleAttemptSession<'_>, RunStartError> {
+        seed: RuleAttemptSeed<E, A>,
+    ) -> Result<BorrowedRuleAttemptSession<'_, P, E, A>, RunStartError> {
         BorrowedRuleAttemptSession::new(self, seed)
     }
 
@@ -165,10 +178,10 @@ impl Program {
     /// # Errors
     ///
     /// Returns `RunStartError` when allocating per-run execution state fails.
-    pub fn into_rule_attempt_run(
+    pub fn into_rule_attempt_run<E: ExecutionPolicy, A: RuleAttemptPolicy>(
         self,
-        seed: RuleAttemptSeed,
-    ) -> Result<OwnedRuleAttemptSession, RunStartError> {
+        seed: RuleAttemptSeed<E, A>,
+    ) -> Result<OwnedRuleAttemptSession<P, E, A>, RunStartError> {
         OwnedRuleAttemptSession::new(self, seed)
     }
 
@@ -183,7 +196,7 @@ impl Program {
     ///
     /// Returns `RunError` when allocation fails, state-size arithmetic
     /// overflows, or a configured execution budget would be exceeded.
-    pub fn run(&self, seed: RunSeed) -> Result<RunResult, RunError> {
+    pub fn run<E: ExecutionPolicy>(&self, seed: RunSeed<E>) -> Result<RunResult, RunError> {
         crate::execution::finish_borrowed_run(self, seed)
     }
 
@@ -193,15 +206,10 @@ impl Program {
     }
 
     /// Selects the next checked rule-attempt target.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RuleAttemptCursorError` if the cursor no longer points inside
-    /// this parsed program.
     pub(crate) fn select_attempt_target(
         &self,
         cursor: &mut RuleCursor,
-    ) -> Result<RuleAttemptTargetSelection<'_>, RuleAttemptCursorError> {
+    ) -> RuleAttemptTargetSelection<'_> {
         self.rule_set.select_attempt_target(cursor)
     }
 }

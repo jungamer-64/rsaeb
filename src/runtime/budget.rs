@@ -3,50 +3,52 @@ use crate::error::{
     ReturnOutputLimitError, RuleAttemptLimitError, RuleAttemptStepError, RunStepError,
     RuntimeStateLimitError, StepLimitError,
 };
-use crate::limits::{ExecutionLimits, RuleAttemptCount, RuleAttemptLimit, StepCount};
+use crate::limits::{RuleAttemptCount, RuleAttemptLimit, StepCount};
+use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
+use core::marker::PhantomData;
 
 /// Execution budgets plus the number of committed execution steps.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct RuntimeBudgetState {
-    /// Host execution policy admitted for this run.
-    limits: ExecutionLimits,
+pub(crate) struct RuntimeBudgetState<E: ExecutionPolicy> {
     /// Steps committed so far.
     completed_steps: StepCount,
+    /// Compile-time execution policy selected for this run.
+    policy: PhantomData<E>,
 }
 
 /// Rule-attempt budget plus the number of consumed executable rule-line attempts.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct RuleAttemptBudgetState {
-    /// Host rule-attempt policy admitted for this run.
-    limit: RuleAttemptLimit,
+pub(crate) struct RuleAttemptBudgetState<A: RuleAttemptPolicy> {
     /// Rule attempts consumed so far.
     completed_attempts: RuleAttemptCount,
+    /// Compile-time rule-attempt policy selected for this run.
+    policy: PhantomData<A>,
 }
 
 /// Borrow-tied next step reservation.
 #[derive(Debug)]
-pub(crate) struct StepReservation<'budget> {
+pub(crate) struct StepReservation<'budget, E: ExecutionPolicy> {
     /// Budget state borrowed until the reservation is either committed or dropped.
-    budget: &'budget mut RuntimeBudgetState,
+    budget: &'budget mut RuntimeBudgetState<E>,
     /// Step count to publish when the rule application commits.
     next_step: StepCount,
 }
 
 /// Borrow-tied next rule-attempt reservation.
 #[derive(Debug)]
-pub(crate) struct RuleAttemptReservation<'budget> {
+pub(crate) struct RuleAttemptReservation<'budget, A: RuleAttemptPolicy> {
     /// Attempt budget borrowed until the reservation is either committed or dropped.
-    budget: &'budget mut RuleAttemptBudgetState,
+    budget: &'budget mut RuleAttemptBudgetState<A>,
     /// Rule-attempt count to publish when the rule line is consumed.
     next_attempt: RuleAttemptCount,
 }
 
-impl RuntimeBudgetState {
+impl<E: ExecutionPolicy> RuntimeBudgetState<E> {
     /// Starts runtime budget tracking for a newly admitted run.
-    pub(crate) const fn new(limits: ExecutionLimits) -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
-            limits,
             completed_steps: StepCount::ZERO,
+            policy: PhantomData,
         }
     }
 
@@ -65,7 +67,7 @@ impl RuntimeBudgetState {
         &self,
         attempted_len: RuntimeStateByteCount,
     ) -> Result<(), RunStepError> {
-        let limit = self.limits.state_byte_limit();
+        let limit = E::STATE_BYTE_LIMIT;
         if limit.accepts(attempted_len) {
             return Ok(());
         }
@@ -83,7 +85,7 @@ impl RuntimeBudgetState {
         &self,
         attempted_len: ReturnOutputByteCount,
     ) -> Result<(), RunStepError> {
-        let limit = self.limits.return_byte_limit();
+        let limit = E::RETURN_BYTE_LIMIT;
         if limit.accepts(attempted_len) {
             return Ok(());
         }
@@ -100,8 +102,8 @@ impl RuntimeBudgetState {
     pub(crate) fn reserve_next_step(
         &mut self,
         state_len: RuntimeStateByteCount,
-    ) -> Result<StepReservation<'_>, RunStepError> {
-        let limit = self.limits.step_limit();
+    ) -> Result<StepReservation<'_, E>, RunStepError> {
+        let limit = E::STEP_LIMIT;
         let next_step = reserve_next_step(limit, self.completed_steps, state_len)?;
 
         Ok(StepReservation {
@@ -111,7 +113,7 @@ impl RuntimeBudgetState {
     }
 }
 
-impl StepReservation<'_> {
+impl<E: ExecutionPolicy> StepReservation<'_, E> {
     /// Checks a candidate rewrite state against runtime state limits.
     ///
     /// # Errors
@@ -145,12 +147,12 @@ impl StepReservation<'_> {
     }
 }
 
-impl RuleAttemptBudgetState {
+impl<A: RuleAttemptPolicy> RuleAttemptBudgetState<A> {
     /// Starts rule-attempt budget tracking for a newly admitted rule-attempt run.
-    pub(crate) const fn new(limit: RuleAttemptLimit) -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
-            limit,
             completed_attempts: RuleAttemptCount::ZERO,
+            policy: PhantomData,
         }
     }
 
@@ -168,8 +170,9 @@ impl RuleAttemptBudgetState {
     pub(crate) fn reserve_next_attempt(
         &mut self,
         state_len: RuntimeStateByteCount,
-    ) -> Result<RuleAttemptReservation<'_>, RuleAttemptStepError> {
-        let next_attempt = reserve_next_attempt(self.limit, self.completed_attempts, state_len)?;
+    ) -> Result<RuleAttemptReservation<'_, A>, RuleAttemptStepError> {
+        let next_attempt =
+            reserve_next_attempt(A::RULE_ATTEMPT_LIMIT, self.completed_attempts, state_len)?;
 
         Ok(RuleAttemptReservation {
             budget: self,
@@ -178,7 +181,7 @@ impl RuleAttemptBudgetState {
     }
 }
 
-impl RuleAttemptReservation<'_> {
+impl<A: RuleAttemptPolicy> RuleAttemptReservation<'_, A> {
     /// Publishes the reserved rule-attempt count.
     pub(crate) fn commit(self) -> RuleAttemptCount {
         self.budget.completed_attempts = self.next_attempt;

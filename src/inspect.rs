@@ -12,15 +12,15 @@
 //! cannot allocate.
 //!
 //! ```
-//! use rsaeb::limits::DEFAULT_PARSE_LIMITS;
 //! use rsaeb::inspect::{RuleAction, RuleAnchor, RuleRepeat};
+//! use rsaeb::policy::DefaultPolicy;
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_text(
+//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text(
 //!     "(once)(start)a=(return)done",
-//! ), DEFAULT_PARSE_LIMITS)?;
+//! ))?;
 //! let rule = program.rules().next().ok_or("missing rule")?;
 //!
 //! if rule.position().number().get() != 1 {
@@ -118,9 +118,6 @@ pub struct RuleNumber {
 }
 
 impl RuleNumber {
-    /// First public rule number.
-    pub(crate) const FIRST: Self = Self { one_based: 1 };
-
     /// Builds an index from a zero-based offset.
     fn from_zero_based(zero_based: usize) -> Option<Self> {
         let one_based = zero_based.checked_add(1)?;
@@ -146,11 +143,6 @@ pub struct RulePosition {
 }
 
 impl RulePosition {
-    /// First executable rule position.
-    pub(crate) const FIRST: Self = Self {
-        number: RuleNumber::FIRST,
-    };
-
     /// Builds an index from a zero-based offset.
     pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
         let number = RuleNumber::from_zero_based(zero_based)?;

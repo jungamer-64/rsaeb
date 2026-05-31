@@ -8,7 +8,7 @@
 //! `rsaeb` is a `no_std + alloc` library crate. It parses compact A=B source
 //! into an immutable [`program::Program`], validates host bytes as
 //! [`input::RuntimeInput`], admits that input into a one-run [`input::RunSeed`],
-//! and executes only after [`limits::ExecutionLimits`] are attached. The
+//! and executes under resource policies selected by types from [`policy`]. The
 //! interpreter core does not read files, use process arguments, access
 //! environment variables, write stdout/stderr, or perform lossy byte-to-text
 //! display conversion.
@@ -27,14 +27,15 @@
 //!
 //! - [`source::ProgramSource::from_bytes`] and [`source::ProgramSource::from_text`] explicitly
 //!   label host bytes or strings as A=B source before parsing.
-//! - [`program::Program::parse`] validates source syntax under [`limits::ParseLimits`] and
-//!   returns a reusable [`program::Program`].
+//! - [`program::Program::parse`] validates source syntax under the program's
+//!   [`policy::ParsePolicy`] and returns a reusable [`program::Program`].
 //! - [`input::RuntimeInputSource::from_bytes`] labels host input bytes, and
 //!   [`input::RuntimeInput::validate`] validates and owns them in the runtime input
 //!   byte domain until execution consumes the value.
-//! - [`limits::RuntimeInputLimits`] bounds raw input validation,
-//!   [`input::RunSeed`] admits validated input under [`limits::ExecutionLimits`],
-//!   and [`limits::TraceSnapshotByteLimit`] bounds trace snapshot materialization.
+//! - [`policy::RuntimeInputPolicy`] bounds raw input validation,
+//!   [`input::RunSeed`] admits validated input under a
+//!   [`policy::ExecutionPolicy`], and [`policy::TraceSnapshotPolicy`] bounds
+//!   trace snapshot materialization.
 //! - [`program::Program::run`] runs to completion while borrowing the parsed
 //!   program, [`program::Program::start_run`] returns a borrowed typestate
 //!   execution, [`program::Program::start_rule_attempt_run`] returns a borrowed
@@ -56,12 +57,11 @@
 //! distinguishable in the type system.
 //!
 //! [`input::RunSeed`] is the admission witness for one run. It consumes a
-//! validated [`input::RuntimeInput`] together with
-//! [`limits::ExecutionLimits`], checks the initial runtime-state budget, and
-//! prevents a later execution API from receiving raw bytes or detached budget
-//! values.
+//! validated [`input::RuntimeInput`] under an [`policy::ExecutionPolicy`],
+//! checks the initial runtime-state budget, and prevents a later execution API
+//! from receiving raw bytes or detached budget values.
 //! [`execution::RuleAttemptSeed`] extends that admission witness with a
-//! [`limits::RuleAttemptLimit`] when a host needs rule-line attempt stepping.
+//! [`policy::RuleAttemptPolicy`] when a host needs rule-line attempt stepping.
 //!
 //! # Basic execution
 //!
@@ -69,24 +69,15 @@
 //! admit an [`input::RunSeed`] before running:
 //!
 //! ```
-//! use rsaeb::limits::{
-//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
-//! };
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
-//! use rsaeb::limits::{ExecutionLimits, RuntimeInputLimits};
+//! use rsaeb::policy::DefaultPolicy;
 //! use rsaeb::program::{Program, RunOutcome};
 //! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?;
-//! let input_limits = RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN);
-//! let execution_limits = ExecutionLimits::new(
-//!     DEFAULT_MAX_STEPS,
-//!     DEFAULT_MAX_STATE_LEN,
-//!     DEFAULT_MAX_RETURN_LEN,
-//! );
-//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), input_limits)?;
-//! let seed = RunSeed::admit(input, execution_limits)?;
+//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("a=b"))?;
+//! let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let seed = RunSeed::<DefaultPolicy>::admit(input)?;
 //! let result = program.run(seed)?;
 //!
 //! if !matches!(
@@ -104,28 +95,21 @@
 //! owns only those per-run slot states rather than mutating the parsed program:
 //!
 //! ```
-//! use rsaeb::limits::{
-//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
-//!     ExecutionLimits, RuntimeInputLimits, StepLimit,
-//! };
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::{DefaultPolicy, StaticExecutionPolicy};
 //! use rsaeb::program::{Program, RunOutcome};
 //! use rsaeb::source::ProgramSource;
 //!
+//! type ShortRun = StaticExecutionPolicy<10_000, 16_777_216, 16_777_216>;
+//!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_text("(once)a=b\na=c"), DEFAULT_PARSE_LIMITS)?;
-//! let input_limits = RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN);
-//! let execution_limits = ExecutionLimits::new(
-//!     StepLimit::new(10_000),
-//!     DEFAULT_MAX_STATE_LEN,
-//!     DEFAULT_MAX_RETURN_LEN,
-//! );
+//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("(once)a=b\na=c"))?;
 //!
-//! let first_input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"aa"), input_limits)?;
-//! let second_input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"aa"), input_limits)?;
+//! let first_input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"aa"))?;
+//! let second_input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"aa"))?;
 //!
-//! let first = program.run(RunSeed::admit(first_input, execution_limits)?)?;
-//! let second = program.run(RunSeed::admit(second_input, execution_limits)?)?;
+//! let first = program.run(RunSeed::<ShortRun>::admit(first_input)?)?;
+//! let second = program.run(RunSeed::<ShortRun>::admit(second_input)?)?;
 //!
 //! if !matches!(
 //!     first.outcome(),
@@ -143,6 +127,39 @@
 //! # }
 //! ```
 //!
+//! # Compile-time policies
+//!
+//! Resource policy is selected by types. The default policy preserves the crate
+//! defaults; const-generic static policies let a host name tighter domains
+//! without constructing runtime limit bags:
+//!
+//! ```
+//! use rsaeb::error::{RunError, RunFinishError, RunStepError};
+//! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::{DefaultPolicy, StaticExecutionPolicy, StaticRuntimeInputPolicy};
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
+//!
+//! type TinyInput = StaticRuntimeInputPolicy<4>;
+//! type NoSteps = StaticExecutionPolicy<0, 4, 4>;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("a=b"))?;
+//! let input = RuntimeInput::<TinyInput>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let seed = RunSeed::<NoSteps>::admit(input)?;
+//! let result = program.run(seed);
+//!
+//! if !matches!(
+//!     result,
+//!     Err(RunError::Finish(RunFinishError::Step(RunStepError::StepLimit(error))))
+//!         if error.max_steps().get() == 0
+//! ) {
+//!     return Err("unexpected step-limit error".into());
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Stepwise execution
 //!
 //! Use [`program::Program::start_run`] when a host wants to wait after each
@@ -150,25 +167,17 @@
 //!
 //! ```
 //! use rsaeb::execution::BorrowedStepTransition;
-//! use rsaeb::limits::{
-//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
-//! };
-//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
-//! use rsaeb::input::RunSeed;
-//! use rsaeb::limits::{ExecutionLimits, RuntimeInputLimits};
+//! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::{DefaultPolicy, StaticExecutionPolicy};
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
+//! type TenSteps = StaticExecutionPolicy<10, 16_777_216, 16_777_216>;
+//!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_text("a=b\nb=c"), DEFAULT_PARSE_LIMITS)?;
-//! let input_limits = RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN);
-//! let execution_limits = ExecutionLimits::new(
-//!     StepLimit::new(10),
-//!     DEFAULT_MAX_STATE_LEN,
-//!     DEFAULT_MAX_RETURN_LEN,
-//! );
-//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), input_limits)?;
-//! let seed = RunSeed::admit(input, execution_limits)?;
+//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("a=b\nb=c"))?;
+//! let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let seed = RunSeed::<TenSteps>::admit(input)?;
 //! let execution = program.start_run(seed)?;
 //!
 //! let execution = match execution.step() {
@@ -238,27 +247,19 @@
 //!
 //! ```
 //! use rsaeb::execution::{BorrowedRuleAttemptTransition, RuleAttemptSeed, RuleMissReason};
-//! use rsaeb::limits::{
-//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
-//!     RuleAttemptLimit, StepLimit,
-//! };
-//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
-//! use rsaeb::input::RunSeed;
-//! use rsaeb::limits::{ExecutionLimits, RuntimeInputLimits};
+//! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::{DefaultPolicy, StaticExecutionPolicy, StaticRuleAttemptPolicy};
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
+//! type TenSteps = StaticExecutionPolicy<10, 16_777_216, 16_777_216>;
+//! type TenAttempts = StaticRuleAttemptPolicy<10>;
+//!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_text("z=x\na=b"), DEFAULT_PARSE_LIMITS)?;
-//! let input_limits = RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN);
-//! let execution_limits = ExecutionLimits::new(
-//!     StepLimit::new(10),
-//!     DEFAULT_MAX_STATE_LEN,
-//!     DEFAULT_MAX_RETURN_LEN,
-//! );
-//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), input_limits)?;
-//! let seed = RunSeed::admit(input, execution_limits)?;
-//! let attempt_seed = RuleAttemptSeed::new(seed, RuleAttemptLimit::new(10));
+//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("z=x\na=b"))?;
+//! let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let seed = RunSeed::<TenSteps>::admit(input)?;
+//! let attempt_seed = RuleAttemptSeed::<TenSteps, TenAttempts>::new(seed);
 //! let execution = program.start_rule_attempt_run(attempt_seed)?;
 //!
 //! let execution = match execution.step() {
@@ -294,48 +295,11 @@
 //!
 //! # Limits
 //!
-//! [`limits::RuntimeInputLimits`] carries input-byte validation policy.
-//! [`limits::ExecutionLimits`] carries initial runtime-state admission, the step
-//! budget, and byte budgets for rewrite states and `(return)` outputs.
-//! [`execution::RuleAttemptSeed`] binds one run seed to the
-//! [`limits::RuleAttemptLimit`] for the separate rule-line attempt mode.
-//! Trace snapshot materialization uses an explicit
-//! [`limits::TraceSnapshotByteLimit`]. Step limits are reserved before rewrite
-//! or return-output materialization when another matching rule would apply
-//! after the configured number of completed steps:
-//!
-//! ```
-//! use rsaeb::error::{RunError, RunFinishError, RunStepError};
-//! use rsaeb::limits::{
-//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
-//! };
-//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
-//! use rsaeb::input::RunSeed;
-//! use rsaeb::limits::{ExecutionLimits, RuntimeInputLimits};
-//! use rsaeb::program::Program;
-//! use rsaeb::source::ProgramSource;
-//!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let input_limits = RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN);
-//! let execution_limits = ExecutionLimits::new(
-//!     StepLimit::new(0),
-//!     DEFAULT_MAX_STATE_LEN,
-//!     DEFAULT_MAX_RETURN_LEN,
-//! );
-//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), input_limits)?;
-//! let seed = RunSeed::admit(input, execution_limits)?;
-//! let result = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?.run(seed);
-//!
-//! if !matches!(
-//!     result,
-//!     Err(RunError::Finish(RunFinishError::Step(RunStepError::StepLimit(error))))
-//!         if error.completed_steps().get() == 0
-//! ) {
-//!     return Err("unexpected step-limit error".into());
-//! }
-//! # Ok(())
-//! # }
-//! ```
+//! The [`limits`] module contains leaf domain values such as
+//! [`limits::StepLimit`], [`limits::RuntimeStateByteLimit`], and
+//! [`limits::RuleLimit`]. Policy traits expose those values as associated
+//! constants, and structured errors echo the leaf value that rejected a measured
+//! count.
 //!
 //! # Rule inspection
 //!
@@ -343,13 +307,13 @@
 //! strings:
 //!
 //! ```
-//! use rsaeb::limits::DEFAULT_PARSE_LIMITS;
 //! use rsaeb::inspect::{RuleAction, RuleAnchor, RuleRepeat};
+//! use rsaeb::policy::DefaultPolicy;
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_text("( once ) ( start ) a = ( end ) b # comment"), DEFAULT_PARSE_LIMITS)?;
+//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("( once ) ( start ) a = ( end ) b # comment"))?;
 //! let rule = program.rules().next().ok_or("missing parsed rule")?;
 //!
 //! if rule.repeat() != RuleRepeat::Once {
@@ -385,27 +349,19 @@
 //!
 //! ```
 //! use core::convert::Infallible;
-//! use rsaeb::limits::{
-//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, StepLimit,
-//! };
 //! use rsaeb::trace::BorrowedTraceEvent;
-//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
-//! use rsaeb::input::RunSeed;
-//! use rsaeb::limits::{ExecutionLimits, RuntimeInputLimits};
+//! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::{DefaultPolicy, StaticExecutionPolicy};
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
+//! type TenSteps = StaticExecutionPolicy<10, 16_777_216, 16_777_216>;
+//!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_text("a=b\nb=(return)ok"), DEFAULT_PARSE_LIMITS)?;
+//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("a=b\nb=(return)ok"))?;
 //! let mut byte_counts = Vec::new();
-//! let input_limits = RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN);
-//! let execution_limits = ExecutionLimits::new(
-//!     StepLimit::new(10),
-//!     DEFAULT_MAX_STATE_LEN,
-//!     DEFAULT_MAX_RETURN_LEN,
-//! );
-//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), input_limits)?;
-//! let seed = RunSeed::admit(input, execution_limits)?;
+//! let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let seed = RunSeed::<TenSteps>::admit(input)?;
 //!
 //! program.run_with_borrowed_trace(
 //!     seed,
@@ -429,44 +385,43 @@
 //! byte budget, which lets the caller retain events after each callback returns:
 //!
 //! ```
-//! use rsaeb::limits::{
-//!     DEFAULT_MAX_INPUT_LEN, DEFAULT_PARSE_LIMITS, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
-//!     DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit,
-//! };
 //! use rsaeb::trace::{TraceSnapshotEffect, TraceSnapshotEvent};
-//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
-//! use rsaeb::input::RunSeed;
-//! use rsaeb::limits::{ExecutionLimits, RuntimeInputLimits};
+//! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::{
+//!     DefaultPolicy, StaticExecutionPolicy, StaticTraceSnapshotPolicy,
+//!     TraceSnapshotPolicyWitness,
+//! };
 //! use rsaeb::program::Program;
 //! use rsaeb::source::ProgramSource;
 //!
+//! type TenSteps = StaticExecutionPolicy<10, 16_777_216, 16_777_216>;
+//! type SnapshotBytes = StaticTraceSnapshotPolicy<16_777_216>;
+//!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::parse(ProgramSource::from_text("a=b\nb=(return)ok"), DEFAULT_PARSE_LIMITS)?;
-//! let input_limits = RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN);
-//! let execution_limits = ExecutionLimits::new(
-//!     StepLimit::new(10),
-//!     DEFAULT_MAX_STATE_LEN,
-//!     DEFAULT_MAX_RETURN_LEN,
-//! );
-//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), input_limits)?;
-//! let seed = RunSeed::admit(input, execution_limits)?;
+//! let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("a=b\nb=(return)ok"))?;
+//! let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let seed = RunSeed::<TenSteps>::admit(input)?;
 //! let mut states = Vec::new();
 //! let mut returns = Vec::new();
 //!
-//! program.run_with_trace_snapshots(seed, DEFAULT_MAX_TRACE_SNAPSHOT_LEN, |event| {
-//!     match event {
-//!         TraceSnapshotEvent::Initial { state } => states.push(state.into_raw_bytes()),
-//!         TraceSnapshotEvent::Step {
-//!             effect: TraceSnapshotEffect::Continue { state },
-//!             ..
-//!         } => states.push(state.into_raw_bytes()),
-//!         TraceSnapshotEvent::Step {
-//!             effect: TraceSnapshotEffect::Return { output },
-//!             ..
-//!         } => returns.push(output.into_raw_bytes()),
-//!     }
-//!     Ok::<(), core::convert::Infallible>(())
-//! })?;
+//! program.run_with_trace_snapshots(
+//!     seed,
+//!     TraceSnapshotPolicyWitness::<SnapshotBytes>::new(),
+//!     |event| {
+//!         match event {
+//!             TraceSnapshotEvent::Initial { state } => states.push(state.into_raw_bytes()),
+//!             TraceSnapshotEvent::Step {
+//!                 effect: TraceSnapshotEffect::Continue { state },
+//!                 ..
+//!             } => states.push(state.into_raw_bytes()),
+//!             TraceSnapshotEvent::Step {
+//!                 effect: TraceSnapshotEffect::Return { output },
+//!                 ..
+//!             } => returns.push(output.into_raw_bytes()),
+//!         }
+//!         Ok::<(), core::convert::Infallible>(())
+//!     },
+//! )?;
 //!
 //! if states != [b"a".to_vec(), b"b".to_vec()] {
 //!     return Err("unexpected trace states".into());
@@ -494,12 +449,13 @@
 //!
 //! ```
 //! use rsaeb::error::RuntimeInputError;
-//! use rsaeb::limits::{RuntimeInputByteLimit, RuntimeInputLimits};
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::StaticRuntimeInputPolicy;
 //!
-//! fn validate_host_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
-//!     let limits = RuntimeInputLimits::new(RuntimeInputByteLimit::new(4));
-//!     RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), limits)
+//! type HostInput = StaticRuntimeInputPolicy<4>;
+//!
+//! fn validate_host_input(bytes: &[u8]) -> Result<RuntimeInput<HostInput>, RuntimeInputError> {
+//!     RuntimeInput::<HostInput>::validate(RuntimeInputSource::from_bytes(bytes))
 //! }
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -541,6 +497,7 @@ pub mod limits;
 mod materialized;
 /// Program source parser.
 mod parser;
+pub mod policy;
 pub mod program;
 /// Parsed rule domain model.
 mod rule;

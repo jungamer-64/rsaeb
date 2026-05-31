@@ -10,14 +10,15 @@ use crate::error::{
 use crate::execution::{BorrowedFailedRun, BorrowedStepTransition};
 use crate::input::{RuntimeInput, RuntimeInputSource};
 use crate::limits::{
-    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, ReturnByteLimit,
-    ReturnOutputByteCount, RuntimeInputByteCount, RuntimeInputByteLimit, RuntimeStateByteCount,
-    RuntimeStateByteLimit, StepCount, StepLimit,
+    ReturnByteLimit, ReturnOutputByteCount, RuntimeInputByteCount, RuntimeInputByteLimit,
+    RuntimeStateByteCount, RuntimeStateByteLimit, StepCount, StepLimit,
 };
+use crate::policy::{DefaultPolicy, ExecutionPolicy, RuntimeInputPolicy};
 use crate::program::RunOutcome;
 use crate::runtime::action::prepare_matched_rule;
 use crate::test_support::{
-    TestFailure, TestResult, TestRunPolicy, ensure_eq, ensure_matches, parse_program, run_seed,
+    DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestFailure, TestInputPolicy, TestResult,
+    TestRunPolicy, ensure_eq, ensure_matches, parse_program, run_seed,
 };
 use crate::trace::RuntimeStateView;
 use alloc::vec::Vec;
@@ -62,8 +63,7 @@ fn expect_step_limit(error: RunStepError) -> Result<StepLimitError, TestFailure>
         RunStepError::Allocation(_)
         | RunStepError::RewriteSize(_)
         | RunStepError::RuntimeStateLimit(_)
-        | RunStepError::ReturnOutputLimit(_)
-        | RunStepError::RuleRuntimeState(_) => {
+        | RunStepError::ReturnOutputLimit(_) => {
             Err(TestFailure::message("expected step limit error"))
         }
     }
@@ -74,9 +74,9 @@ fn expect_step_limit(error: RunStepError) -> Result<StepLimitError, TestFailure>
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping succeeds.
-fn expect_step_error<'program>(
-    result: BorrowedStepTransition<'program>,
-) -> Result<BorrowedFailedRun<'program>, TestFailure> {
+fn expect_step_error<'program, P: crate::policy::ParsePolicy, E: ExecutionPolicy>(
+    result: BorrowedStepTransition<'program, P, E>,
+) -> Result<BorrowedFailedRun<'program, P, E>, TestFailure> {
     match result {
         BorrowedStepTransition::Failed(failed) => Ok(failed),
         BorrowedStepTransition::Applied(_)
@@ -90,9 +90,9 @@ fn expect_step_error<'program>(
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping fails.
-fn expect_step_transition<'program>(
-    result: BorrowedStepTransition<'program>,
-) -> Result<BorrowedStepTransition<'program>, TestFailure> {
+fn expect_step_transition<'program, P: crate::policy::ParsePolicy, E: ExecutionPolicy>(
+    result: BorrowedStepTransition<'program, P, E>,
+) -> Result<BorrowedStepTransition<'program, P, E>, TestFailure> {
     match result {
         BorrowedStepTransition::Failed(failed) => Err(TestFailure::from(failed.into_error())),
         transition => Ok(transition),
@@ -105,15 +105,18 @@ fn expect_step_transition<'program>(
 ///
 /// Returns `TestFailure` if input validation fails or the input exceeds runtime
 /// state limits.
-fn state_from_input_bytes(input: &[u8], limits: TestRunPolicy) -> Result<State, TestFailure> {
+fn state_from_input_bytes<I: RuntimeInputPolicy, E: ExecutionPolicy>(
+    input: &[u8],
+    limits: TestRunPolicy<I, E>,
+) -> Result<State, TestFailure> {
     let (input, _) = run_seed(input, limits)?.into_runtime_parts();
     Ok(State::from_input(input))
 }
 
-struct OnceRuleFailureExpectation {
+struct OnceRuleFailureExpectation<I: RuntimeInputPolicy, E: ExecutionPolicy> {
     source: &'static str,
     input: &'static [u8],
-    limits: TestRunPolicy,
+    limits: TestRunPolicy<I, E>,
     error: RunStepError,
     expected_match: &'static str,
     expected_availability: &'static str,
@@ -125,18 +128,16 @@ struct OnceRuleFailureExpectation {
 ///
 /// Returns `TestFailure` if the candidate does not fail as expected or the
 /// failed candidate mutates progress, state, or once-rule availability.
-fn ensure_once_rule_failure_does_not_commit_rule(
-    expectation: &OnceRuleFailureExpectation,
+fn ensure_once_rule_failure_does_not_commit_rule<I: RuntimeInputPolicy, E: ExecutionPolicy>(
+    expectation: &OnceRuleFailureExpectation<I, E>,
 ) -> TestResult {
     let program = parse_program(expectation.source)?;
     let state = state_from_input_bytes(expectation.input, expectation.limits)?;
-    let mut budget = RuntimeBudgetState::new(expectation.limits.execution());
+    let mut budget: RuntimeBudgetState<E> = RuntimeBudgetState::new();
     let mut scratch = RewriteScratch::new();
     let mut once_states = OnceStateSet::new(program.once_rule_count())?;
 
-    let matched = match find_next_match(program.rule_scan(), &mut once_states, &state)
-        .map_err(RunStepError::from)?
-    {
+    let matched = match find_next_match(program.rule_scan(), &mut once_states, &state) {
         RuleSearch::Matched(matched) => matched,
         RuleSearch::Stable => {
             return Err(TestFailure::message(expectation.expected_match));
@@ -156,8 +157,7 @@ fn ensure_once_rule_failure_does_not_commit_rule(
 
     ensure_matches(
         matches!(
-            find_next_match(program.rule_scan(), &mut once_states, &state)
-                .map_err(RunStepError::from)?,
+            find_next_match(program.rule_scan(), &mut once_states, &state),
             RuleSearch::Matched(_)
         ),
         expectation.expected_availability,
@@ -171,12 +171,7 @@ fn ensure_once_rule_failure_does_not_commit_rule(
 #[test]
 fn once_rule_failure_preserves_state_before_step_commit() -> TestResult {
     let program = parse_program("(once)a=(return)ok")?;
-    let limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(1),
-        DEFAULT_MAX_STATE_LEN,
-        ReturnByteLimit::new(1),
-    );
+    let limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, 1>::new();
     let input = run_seed(b"a", limits)?;
     let runtime = program.start_run(input)?;
     let error = expect_step_error(runtime.step())?;
@@ -202,12 +197,7 @@ fn once_rule_failure_preserves_state_before_step_commit() -> TestResult {
 #[test]
 fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
     let program = parse_program("a=b")?;
-    let limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(0),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
+    let limits = DefaultInputRunPolicy::<0, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     let no_match_input = run_seed(b"x", limits)?;
     let no_match = program.start_run(no_match_input)?;
     match expect_step_transition(no_match.step())? {
@@ -261,12 +251,7 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
 /// Returns `TestFailure` if state or return-size limit failures commit state.
 #[test]
 fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
-    let state_limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(1),
-        RuntimeStateByteLimit::new(2),
-        ReturnByteLimit::new(10),
-    );
+    let state_limits = DefaultInputRunPolicy::<1, 2, 10>::new();
     let state_program = parse_program("=a")?;
     let state_input = run_seed(b"aa", state_limits)?;
     let state_limited = state_program.start_run(state_input)?;
@@ -291,12 +276,7 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
         )),
     )?;
 
-    let return_limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(1),
-        RuntimeStateByteLimit::new(10),
-        ReturnByteLimit::new(1),
-    );
+    let return_limits = DefaultInputRunPolicy::<1, 10, 1>::new();
     let return_program = parse_program("a=(return)ok")?;
     let return_input = run_seed(b"a", return_limits)?;
     let return_limited = return_program.start_run(return_input)?;
@@ -329,12 +309,7 @@ fn execution_size_limit_failures_preserve_uncommitted_state() -> TestResult {
 #[test]
 fn return_action_bypasses_rewrite_state_mutation_path() -> TestResult {
     let program = parse_program("a=(return)ok")?;
-    let limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(1),
-        RuntimeStateByteLimit::new(1),
-        ReturnByteLimit::new(2),
-    );
+    let limits = DefaultInputRunPolicy::<1, 1, 2>::new();
     let session = program.start_run(run_seed(b"a", limits)?)?;
 
     match expect_step_transition(session.step())? {
@@ -362,61 +337,40 @@ fn return_action_bypasses_rewrite_state_mutation_path() -> TestResult {
 /// Returns `TestFailure` if any failed `(once)` candidate commits its once slot.
 #[test]
 fn once_limit_failures_do_not_commit_rule() -> TestResult {
-    let expectations = [
-        OnceRuleFailureExpectation {
-            source: "(once)=aa",
-            input: b"a",
-            limits: TestRunPolicy::new(
-                DEFAULT_MAX_INPUT_LEN,
-                StepLimit::new(1),
-                RuntimeStateByteLimit::new(1),
-                DEFAULT_MAX_RETURN_LEN,
-            ),
-            error: RunStepError::RuntimeStateLimit(RuntimeStateLimitError::new(
-                RuntimeStateByteLimit::new(1),
-                RuntimeStateByteCount::new(3),
-            )),
-            expected_match: "expected once rewrite limit failure",
-            expected_availability: "expected failed once rewrite to remain available",
-        },
-        OnceRuleFailureExpectation {
-            source: "(once)a=b",
-            input: b"a",
-            limits: TestRunPolicy::new(
-                DEFAULT_MAX_INPUT_LEN,
-                StepLimit::new(0),
-                DEFAULT_MAX_STATE_LEN,
-                DEFAULT_MAX_RETURN_LEN,
-            ),
-            error: RunStepError::StepLimit(StepLimitError::new(
-                StepLimit::new(0),
-                StepCount::ZERO,
-                RuntimeStateByteCount::new(1),
-            )),
-            expected_match: "expected once step limit failure",
-            expected_availability: "expected failed step reservation to leave once rule available",
-        },
-        OnceRuleFailureExpectation {
-            source: "(once)a=(return)ok",
-            input: b"a",
-            limits: TestRunPolicy::new(
-                DEFAULT_MAX_INPUT_LEN,
-                StepLimit::new(1),
-                DEFAULT_MAX_STATE_LEN,
-                ReturnByteLimit::new(1),
-            ),
-            error: RunStepError::ReturnOutputLimit(ReturnOutputLimitError::new(
-                ReturnByteLimit::new(1),
-                ReturnOutputByteCount::new(2),
-            )),
-            expected_match: "expected once return limit failure",
-            expected_availability: "expected failed once return to remain available",
-        },
-    ];
-
-    for expectation in expectations {
-        ensure_once_rule_failure_does_not_commit_rule(&expectation)?;
-    }
+    ensure_once_rule_failure_does_not_commit_rule(&OnceRuleFailureExpectation {
+        source: "(once)=aa",
+        input: b"a",
+        limits: DefaultInputRunPolicy::<1, 1, DEFAULT_BYTE_BUDGET>::new(),
+        error: RunStepError::RuntimeStateLimit(RuntimeStateLimitError::new(
+            RuntimeStateByteLimit::new(1),
+            RuntimeStateByteCount::new(3),
+        )),
+        expected_match: "expected once rewrite limit failure",
+        expected_availability: "expected failed once rewrite to remain available",
+    })?;
+    ensure_once_rule_failure_does_not_commit_rule(&OnceRuleFailureExpectation {
+        source: "(once)a=b",
+        input: b"a",
+        limits: DefaultInputRunPolicy::<0, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new(),
+        error: RunStepError::StepLimit(StepLimitError::new(
+            StepLimit::new(0),
+            StepCount::ZERO,
+            RuntimeStateByteCount::new(1),
+        )),
+        expected_match: "expected once step limit failure",
+        expected_availability: "expected failed step reservation to leave once rule available",
+    })?;
+    ensure_once_rule_failure_does_not_commit_rule(&OnceRuleFailureExpectation {
+        source: "(once)a=(return)ok",
+        input: b"a",
+        limits: DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, 1>::new(),
+        error: RunStepError::ReturnOutputLimit(ReturnOutputLimitError::new(
+            ReturnByteLimit::new(1),
+            ReturnOutputByteCount::new(2),
+        )),
+        expected_match: "expected once return limit failure",
+        expected_availability: "expected failed once return to remain available",
+    })?;
     Ok(())
 }
 
@@ -430,18 +384,12 @@ fn once_state_set_is_constructed_from_parser_assigned_slots() -> TestResult {
     let mut once_states = OnceStateSet::new(program.once_rule_count())?;
     let state = state_from_input_bytes(
         b"a",
-        TestRunPolicy::new(
-            DEFAULT_MAX_INPUT_LEN,
-            StepLimit::new(1),
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        ),
+        DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new(),
     )?;
 
     ensure_matches(
         matches!(
-            find_next_match(program.rule_scan(), &mut once_states, &state)
-                .map_err(RunStepError::from)?,
+            find_next_match(program.rule_scan(), &mut once_states, &state),
             RuleSearch::Matched(_)
         ),
         "expected parser-assigned once slot state to keep the rule available",
@@ -454,16 +402,9 @@ fn once_state_set_is_constructed_from_parser_assigned_slots() -> TestResult {
 /// information.
 #[test]
 fn runtime_input_error_is_structured_at_the_runtime_boundary() -> TestResult {
-    let Err(error) = RuntimeInput::validate(
-        RuntimeInputSource::from_bytes(b"abc"),
-        TestRunPolicy::new(
-            RuntimeInputByteLimit::new(2),
-            StepLimit::new(10),
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        )
-        .input(),
-    ) else {
+    let Err(error) =
+        RuntimeInput::<TestInputPolicy<2>>::validate(RuntimeInputSource::from_bytes(b"abc"))
+    else {
         return Err(TestFailure::message("expected input limit error"));
     };
 
@@ -475,16 +416,9 @@ fn runtime_input_error_is_structured_at_the_runtime_boundary() -> TestResult {
         },
     )?;
 
-    let Err(error) = RuntimeInput::validate(
-        RuntimeInputSource::from_bytes("a\u{80}".as_bytes()),
-        TestRunPolicy::new(
-            RuntimeInputByteLimit::new(1),
-            StepLimit::new(10),
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        )
-        .input(),
-    ) else {
+    let Err(error) = RuntimeInput::<TestInputPolicy<1>>::validate(RuntimeInputSource::from_bytes(
+        "a\u{80}".as_bytes(),
+    )) else {
         return Err(TestFailure::message(
             "expected input limit before byte error",
         ));
@@ -498,10 +432,9 @@ fn runtime_input_error_is_structured_at_the_runtime_boundary() -> TestResult {
         },
     )?;
 
-    let Err(error) = RuntimeInput::validate(
-        RuntimeInputSource::from_bytes("a\u{80}".as_bytes()),
-        TestRunPolicy::default().input(),
-    ) else {
+    let Err(error) = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(
+        "a\u{80}".as_bytes(),
+    )) else {
         return Err(TestFailure::message("expected input error"));
     };
 
@@ -527,12 +460,7 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
         .next()
         .ok_or(TestFailure::message("expected parsed rule"))?
         .lhs();
-    let limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(10_000),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
+    let limits = DefaultInputRunPolicy::<10_000, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     let (input, _) = run_seed(b"a=()# ", limits)?.into_runtime_parts();
     let state = State::from_input(input);
 
@@ -559,12 +487,7 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
 #[test]
 fn once_rule_commit_proof_allows_only_one_successful_application() -> TestResult {
     let program = parse_program("(once)a=a\na=b")?;
-    let limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(10),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
+    let limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     let result = program.run(run_seed(b"a", limits)?)?;
 
     ensure_eq!(result.steps().get(), 2)?;
@@ -588,12 +511,7 @@ fn rewrite_action_variants_preserve_runtime_placement() -> TestResult {
         ("b=(start)x", b"ab".as_slice(), b"xa".as_slice()),
         ("a=(end)x", b"ab".as_slice(), b"bx".as_slice()),
     ] {
-        let limits = TestRunPolicy::new(
-            DEFAULT_MAX_INPUT_LEN,
-            StepLimit::new(1),
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        );
+        let limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
         let result = parse_program(source)?.run(run_seed(input, limits)?)?;
 
         ensure_matches(
@@ -620,12 +538,7 @@ fn empty_payload_matches_keep_anchor_specific_span_placement() -> TestResult {
         ("(end)=x", b"abx".as_slice()),
     ] {
         let program = parse_program(source)?;
-        let limits = TestRunPolicy::new(
-            DEFAULT_MAX_INPUT_LEN,
-            StepLimit::new(1),
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        );
+        let limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
         let session = program.start_run(run_seed(b"ab", limits)?)?;
 
         match expect_step_transition(session.step())? {

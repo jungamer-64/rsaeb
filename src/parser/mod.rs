@@ -9,7 +9,8 @@ mod rule_line;
 mod tests;
 
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
-use crate::limits::{ParseLimits, SourceByteCount};
+use crate::limits::SourceByteCount;
+use crate::policy::ParsePolicy;
 use crate::program::{RuleSet, RuleSetBuilder};
 use crate::source::{ProgramSource, SourceLineNumber};
 
@@ -22,17 +23,16 @@ use location::source_line_number;
 ///
 /// Returns `ParseError` if source location conversion, line compaction, rule
 /// parsing, or parsed-rule storage fails.
-pub(crate) fn parse_rules_impl(
+pub(crate) fn parse_rules_impl<P: ParsePolicy>(
     source: ProgramSource<'_>,
-    limits: ParseLimits,
 ) -> Result<RuleSet, ParseError> {
-    ensure_source_within_limit(source, limits)?;
+    ensure_source_within_limit::<P>(source)?;
 
     let mut rule_set = RuleSetBuilder::new();
 
     for (zero_based_line, raw_line) in source.as_bytes().split(|&byte| byte == b'\n').enumerate() {
         let line_number = source_line_number(zero_based_line)?;
-        let compact_code = RawSourceLine::new(line_number, raw_line, limits.code_line_byte_limit())
+        let compact_code = RawSourceLine::new(line_number, raw_line, P::CODE_LINE_BYTE_LIMIT)
             .into_code_line()?
             .into_compact_line()?;
 
@@ -42,9 +42,9 @@ pub(crate) fn parse_rules_impl(
 
         let parsed_rule = non_empty_code
             .into_rule_syntax()?
-            .parse(limits.payload_byte_limit())?;
+            .parse(P::PAYLOAD_BYTE_LIMIT)?;
 
-        rule_set.push_parsed_rule(parsed_rule, limits.rule_limit())?;
+        rule_set.push_parsed_rule(parsed_rule, P::RULE_LIMIT)?;
     }
 
     Ok(rule_set.finish())
@@ -55,12 +55,9 @@ pub(crate) fn parse_rules_impl(
 /// # Errors
 ///
 /// Returns `ParseError` if the source length exceeds parser limits.
-fn ensure_source_within_limit(
-    source: ProgramSource<'_>,
-    limits: ParseLimits,
-) -> Result<(), ParseError> {
+fn ensure_source_within_limit<P: ParsePolicy>(source: ProgramSource<'_>) -> Result<(), ParseError> {
     let attempted_len = SourceByteCount::new(source.as_bytes().len());
-    let limit = limits.source_byte_limit();
+    let limit = P::SOURCE_BYTE_LIMIT;
     if limit.accepts(attempted_len) {
         return Ok(());
     }

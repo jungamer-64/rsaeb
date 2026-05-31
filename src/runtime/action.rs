@@ -1,6 +1,7 @@
 use crate::bytes::ReturnOutputByteCount;
 use crate::error::RunStepError;
 use crate::limits::StepCount;
+use crate::policy::ExecutionPolicy;
 use crate::program::{ReturnOutput, ReturnOutputView};
 use crate::rule::{ParsedRuleAction, Rule};
 
@@ -20,11 +21,11 @@ pub(crate) enum AppliedRule<'program> {
 
 /// Rule application after all failure-prone runtime preparation has succeeded.
 #[derive(Debug)]
-pub(crate) enum PreparedRuleApplication<'program, 'once, 'budget> {
+pub(crate) enum PreparedRuleApplication<'program, 'once, 'budget, E: ExecutionPolicy> {
     /// Prepared non-terminal rewrite.
-    Rewrite(PreparedRewriteRule<'program, 'once, 'budget>),
+    Rewrite(PreparedRewriteRule<'program, 'once, 'budget, E>),
     /// Prepared terminal return.
-    Return(PreparedReturnRule<'program, 'once, 'budget>),
+    Return(PreparedReturnRule<'program, 'once, 'budget, E>),
 }
 
 /// Committed non-terminal rewrite rule.
@@ -51,22 +52,22 @@ pub(crate) struct CommittedReturnRule<'program> {
 
 /// Prepared non-terminal rewrite before its step and once-state side effects commit.
 #[derive(Debug)]
-pub(crate) struct PreparedRewriteRule<'program, 'once, 'budget> {
+pub(crate) struct PreparedRewriteRule<'program, 'once, 'budget, E: ExecutionPolicy> {
     /// Matched rule and once-state commit permit.
     matched: PreparedMatchedRule<'program, 'once>,
     /// Step reservation required before this rewrite can commit.
-    step: StepReservation<'budget>,
+    step: StepReservation<'budget, E>,
     /// Runtime bytes ready to become the next state.
     rewrite: PreparedRewrite,
 }
 
 /// Prepared terminal return before its step and once-state side effects commit.
 #[derive(Debug)]
-pub(crate) struct PreparedReturnRule<'program, 'once, 'budget> {
+pub(crate) struct PreparedReturnRule<'program, 'once, 'budget, E: ExecutionPolicy> {
     /// Matched rule and once-state commit permit.
     matched: PreparedMatchedRule<'program, 'once>,
     /// Step reservation required before this return can commit.
-    step: StepReservation<'budget>,
+    step: StepReservation<'budget, E>,
     /// Borrowed return output payload from the matched parsed rule.
     output_view: ReturnOutputView<'program>,
     /// Materialized return output.
@@ -111,7 +112,7 @@ impl<'program> CommittedReturnRule<'program> {
     }
 }
 
-impl<'program> PreparedRuleApplication<'program, '_, '_> {
+impl<'program, E: ExecutionPolicy> PreparedRuleApplication<'program, '_, '_, E> {
     /// Parsed rule selected by this prepared application.
     pub(crate) const fn rule(&self) -> &'program Rule {
         match self {
@@ -168,12 +169,12 @@ pub(crate) fn materialize_return_output(
 ///
 /// Returns `RunStepError` if the next step cannot be reserved, the rewrite would
 /// exceed state limits, return output exceeds limits, or allocation fails.
-pub(crate) fn prepare_matched_rule<'program, 'once, 'budget>(
+pub(crate) fn prepare_matched_rule<'program, 'once, 'budget, E: ExecutionPolicy>(
     scratch: &mut RewriteScratch,
-    budget: &'budget mut RuntimeBudgetState,
+    budget: &'budget mut RuntimeBudgetState<E>,
     state_len: crate::bytes::RuntimeStateByteCount,
     matched: MatchedRuleApplication<'program, '_, 'once>,
-) -> Result<PreparedRuleApplication<'program, 'once, 'budget>, RunStepError> {
+) -> Result<PreparedRuleApplication<'program, 'once, 'budget, E>, RunStepError> {
     let (state_match, matched) = matched.into_prepare_parts();
     let step = budget.reserve_next_step(state_len)?;
     match matched.rule().action() {

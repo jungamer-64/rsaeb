@@ -1,6 +1,5 @@
 use super::once::{MatchedRuleCommit, OnceRuleReadiness, OnceStateSet, RuntimeRule};
 use super::state::{State, StateMatch};
-use crate::error::RuleRuntimeStateError;
 use crate::program::{RuleScan, RuleTarget};
 use crate::rule::{Rule, RuleAnchorSyntax};
 
@@ -156,32 +155,24 @@ impl<'program> CommittedRule<'program> {
 }
 
 /// Finds the first currently available rule that matches `state`.
-///
-/// # Errors
-///
-/// Returns `RuleRuntimeStateError` if parsed rule metadata and per-run
-/// once-state slots no longer align.
 pub(crate) fn find_next_match<'program, 'state, 'once>(
     rules: RuleScan<'program>,
     once_states: &'once mut OnceStateSet,
     state: &'state State,
-) -> Result<RuleSearch<'program, 'state, 'once>, RuleRuntimeStateError> {
-    for runtime_rule in once_states.runtime_rules_mut(rules) {
-        let runtime_rule = runtime_rule?;
-        let rule = runtime_rule.rule();
+) -> RuleSearch<'program, 'state, 'once> {
+    for rule in rules.iter() {
         let Some(candidate) = matched_candidate_for_rule(rule, state) else {
             continue;
         };
-
-        match runtime_rule.readiness() {
-            OnceRuleReadiness::Available(commit) => {
-                return Ok(RuleSearch::Matched(candidate.into_application(commit)));
-            }
-            OnceRuleReadiness::Consumed => {}
+        if once_states.is_rule_consumed(rule) {
+            continue;
         }
+
+        let commit = once_states.commit_for_fresh_rule(rule);
+        return RuleSearch::Matched(candidate.into_application(commit));
     }
 
-    Ok(RuleSearch::Stable)
+    RuleSearch::Stable
 }
 
 /// Evaluates exactly one parsed rule line against the current runtime state.
@@ -205,15 +196,10 @@ pub(crate) fn attempt_rule<'program, 'state, 'once>(
 }
 
 /// Pairs a rule-attempt target with aligned runtime state.
-///
-/// # Errors
-///
-/// Returns `RuleRuntimeStateError` if the targeted parsed rule refers to a
-/// missing per-run once-state slot.
 pub(crate) fn runtime_rule_for_target<'program, 'once>(
     once_states: &'once mut OnceStateSet,
     target: RuleTarget<'program>,
-) -> Result<RuntimeRule<'program, 'once>, RuleRuntimeStateError> {
+) -> RuntimeRule<'program, 'once> {
     once_states.runtime_rule_mut(target.rule())
 }
 

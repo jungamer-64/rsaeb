@@ -2,12 +2,14 @@ use alloc::vec::Vec;
 
 use super::*;
 use crate::error::{ParseError, ParseErrorKind, PayloadKind};
-use crate::limits::DEFAULT_MAX_PAYLOAD_LEN;
+use crate::limits::PayloadByteLimit;
 use crate::source::{SourceLineNumber, SourcePosition};
 use crate::test_support::{
     TestFailure, TestResult, ensure_eq, ensure_matches, expect_error_position, source_column,
     source_line_number,
 };
+
+const TEST_PAYLOAD_LIMIT: PayloadByteLimit = PayloadByteLimit::new(16_777_216);
 
 /// Returns one classified runtime byte after crossing the validation boundary.
 ///
@@ -42,9 +44,7 @@ fn parse_payload_error(
     line_number: SourceLineNumber,
     payload_kind: PayloadKind,
 ) -> Result<ParseError, TestFailure> {
-    match PayloadSyntax::check(input, line_number, payload_kind, DEFAULT_MAX_PAYLOAD_LEN)?
-        .validate()
-    {
+    match PayloadSyntax::check(input, line_number, payload_kind, TEST_PAYLOAD_LIMIT)?.validate() {
         Ok(_) => Err(TestFailure::message("invalid payload bytes were accepted")),
         Err(error) => Ok(error),
     }
@@ -60,10 +60,7 @@ fn parse_payload(
     line_number: SourceLineNumber,
     payload_kind: PayloadKind,
 ) -> Result<Payload, TestFailure> {
-    Ok(
-        PayloadSyntax::check(input, line_number, payload_kind, DEFAULT_MAX_PAYLOAD_LEN)?
-            .validate()?,
-    )
+    Ok(PayloadSyntax::check(input, line_number, payload_kind, TEST_PAYLOAD_LIMIT)?.validate()?)
 }
 
 /// # Errors

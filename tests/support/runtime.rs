@@ -1,39 +1,84 @@
+#![expect(
+    dead_code,
+    reason = "shared integration-test policy helpers are compiled per test crate"
+)]
+
+use core::marker::PhantomData;
+
 use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
-use rsaeb::limits::{
-    ExecutionLimits, ReturnByteLimit, RuntimeInputByteLimit, RuntimeInputLimits,
-    RuntimeStateByteLimit, StepLimit,
+use rsaeb::limits::{ReturnByteLimit, RuntimeInputByteLimit, RuntimeStateByteLimit, StepLimit};
+use rsaeb::policy::{
+    DefaultPolicy, ExecutionPolicy, RuntimeInputPolicy, StaticExecutionPolicy,
+    StaticRuntimeInputPolicy,
 };
 
 use crate::support::TestFailure;
 
-#[derive(Clone, Copy)]
-pub struct TestRunPolicy {
-    input: RuntimeInputLimits,
-    execution: ExecutionLimits,
+pub const DEFAULT_BYTE_BUDGET: usize = 16_777_216;
+pub const DEFAULT_COUNT_BUDGET: usize = 1_000_000;
+pub type TestInputPolicy<const INPUT_BYTES: usize> = StaticRuntimeInputPolicy<INPUT_BYTES>;
+pub type TestExecutionPolicy<
+    const STEPS: usize,
+    const STATE_BYTES: usize,
+    const RETURN_BYTES: usize,
+> = StaticExecutionPolicy<STEPS, STATE_BYTES, RETURN_BYTES>;
+pub type StaticTestRunPolicy<
+    const INPUT_BYTES: usize,
+    const STEPS: usize,
+    const STATE_BYTES: usize,
+    const RETURN_BYTES: usize,
+> = TestRunPolicy<
+    TestInputPolicy<INPUT_BYTES>,
+    TestExecutionPolicy<STEPS, STATE_BYTES, RETURN_BYTES>,
+>;
+pub type DefaultInputRunPolicy<
+    const STEPS: usize,
+    const STATE_BYTES: usize,
+    const RETURN_BYTES: usize,
+> = TestRunPolicy<DefaultPolicy, TestExecutionPolicy<STEPS, STATE_BYTES, RETURN_BYTES>>;
+pub type DefaultExecutionRunPolicy<const INPUT_BYTES: usize> =
+    TestRunPolicy<TestInputPolicy<INPUT_BYTES>, DefaultPolicy>;
+pub type DefaultRunPolicy = TestRunPolicy<DefaultPolicy, DefaultPolicy>;
+
+pub struct TestRunPolicy<I: RuntimeInputPolicy = DefaultPolicy, E: ExecutionPolicy = DefaultPolicy>
+{
+    policy: PhantomData<(I, E)>,
 }
 
-impl TestRunPolicy {
+impl<I: RuntimeInputPolicy, E: ExecutionPolicy> Clone for TestRunPolicy<I, E> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<I: RuntimeInputPolicy, E: ExecutionPolicy> Copy for TestRunPolicy<I, E> {}
+
+impl<I: RuntimeInputPolicy, E: ExecutionPolicy> TestRunPolicy<I, E> {
     #[must_use]
-    pub const fn new(
-        max_input_len: RuntimeInputByteLimit,
-        max_steps: StepLimit,
-        max_state_len: RuntimeStateByteLimit,
-        max_return_len: ReturnByteLimit,
-    ) -> Self {
+    pub const fn new() -> Self {
         Self {
-            input: RuntimeInputLimits::new(max_input_len),
-            execution: ExecutionLimits::new(max_steps, max_state_len, max_return_len),
+            policy: PhantomData,
         }
     }
 
     #[must_use]
-    const fn input(self) -> RuntimeInputLimits {
-        self.input
+    pub const fn input_limit(self) -> RuntimeInputByteLimit {
+        I::INPUT_BYTE_LIMIT
     }
 
     #[must_use]
-    const fn execution(self) -> ExecutionLimits {
-        self.execution
+    pub const fn step_limit(self) -> StepLimit {
+        E::STEP_LIMIT
+    }
+
+    #[must_use]
+    pub const fn state_limit(self) -> RuntimeStateByteLimit {
+        E::STATE_BYTE_LIMIT
+    }
+
+    #[must_use]
+    pub const fn return_limit(self) -> ReturnByteLimit {
+        E::RETURN_BYTE_LIMIT
     }
 }
 
@@ -42,7 +87,10 @@ impl TestRunPolicy {
 /// # Errors
 ///
 /// Returns `TestFailure` if validation or run admission fails.
-pub fn run_seed(bytes: &[u8], policy: TestRunPolicy) -> Result<RunSeed, TestFailure> {
-    let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), policy.input())?;
-    Ok(RunSeed::admit(input, policy.execution())?)
+pub fn run_seed<I: RuntimeInputPolicy, E: ExecutionPolicy>(
+    bytes: &[u8],
+    _policy: TestRunPolicy<I, E>,
+) -> Result<RunSeed<E>, TestFailure> {
+    let input = RuntimeInput::<I>::validate(RuntimeInputSource::from_bytes(bytes))?;
+    Ok(RunSeed::<E>::admit(input)?)
 }

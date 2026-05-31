@@ -1,4 +1,8 @@
 #![cfg(test)]
+#![expect(
+    dead_code,
+    reason = "shared unit-test policy helpers are compiled per test target"
+)]
 
 use alloc::string::{FromUtf8Error, String};
 
@@ -8,13 +12,40 @@ use crate::error::{
     RuntimeInputError, TraceSnapshotRunError,
 };
 use crate::input::{RunSeed, RuntimeInput, RuntimeInputSource};
-use crate::limits::{
-    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
-    DEFAULT_PARSE_LIMITS, ExecutionLimits, ReturnByteLimit, RuntimeInputByteLimit,
-    RuntimeInputLimits, RuntimeStateByteLimit, StepLimit,
+use crate::limits::{ReturnByteLimit, RuntimeInputByteLimit, RuntimeStateByteLimit, StepLimit};
+use crate::policy::{
+    DefaultPolicy, ExecutionPolicy, RuntimeInputPolicy, StaticExecutionPolicy,
+    StaticRuntimeInputPolicy,
 };
 use crate::program::Program;
 use crate::source::{ProgramSource, SourceColumn, SourceLineNumber, SourcePosition};
+use core::marker::PhantomData;
+
+pub(crate) const DEFAULT_BYTE_BUDGET: usize = 16_777_216;
+pub(crate) const DEFAULT_COUNT_BUDGET: usize = 1_000_000;
+pub(crate) type TestInputPolicy<const INPUT_BYTES: usize> = StaticRuntimeInputPolicy<INPUT_BYTES>;
+pub(crate) type TestExecutionPolicy<
+    const STEPS: usize,
+    const STATE_BYTES: usize,
+    const RETURN_BYTES: usize,
+> = StaticExecutionPolicy<STEPS, STATE_BYTES, RETURN_BYTES>;
+pub(crate) type StaticTestRunPolicy<
+    const INPUT_BYTES: usize,
+    const STEPS: usize,
+    const STATE_BYTES: usize,
+    const RETURN_BYTES: usize,
+> = TestRunPolicy<
+    TestInputPolicy<INPUT_BYTES>,
+    TestExecutionPolicy<STEPS, STATE_BYTES, RETURN_BYTES>,
+>;
+pub(crate) type DefaultInputRunPolicy<
+    const STEPS: usize,
+    const STATE_BYTES: usize,
+    const RETURN_BYTES: usize,
+> = TestRunPolicy<DefaultPolicy, TestExecutionPolicy<STEPS, STATE_BYTES, RETURN_BYTES>>;
+pub(crate) type DefaultExecutionRunPolicy<const INPUT_BYTES: usize> =
+    TestRunPolicy<TestInputPolicy<INPUT_BYTES>, DefaultPolicy>;
+pub(crate) type DefaultRunPolicy = TestRunPolicy<DefaultPolicy, DefaultPolicy>;
 
 pub(crate) enum TestFailure {
     Message(String),
@@ -153,44 +184,52 @@ impl From<RunAdmissionError> for TestFailure {
 
 pub(crate) type TestResult = Result<(), TestFailure>;
 
-#[derive(Clone, Copy)]
-pub(crate) struct TestRunPolicy {
-    input: RuntimeInputLimits,
-    execution: ExecutionLimits,
+pub(crate) struct TestRunPolicy<
+    I: RuntimeInputPolicy = DefaultPolicy,
+    E: ExecutionPolicy = DefaultPolicy,
+> {
+    policy: PhantomData<(I, E)>,
 }
 
-impl TestRunPolicy {
+impl<I: RuntimeInputPolicy, E: ExecutionPolicy> Clone for TestRunPolicy<I, E> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<I: RuntimeInputPolicy, E: ExecutionPolicy> Copy for TestRunPolicy<I, E> {}
+
+impl<I: RuntimeInputPolicy, E: ExecutionPolicy> TestRunPolicy<I, E> {
     #[must_use]
-    pub(crate) const fn new(
-        max_input_len: RuntimeInputByteLimit,
-        max_steps: StepLimit,
-        max_state_len: RuntimeStateByteLimit,
-        max_return_len: ReturnByteLimit,
-    ) -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
-            input: RuntimeInputLimits::new(max_input_len),
-            execution: ExecutionLimits::new(max_steps, max_state_len, max_return_len),
+            policy: PhantomData,
         }
     }
 
     #[must_use]
     pub(crate) const fn default() -> Self {
-        Self::new(
-            DEFAULT_MAX_INPUT_LEN,
-            DEFAULT_MAX_STEPS,
-            DEFAULT_MAX_STATE_LEN,
-            DEFAULT_MAX_RETURN_LEN,
-        )
+        Self::new()
     }
 
     #[must_use]
-    pub(crate) const fn input(self) -> RuntimeInputLimits {
-        self.input
+    pub(crate) const fn input_limit(self) -> RuntimeInputByteLimit {
+        I::INPUT_BYTE_LIMIT
     }
 
     #[must_use]
-    pub(crate) const fn execution(self) -> ExecutionLimits {
-        self.execution
+    pub(crate) const fn step_limit(self) -> StepLimit {
+        E::STEP_LIMIT
+    }
+
+    #[must_use]
+    pub(crate) const fn state_limit(self) -> RuntimeStateByteLimit {
+        E::STATE_BYTE_LIMIT
+    }
+
+    #[must_use]
+    pub(crate) const fn return_limit(self) -> ReturnByteLimit {
+        E::RETURN_BYTE_LIMIT
     }
 }
 
@@ -200,11 +239,11 @@ impl TestRunPolicy {
 ///
 /// Returns `RuntimeInputError` if the test input violates validation, allocation,
 /// or initial runtime-state admission constraints.
-pub(crate) fn runtime_input(
+pub(crate) fn runtime_input<I: RuntimeInputPolicy, E: ExecutionPolicy>(
     bytes: &[u8],
-    limits: RuntimeInputLimits,
-) -> Result<RuntimeInput, RuntimeInputError> {
-    RuntimeInput::validate(RuntimeInputSource::from_bytes(bytes), limits)
+    _policy: TestRunPolicy<I, E>,
+) -> Result<RuntimeInput<I>, RuntimeInputError> {
+    RuntimeInput::<I>::validate(RuntimeInputSource::from_bytes(bytes))
 }
 
 /// Validates and admits test input into a run seed.
@@ -212,11 +251,11 @@ pub(crate) fn runtime_input(
 /// # Errors
 ///
 /// Returns `TestFailure` if validation or run admission fails.
-pub(crate) fn run_seed(bytes: &[u8], policy: TestRunPolicy) -> Result<RunSeed, TestFailure> {
-    Ok(RunSeed::admit(
-        runtime_input(bytes, policy.input())?,
-        policy.execution(),
-    )?)
+pub(crate) fn run_seed<I: RuntimeInputPolicy, E: ExecutionPolicy>(
+    bytes: &[u8],
+    policy: TestRunPolicy<I, E>,
+) -> Result<RunSeed<E>, TestFailure> {
+    Ok(RunSeed::<E>::admit(runtime_input(bytes, policy)?)?)
 }
 
 /// Parses source text with the default parser limits.
@@ -226,7 +265,7 @@ pub(crate) fn run_seed(bytes: &[u8], policy: TestRunPolicy) -> Result<RunSeed, T
 /// Returns `ParseError` if the source violates parser syntax, resource, or
 /// allocation constraints.
 pub(crate) fn parse_program(source: &str) -> Result<Program, ParseError> {
-    Program::parse(ProgramSource::from_text(source), DEFAULT_PARSE_LIMITS)
+    Program::parse(ProgramSource::from_text(source))
 }
 
 /// Parses source bytes with the default parser limits.
@@ -236,7 +275,7 @@ pub(crate) fn parse_program(source: &str) -> Result<Program, ParseError> {
 /// Returns `ParseError` if the source violates parser syntax, resource, or
 /// allocation constraints.
 pub(crate) fn parse_program_bytes(source: &[u8]) -> Result<Program, ParseError> {
-    Program::parse(ProgramSource::from_bytes(source), DEFAULT_PARSE_LIMITS)
+    Program::parse(ProgramSource::from_bytes(source))
 }
 
 /// Converts a boolean assertion into the shared test result type.

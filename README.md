@@ -27,32 +27,23 @@ please support the original game.
 
 The crate root intentionally does not re-export duplicate type paths. Public
 types live under their domain modules, such as `source`, `input`, `program`,
-`limits`, `execution`, `inspect`, `trace`, and `error`.
+`policy`, `limits`, `execution`, `inspect`, `trace`, and `error`.
 
 ## Quick Start
 
 Parse source into an immutable `Program`, validate runtime input, admit it into
-a run seed with explicit execution limits, then run:
+a run seed under an execution policy, then run:
 
 ```rust
 use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
-use rsaeb::limits::{
-    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
-    DEFAULT_MAX_STEPS, DEFAULT_PARSE_LIMITS, ExecutionLimits, RuntimeInputLimits,
-};
+use rsaeb::policy::DefaultPolicy;
 use rsaeb::program::{Program, RunOutcome};
 use rsaeb::source::ProgramSource;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let program = Program::parse(ProgramSource::from_text("a=b"), DEFAULT_PARSE_LIMITS)?;
-    let input_limits = RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN);
-    let execution_limits = ExecutionLimits::new(
-        DEFAULT_MAX_STEPS,
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
-    let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"a"), input_limits)?;
-    let seed = RunSeed::admit(input, execution_limits)?;
+    let program = Program::<DefaultPolicy>::parse(ProgramSource::from_text("a=b"))?;
+    let input = RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+    let seed = RunSeed::<DefaultPolicy>::admit(input)?;
     let result = program.run(seed)?;
 
     if !matches!(
@@ -81,7 +72,7 @@ The normal host flow is:
 3. Parse with `Program::parse`.
 4. Label host input bytes with `RuntimeInputSource::from_bytes`.
 5. Validate with `RuntimeInput::validate`.
-6. Admit with `RunSeed::admit` and `ExecutionLimits`.
+6. Admit with `RunSeed::admit` under an `ExecutionPolicy`.
 7. Execute through run-to-completion, stepwise execution, tracing, or
    rule-attempt stepping.
 
@@ -288,7 +279,8 @@ With input `ab`, this inserts `x` at the end and produces `abx`.
 
 An unanchored empty-left rule without `(once)`, `(return)`, or some later rule
 that makes execution stop can rewrite forever until the step limit is reached.
-That is legal syntax; execution remains governed by `ExecutionLimits`.
+That is legal syntax; execution remains governed by the selected
+`ExecutionPolicy`.
 
 ### Ordered Execution
 
@@ -380,11 +372,11 @@ snapshots. It requires an allocator, but not `std`.
 
 Allocation is explicit and fallible. Parser/runtime paths reserve explicitly
 and report `AllocationError` instead of relying on accidental `Vec` growth.
-Runtime expansion is budgeted through `ExecutionLimits`; the runtime checks size
-limits before allocating oversized states or return outputs. Step budget is
-reserved before rewrite or return-output materialization, so an exhausted step
-limit cannot allocate a candidate state or return buffer. Trace snapshot
-materialization is budgeted separately through `TraceSnapshotByteLimit`.
+Runtime expansion is budgeted through the selected `ExecutionPolicy`; the
+runtime checks size limits before allocating oversized states or return outputs.
+Step budget is reserved before rewrite or return-output materialization, so an
+exhausted step limit cannot allocate a candidate state or return buffer. Trace
+snapshot materialization is budgeted separately through `TraceSnapshotPolicy`.
 
 Owned public values that contain byte buffers intentionally do not implement
 `Clone`; copying bytes is an explicit materialization step, not a hidden

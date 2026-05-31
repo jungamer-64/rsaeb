@@ -5,7 +5,6 @@ use crate::bytes::{
     NonAsciiInputByte, PayloadByteCount, ReturnOutputByteCount, RuntimeInputByteCount,
     RuntimeStateByteCount,
 };
-use crate::inspect::RulePosition;
 use crate::limits::{
     ReturnByteLimit, RuleAttemptCount, RuleAttemptLimit, RuntimeInputByteLimit,
     RuntimeStateByteLimit, StepCount, StepLimit,
@@ -301,7 +300,7 @@ impl From<AllocationError> for RuntimeInputError {
 ///
 /// This error is produced after runtime input validation and before execution
 /// starts, while validated input is admitted as the initial runtime state under
-/// execution limits. It means the input bytes were valid runtime input, but the
+/// an execution policy. It means the input bytes were valid runtime input, but the
 /// execution policy rejected them as the initial state for this run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunAdmissionError {

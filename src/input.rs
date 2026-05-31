@@ -3,7 +3,7 @@
 //! Host bytes enter the interpreter as [`RuntimeInputSource`], then
 //! [`RuntimeInput::validate`] checks the runtime input contract before storing
 //! owned runtime-domain bytes. Execution consumes a [`RunSeed`] admitted from
-//! validated input and execution limits, so input validation and execution
+//! validated input under an execution policy, so input validation and execution
 //! budgets cannot be conflated.
 //!
 //! The three public values in this module represent three different states:
@@ -12,7 +12,7 @@
 //!   proven ASCII validity and it owns nothing.
 //! - [`RuntimeInput`] owns bytes after the runtime-input contract has been
 //!   checked. It still has no step, state, or return-output budget.
-//! - [`RunSeed`] consumes validated input with execution limits and proves that
+//! - [`RunSeed`] consumes validated input under an execution policy and proves that
 //!   the initial runtime state may be created for exactly one execution.
 //!
 //! Admission is deliberately separate from validation. Input construction can
@@ -23,21 +23,15 @@
 //! ```
 //! use rsaeb::error::RunAdmissionError;
 //! use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
-//! use rsaeb::limits::{
-//!     ExecutionLimits, ReturnByteLimit, RuntimeInputByteLimit, RuntimeInputLimits,
-//!     RuntimeStateByteLimit, StepLimit,
-//! };
+//! use rsaeb::policy::{StaticExecutionPolicy, StaticRuntimeInputPolicy};
+//!
+//! type Input8 = StaticRuntimeInputPolicy<8>;
+//! type State3 = StaticExecutionPolicy<10, 3, 8>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let input_limits = RuntimeInputLimits::new(RuntimeInputByteLimit::new(8));
-//! let input = RuntimeInput::validate(RuntimeInputSource::from_bytes(b"abcd"), input_limits)?;
-//! let execution_limits = ExecutionLimits::new(
-//!     StepLimit::new(10),
-//!     RuntimeStateByteLimit::new(3),
-//!     ReturnByteLimit::new(8),
-//! );
+//! let input = RuntimeInput::<Input8>::validate(RuntimeInputSource::from_bytes(b"abcd"))?;
 //!
-//! let Err(error) = RunSeed::admit(input, execution_limits) else {
+//! let Err(error) = RunSeed::<State3>::admit(input) else {
 //!     return Err("expected run admission to reject the initial state".into());
 //! };
 //!
@@ -53,12 +47,12 @@
 //! ```
 
 use alloc::vec::Vec;
-use core::fmt;
+use core::{fmt, marker::PhantomData};
 
 use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeInputByte, RuntimeInputByteCount, RuntimeStateByteCount};
 use crate::error::{RunAdmissionError, RuntimeInputError};
-use crate::limits::{ExecutionLimits, RuntimeInputLimits};
+use crate::policy::{DefaultPolicy, ExecutionPolicy, RuntimeInputPolicy};
 use crate::runtime::budget::RuntimeBudgetState;
 
 /// Borrowed runtime input source at the validation boundary.
@@ -103,12 +97,14 @@ impl<'input> RuntimeInputSource<'input> {
 /// another run means validating another [`RuntimeInputSource`], not cloning a
 /// previously admitted execution state.
 #[derive(PartialEq, Eq)]
-pub struct RuntimeInput {
+pub struct RuntimeInput<I: RuntimeInputPolicy = DefaultPolicy> {
     /// Owned bytes classified for mutable runtime state.
     bytes: Vec<RuntimeByte>,
+    /// Compile-time runtime-input policy selected for this value.
+    policy: PhantomData<I>,
 }
 
-impl fmt::Debug for RuntimeInput {
+impl<I: RuntimeInputPolicy> fmt::Debug for RuntimeInput<I> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RuntimeInput")
@@ -118,9 +114,9 @@ impl fmt::Debug for RuntimeInput {
 }
 
 /// Internal runtime input debug bytes.
-struct RuntimeInputDebugBytes<'input>(&'input RuntimeInput);
+struct RuntimeInputDebugBytes<'input, I: RuntimeInputPolicy>(&'input RuntimeInput<I>);
 
-impl fmt::Debug for RuntimeInputDebugBytes<'_> {
+impl<I: RuntimeInputPolicy> fmt::Debug for RuntimeInputDebugBytes<'_, I> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_list()
@@ -129,31 +125,26 @@ impl fmt::Debug for RuntimeInputDebugBytes<'_> {
     }
 }
 
-impl RuntimeInput {
+impl<I: RuntimeInputPolicy> RuntimeInput<I> {
     /// Validates a runtime input source for one run.
     ///
     /// Runtime input accepts all ASCII bytes, including bytes that would be
     /// reserved syntax in program source. Non-ASCII bytes are rejected with a
     /// structured input column before execution starts. Owned storage is
     /// reserved only after the full validation pass succeeds, so
-    /// [`RuntimeInputLimits`] bounds raw input classification before allocation
-    /// grows runtime-domain bytes.
+    /// the selected [`RuntimeInputPolicy`] bounds raw input classification
+    /// before allocation grows runtime-domain bytes.
     ///
     /// # Errors
     ///
-    /// Returns `RuntimeInputError` if the input exceeds `limits`, if any input byte
-    /// is non-ASCII, if its one-based column cannot be represented, or if owned
-    /// storage cannot be allocated.
-    pub fn validate(
-        input: RuntimeInputSource<'_>,
-        limits: RuntimeInputLimits,
-    ) -> Result<Self, RuntimeInputError> {
+    /// Returns `RuntimeInputError` if the input exceeds the selected policy, if
+    /// any input byte is non-ASCII, if its one-based column cannot be
+    /// represented, or if owned storage cannot be allocated.
+    pub fn validate(input: RuntimeInputSource<'_>) -> Result<Self, RuntimeInputError> {
         let byte_count = RuntimeInputByteCount::new(input.as_bytes().len());
-        if !limits.input_byte_limit().accepts(byte_count) {
-            return Err(RuntimeInputError::input_limit(
-                limits.input_byte_limit(),
-                byte_count,
-            ));
+        let limit = I::INPUT_BYTE_LIMIT;
+        if !limit.accepts(byte_count) {
+            return Err(RuntimeInputError::input_limit(limit, byte_count));
         }
 
         let mut bytes = Vec::new();
@@ -171,7 +162,10 @@ impl RuntimeInput {
             )?;
         }
 
-        Ok(Self { bytes })
+        Ok(Self {
+            bytes,
+            policy: PhantomData,
+        })
     }
 
     /// Returns materialized runtime bytes.
@@ -197,22 +191,22 @@ impl RuntimeInput {
     }
 }
 
-/// Run-start witness tying checked input to execution limits.
+/// Run-start witness tying checked input to an execution policy.
 ///
 /// A seed is the only public value accepted by execution entrypoints. It
 /// carries both the initial runtime-state bytes and the already checked budget
 /// state, so `Program::run`, `Program::start_run`, and `Program::into_run` do
-/// not need to reinterpret raw input or detached execution limits.
+/// not need to reinterpret raw input or detached execution policy values.
 #[derive(Debug, PartialEq, Eq)]
-pub struct RunSeed {
+pub struct RunSeed<E: ExecutionPolicy = DefaultPolicy> {
     /// Runtime-domain bytes admitted as the initial execution state.
     initial_state: InitialStateBytes,
     /// Execution budgets already tied to this admitted run.
-    budget: RuntimeBudgetState,
+    budget: RuntimeBudgetState<E>,
 }
 
-impl RunSeed {
-    /// Admits validated runtime input for execution under execution limits.
+impl<E: ExecutionPolicy> RunSeed<E> {
+    /// Admits validated runtime input for execution under an execution policy.
     ///
     /// This consumes the validated input. A successful seed represents one
     /// admitted execution start; it is not a reusable input buffer.
@@ -221,11 +215,12 @@ impl RunSeed {
     ///
     /// Returns `RunAdmissionError` if the validated input would exceed the
     /// initial runtime-state budget.
-    pub fn admit(input: RuntimeInput, limits: ExecutionLimits) -> Result<Self, RunAdmissionError> {
+    pub fn admit<I: RuntimeInputPolicy>(input: RuntimeInput<I>) -> Result<Self, RunAdmissionError> {
         let initial_state_len = RuntimeStateByteCount::from_runtime_input_count(input.byte_count());
-        if !limits.state_byte_limit().accepts(initial_state_len) {
+        let limit = E::STATE_BYTE_LIMIT;
+        if !limit.accepts(initial_state_len) {
             return Err(RunAdmissionError::initial_state_limit(
-                limits.state_byte_limit(),
+                limit,
                 initial_state_len,
             ));
         }
@@ -234,12 +229,12 @@ impl RunSeed {
             initial_state: InitialStateBytes {
                 bytes: input.into_runtime_bytes(),
             },
-            budget: RuntimeBudgetState::new(limits),
+            budget: RuntimeBudgetState::new(),
         })
     }
 
     /// Splits the admitted run seed into runtime state bytes and budget state.
-    pub(crate) fn into_runtime_parts(self) -> (InitialStateBytes, RuntimeBudgetState) {
+    pub(crate) fn into_runtime_parts(self) -> (InitialStateBytes, RuntimeBudgetState<E>) {
         (self.initial_state, self.budget)
     }
 }

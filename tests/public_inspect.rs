@@ -3,7 +3,7 @@
 mod support;
 
 use rsaeb::inspect::{OnceRuleCount, RuleAction, RuleAnchor, RuleRepeat};
-use rsaeb::limits::DEFAULT_PARSE_LIMITS;
+use rsaeb::policy::DefaultPolicy;
 use rsaeb::program::Program;
 use rsaeb::source::ProgramSource;
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
@@ -67,10 +67,8 @@ fn inspect_canonical_source_reparses_to_same_public_rule_view() -> TestResult {
         .ok_or(TestFailure::message("expected parsed rule"))?;
     let canonical = rule.canonical_source()?;
 
-    let reparsed = Program::parse(
-        ProgramSource::from_bytes(canonical.as_slice()),
-        DEFAULT_PARSE_LIMITS,
-    )?;
+    let reparsed =
+        Program::<DefaultPolicy>::parse(ProgramSource::from_bytes(canonical.as_slice()))?;
     let reparsed_rule = reparsed
         .rules()
         .next()

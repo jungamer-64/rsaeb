@@ -6,13 +6,12 @@ mod support;
 
 use rsaeb::input::RunSeed;
 use rsaeb::inspect::OnceRuleCount;
-use rsaeb::limits::{
-    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN, DEFAULT_MAX_STEPS,
-    DEFAULT_PARSE_LIMITS, StepLimit,
-};
+use rsaeb::policy::DefaultPolicy;
 use rsaeb::program::{Program, RunOutcome, RunResult};
 use rsaeb::source::ProgramSource;
-use runtime_support::TestRunPolicy;
+use runtime_support::{
+    DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, DefaultRunPolicy, TestRunPolicy,
+};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns stable output bytes when they match `expected`.
@@ -53,7 +52,10 @@ fn expect_return_bytes<'result>(
 /// # Errors
 ///
 /// Returns `RuntimeInputError` if the bytes are not valid runtime input.
-fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFailure> {
+fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: rsaeb::policy::ExecutionPolicy>(
+    bytes: &[u8],
+    limits: TestRunPolicy<I, E>,
+) -> Result<RunSeed<E>, TestFailure> {
     runtime_support::run_seed(bytes, limits)
 }
 
@@ -63,12 +65,7 @@ fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFai
 /// programs.
 #[test]
 fn program_parse_accepts_text_and_byte_sources() -> TestResult {
-    let limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        DEFAULT_MAX_STEPS,
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
+    let limits = DefaultRunPolicy::new();
 
     let program = parse_program("a=b")?;
     let input = runtime_input(b"a", limits)?;
@@ -76,7 +73,7 @@ fn program_parse_accepts_text_and_byte_sources() -> TestResult {
     expect_stable_bytes(&result, b"b")?;
     ensure_matches(result.steps().get() == 1, "expected one execution step")?;
 
-    let program = Program::parse(ProgramSource::from_bytes(b"a=b#\xff"), DEFAULT_PARSE_LIMITS)?;
+    let program = Program::<DefaultPolicy>::parse(ProgramSource::from_bytes(b"a=b#\xff"))?;
     let input = runtime_input(b"a", limits)?;
     let result = program.run(input)?;
     expect_stable_bytes(&result, b"b")?;
@@ -89,12 +86,7 @@ fn program_parse_accepts_text_and_byte_sources() -> TestResult {
 /// drift from the expected contract.
 #[test]
 fn program_language_surface_handles_spacing_comments_and_actions() -> TestResult {
-    let limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(10_000),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
+    let limits = DefaultInputRunPolicy::<10_000, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
 
     let program = parse_program("a b=bb")?;
     let result = program.run(runtime_input(b"abc", limits)?)?;
@@ -135,12 +127,7 @@ fn program_language_surface_handles_spacing_comments_and_actions() -> TestResult
 /// Returns `TestFailure` if parsed programs are not reusable.
 #[test]
 fn program_values_are_reusable_across_runs() -> TestResult {
-    let limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(10_000),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
+    let limits = DefaultInputRunPolicy::<10_000, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     let program = parse_program("(once)a=b\na=c")?;
     let first = program.run(runtime_input(b"aa", limits)?)?;
     let second = program.run(runtime_input(b"aa", limits)?)?;

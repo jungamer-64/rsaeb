@@ -199,11 +199,6 @@ impl OnceRuleSlot {
             zero_based: count.get(),
         }
     }
-
-    /// Zero-based slot index.
-    pub(crate) const fn index(self) -> usize {
-        self.zero_based
-    }
 }
 
 /// Runtime availability assigned after program-level rule construction.

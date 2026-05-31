@@ -1,28 +1,34 @@
+use core::marker::PhantomData;
+
 use crate::input::RunSeed;
-use crate::limits::RuleAttemptLimit;
+use crate::policy::{DefaultPolicy, ExecutionPolicy, RuleAttemptPolicy};
 
 /// Run-start witness for rule-attempt execution.
 ///
 /// Rule-attempt execution consumes the same admitted runtime input as ordinary
-/// execution, plus a separate rule-attempt budget. Grouping them prevents
-/// callers from passing a detached limit beside an unrelated run seed.
+/// execution, plus a separate rule-attempt policy. Grouping them prevents
+/// callers from selecting a detached policy beside an unrelated run seed.
 #[derive(Debug, PartialEq, Eq)]
-pub struct RuleAttemptSeed {
-    /// Admitted runtime input and execution limits.
-    seed: RunSeed,
-    /// Budget for consumed executable rule-line attempts.
-    limit: RuleAttemptLimit,
+pub struct RuleAttemptSeed<E: ExecutionPolicy = DefaultPolicy, A: RuleAttemptPolicy = DefaultPolicy>
+{
+    /// Admitted runtime input and execution policy.
+    seed: RunSeed<E>,
+    /// Compile-time rule-attempt policy selected for this value.
+    policy: PhantomData<A>,
 }
 
-impl RuleAttemptSeed {
-    /// Binds one admitted run seed to a rule-attempt budget.
+impl<E: ExecutionPolicy, A: RuleAttemptPolicy> RuleAttemptSeed<E, A> {
+    /// Binds one admitted run seed to a rule-attempt policy.
     #[must_use]
-    pub const fn new(seed: RunSeed, limit: RuleAttemptLimit) -> Self {
-        Self { seed, limit }
+    pub const fn new(seed: RunSeed<E>) -> Self {
+        Self {
+            seed,
+            policy: PhantomData,
+        }
     }
 
-    /// Splits the seed into the ordinary run seed and the rule-attempt limit.
-    pub(crate) fn into_parts(self) -> (RunSeed, RuleAttemptLimit) {
-        (self.seed, self.limit)
+    /// Splits the seed into the ordinary run seed.
+    pub(crate) fn into_parts(self) -> RunSeed<E> {
+        self.seed
     }
 }

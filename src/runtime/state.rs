@@ -7,6 +7,7 @@ use crate::bytes::{
 };
 use crate::error::{RewriteSizeError, RunStepError};
 use crate::input::InitialStateBytes;
+use crate::policy::ExecutionPolicy;
 use crate::program::RuntimeStateSnapshot;
 use crate::rule::RewriteAction;
 use crate::trace::RuntimeStateView;
@@ -307,11 +308,11 @@ impl<'state> StateMatch<'state> {
     ///
     /// Returns `RunStepError` if replacement size arithmetic overflows, the
     /// rewritten state exceeds limits, or scratch allocation fails.
-    pub(crate) fn rewrite_into(
+    pub(crate) fn rewrite_into<E: ExecutionPolicy>(
         self,
         action: &RewriteAction,
         output: &mut RewriteScratch,
-        step: &StepReservation<'_>,
+        step: &StepReservation<'_, E>,
     ) -> Result<PreparedRewrite, RunStepError> {
         self.prepare_replacement_buffer(action.payload(), output, step)?;
         match action {
@@ -359,11 +360,11 @@ impl<'state> StateMatch<'state> {
     ///
     /// Returns `RunStepError` if replacement size arithmetic overflows, the
     /// rewritten state exceeds limits, or scratch allocation fails.
-    fn prepare_replacement_buffer(
+    fn prepare_replacement_buffer<E: ExecutionPolicy>(
         self,
         rhs: &Payload,
         output: &mut RewriteScratch,
-        step: &StepReservation<'_>,
+        step: &StepReservation<'_, E>,
     ) -> Result<(), RunStepError> {
         let capacity = self.replaced_byte_count(rhs)?;
 

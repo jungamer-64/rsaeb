@@ -1,6 +1,8 @@
 use crate::error::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
 use crate::input::RunSeed;
-use crate::limits::TraceSnapshotByteLimit;
+use crate::policy::{
+    ExecutionPolicy, ParsePolicy, TraceSnapshotPolicy, TraceSnapshotPolicyWitness,
+};
 use crate::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
 
 use super::Program;
@@ -14,7 +16,7 @@ enum SnapshotTraceCallbackError<E> {
     Trace(E),
 }
 
-impl Program {
+impl<P: ParsePolicy> Program<P> {
     /// Runs this program and emits owned trace snapshot events.
     ///
     /// This API materializes bounded `Vec<u8>` snapshots for the initial state
@@ -28,21 +30,23 @@ impl Program {
     ///
     /// Returns `TraceSnapshotRunError::Run` for runtime failures.
     /// Returns `TraceSnapshotRunError::Snapshot` when snapshot materialization
-    /// exceeds `snapshot_byte_limit` or allocation fails. Returns
+    /// exceeds the selected snapshot policy or allocation fails. Returns
     /// `TraceSnapshotRunError::Trace` when the user-provided trace callback
     /// returns an error.
-    pub fn run_with_trace_snapshots<'program, F, E>(
+    pub fn run_with_trace_snapshots<'program, E, T, F, TraceError>(
         &'program self,
-        seed: RunSeed,
-        snapshot_byte_limit: TraceSnapshotByteLimit,
+        seed: RunSeed<E>,
+        snapshot_policy: TraceSnapshotPolicyWitness<T>,
         mut trace: F,
-    ) -> Result<RunResult, TraceSnapshotRunError<E>>
+    ) -> Result<RunResult, TraceSnapshotRunError<TraceError>>
     where
-        F: FnMut(TraceSnapshotEvent<'program>) -> Result<(), E>,
+        E: ExecutionPolicy,
+        T: TraceSnapshotPolicy,
+        F: FnMut(TraceSnapshotEvent<'program>) -> Result<(), TraceError>,
     {
         let result = self.run_with_borrowed_trace(seed, |event| {
             let snapshot = event
-                .to_snapshot(snapshot_byte_limit)
+                .to_snapshot(snapshot_policy)
                 .map_err(SnapshotTraceCallbackError::Snapshot)?;
             trace(snapshot).map_err(SnapshotTraceCallbackError::Trace)
         });
@@ -72,13 +76,14 @@ impl Program {
     /// Returns `TracedRunError::Run` for ordinary runtime failures. Returns
     /// `TracedRunError::Trace` when the user-provided trace callback returns an
     /// error.
-    pub fn run_with_borrowed_trace<'program, F, E>(
+    pub fn run_with_borrowed_trace<'program, E, F, TraceError>(
         &'program self,
-        seed: RunSeed,
+        seed: RunSeed<E>,
         trace: F,
-    ) -> Result<RunResult, TracedRunError<E>>
+    ) -> Result<RunResult, TracedRunError<TraceError>>
     where
-        F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), E>,
+        E: ExecutionPolicy,
+        F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), TraceError>,
     {
         crate::execution::run_with_borrowed_trace(self, seed, trace)
     }

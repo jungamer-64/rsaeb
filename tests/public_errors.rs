@@ -9,8 +9,8 @@ use rsaeb::error::{
     RunFinishError, RunStepError,
 };
 use rsaeb::input::{RunSeed, RuntimeInput, RuntimeInputSource};
-use rsaeb::limits::{DEFAULT_MAX_INPUT_LEN, RuntimeInputLimits};
-use runtime_support::TestRunPolicy;
+use rsaeb::policy::DefaultPolicy;
+use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns the expected runtime error.
@@ -30,7 +30,10 @@ fn expect_run_error<T>(result: Result<T, RunError>) -> Result<RunError, TestFail
 /// # Errors
 ///
 /// Returns `RuntimeInputError` if the bytes are not valid runtime input.
-fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFailure> {
+fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: rsaeb::policy::ExecutionPolicy>(
+    bytes: &[u8],
+    limits: TestRunPolicy<I, E>,
+) -> Result<RunSeed<E>, TestFailure> {
     runtime_support::run_seed(bytes, limits)
 }
 
@@ -106,10 +109,9 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
         "parse error at line 1, column 4: multiple '=' characters are not allowed",
     )?;
 
-    let Err(input_error) = RuntimeInput::validate(
-        RuntimeInputSource::from_bytes(&[0xff]),
-        RuntimeInputLimits::new(DEFAULT_MAX_INPUT_LEN),
-    ) else {
+    let Err(input_error) =
+        RuntimeInput::<DefaultPolicy>::validate(RuntimeInputSource::from_bytes(&[0xff]))
+    else {
         return Err(TestFailure::message("expected input error"));
     };
     ensure_eq!(
@@ -117,12 +119,7 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
         "input error: non-ASCII byte 0xff at column 1",
     )?;
 
-    let return_limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        rsaeb::limits::StepLimit::new(1),
-        rsaeb::limits::DEFAULT_MAX_STATE_LEN,
-        rsaeb::limits::ReturnByteLimit::new(1),
-    );
+    let return_limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, 1>::new();
     let return_error = parse_program("a=(return)ok")?.run(runtime_input(b"a", return_limits)?);
     ensure_matches(
         matches!(

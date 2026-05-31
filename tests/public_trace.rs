@@ -10,15 +10,13 @@ use rsaeb::error::{
 };
 use rsaeb::execution::OwnedStepTransition;
 use rsaeb::input::RunSeed;
-use rsaeb::limits::{
-    DEFAULT_MAX_INPUT_LEN, DEFAULT_MAX_RETURN_LEN, DEFAULT_MAX_STATE_LEN,
-    DEFAULT_MAX_TRACE_SNAPSHOT_LEN, StepLimit, TraceSnapshotByteLimit,
-};
+use rsaeb::limits::TraceSnapshotByteLimit;
+use rsaeb::policy::{DefaultPolicy, StaticTraceSnapshotPolicy, TraceSnapshotPolicyWitness};
 use rsaeb::program::{Program, RunOutcome, RunResult};
 use rsaeb::trace::{
     BorrowedTraceEffect, BorrowedTraceEvent, TraceSnapshotEffect, TraceSnapshotEvent,
 };
-use runtime_support::TestRunPolicy;
+use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns the expected trace snapshot run error.
@@ -45,15 +43,10 @@ fn trace_snapshot_example(
     program: &Program,
 ) -> Result<(RunResult, Vec<TraceSnapshotEvent<'_>>), TestFailure> {
     let mut events = Vec::new();
-    let limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(10_000),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
+    let limits = DefaultInputRunPolicy::<10_000, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     let result = program.run_with_trace_snapshots(
         runtime_input(b"a", limits)?,
-        DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
+        TraceSnapshotPolicyWitness::<DefaultPolicy>::new(),
         |event| {
             events.push(event);
             Ok::<(), TestFailure>(())
@@ -99,7 +92,10 @@ enum CommittedStepSignature {
 /// # Errors
 ///
 /// Returns `RuntimeInputError` if the bytes are not valid runtime input.
-fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFailure> {
+fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: rsaeb::policy::ExecutionPolicy>(
+    bytes: &[u8],
+    limits: TestRunPolicy<I, E>,
+) -> Result<RunSeed<E>, TestFailure> {
     runtime_support::run_seed(bytes, limits)
 }
 
@@ -110,7 +106,7 @@ fn runtime_input(bytes: &[u8], limits: TestRunPolicy) -> Result<RunSeed, TestFai
 /// Returns `TestFailure` if tracing or materialization fails.
 fn borrowed_trace_step_signatures(
     program: &Program,
-    seed: RunSeed,
+    seed: RunSeed<impl rsaeb::policy::ExecutionPolicy>,
 ) -> Result<Vec<CommittedStepSignature>, TestFailure> {
     let mut signatures = Vec::new();
     program
@@ -146,7 +142,7 @@ fn borrowed_trace_step_signatures(
 /// Returns `TestFailure` if stepping or materialization fails.
 fn owned_step_signatures(
     program: Program,
-    seed: RunSeed,
+    seed: RunSeed<impl rsaeb::policy::ExecutionPolicy>,
 ) -> Result<Vec<CommittedStepSignature>, TestFailure> {
     let mut signatures = Vec::new();
     let mut session = program.into_run(seed)?;
@@ -184,12 +180,7 @@ fn owned_step_signatures(
 fn trace_borrowed_events_are_emitted_without_snapshots() -> TestResult {
     let program = parse_program("a=b\nb=(return)ok")?;
     let mut seen = Vec::new();
-    let limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(10_000),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
+    let limits = DefaultInputRunPolicy::<10_000, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
 
     let result = program
         .run_with_borrowed_trace(runtime_input(b"a", limits)?, |event| {
@@ -226,12 +217,7 @@ fn trace_borrowed_events_are_emitted_without_snapshots() -> TestResult {
 #[test]
 fn trace_borrowed_steps_match_owned_stepwise_commits() -> TestResult {
     let source = "(once)a=b\nb=(return)ok";
-    let limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(10),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
+    let limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
 
     let borrowed = parse_program(source)?;
     let borrowed_steps = borrowed_trace_step_signatures(&borrowed, runtime_input(b"a", limits)?)?;
@@ -326,17 +312,14 @@ fn trace_snapshot_continue_step_carries_rule_view() -> TestResult {
 fn trace_borrowed_to_snapshot_uses_only_snapshot_limit() -> TestResult {
     let program = parse_program("a=b")?;
     let mut materialization = None;
-    let limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(10),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
+    let limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
 
     program
         .run_with_borrowed_trace(runtime_input(b"a", limits)?, |event| {
             if materialization.is_none() {
-                materialization = Some(event.to_snapshot(TraceSnapshotByteLimit::new(0)));
+                materialization = Some(event.to_snapshot(TraceSnapshotPolicyWitness::<
+                    StaticTraceSnapshotPolicy<0>,
+                >::new()));
             }
             Ok::<(), TestFailure>(())
         })
@@ -361,15 +344,11 @@ fn trace_borrowed_to_snapshot_uses_only_snapshot_limit() -> TestResult {
 #[test]
 fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult {
     let program = parse_program("a=b")?;
-    let runtime_limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(0),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
+    let runtime_limits =
+        DefaultInputRunPolicy::<0, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     let runtime_error = program.run_with_trace_snapshots(
         runtime_input(b"a", runtime_limits)?,
-        TraceSnapshotByteLimit::new(10),
+        TraceSnapshotPolicyWitness::<StaticTraceSnapshotPolicy<10>>::new(),
         |_event| Ok::<(), TestFailure>(()),
     );
     let runtime_error = expect_trace_snapshot_error(runtime_error)?;
@@ -383,15 +362,11 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
         "expected runtime failure variant",
     )?;
 
-    let snapshot_limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(10),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
+    let snapshot_limits =
+        DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     let snapshot_error = program.run_with_trace_snapshots(
         runtime_input(b"a", snapshot_limits)?,
-        TraceSnapshotByteLimit::new(0),
+        TraceSnapshotPolicyWitness::<StaticTraceSnapshotPolicy<0>>::new(),
         |_event| Ok::<(), TestFailure>(()),
     );
     ensure_matches(
@@ -405,15 +380,10 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
         "expected snapshot materialization limit",
     )?;
 
-    let sink_limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(10),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
+    let sink_limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     let sink_error = program.run_with_trace_snapshots(
         runtime_input(b"a", sink_limits)?,
-        TraceSnapshotByteLimit::new(10),
+        TraceSnapshotPolicyWitness::<StaticTraceSnapshotPolicy<10>>::new(),
         |_event| Err::<(), _>("trace sink full"),
     );
     ensure_eq!(
@@ -430,16 +400,11 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
 fn trace_final_event_matches_run_result() -> TestResult {
     let program = parse_program("a=b\nb=(return)c")?;
     let mut events = Vec::new();
-    let limits = TestRunPolicy::new(
-        DEFAULT_MAX_INPUT_LEN,
-        StepLimit::new(10),
-        DEFAULT_MAX_STATE_LEN,
-        DEFAULT_MAX_RETURN_LEN,
-    );
+    let limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
 
     let result = program.run_with_trace_snapshots(
         runtime_input(b"a", limits)?,
-        DEFAULT_MAX_TRACE_SNAPSHOT_LEN,
+        TraceSnapshotPolicyWitness::<DefaultPolicy>::new(),
         |event| {
             events.push(event);
             Ok::<(), TestFailure>(())
