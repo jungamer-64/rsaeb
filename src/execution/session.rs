@@ -7,7 +7,7 @@ use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
 
 use super::advance::{
     BorrowedRunWitness, CoreAppliedRule, CoreRuleAttemptStep, CoreStep, OwnedRunWitness,
-    advance_borrowed_rule_attempt, advance_owned_rule_attempt, advance_run,
+    advance_borrowed_rule_attempt, advance_run,
 };
 use super::engine::{
     AttemptSession, BorrowedProgram, OwnedProgram, Session, TerminalAttemptSession, TerminalRunCore,
@@ -16,10 +16,8 @@ use super::transition::{
     BorrowedAppliedStep, BorrowedFailedRun, BorrowedMissedRuleAttempt, BorrowedReturnedRun,
     BorrowedRuleAttemptAppliedStep, BorrowedRuleAttemptFailedRun, BorrowedRuleAttemptReturnedRun,
     BorrowedRuleAttemptStableRun, BorrowedRuleAttemptTransition, BorrowedStableRun,
-    BorrowedStepTransition, OwnedAppliedStep, OwnedFailedRun, OwnedMissedRuleAttempt,
-    OwnedReturnedRun, OwnedRuleAttemptAppliedStep, OwnedRuleAttemptFailedRun,
-    OwnedRuleAttemptReturnedRun, OwnedRuleAttemptStableRun, OwnedRuleAttemptTransition,
-    OwnedStableRun, OwnedStepTransition,
+    BorrowedStepTransition, OwnedAppliedStep, OwnedFailedRun, OwnedReturnedRun, OwnedStableRun,
+    OwnedStepTransition,
 };
 
 /// Stateful run session that borrows a reusable parsed program.
@@ -57,15 +55,7 @@ pub struct BorrowedRuleAttemptSession<
     A: RuleAttemptPolicy,
 > {
     /// Internal rule-attempt session using the public borrowed program boundary.
-    pub(super) session: AttemptSession<BorrowedProgram<'program, P>, E, A>,
-}
-
-/// Stateful run session that owns its parsed program and advances by rule attempt.
-///
-/// This is the owned counterpart to [`BorrowedRuleAttemptSession`].
-pub struct OwnedRuleAttemptSession<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> {
-    /// Internal rule-attempt session using the public owned program boundary.
-    pub(super) session: AttemptSession<OwnedProgram<P>, E, A>,
+    pub(super) session: AttemptSession<'program, P, E, A>,
 }
 
 /// Terminal data split out of a borrowed ordinary run session.
@@ -88,16 +78,6 @@ struct OwnedRunTerminal<P: ParsePolicy> {
 struct BorrowedRuleAttemptTerminal<'program, P: ParsePolicy> {
     /// Parsed program borrowed by the terminal state.
     program: &'program Program<P>,
-    /// Runtime core retained for terminal state observation or materialization.
-    core: TerminalRunCore,
-    /// Rule attempts consumed before the terminal boundary was reached.
-    attempts: RuleAttemptCount,
-}
-
-/// Terminal data split out of an owned rule-attempt run session.
-struct OwnedRuleAttemptTerminal<P: ParsePolicy> {
-    /// Parsed program retained by the terminal state.
-    program: Program<P>,
     /// Runtime core retained for terminal state observation or materialization.
     core: TerminalRunCore,
     /// Rule attempts consumed before the terminal boundary was reached.
@@ -212,7 +192,7 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
     /// Returns `RunStartError` if allocating per-run rule state fails.
     pub(crate) fn new(
         program: &'program Program<P>,
-        first_cursor: ActiveRuleCursor,
+        first_cursor: ActiveRuleCursor<'program>,
         admitted: AdmittedRun<E>,
     ) -> Result<Self, RunStartError> {
         Ok(Self {
@@ -221,7 +201,7 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
     }
 
     /// Builds a public active rule-attempt session from the internal session.
-    const fn from_active(session: AttemptSession<BorrowedProgram<'program, P>, E, A>) -> Self {
+    const fn from_active(session: AttemptSession<'program, P, E, A>) -> Self {
         Self { session }
     }
 
@@ -332,77 +312,6 @@ impl<P: ParsePolicy, E: ExecutionPolicy> OwnedRunSession<P, E> {
     }
 }
 
-impl<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> OwnedRuleAttemptSession<P, E, A> {
-    /// Starts owned rule-attempt execution from an executable program witness.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunStartError` if allocating per-run rule state fails.
-    pub(crate) fn new(
-        program: Program<P>,
-        first_cursor: ActiveRuleCursor,
-        admitted: AdmittedRun<E>,
-    ) -> Result<Self, RunStartError> {
-        Ok(Self {
-            session: AttemptSession::new(OwnedProgram { program }, admitted, first_cursor)?,
-        })
-    }
-
-    /// Builds a public active rule-attempt session from the internal session.
-    const fn from_active(session: AttemptSession<OwnedProgram<P>, E, A>) -> Self {
-        Self { session }
-    }
-
-    /// Number of execution steps that have already completed in this run.
-    #[must_use]
-    pub const fn completed_steps(&self) -> StepCount {
-        self.session.completed_steps()
-    }
-
-    /// Number of executable rule-line attempts consumed so far.
-    #[must_use]
-    pub const fn completed_attempts(&self) -> RuleAttemptCount {
-        self.session.completed_attempts()
-    }
-
-    /// Borrow the parsed program owned by this session.
-    #[must_use]
-    pub fn program(&self) -> &Program<P> {
-        self.session.program()
-    }
-
-    /// Discards the current run state and recovers the owned parsed program.
-    ///
-    /// This intentionally drops the in-progress runtime state; it is for
-    /// ownership recovery, not for retrying the same admitted run.
-    #[must_use]
-    pub fn into_program(self) -> Program<P> {
-        let (program, _core) = self.session.into_program_core();
-        program
-    }
-
-    /// Borrow the current runtime state.
-    ///
-    /// The returned view borrows only for this observation. Materializing it is
-    /// an explicit allocation boundary.
-    #[must_use]
-    pub fn state(&self) -> RuntimeStateView<'_> {
-        self.session.state()
-    }
-
-    /// Advances this run by exactly one executable rule line when possible.
-    ///
-    /// Non-matching rules return [`OwnedRuleAttemptTransition::Missed`] with a
-    /// continuation session. Matching rewrites return
-    /// [`OwnedRuleAttemptTransition::Applied`] and reset the next attempt to
-    /// the first executable rule. Owned terminal and failed states keep the
-    /// parsed program recoverable.
-    #[must_use]
-    pub fn step(self) -> OwnedRuleAttemptTransition<P, E, A> {
-        step_owned_rule_attempt_run(self)
-    }
-}
-
 impl<'program, P: ParsePolicy> BorrowedRunTerminal<'program, P> {
     /// Splits a borrowed run session into terminal data.
     fn from_session<E: ExecutionPolicy>(session: BorrowedRunSession<'program, P, E>) -> Self {
@@ -427,23 +336,7 @@ impl<P: ParsePolicy> OwnedRunTerminal<P> {
 
 impl<'program, P: ParsePolicy> BorrowedRuleAttemptTerminal<'program, P> {
     /// Projects terminal borrowed rule-attempt state into public terminal data.
-    fn from_terminal(terminal: TerminalAttemptSession<BorrowedProgram<'program, P>>) -> Self {
-        let TerminalAttemptSession {
-            program,
-            core,
-            attempts,
-        } = terminal;
-        Self {
-            program: program.program,
-            core,
-            attempts,
-        }
-    }
-}
-
-impl<P: ParsePolicy> OwnedRuleAttemptTerminal<P> {
-    /// Projects terminal owned rule-attempt state into public terminal data.
-    fn from_terminal(terminal: TerminalAttemptSession<OwnedProgram<P>>) -> Self {
+    fn from_terminal(terminal: TerminalAttemptSession<'program, P>) -> Self {
         let TerminalAttemptSession {
             program,
             core,
@@ -609,72 +502,6 @@ fn step_borrowed_rule_attempt_run<
         CoreRuleAttemptStep::Failed { error, terminal } => {
             let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
             BorrowedRuleAttemptTransition::Failed(BorrowedRuleAttemptFailedRun::new(
-                error,
-                terminal.attempts,
-                terminal.program,
-                terminal.core,
-            ))
-        }
-    }
-}
-
-/// Advances an owned rule-attempt run and projects the private transition into the public type.
-fn step_owned_rule_attempt_run<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>(
-    session: OwnedRuleAttemptSession<P, E, A>,
-) -> OwnedRuleAttemptTransition<P, E, A> {
-    match advance_owned_rule_attempt(session.session) {
-        CoreRuleAttemptStep::Missed {
-            attempt,
-            miss,
-            continuation,
-        } => OwnedRuleAttemptTransition::Missed(OwnedMissedRuleAttempt {
-            attempt,
-            miss,
-            session: OwnedRuleAttemptSession::from_active(continuation),
-        }),
-        CoreRuleAttemptStep::Applied {
-            attempt,
-            step,
-            rule,
-            continuation,
-        } => OwnedRuleAttemptTransition::Applied(OwnedRuleAttemptAppliedStep {
-            attempt,
-            step,
-            rule,
-            session: OwnedRuleAttemptSession::from_active(continuation),
-        }),
-        CoreRuleAttemptStep::Returned {
-            attempt,
-            step,
-            rule,
-            output,
-            terminal,
-        } => {
-            let terminal = OwnedRuleAttemptTerminal::from_terminal(terminal);
-            OwnedRuleAttemptTransition::Returned(OwnedRuleAttemptReturnedRun {
-                attempt,
-                step,
-                rule,
-                program: terminal.program,
-                output,
-            })
-        }
-        CoreRuleAttemptStep::Stable {
-            attempts,
-            final_miss,
-            terminal,
-        } => {
-            let terminal = OwnedRuleAttemptTerminal::from_terminal(terminal);
-            OwnedRuleAttemptTransition::Stable(OwnedRuleAttemptStableRun {
-                attempts,
-                final_miss,
-                program: terminal.program,
-                core: terminal.core,
-            })
-        }
-        CoreRuleAttemptStep::Failed { error, terminal } => {
-            let terminal = OwnedRuleAttemptTerminal::from_terminal(terminal);
-            OwnedRuleAttemptTransition::Failed(OwnedRuleAttemptFailedRun::new(
                 error,
                 terminal.attempts,
                 terminal.program,

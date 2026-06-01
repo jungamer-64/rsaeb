@@ -3,12 +3,12 @@ use core::fmt;
 use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind};
 
 use super::{
-    InputColumn, LeftModifierKind, OwnedRuleAttemptStepError, OwnedRunStepError, ParseError,
-    ParseErrorKind, ParseErrorLocation, ParseRepresentationError, PayloadKind,
-    ReturnOutputLimitError, RewriteSizeError, RightActionKind, RuleAttemptLimitError,
-    RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError, RunStartError, RunStepError,
-    RuntimeInputError, RuntimeStateLimitError, StepLimitError, TraceSnapshotError,
-    TraceSnapshotRunError, TracedRunError,
+    InputColumn, LeftModifierKind, OwnedRunStepError, ParseError, ParseErrorKind,
+    ParseErrorLocation, ParseRepresentationError, PayloadKind, ReturnOutputLimitError,
+    RewriteSizeError, RightActionKind, RuleAttemptLimitError, RuleAttemptStepError,
+    RunAdmissionError, RunError, RunFinishError, RunStartError, RunStepError, RuntimeInputError,
+    RuntimeStateLimitError, StepLimitError, TraceSnapshotError, TraceSnapshotRunError,
+    TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -19,7 +19,7 @@ impl fmt::Display for AllocationContext {
             Self::ProgramRuleTable => f.write_str("program rule table"),
             Self::CanonicalSource => f.write_str("canonical source bytes"),
             Self::RuntimeInputValidation => f.write_str("runtime input validation"),
-            Self::RuntimeRuleState => f.write_str("runtime rule state"),
+            Self::OnceRuleState => f.write_str("once rule state"),
             Self::RuntimeRewriteState => f.write_str("runtime rewrite state"),
             Self::PayloadView => f.write_str("payload view"),
             Self::OwnedRuleWitness => f.write_str("owned execution rule witness"),
@@ -236,17 +236,6 @@ impl fmt::Display for RuleAttemptStepError {
         match self {
             Self::Step(error) => error.fmt(f),
             Self::RuleAttemptLimit(error) => error.fmt(f),
-        }
-    }
-}
-
-impl fmt::Display for OwnedRuleAttemptStepError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Attempt(error) => error.fmt(f),
-            Self::RuleWitnessAllocation(error) => {
-                write!(f, "owned rule witness materialization failed: {error}")
-            }
         }
     }
 }

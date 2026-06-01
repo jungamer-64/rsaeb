@@ -44,6 +44,11 @@
 //! - [`inspect`] exposes borrowed structured rule views, and [`error`] exposes
 //!   structured parse, input, runtime, and trace errors.
 //!
+//! `(once)` rules own parser-assigned once slots. Runtime execution allocates
+//! per-run once state from [`inspect::OnceRuleCount`], not from the total rule
+//! count, so ordinary rules interleaved between `(once)` rules do not occupy
+//! once-state cells.
+//!
 //! # Compile-time API guards
 //!
 //! Runtime execution mode selectors and old method-shaped entrypoints are not
@@ -92,6 +97,29 @@
 //!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
 //!     let _ = program.rule_attempts::<StaticRuleAttemptPolicy<10>, _>(admitted)?;
+//!     Ok(())
+//! }
+//! ```
+//!
+//! Owned executable witnesses do not expose rule-attempt sessions. Rule-attempt
+//! execution is the borrowed cursor-bearing API because the resumable cursor is
+//! tied to the executable rule table:
+//!
+//! ```compile_fail
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::{
+//!     DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy,
+//!     StaticRuleAttemptPolicy,
+//! };
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
+//!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
+//!     let executable = program.into_executable().map_err(|_| "expected executable rules")?;
+//!     let _ = executable.into_rule_attempts::<StaticRuleAttemptPolicy<10>, _>(admitted)?;
 //!     Ok(())
 //! }
 //! ```
@@ -433,12 +461,12 @@
 //! uncommitted-state diagnostics for owned sessions, and it can split into the
 //! runtime error plus the parsed program when ownership matters. Failed
 //! transitions are terminal; recovering the program never recovers a retryable
-//! session. Borrowed applied and returned transitions carry
+//! session. Borrowed applied, missed, and returned transitions carry
 //! [`inspect::RuleView`] witnesses; owned transitions retain
 //! [`execution::OwnedRuleWitness`] values so rule metadata remains available
-//! after ownership moves. Owned non-terminal applied and missed transitions also
-//! expose `into_parts` methods so callers can keep the owned witness and the
-//! continuation session together.
+//! after ownership moves. Owned non-terminal applied transitions expose
+//! `into_parts` so callers can keep the owned witness and the continuation
+//! session together.
 //!
 //! Use [`program::BorrowedExecutableProgram::rule_attempts`] when the host needs
 //! to observe every executable rule line, including lines that do not apply to

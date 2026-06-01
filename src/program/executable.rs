@@ -1,7 +1,5 @@
 use crate::error::RunStartError;
-use crate::execution::{
-    BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRuleAttemptSession, OwnedRunSession,
-};
+use crate::execution::{BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRunSession};
 use crate::input::AdmittedRun;
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 
@@ -13,7 +11,7 @@ pub struct BorrowedExecutableProgram<'program, P: ParsePolicy> {
     /// Parsed program proven to contain at least one executable rule.
     program: &'program Program<P>,
     /// First executable cursor minted from the proven non-empty rule table.
-    first_cursor: ActiveRuleCursor,
+    first_cursor: ActiveRuleCursor<'program>,
 }
 
 /// Borrowed witness that a parsed program has no executable rules.
@@ -28,8 +26,6 @@ pub struct BorrowedEmptyProgram<'program, P: ParsePolicy> {
 pub struct OwnedExecutableProgram<P: ParsePolicy> {
     /// Parsed program proven to contain at least one executable rule.
     program: Program<P>,
-    /// First executable cursor minted from the proven non-empty rule table.
-    first_cursor: ActiveRuleCursor,
 }
 
 /// Owned witness that a parsed program has no executable rules.
@@ -110,12 +106,10 @@ impl<P: ParsePolicy> OwnedExecutableProgram<P> {
     ///
     /// Returns `OwnedEmptyProgram` when the parsed program has no executable rules.
     pub(crate) fn from_program(program: Program<P>) -> Result<Self, OwnedEmptyProgram<P>> {
-        match program.rule_scan().first_cursor() {
-            Some(first_cursor) => Ok(Self {
-                program,
-                first_cursor,
-            }),
-            None => Err(OwnedEmptyProgram { program }),
+        if program.rule_scan().first_cursor().is_some() {
+            Ok(Self { program })
+        } else {
+            Err(OwnedEmptyProgram { program })
         }
     }
 
@@ -138,22 +132,6 @@ impl<P: ParsePolicy> OwnedExecutableProgram<P> {
         E: ExecutionPolicy,
     {
         OwnedRunSession::new(self.program, admitted)
-    }
-
-    /// Starts owned rule-attempt execution.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunStartError` if allocating per-run rule state fails.
-    pub fn into_rule_attempts<A, E>(
-        self,
-        admitted: AdmittedRun<E>,
-    ) -> Result<OwnedRuleAttemptSession<P, E, A>, RunStartError>
-    where
-        A: RuleAttemptPolicy,
-        E: ExecutionPolicy,
-    {
-        OwnedRuleAttemptSession::new(self.program, self.first_cursor, admitted)
     }
 }
 

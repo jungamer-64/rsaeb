@@ -1,6 +1,6 @@
 use super::budget::RuntimeBudgetState;
 use super::matcher::{RuleSearch, find_next_match};
-use super::once::RuntimeRuleStates;
+use super::once::OnceStateSet;
 use super::rewrite::RewriteScratch;
 use super::state::State;
 use crate::bytes::Payload;
@@ -135,7 +135,7 @@ fn ensure_once_rule_failure_does_not_commit_rule<I: RuntimeInputPolicy, E: Execu
     let state = state_from_input_bytes(expectation.input, expectation.limits)?;
     let mut budget: RuntimeBudgetState<E> = RuntimeBudgetState::new();
     let mut scratch = RewriteScratch::new();
-    let mut rule_states = RuntimeRuleStates::new(program.rule_scan())?;
+    let mut rule_states = OnceStateSet::new(program.once_rule_count())?;
 
     let matched = match find_next_match(program.rule_scan(), &mut rule_states, &state) {
         RuleSearch::Matched(matched) => matched,
@@ -376,12 +376,12 @@ fn once_limit_failures_do_not_commit_rule() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if runtime rule-state construction loses parsed
-/// `(once)` availability.
+/// Returns `TestFailure` if parser-assigned once-state construction loses
+/// parsed `(once)` availability.
 #[test]
-fn runtime_rule_states_are_constructed_from_parsed_rules() -> TestResult {
+fn once_state_set_is_constructed_from_parser_assigned_slots() -> TestResult {
     let program = parse_program("(once)a=b")?;
-    let mut rule_states = RuntimeRuleStates::new(program.rule_scan())?;
+    let mut rule_states = OnceStateSet::new(program.once_rule_count())?;
     let state = state_from_input_bytes(
         b"a",
         DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new(),
@@ -392,7 +392,7 @@ fn runtime_rule_states_are_constructed_from_parsed_rules() -> TestResult {
             find_next_match(program.rule_scan(), &mut rule_states, &state),
             RuleSearch::Matched(_)
         ),
-        "expected aligned runtime rule state to keep the rule available",
+        "expected parser-assigned once slot to keep the rule available",
     )
 }
 

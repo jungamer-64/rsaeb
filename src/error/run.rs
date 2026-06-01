@@ -177,36 +177,6 @@ impl From<RuleAttemptLimitError> for RuleAttemptStepError {
     }
 }
 
-/// Error while advancing one owned rule-attempt step.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OwnedRuleAttemptStepError {
-    /// Ordinary borrowed rule-attempt failure domain.
-    Attempt(RuleAttemptStepError),
-    /// Retaining the owned rule witness failed.
-    RuleWitnessAllocation(AllocationError),
-}
-
-impl Error for OwnedRuleAttemptStepError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Attempt(error) => Some(error),
-            Self::RuleWitnessAllocation(error) => Some(error),
-        }
-    }
-}
-
-impl From<RuleAttemptStepError> for OwnedRuleAttemptStepError {
-    fn from(value: RuleAttemptStepError) -> Self {
-        Self::Attempt(value)
-    }
-}
-
-impl From<RunStepError> for OwnedRuleAttemptStepError {
-    fn from(value: RunStepError) -> Self {
-        Self::Attempt(RuleAttemptStepError::Step(value))
-    }
-}
-
 /// Error while finishing a run session that has already started.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunFinishError {

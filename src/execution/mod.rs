@@ -70,17 +70,13 @@ mod transition;
 mod witness;
 
 pub use attempt::{RuleMiss, RuleMissReason};
-pub use session::{
-    BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRuleAttemptSession, OwnedRunSession,
-};
+pub use session::{BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRunSession};
 pub use transition::{
     BorrowedAppliedStep, BorrowedFailedRun, BorrowedMissedRuleAttempt, BorrowedReturnedRun,
     BorrowedRuleAttemptAppliedStep, BorrowedRuleAttemptFailedRun, BorrowedRuleAttemptReturnedRun,
     BorrowedRuleAttemptStableRun, BorrowedRuleAttemptTransition, BorrowedStableRun,
-    BorrowedStepTransition, OwnedAppliedStep, OwnedFailedRun, OwnedMissedRuleAttempt,
-    OwnedReturnedRun, OwnedRuleAttemptAppliedStep, OwnedRuleAttemptFailedRun,
-    OwnedRuleAttemptReturnedRun, OwnedRuleAttemptStableRun, OwnedRuleAttemptTransition,
-    OwnedStableRun, OwnedStepTransition,
+    BorrowedStepTransition, OwnedAppliedStep, OwnedFailedRun, OwnedReturnedRun, OwnedStableRun,
+    OwnedStepTransition,
 };
 pub use witness::{OwnedRuleAction, OwnedRulePayload, OwnedRuleWitness};
 

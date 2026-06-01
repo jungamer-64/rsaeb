@@ -61,7 +61,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 input; `Program::parse` performs source validation. `RuntimeInputSource` and
 `RuntimeInput::validate` do the same for runtime input bytes. Reuse parsed
 programs freely: a `Program` is immutable, and `(once)` consumption is local to
-each execution.
+each execution. The parser assigns each `(once)` rule a dense once slot; per-run
+once state is allocated from that once-rule count, so interleaved ordinary rules
+do not consume once-state cells.
 
 ## Execution Shape
 
@@ -85,8 +87,9 @@ empty programs. Stepwise and rule-attempt execution first require
 `Program::as_executable()` or `Program::into_executable()`, which returns either
 an executable-program witness or a typed empty-program witness. Borrowed
 executable witnesses start reusable sessions with `.steps(admitted)` or
-`.rule_attempts::<A, _>(admitted)`; owned witnesses start the corresponding
-owned sessions with `.into_steps(admitted)` or `.into_rule_attempts::<A, _>(admitted)`.
+`.rule_attempts::<A, _>(admitted)`. Owned executable witnesses start ordinary
+step sessions with `.into_steps(admitted)`. Rule-attempt execution is borrowed
+because its resumable cursor is tied to the executable rule table.
 
 The exact typestate names, transition variants, owned recovery methods, tracing
 events, and error variants are documented in rustdoc.

@@ -1,12 +1,11 @@
 use alloc::vec::Vec;
-use core::num::NonZeroUsize;
 use core::slice;
 
 use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError, ParseRepresentationError};
 use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePosition};
 use crate::limits::RuleLimit;
-use crate::rule::{ParsedRule, Rule, RuleRepeatBehavior, RuleRepeatSyntax};
+use crate::rule::{OnceRuleSlot, ParsedRule, Rule, RuleAvailability, RuleRepeatSyntax};
 
 /// Immutable executable rule table built by the parser.
 #[derive(Debug, PartialEq, Eq)]
@@ -49,25 +48,18 @@ struct RuleInsertionPermit {
 
 /// Cursor pointing to an executable rule line in one active rule-attempt run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ActiveRuleCursor {
-    /// Zero-based rule-table offset selected on the next attempt.
-    next_rule_index: usize,
-    /// Total executable rules in the table that minted this cursor.
-    rule_count: ActiveRuleCount,
-}
-
-/// Non-zero executable rule count carried by active rule-attempt cursors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ActiveRuleCount {
-    /// Non-zero total executable rule count.
-    value: NonZeroUsize,
+pub(crate) struct ActiveRuleCursor<'program> {
+    /// Parsed executable rule selected on the next attempt.
+    current: &'program Rule,
+    /// Remaining parsed rules after the current target.
+    remaining_after_current: &'program [Rule],
 }
 
 /// Cursor movement after a non-applying rule line has been consumed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuleCursorAfterMiss {
+pub(crate) enum RuleCursorAfterMiss<'program> {
     /// Cursor advanced to the next executable rule.
-    Advanced(ActiveRuleCursor),
+    Advanced(ActiveRuleCursor<'program>),
     /// The consumed miss was the final executable rule.
     Exhausted,
 }
@@ -124,14 +116,14 @@ impl RuleInsertionPermit {
 }
 
 impl PendingRuleInsertion {
-    /// Assigns runtime repeat behavior to one parsed rule before storage.
+    /// Assigns runtime availability to one parsed rule before storage.
     fn from_parsed(
         position: RulePosition,
         parsed: ParsedRule,
-        repeat_behavior: RuleRepeatBehavior,
+        availability: RuleAvailability,
     ) -> Self {
         Self {
-            rule: Rule::from_parsed(position, parsed, repeat_behavior),
+            rule: Rule::from_parsed(position, parsed, availability),
         }
     }
 
@@ -163,11 +155,10 @@ impl RuleSetBuilder {
     ) -> Result<(), ParseError> {
         let line_number = parsed.line_number();
         let insertion = RuleInsertionPermit::new(self.rules.len(), limit, line_number)?;
-        let (repeat_behavior, next_once_rule_count) =
-            self.assign_rule_repeat_behavior(&parsed, line_number)?;
+        let (availability, next_once_rule_count) =
+            self.assign_rule_availability(&parsed, line_number)?;
 
-        let pending =
-            PendingRuleInsertion::from_parsed(insertion.position(), parsed, repeat_behavior);
+        let pending = PendingRuleInsertion::from_parsed(insertion.position(), parsed, availability);
 
         let pending_line_number = pending.line_number();
         try_reserve_total_exact(
@@ -198,20 +189,21 @@ impl RuleSetBuilder {
         }
     }
 
-    /// Assigns parsed repeat syntax to runtime repeat behavior.
+    /// Assigns parsed repeat syntax to runtime availability.
     ///
     /// # Errors
     ///
     /// Returns `ParseError` if the next parsed `(once)` count cannot be
     /// represented.
-    fn assign_rule_repeat_behavior(
+    fn assign_rule_availability(
         &self,
         parsed: &ParsedRule,
         line_number: crate::source::SourceLineNumber,
-    ) -> Result<(RuleRepeatBehavior, PublicOnceRuleCount), ParseError> {
+    ) -> Result<(RuleAvailability, PublicOnceRuleCount), ParseError> {
         match parsed.repeat_syntax() {
-            RuleRepeatSyntax::Always => Ok((RuleRepeatBehavior::Always, self.once_rule_count)),
+            RuleRepeatSyntax::Always => Ok((RuleAvailability::Always, self.once_rule_count)),
             RuleRepeatSyntax::Once => {
+                let slot = OnceRuleSlot::from_count(self.once_rule_count);
                 let next_once_rule_count =
                     self.once_rule_count.checked_next().ok_or_else(|| {
                         ParseError::at_line(
@@ -219,7 +211,7 @@ impl RuleSetBuilder {
                             ParseErrorKind::Representation(ParseRepresentationError::RuleCount),
                         )
                     })?;
-                Ok((RuleRepeatBehavior::Once, next_once_rule_count))
+                Ok((RuleAvailability::Once(slot), next_once_rule_count))
             }
         }
     }
@@ -253,69 +245,36 @@ impl<'program> RuleScan<'program> {
         self.rules.iter()
     }
 
-    /// Number of executable rules in this scan.
-    pub(crate) fn rule_count(self) -> RuleCount {
-        RuleCount::new(self.rules.len())
-    }
-
     /// Mints the first active rule cursor for a non-empty rule table.
-    pub(crate) fn first_cursor(self) -> Option<ActiveRuleCursor> {
-        ActiveRuleCount::new(self.rules.len()).map(ActiveRuleCursor::at_first_rule)
+    pub(crate) fn first_cursor(self) -> Option<ActiveRuleCursor<'program>> {
+        ActiveRuleCursor::from_rules(self.rules)
     }
 
-    /// Returns the rule at a cursor position.
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "ActiveRuleCursor is minted only by this RuleScan from a non-empty table"
-    )]
-    pub(crate) fn rule_at_cursor(self, cursor: ActiveRuleCursor) -> &'program Rule {
-        &self.rules[cursor.next_rule_index]
-    }
-
-    /// Cursor movement allowed after the current cursor consumes a miss.
-    pub(crate) fn after_miss(self, cursor: ActiveRuleCursor) -> RuleCursorAfterMiss {
-        cursor.after_miss()
+    /// Splits a cursor into the selected rule and the only legal post-miss cursor movement.
+    pub(crate) fn consume_cursor(
+        self,
+        cursor: ActiveRuleCursor<'program>,
+    ) -> (&'program Rule, RuleCursorAfterMiss<'program>) {
+        cursor.into_target()
     }
 }
 
-impl ActiveRuleCursor {
-    /// Selects the first executable rule in a non-empty rule table.
-    const fn at_first_rule(rule_count: ActiveRuleCount) -> Self {
-        Self {
-            next_rule_index: 0,
-            rule_count,
-        }
-    }
-
-    /// Zero-based rule-table offset selected on the next attempt.
-    pub(crate) const fn next_rule_index(&self) -> usize {
-        self.next_rule_index
-    }
-
-    /// Cursor movement allowed after the current cursor consumes a miss.
-    fn after_miss(self) -> RuleCursorAfterMiss {
-        match self.next_rule_index.checked_add(1) {
-            Some(next_rule_index) if next_rule_index < self.rule_count.get() => {
-                RuleCursorAfterMiss::Advanced(Self {
-                    next_rule_index,
-                    rule_count: self.rule_count,
-                })
-            }
-            Some(_) | None => RuleCursorAfterMiss::Exhausted,
-        }
-    }
-}
-
-impl ActiveRuleCount {
-    /// Creates an active rule count only for non-empty rule tables.
-    fn new(value: usize) -> Option<Self> {
+impl<'program> ActiveRuleCursor<'program> {
+    /// Builds a cursor from a non-empty parsed rule slice.
+    fn from_rules(rules: &'program [Rule]) -> Option<Self> {
+        let (current, remaining_after_current) = rules.split_first()?;
         Some(Self {
-            value: NonZeroUsize::new(value)?,
+            current,
+            remaining_after_current,
         })
     }
 
-    /// Rule count as a primitive value.
-    const fn get(self) -> usize {
-        self.value.get()
+    /// Splits this cursor into its selected rule and miss continuation.
+    fn into_target(self) -> (&'program Rule, RuleCursorAfterMiss<'program>) {
+        let after_miss = match Self::from_rules(self.remaining_after_current) {
+            Some(cursor) => RuleCursorAfterMiss::Advanced(cursor),
+            None => RuleCursorAfterMiss::Exhausted,
+        };
+        (self.current, after_miss)
     }
 }

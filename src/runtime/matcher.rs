@@ -1,4 +1,4 @@
-use super::once::{MatchedRuleCommit, RuntimeRule, RuntimeRuleReadiness, RuntimeRuleStates};
+use super::once::{MatchedRuleCommit, OnceStateSet, RuntimeRule, RuntimeRuleReadiness};
 use super::state::{State, StateMatch};
 use crate::program::RuleScan;
 use crate::rule::{Rule, RuleAnchorSyntax};
@@ -150,10 +150,10 @@ impl<'program> PreparedMatchedRule<'program, '_> {
 /// Finds the first currently available rule that matches `state`.
 pub(crate) fn find_next_match<'program, 'state, 'once>(
     rules: RuleScan<'program>,
-    rule_states: &'once mut RuntimeRuleStates,
+    once_states: &'once mut OnceStateSet,
     state: &'state State,
 ) -> RuleSearch<'program, 'state, 'once> {
-    for runtime_rule in rule_states.scan(rules) {
+    for runtime_rule in once_states.scan(rules) {
         let candidate = match match_rule_state(runtime_rule.rule(), state) {
             RuleStateMatch::Matched(candidate) => candidate,
             RuleStateMatch::Mismatched => continue,
