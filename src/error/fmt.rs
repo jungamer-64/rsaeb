@@ -6,8 +6,8 @@ use super::{
     InputColumn, LeftModifierKind, OwnedRuleAttemptStepError, OwnedRunStepError, ParseError,
     ParseErrorKind, ParseErrorLocation, ParseRepresentationError, PayloadKind,
     ReturnOutputLimitError, RewriteSizeError, RightActionKind, RuleAttemptLimitError,
-    RuleAttemptStepError, RuleRuntimeStateError, RunAdmissionError, RunError, RunFinishError,
-    RunStartError, RunStepError, RuntimeInputError, RuntimeStateLimitError, StepLimitError,
+    RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError, RunStartError,
+    RunStepError, RuntimeInputError, RuntimeStateLimitError, StepLimitError,
     TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
 };
 
@@ -216,19 +216,7 @@ impl fmt::Display for RunStepError {
             Self::RuntimeStateLimit(error) => error.fmt(f),
             Self::ReturnOutputLimit(error) => error.fmt(f),
             Self::StepLimit(error) => error.fmt(f),
-            Self::RuleRuntimeState(error) => error.fmt(f),
         }
-    }
-}
-
-impl fmt::Display for RuleRuntimeStateError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "runtime rule state error: once slot {} is outside the run-local once slot count {}",
-            self.slot_index(),
-            self.slot_count().get(),
-        )
     }
 }
 
