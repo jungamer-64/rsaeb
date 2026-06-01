@@ -5,17 +5,18 @@ use crate::error::{
 use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
-use crate::program::{ReturnOutput, ReturnOutputView, RuleCursor, RuleCursorAfterMiss, RuleScan};
+use crate::program::{
+    ActiveRuleCursor, ReturnOutput, ReturnOutputView, RuleCursorAfterMiss, RuleScan,
+};
 use crate::runtime::action::{AppliedRule, PreparedRuleApplication, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuleAttemptReservation, RuntimeBudgetState};
 use crate::runtime::matcher::{
     MatchedRuleApplication, RuleAttempt, RuleSearch, attempt_rule, find_next_match,
 };
-use crate::runtime::once::RuntimeRuleTargetSelection;
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
 
-use super::attempt::{RuleAttemptStableReason, RuleMiss};
+use super::attempt::RuleMiss;
 use super::engine::{
     AttemptSession, BorrowedProgram, OwnedProgram, RunCore, TerminalAttemptSession,
 };
@@ -148,8 +149,8 @@ pub(super) enum CoreRuleAttemptStep<
         attempts: RuleAttemptCount,
         /// Rewrite steps committed before stability.
         steps: StepCount,
-        /// Why the rule-attempt pass reached stability.
-        stable_reason: RuleAttemptStableReason<RuleWitness>,
+        /// Final non-applying rule that exhausted the current pass.
+        final_miss: RuleMiss<RuleWitness>,
         /// Terminal session with no resumable cursor.
         terminal: TerminalAttemptSession<P, E, A>,
     },
@@ -172,8 +173,10 @@ enum RuleAttemptAdvance<E: ExecutionPolicy, A: RuleAttemptPolicy, RuleWitness, S
         miss: RuleMiss<RuleWitness>,
         /// Mutable runtime state after the miss.
         core: RunCore<E>,
+        /// First executable rule cursor for reset after a rewrite.
+        first_cursor: ActiveRuleCursor,
         /// Cursor selected for the next attempt.
-        cursor: RuleCursor,
+        cursor: ActiveRuleCursor,
         /// Rule-attempt budget after the miss.
         attempt_budget: RuleAttemptBudgetState<A>,
     },
@@ -187,6 +190,8 @@ enum RuleAttemptAdvance<E: ExecutionPolicy, A: RuleAttemptPolicy, RuleWitness, S
         rule: RuleWitness,
         /// Mutable runtime state after the rewrite.
         core: RunCore<E>,
+        /// First executable rule cursor for reset after a rewrite.
+        first_cursor: ActiveRuleCursor,
         /// Rule-attempt budget after the rewrite.
         attempt_budget: RuleAttemptBudgetState<A>,
     },
@@ -211,8 +216,8 @@ enum RuleAttemptAdvance<E: ExecutionPolicy, A: RuleAttemptPolicy, RuleWitness, S
         attempts: RuleAttemptCount,
         /// Rewrite steps committed before stability.
         steps: StepCount,
-        /// Why the rule-attempt pass reached stability.
-        stable_reason: RuleAttemptStableReason<RuleWitness>,
+        /// Final non-applying rule that exhausted the current pass.
+        final_miss: RuleMiss<RuleWitness>,
         /// Mutable runtime state retained for terminal observation.
         core: RunCore<E>,
         /// Rule-attempt budget at stability.
@@ -346,6 +351,7 @@ where
                 attempt,
                 miss,
                 core,
+                first_cursor,
                 cursor,
                 attempt_budget,
             } => CoreRuleAttemptStep::Missed {
@@ -354,6 +360,7 @@ where
                 continuation: AttemptSession {
                     program,
                     core,
+                    first_cursor,
                     cursor,
                     attempt_budget,
                 },
@@ -363,6 +370,7 @@ where
                 step,
                 rule,
                 core,
+                first_cursor,
                 attempt_budget,
             } => CoreRuleAttemptStep::Applied {
                 attempt,
@@ -371,7 +379,8 @@ where
                 continuation: AttemptSession {
                     program,
                     core,
-                    cursor: RuleCursor::first(),
+                    first_cursor,
+                    cursor: first_cursor,
                     attempt_budget,
                 },
             },
@@ -396,13 +405,13 @@ where
             Self::Stable {
                 attempts,
                 steps,
-                stable_reason,
+                final_miss,
                 core,
                 attempt_budget,
             } => CoreRuleAttemptStep::Stable {
                 attempts,
                 steps,
-                stable_reason,
+                final_miss,
                 terminal: TerminalAttemptSession {
                     program,
                     core,
@@ -464,12 +473,14 @@ where
     let AttemptSession {
         program,
         core,
+        first_cursor,
         cursor,
         attempt_budget,
     } = session;
     let advanced = advance_rule_attempt::<_, _, BorrowedAttemptWitness>(
         program.program.rule_scan(),
         core,
+        first_cursor,
         cursor,
         attempt_budget,
     );
@@ -488,12 +499,14 @@ where
     let AttemptSession {
         program,
         core,
+        first_cursor,
         cursor,
         attempt_budget,
     } = session;
     let advanced = advance_rule_attempt::<_, _, OwnedAttemptWitness>(
         program.program.rule_scan(),
         core,
+        first_cursor,
         cursor,
         attempt_budget,
     );
@@ -504,7 +517,8 @@ where
 fn advance_rule_attempt<'program, E, A, W>(
     rules: RuleScan<'program>,
     mut core: RunCore<E>,
-    cursor: RuleCursor,
+    first_cursor: ActiveRuleCursor,
+    cursor: ActiveRuleCursor,
     mut attempt_budget: RuleAttemptBudgetState<A>,
 ) -> RuleAttemptAdvance<E, A, W::Witness, W::Error>
 where
@@ -512,12 +526,7 @@ where
     A: RuleAttemptPolicy,
     W: AttemptRuleWitness<'program>,
 {
-    let target = match core.rule_states.select_attempt_target(rules, &cursor) {
-        RuntimeRuleTargetSelection::Target(target) => target,
-        RuntimeRuleTargetSelection::NoExecutableRules => {
-            return no_executable_rule_attempt(core, attempt_budget);
-        }
-    };
+    let target = core.rule_states.select_attempt_target(rules, cursor);
     let (after_miss, runtime_rule) = target.into_parts();
 
     let reservation = match attempt_budget.reserve_next_attempt(core.state.byte_count()) {
@@ -540,7 +549,14 @@ where
             };
             let miss = RuleMiss::new(witness, missed.reason());
             let attempt = reservation.commit();
-            committed_rule_miss(core, attempt_budget, attempt, after_miss, miss)
+            committed_rule_miss(
+                core,
+                first_cursor,
+                attempt_budget,
+                attempt,
+                after_miss,
+                miss,
+            )
         }
         RuleAttempt::Matched(matched) => {
             let state_len = core.state.byte_count();
@@ -555,28 +571,8 @@ where
                 Err(error) => return failed_rule_attempt(core, attempt_budget, error),
             };
             let applied = witnessed.commit(&mut core.state, &mut core.scratch);
-            committed_rule_attempt_application(core, attempt_budget, attempt, applied)
+            committed_rule_attempt_application(core, first_cursor, attempt_budget, attempt, applied)
         }
-    }
-}
-
-/// Reports stability when a cursor cannot select any executable rule.
-fn no_executable_rule_attempt<E, A, RuleWitness, StepError>(
-    core: RunCore<E>,
-    attempt_budget: RuleAttemptBudgetState<A>,
-) -> RuleAttemptAdvance<E, A, RuleWitness, StepError>
-where
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-{
-    let attempts = attempt_budget.completed_attempts();
-    let steps = core.completed_steps();
-    RuleAttemptAdvance::Stable {
-        attempts,
-        steps,
-        stable_reason: RuleAttemptStableReason::NoExecutableRules,
-        core,
-        attempt_budget,
     }
 }
 
@@ -600,6 +596,7 @@ where
 /// Commits a non-applying rule attempt and returns the next typed state.
 fn committed_rule_miss<E, A, RuleWitness, StepError>(
     core: RunCore<E>,
+    first_cursor: ActiveRuleCursor,
     attempt_budget: RuleAttemptBudgetState<A>,
     attempt: RuleAttemptCount,
     after_miss: RuleCursorAfterMiss,
@@ -610,13 +607,13 @@ where
     A: RuleAttemptPolicy,
 {
     match after_miss {
-        RuleCursorAfterMiss::Stable => {
+        RuleCursorAfterMiss::Exhausted => {
             let attempts = attempt_budget.completed_attempts();
             let steps = core.completed_steps();
             RuleAttemptAdvance::Stable {
                 attempts,
                 steps,
-                stable_reason: RuleAttemptStableReason::FinalMiss(miss),
+                final_miss: miss,
                 core,
                 attempt_budget,
             }
@@ -625,6 +622,7 @@ where
             attempt,
             miss,
             core,
+            first_cursor,
             cursor,
             attempt_budget,
         },
@@ -634,6 +632,7 @@ where
 /// Projects a committed rule application into the next rule-attempt state.
 fn committed_rule_attempt_application<'program, E, A, RuleWitness, StepError>(
     core: RunCore<E>,
+    first_cursor: ActiveRuleCursor,
     attempt_budget: RuleAttemptBudgetState<A>,
     attempt: RuleAttemptCount,
     applied: CoreAppliedRule<'program, RuleWitness>,
@@ -648,6 +647,7 @@ where
             step,
             rule,
             core,
+            first_cursor,
             attempt_budget,
         },
         CoreAppliedRule::Return {

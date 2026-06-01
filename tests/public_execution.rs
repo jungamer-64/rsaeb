@@ -7,10 +7,10 @@ mod support;
 use rsaeb::error::{OwnedRunStepError, RuleAttemptStepError, RunStepError};
 use rsaeb::execution::{
     BorrowedAppliedStep, BorrowedFailedRun, BorrowedReturnedRun, BorrowedRuleAttemptSession,
-    BorrowedRuleAttemptTransition, BorrowedRuleAttempts, BorrowedRunSession, BorrowedStableRun,
-    BorrowedStepTransition, BorrowedSteps, CompleteRun, OwnedRuleAction, OwnedRuleAttemptSession,
-    OwnedRuleAttemptTransition, OwnedRuleAttempts, OwnedRuleWitness, OwnedStepTransition,
-    OwnedSteps, RuleAttemptStableReason, RuleMissReason,
+    BorrowedRuleAttemptStart, BorrowedRuleAttemptTransition, BorrowedRuleAttempts,
+    BorrowedRunSession, BorrowedStableRun, BorrowedStepTransition, BorrowedSteps, CompleteRun,
+    OwnedRuleAction, OwnedRuleAttemptSession, OwnedRuleAttemptStart, OwnedRuleAttemptTransition,
+    OwnedRuleAttempts, OwnedRuleWitness, OwnedStepTransition, OwnedSteps, RuleMissReason,
 };
 use rsaeb::input::AdmittedRun;
 use rsaeb::inspect::{RuleAnchor, RuleRepeat};
@@ -77,7 +77,7 @@ enum OwnedRuleAttemptSignature {
     Stable {
         attempts: usize,
         steps: usize,
-        stable_reason: StableReasonSignature,
+        final_miss: FinalMissSignature,
     },
     Return {
         attempt: usize,
@@ -104,7 +104,7 @@ enum BorrowedRuleAttemptSignature {
     Stable {
         attempts: usize,
         steps: usize,
-        stable_reason: StableReasonSignature,
+        final_miss: FinalMissSignature,
         state: Vec<u8>,
     },
     Return {
@@ -138,11 +138,11 @@ macro_rules! borrowed_apply {
 }
 
 macro_rules! borrowed_stable {
-    ($attempts:expr, $steps:expr, $stable_reason:expr, $state:expr $(,)?) => {
+    ($attempts:expr, $steps:expr, $final_miss:expr, $state:expr $(,)?) => {
         BorrowedRuleAttemptSignature::Stable {
             attempts: $attempts,
             steps: $steps,
-            stable_reason: $stable_reason,
+            final_miss: $final_miss,
             state: $state.to_vec(),
         }
     };
@@ -185,7 +185,7 @@ macro_rules! collect_owned_rule_attempt_signatures {
                     signatures.push(OwnedRuleAttemptSignature::Stable {
                         attempts: stable.attempts().get(),
                         steps: stable.steps().get(),
-                        stable_reason: stable_reason_signature(stable.stable_reason(), |rule| {
+                        final_miss: final_miss_signature(stable.final_miss(), |rule| {
                             rule.position().number().get()
                         }),
                     });
@@ -236,7 +236,7 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
                     signatures.push(BorrowedRuleAttemptSignature::Stable {
                         attempts: stable.attempts().get(),
                         steps: stable.steps().get(),
-                        stable_reason: stable_reason_signature(stable.stable_reason(), |rule| {
+                        final_miss: final_miss_signature(stable.final_miss(), |rule| {
                             rule.position().number().get()
                         }),
                         state: runtime_view_bytes(stable.state())?,
@@ -261,12 +261,9 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum StableReasonSignature {
-    NoExecutableRules,
-    FinalMiss {
-        rule_position: usize,
-        reason: RuleMissReason,
-    },
+struct FinalMissSignature {
+    rule_position: usize,
+    reason: RuleMissReason,
 }
 
 enum ExpectedRuleAction<'expected> {
@@ -323,16 +320,13 @@ fn ensure_owned_rule_witness(
     }
 }
 
-fn stable_reason_signature<Rule>(
-    reason: &RuleAttemptStableReason<Rule>,
+fn final_miss_signature<Rule>(
+    miss: &rsaeb::execution::RuleMiss<Rule>,
     rule_position: impl FnOnce(&Rule) -> usize,
-) -> StableReasonSignature {
-    match reason {
-        RuleAttemptStableReason::NoExecutableRules => StableReasonSignature::NoExecutableRules,
-        RuleAttemptStableReason::FinalMiss(miss) => StableReasonSignature::FinalMiss {
-            rule_position: rule_position(miss.rule()),
-            reason: miss.reason(),
-        },
+) -> FinalMissSignature {
+    FinalMissSignature {
+        rule_position: rule_position(miss.rule()),
+        reason: miss.reason(),
     }
 }
 
@@ -377,6 +371,48 @@ fn returned_signature<P: ParsePolicy>(returned: &BorrowedReturnedRun<'_, P>) -> 
 fn default_test_run_policy() -> DefaultInputRunPolicy<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>
 {
     DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new()
+}
+
+/// Extracts an active borrowed rule-attempt session from its start state.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the parsed program was empty.
+fn expect_borrowed_rule_attempt_active<P, E, A>(
+    start: BorrowedRuleAttemptStart<'_, P, E, A>,
+) -> Result<BorrowedRuleAttemptSession<'_, P, E, A>, TestFailure>
+where
+    P: ParsePolicy,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+{
+    match start {
+        BorrowedRuleAttemptStart::Active(session) => Ok(session),
+        BorrowedRuleAttemptStart::Empty(_) => Err(TestFailure::message(
+            "expected active borrowed rule-attempt start",
+        )),
+    }
+}
+
+/// Extracts an active owned rule-attempt session from its start state.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the parsed program was empty.
+fn expect_owned_rule_attempt_active<P, E, A>(
+    start: OwnedRuleAttemptStart<P, E, A>,
+) -> Result<OwnedRuleAttemptSession<P, E, A>, TestFailure>
+where
+    P: ParsePolicy,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+{
+    match start {
+        OwnedRuleAttemptStart::Active(session) => Ok(session),
+        OwnedRuleAttemptStart::Empty(_) => Err(TestFailure::message(
+            "expected active owned rule-attempt start",
+        )),
+    }
 }
 
 /// Runs borrowed rule-attempt execution and collects comparable transition signatures.
@@ -431,13 +467,14 @@ fn finish_step_signatures<P: ParsePolicy, E: ExecutionPolicy>(
 ///
 /// Returns `TestFailure` if a rule attempt fails.
 fn finish_owned_rule_attempt_signatures<P, E, A>(
-    execution: OwnedRuleAttemptSession<P, E, A>,
+    start: OwnedRuleAttemptStart<P, E, A>,
 ) -> Result<Vec<OwnedRuleAttemptSignature>, TestFailure>
 where
     P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
+    let execution = expect_owned_rule_attempt_active(start)?;
     collect_owned_rule_attempt_signatures!(execution)
 }
 
@@ -447,13 +484,14 @@ where
 ///
 /// Returns `TestFailure` if a rule attempt fails or state materialization fails.
 fn finish_borrowed_rule_attempt_signatures<P, E, A>(
-    execution: BorrowedRuleAttemptSession<'_, P, E, A>,
+    start: BorrowedRuleAttemptStart<'_, P, E, A>,
 ) -> Result<Vec<BorrowedRuleAttemptSignature>, TestFailure>
 where
     P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
+    let execution = expect_borrowed_rule_attempt_active(start)?;
     collect_borrowed_rule_attempt_signatures!(execution)
 }
 
@@ -653,7 +691,7 @@ fn execution_rule_attempt_surface_reports_misses_and_resets_after_apply() -> Tes
             borrowed_stable!(
                 8,
                 2,
-                StableReasonSignature::FinalMiss {
+                FinalMissSignature {
                     rule_position: 3,
                     reason: RuleMissReason::StateMismatch,
                 },
@@ -710,24 +748,23 @@ fn execution_owned_rule_attempt_surface_reports_misses_resets_and_returns() -> T
 
 /// # Errors
 ///
-/// Returns `TestFailure` if rule-attempt stable completion does not expose the
-/// reason as a typed public value.
+/// Returns `TestFailure` if rule-attempt start and final-miss terminals are not
+/// exposed as typed public values.
 #[test]
-fn execution_rule_attempt_stable_reason_is_typed() -> TestResult {
+fn execution_rule_attempt_start_and_final_miss_are_typed() -> TestResult {
     let limits = default_test_run_policy();
     let program = parse_program("a=b")?;
     let input = runtime_input(b"z", limits)?;
-    let execution =
-        program.execute::<BorrowedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(input)?;
+    let execution = expect_borrowed_rule_attempt_active(
+        program.execute::<BorrowedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(input)?,
+    )?;
 
     match expect_rule_attempt_transition(execution.step())? {
         BorrowedRuleAttemptTransition::Stable(stable) => {
             ensure_eq!(stable.attempts().get(), 1)?;
             ensure_eq!(stable.steps().get(), 0)?;
-            let RuleAttemptStableReason::FinalMiss(final_miss) = stable.stable_reason() else {
-                return Err(TestFailure::message("expected terminal miss"));
-            };
-            ensure_eq!((*final_miss.rule()).position().number().get(), 1)?;
+            let final_miss = stable.final_miss();
+            ensure_eq!(final_miss.rule().position().number().get(), 1)?;
             ensure_eq!(final_miss.reason(), RuleMissReason::StateMismatch)?;
             ensure_eq!(
                 runtime_view_bytes(stable.state())?.as_slice(),
@@ -742,28 +779,42 @@ fn execution_rule_attempt_stable_reason_is_typed() -> TestResult {
         }
     }
     let program = parse_program("# no executable rules")?;
-    let execution = program.execute::<BorrowedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(
+    let start = program.execute::<BorrowedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(
         runtime_input(b"z", limits)?,
     )?;
 
-    match expect_rule_attempt_transition(execution.step())? {
-        BorrowedRuleAttemptTransition::Stable(stable) => {
-            ensure_eq!(stable.attempts().get(), 0)?;
-            ensure_eq!(stable.steps().get(), 0)?;
+    match start {
+        BorrowedRuleAttemptStart::Empty(empty) => {
+            ensure_eq!(empty.attempts().get(), 0)?;
+            ensure_eq!(empty.steps().get(), 0)?;
             ensure_eq!(
-                stable.stable_reason(),
-                &RuleAttemptStableReason::NoExecutableRules
-            )?;
-            ensure_eq!(
-                runtime_view_bytes(stable.state())?.as_slice(),
+                runtime_view_bytes(empty.state())?.as_slice(),
                 b"z".as_slice(),
             )
         }
-        BorrowedRuleAttemptTransition::Missed(_)
-        | BorrowedRuleAttemptTransition::Applied(_)
-        | BorrowedRuleAttemptTransition::Returned(_)
-        | BorrowedRuleAttemptTransition::Failed(_) => Err(TestFailure::message(
+        BorrowedRuleAttemptStart::Active(_) => Err(TestFailure::message(
             "expected empty-program stable terminal",
+        )),
+    }?;
+
+    let owned_start = parse_program("# no executable rules")?.into_execute::<OwnedRuleAttempts<
+        StaticRuleAttemptPolicy<10>,
+    >, _>(runtime_input(
+        b"z", limits,
+    )?)?;
+
+    match owned_start {
+        OwnedRuleAttemptStart::Empty(empty) => {
+            ensure_eq!(empty.attempts().get(), 0)?;
+            ensure_eq!(empty.steps().get(), 0)?;
+            ensure_eq!(
+                runtime_view_bytes(empty.state())?.as_slice(),
+                b"z".as_slice(),
+            )?;
+            ensure_eq!(empty.into_program().rule_count().get(), 0)
+        }
+        OwnedRuleAttemptStart::Active(_) => Err(TestFailure::message(
+            "expected owned empty-program terminal",
         )),
     }
 }
@@ -788,7 +839,7 @@ fn execution_rule_attempt_preserves_interleaved_once_state() -> TestResult {
             borrowed_stable!(
                 7,
                 2,
-                StableReasonSignature::FinalMiss {
+                FinalMissSignature {
                     rule_position: 3,
                     reason: RuleMissReason::OnceConsumed,
                 },
@@ -813,7 +864,7 @@ fn execution_rule_attempt_once_state_is_run_local_for_reused_program() -> TestRe
         borrowed_stable!(
             5,
             2,
-            StableReasonSignature::FinalMiss {
+            FinalMissSignature {
                 rule_position: 2,
                 reason: RuleMissReason::StateMismatch,
             },
@@ -840,8 +891,9 @@ fn execution_rule_attempt_limit_is_independent_from_step_limit() -> TestResult {
     let limits = DefaultInputRunPolicy::<0, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     let program = parse_program("x=y\na=b")?;
     let input = runtime_input(b"a", limits)?;
-    let execution =
-        program.execute::<BorrowedRuleAttempts<StaticRuleAttemptPolicy<1>>, _>(input)?;
+    let execution = expect_borrowed_rule_attempt_active(
+        program.execute::<BorrowedRuleAttempts<StaticRuleAttemptPolicy<1>>, _>(input)?,
+    )?;
 
     let execution = match expect_rule_attempt_transition(execution.step())? {
         BorrowedRuleAttemptTransition::Missed(missed) => {
@@ -884,8 +936,9 @@ fn execution_rule_attempt_preparation_failure_drops_attempt_reservation() -> Tes
     let limits = DefaultInputRunPolicy::<10, 1, DEFAULT_BYTE_BUDGET>::new();
     let program = parse_program("a=aa")?;
     let input = runtime_input(b"a", limits)?;
-    let execution =
-        program.execute::<BorrowedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(input)?;
+    let execution = expect_borrowed_rule_attempt_active(
+        program.execute::<BorrowedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(input)?,
+    )?;
 
     let failed = expect_failed_rule_attempt(execution.step())?;
     ensure_eq!(failed.completed_attempts().get(), 0)?;
@@ -1131,10 +1184,12 @@ fn ensure_owned_run_witnesses<I: rsaeb::policy::RuntimeInputPolicy, E: Execution
 fn ensure_owned_rule_attempt_witnesses<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolicy>(
     limits: TestRunPolicy<I, E>,
 ) -> TestResult {
-    let attempt = parse_program("z=x\na=b")?
-        .into_execute::<OwnedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(runtime_input(
-            b"a", limits,
-        )?)?;
+    let attempt = expect_owned_rule_attempt_active(
+        parse_program("z=x\na=b")?
+            .into_execute::<OwnedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(runtime_input(
+                b"a", limits,
+            )?)?,
+    )?;
     let attempt = ensure_owned_attempt_witness(
         attempt,
         ExpectedOwnedAttemptWitness::Missed {
@@ -1162,10 +1217,12 @@ fn ensure_owned_rule_attempt_witnesses<I: rsaeb::policy::RuntimeInputPolicy, E: 
         },
     )?;
 
-    let final_attempt = parse_program("z=x")?
-        .into_execute::<OwnedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(runtime_input(
+    let final_attempt =
+        expect_owned_rule_attempt_active(parse_program("z=x")?.into_execute::<OwnedRuleAttempts<
+            StaticRuleAttemptPolicy<10>,
+        >, _>(runtime_input(
             b"a", limits,
-        )?)?;
+        )?)?)?;
     ensure_owned_final_miss_witness(final_attempt)
 }
 
@@ -1239,9 +1296,7 @@ where
 {
     match attempt.step() {
         OwnedRuleAttemptTransition::Stable(stable) => {
-            let RuleAttemptStableReason::FinalMiss(final_miss) = stable.stable_reason() else {
-                return Err(TestFailure::message("expected owned final miss"));
-            };
+            let final_miss = stable.final_miss();
             ensure_owned_rule_witness(
                 final_miss.rule(),
                 ExpectedOwnedRuleWitness {
@@ -1270,12 +1325,11 @@ where
 fn execution_owned_rule_attempt_terminals_can_return_program() -> TestResult {
     let limits = default_test_run_policy();
 
-    let stable_program = match parse_program("a=b")?
+    let stable_start = parse_program("a=b")?
         .into_execute::<OwnedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(runtime_input(
             b"z", limits,
-        )?)?
-        .step()
-    {
+        )?)?;
+    let stable_program = match expect_owned_rule_attempt_active(stable_start)?.step() {
         OwnedRuleAttemptTransition::Stable(stable) => stable.into_program(),
         OwnedRuleAttemptTransition::Missed(_)
         | OwnedRuleAttemptTransition::Applied(_)
@@ -1286,12 +1340,10 @@ fn execution_owned_rule_attempt_terminals_can_return_program() -> TestResult {
     };
     ensure_eq!(stable_program.rule_count().get(), 1)?;
 
-    let returned_program = match parse_program("a=(return)ok")?
-        .into_execute::<OwnedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(runtime_input(
-            b"a", limits,
-        )?)?
-        .step()
-    {
+    let returned_start = parse_program("a=(return)ok")?.into_execute::<OwnedRuleAttempts<
+        StaticRuleAttemptPolicy<10>,
+    >, _>(runtime_input(b"a", limits)?)?;
+    let returned_program = match expect_owned_rule_attempt_active(returned_start)?.step() {
         OwnedRuleAttemptTransition::Returned(returned) => returned.into_program(),
         OwnedRuleAttemptTransition::Missed(_)
         | OwnedRuleAttemptTransition::Applied(_)
@@ -1303,13 +1355,11 @@ fn execution_owned_rule_attempt_terminals_can_return_program() -> TestResult {
     ensure_eq!(returned_program.rule_count().get(), 1)?;
 
     let failed_limits = DefaultInputRunPolicy::<10, 1, DEFAULT_BYTE_BUDGET>::new();
-    let failed_program = match parse_program("a=aa")?
-        .into_execute::<OwnedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(runtime_input(
-            b"a",
-            failed_limits,
-        )?)?
-        .step()
-    {
+    let failed_start =
+        parse_program("a=aa")?.into_execute::<OwnedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(
+            runtime_input(b"a", failed_limits)?,
+        )?;
+    let failed_program = match expect_owned_rule_attempt_active(failed_start)?.step() {
         OwnedRuleAttemptTransition::Failed(failed) => failed.into_program(),
         OwnedRuleAttemptTransition::Missed(_)
         | OwnedRuleAttemptTransition::Applied(_)

@@ -87,8 +87,9 @@ for hosts that keep a reusable parsed program.
 `Program::into_execute::<OwnedSteps, _>(admitted)` transfers ownership of the
 parsed program into the stepwise session. Rule-attempt stepping is explicit:
 use `BorrowedRuleAttempts<A>` or `OwnedRuleAttempts<A>` as the execution mode so
-both the execution policy and rule-attempt policy stay visible in the session
-type.
+both the execution policy and rule-attempt policy stay visible in the start
+typestate. Empty programs produce an empty terminal start state; only active
+starts expose a step-capable rule-attempt session.
 
 The exact typestate names, transition variants, owned recovery methods, tracing
 events, and error variants are documented in rustdoc.

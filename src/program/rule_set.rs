@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::num::NonZeroUsize;
 use core::slice;
 
 use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
@@ -46,20 +47,38 @@ struct RuleInsertionPermit {
     position: RulePosition,
 }
 
-/// Cursor pointing to the next executable rule line in one rule-attempt run.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct RuleCursor {
+/// Start state for one rule-attempt run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuleAttemptStart {
+    /// At least one executable rule is available to attempt.
+    Active(ActiveRuleCursor),
+    /// The parsed program has no executable rules.
+    Empty,
+}
+
+/// Cursor pointing to an executable rule line in one active rule-attempt run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ActiveRuleCursor {
     /// Zero-based rule-table offset selected on the next attempt.
     next_rule_index: usize,
+    /// Total executable rules in the table that minted this cursor.
+    rule_count: ActiveRuleCount,
+}
+
+/// Non-zero executable rule count carried by active rule-attempt cursors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ActiveRuleCount {
+    /// Non-zero total executable rule count.
+    value: NonZeroUsize,
 }
 
 /// Cursor movement after a non-applying rule line has been consumed.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuleCursorAfterMiss {
     /// Cursor advanced to the next executable rule.
-    Advanced(RuleCursor),
+    Advanced(ActiveRuleCursor),
     /// The consumed miss was the final executable rule.
-    Stable,
+    Exhausted,
 }
 
 impl RuleInsertionPermit {
@@ -248,32 +267,69 @@ impl<'program> RuleScan<'program> {
         RuleCount::new(self.rules.len())
     }
 
+    /// Selects the start state for rule-attempt execution.
+    pub(crate) fn rule_attempt_start(self) -> RuleAttemptStart {
+        match ActiveRuleCount::new(self.rules.len()) {
+            Some(rule_count) => {
+                RuleAttemptStart::Active(ActiveRuleCursor::at_first_rule(rule_count))
+            }
+            None => RuleAttemptStart::Empty,
+        }
+    }
+
     /// Returns the rule at a cursor position.
-    pub(crate) fn rule_at_cursor(self, cursor: &RuleCursor) -> Option<&'program Rule> {
-        self.rules.get(cursor.next_rule_index)
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "ActiveRuleCursor is minted only by this RuleScan from a non-empty table"
+    )]
+    pub(crate) fn rule_at_cursor(self, cursor: ActiveRuleCursor) -> &'program Rule {
+        &self.rules[cursor.next_rule_index]
     }
 
     /// Cursor movement allowed after the current cursor consumes a miss.
-    pub(crate) fn after_miss(self, cursor: &RuleCursor) -> RuleCursorAfterMiss {
-        let next_index = cursor.next_rule_index.saturating_add(1);
-        if next_index < self.rules.len() {
-            RuleCursorAfterMiss::Advanced(RuleCursor {
-                next_rule_index: next_index,
-            })
-        } else {
-            RuleCursorAfterMiss::Stable
-        }
+    pub(crate) fn after_miss(self, cursor: ActiveRuleCursor) -> RuleCursorAfterMiss {
+        cursor.after_miss()
     }
 }
 
-impl RuleCursor {
-    /// First executable rule cursor for a fresh pass.
-    pub(crate) const fn first() -> Self {
-        Self { next_rule_index: 0 }
+impl ActiveRuleCursor {
+    /// Selects the first executable rule in a non-empty rule table.
+    const fn at_first_rule(rule_count: ActiveRuleCount) -> Self {
+        Self {
+            next_rule_index: 0,
+            rule_count,
+        }
     }
 
     /// Zero-based rule-table offset selected on the next attempt.
     pub(crate) const fn next_rule_index(&self) -> usize {
         self.next_rule_index
+    }
+
+    /// Cursor movement allowed after the current cursor consumes a miss.
+    fn after_miss(self) -> RuleCursorAfterMiss {
+        match self.next_rule_index.checked_add(1) {
+            Some(next_rule_index) if next_rule_index < self.rule_count.get() => {
+                RuleCursorAfterMiss::Advanced(Self {
+                    next_rule_index,
+                    rule_count: self.rule_count,
+                })
+            }
+            Some(_) | None => RuleCursorAfterMiss::Exhausted,
+        }
+    }
+}
+
+impl ActiveRuleCount {
+    /// Creates an active rule count only for non-empty rule tables.
+    fn new(value: usize) -> Option<Self> {
+        Some(Self {
+            value: NonZeroUsize::new(value)?,
+        })
+    }
+
+    /// Rule count as a primitive value.
+    const fn get(self) -> usize {
+        self.value.get()
     }
 }

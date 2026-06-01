@@ -6,7 +6,7 @@ use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::program::{Program, RunResult};
 
 use super::session::{
-    BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRuleAttemptSession, OwnedRunSession,
+    BorrowedRuleAttemptStart, BorrowedRunSession, OwnedRuleAttemptStart, OwnedRunSession,
     finish_borrowed_run,
 };
 
@@ -138,7 +138,7 @@ where
     A: RuleAttemptPolicy,
 {
     type Output<'program>
-        = BorrowedRuleAttemptSession<'program, P, E, A>
+        = BorrowedRuleAttemptStart<'program, P, E, A>
     where
         P: 'program;
 
@@ -148,7 +148,7 @@ where
         program: &'program Program<P>,
         admitted: AdmittedRun<E>,
     ) -> Result<Self::Output<'program>, Self::Error> {
-        BorrowedRuleAttemptSession::new(program, admitted)
+        BorrowedRuleAttemptStart::new(program, admitted)
     }
 }
 
@@ -171,7 +171,7 @@ where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
-    type Output = OwnedRuleAttemptSession<P, E, A>;
+    type Output = OwnedRuleAttemptStart<P, E, A>;
 
     type Error = RunStartError;
 
@@ -179,6 +179,6 @@ where
         program: Program<P>,
         admitted: AdmittedRun<E>,
     ) -> Result<Self::Output, Self::Error> {
-        OwnedRuleAttemptSession::new(program, admitted)
+        OwnedRuleAttemptStart::new(program, admitted)
     }
 }

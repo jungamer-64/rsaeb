@@ -10,16 +10,17 @@ use super::advance::{
     advance_borrowed_rule_attempt, advance_owned_rule_attempt, advance_run,
 };
 use super::engine::{
-    AttemptSession, BorrowedProgram, OwnedProgram, RunCore, Session, TerminalAttemptSession,
+    AttemptSession, AttemptSessionStart, BorrowedProgram, OwnedProgram, RunCore, Session,
+    TerminalAttemptSession,
 };
 use super::transition::{
-    BorrowedAppliedStep, BorrowedFailedRun, BorrowedMissedRuleAttempt, BorrowedReturnedRun,
-    BorrowedRuleAttemptAppliedStep, BorrowedRuleAttemptFailedRun, BorrowedRuleAttemptReturnedRun,
-    BorrowedRuleAttemptStableRun, BorrowedRuleAttemptTransition, BorrowedStableRun,
-    BorrowedStepTransition, OwnedAppliedStep, OwnedFailedRun, OwnedMissedRuleAttempt,
-    OwnedReturnedRun, OwnedRuleAttemptAppliedStep, OwnedRuleAttemptFailedRun,
-    OwnedRuleAttemptReturnedRun, OwnedRuleAttemptStableRun, OwnedRuleAttemptTransition,
-    OwnedStableRun, OwnedStepTransition,
+    BorrowedAppliedStep, BorrowedEmptyRuleAttemptRun, BorrowedFailedRun, BorrowedMissedRuleAttempt,
+    BorrowedReturnedRun, BorrowedRuleAttemptAppliedStep, BorrowedRuleAttemptFailedRun,
+    BorrowedRuleAttemptReturnedRun, BorrowedRuleAttemptStableRun, BorrowedRuleAttemptTransition,
+    BorrowedStableRun, BorrowedStepTransition, OwnedAppliedStep, OwnedEmptyRuleAttemptRun,
+    OwnedFailedRun, OwnedMissedRuleAttempt, OwnedReturnedRun, OwnedRuleAttemptAppliedStep,
+    OwnedRuleAttemptFailedRun, OwnedRuleAttemptReturnedRun, OwnedRuleAttemptStableRun,
+    OwnedRuleAttemptTransition, OwnedStableRun, OwnedStepTransition,
 };
 
 /// Stateful run session that borrows a reusable parsed program.
@@ -70,6 +71,27 @@ pub struct OwnedRuleAttemptSession<P: ParsePolicy, E: ExecutionPolicy, A: RuleAt
     pub(super) session: AttemptSession<OwnedProgram<P>, E, A>,
 }
 
+/// Start state for borrowed rule-attempt execution.
+pub enum BorrowedRuleAttemptStart<
+    'program,
+    P: ParsePolicy,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+> {
+    /// The parsed program has an executable rule and can be stepped.
+    Active(BorrowedRuleAttemptSession<'program, P, E, A>),
+    /// The parsed program has no executable rules and is terminal immediately.
+    Empty(BorrowedEmptyRuleAttemptRun<'program, P, E>),
+}
+
+/// Start state for owned rule-attempt execution.
+pub enum OwnedRuleAttemptStart<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> {
+    /// The parsed program has an executable rule and can be stepped.
+    Active(OwnedRuleAttemptSession<P, E, A>),
+    /// The parsed program has no executable rules and is terminal immediately.
+    Empty(OwnedEmptyRuleAttemptRun<P, E>),
+}
+
 /// Terminal data split out of a borrowed ordinary run session.
 struct BorrowedRunTerminal<'program, P: ParsePolicy, E: ExecutionPolicy> {
     /// Parsed program borrowed by the terminal state.
@@ -94,6 +116,8 @@ struct BorrowedRuleAttemptTerminal<'program, P: ParsePolicy, E: ExecutionPolicy>
     core: RunCore<E>,
     /// Rule attempts consumed before the terminal boundary was reached.
     attempts: RuleAttemptCount,
+    /// Rewrite steps committed before the terminal boundary was reached.
+    steps: StepCount,
 }
 
 /// Terminal data split out of an owned rule-attempt run session.
@@ -104,6 +128,8 @@ struct OwnedRuleAttemptTerminal<P: ParsePolicy, E: ExecutionPolicy> {
     core: RunCore<E>,
     /// Rule attempts consumed before the terminal boundary was reached.
     attempts: RuleAttemptCount,
+    /// Rewrite steps committed before the terminal boundary was reached.
+    steps: StepCount,
 }
 
 /// Runs a borrowed program to completion.
@@ -205,9 +231,9 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedRunSession<'program, 
 }
 
 impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
-    BorrowedRuleAttemptSession<'program, P, E, A>
+    BorrowedRuleAttemptStart<'program, P, E, A>
 {
-    /// Starts a new borrowed rule-attempt run session for a parsed program and admitted run witness.
+    /// Starts borrowed rule-attempt execution for a parsed program and admitted run witness.
     ///
     /// # Errors
     ///
@@ -216,9 +242,29 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
         program: &'program Program<P>,
         admitted: AdmittedRun<E>,
     ) -> Result<Self, RunStartError> {
-        Ok(Self {
-            session: AttemptSession::new(BorrowedProgram { program }, admitted)?,
-        })
+        match AttemptSession::start(BorrowedProgram { program }, admitted)? {
+            AttemptSessionStart::Active(session) => {
+                Ok(Self::Active(BorrowedRuleAttemptSession { session }))
+            }
+            AttemptSessionStart::Empty(terminal) => {
+                let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
+                Ok(Self::Empty(BorrowedEmptyRuleAttemptRun {
+                    attempts: terminal.attempts,
+                    steps: terminal.steps,
+                    program: terminal.program,
+                    core: terminal.core,
+                }))
+            }
+        }
+    }
+}
+
+impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
+    BorrowedRuleAttemptSession<'program, P, E, A>
+{
+    /// Builds a public active rule-attempt session from the internal session.
+    const fn from_active(session: AttemptSession<BorrowedProgram<'program, P>, E, A>) -> Self {
+        Self { session }
     }
 
     /// Number of execution steps that have already completed in this run.
@@ -328,8 +374,8 @@ impl<P: ParsePolicy, E: ExecutionPolicy> OwnedRunSession<P, E> {
     }
 }
 
-impl<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> OwnedRuleAttemptSession<P, E, A> {
-    /// Starts a new owned rule-attempt run session for a parsed program and admitted run witness.
+impl<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> OwnedRuleAttemptStart<P, E, A> {
+    /// Starts owned rule-attempt execution for a parsed program and admitted run witness.
     ///
     /// # Errors
     ///
@@ -338,9 +384,27 @@ impl<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> OwnedRuleAttemptS
         program: Program<P>,
         admitted: AdmittedRun<E>,
     ) -> Result<Self, RunStartError> {
-        Ok(Self {
-            session: AttemptSession::new(OwnedProgram { program }, admitted)?,
-        })
+        match AttemptSession::start(OwnedProgram { program }, admitted)? {
+            AttemptSessionStart::Active(session) => {
+                Ok(Self::Active(OwnedRuleAttemptSession { session }))
+            }
+            AttemptSessionStart::Empty(terminal) => {
+                let terminal = OwnedRuleAttemptTerminal::from_terminal(terminal);
+                Ok(Self::Empty(OwnedEmptyRuleAttemptRun {
+                    attempts: terminal.attempts,
+                    steps: terminal.steps,
+                    program: terminal.program,
+                    core: terminal.core,
+                }))
+            }
+        }
+    }
+}
+
+impl<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy> OwnedRuleAttemptSession<P, E, A> {
+    /// Builds a public active rule-attempt session from the internal session.
+    const fn from_active(session: AttemptSession<OwnedProgram<P>, E, A>) -> Self {
+        Self { session }
     }
 
     /// Number of execution steps that have already completed in this run.
@@ -422,10 +486,12 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedRuleAttemptTerminal<'
             core,
             attempt_budget,
         } = terminal;
+        let steps = core.completed_steps();
         Self {
             program: program.program,
             core,
             attempts: attempt_budget.completed_attempts(),
+            steps,
         }
     }
 }
@@ -440,10 +506,12 @@ impl<P: ParsePolicy, E: ExecutionPolicy> OwnedRuleAttemptTerminal<P, E> {
             core,
             attempt_budget,
         } = terminal;
+        let steps = core.completed_steps();
         Self {
             program: program.program,
             core,
             attempts: attempt_budget.completed_attempts(),
+            steps,
         }
     }
 }
@@ -557,9 +625,7 @@ fn step_borrowed_rule_attempt_run<
         } => BorrowedRuleAttemptTransition::Missed(BorrowedMissedRuleAttempt {
             attempt,
             miss,
-            session: BorrowedRuleAttemptSession {
-                session: continuation,
-            },
+            session: BorrowedRuleAttemptSession::from_active(continuation),
         }),
         CoreRuleAttemptStep::Applied {
             attempt,
@@ -570,9 +636,7 @@ fn step_borrowed_rule_attempt_run<
             attempt,
             step,
             rule,
-            session: BorrowedRuleAttemptSession {
-                session: continuation,
-            },
+            session: BorrowedRuleAttemptSession::from_active(continuation),
         }),
         CoreRuleAttemptStep::Returned {
             attempt,
@@ -593,14 +657,14 @@ fn step_borrowed_rule_attempt_run<
         CoreRuleAttemptStep::Stable {
             attempts,
             steps,
-            stable_reason,
+            final_miss,
             terminal,
         } => {
             let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
             BorrowedRuleAttemptTransition::Stable(BorrowedRuleAttemptStableRun {
                 attempts,
                 steps,
-                stable_reason,
+                final_miss,
                 program: terminal.program,
                 core: terminal.core,
             })
@@ -629,9 +693,7 @@ fn step_owned_rule_attempt_run<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemp
         } => OwnedRuleAttemptTransition::Missed(OwnedMissedRuleAttempt {
             attempt,
             miss,
-            session: OwnedRuleAttemptSession {
-                session: continuation,
-            },
+            session: OwnedRuleAttemptSession::from_active(continuation),
         }),
         CoreRuleAttemptStep::Applied {
             attempt,
@@ -642,9 +704,7 @@ fn step_owned_rule_attempt_run<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemp
             attempt,
             step,
             rule,
-            session: OwnedRuleAttemptSession {
-                session: continuation,
-            },
+            session: OwnedRuleAttemptSession::from_active(continuation),
         }),
         CoreRuleAttemptStep::Returned {
             attempt,
@@ -665,14 +725,14 @@ fn step_owned_rule_attempt_run<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemp
         CoreRuleAttemptStep::Stable {
             attempts,
             steps,
-            stable_reason,
+            final_miss,
             terminal,
         } => {
             let terminal = OwnedRuleAttemptTerminal::from_terminal(terminal);
             OwnedRuleAttemptTransition::Stable(OwnedRuleAttemptStableRun {
                 attempts,
                 steps,
-                stable_reason,
+                final_miss,
                 program: terminal.program,
                 core: terminal.core,
             })

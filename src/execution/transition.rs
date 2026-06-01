@@ -141,6 +141,18 @@ pub struct BorrowedRuleAttemptStableRun<'program, P: ParsePolicy, E: ExecutionPo
     pub(super) core: RunCore<E>,
 }
 
+/// Terminal borrowed rule-attempt run state for an empty parsed program.
+pub struct BorrowedEmptyRuleAttemptRun<'program, P: ParsePolicy, E: ExecutionPolicy> {
+    /// Number of consumed rule attempts before the empty terminal.
+    pub(super) attempts: RuleAttemptCount,
+    /// Number of committed execution steps before the empty terminal.
+    pub(super) steps: StepCount,
+    /// Parsed program borrowed by the terminal state.
+    pub(super) program: &'program Program<P>,
+    /// Terminal runtime core containing the original runtime state.
+    pub(super) core: RunCore<E>,
+}
+
 /// Terminal borrowed rule-attempt run state reached by `(return)`.
 pub struct BorrowedRuleAttemptReturnedRun<'program, P: ParsePolicy> {
     /// Rule-attempt count committed by this transition.
@@ -274,6 +286,18 @@ pub struct OwnedRuleAttemptStableRun<P: ParsePolicy, E: ExecutionPolicy> {
     /// Parsed program retained by the owned terminal state.
     pub(super) program: Program<P>,
     /// Terminal runtime core containing the stable state.
+    pub(super) core: RunCore<E>,
+}
+
+/// Terminal owned rule-attempt run state for an empty parsed program.
+pub struct OwnedEmptyRuleAttemptRun<P: ParsePolicy, E: ExecutionPolicy> {
+    /// Number of consumed rule attempts before the empty terminal.
+    pub(super) attempts: RuleAttemptCount,
+    /// Number of committed execution steps before the empty terminal.
+    pub(super) steps: StepCount,
+    /// Parsed program retained by the terminal state.
+    pub(super) program: Program<P>,
+    /// Terminal runtime core containing the original runtime state.
     pub(super) core: RunCore<E>,
 }
 
@@ -623,6 +647,41 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedRuleAttemptStableRun<
     }
 }
 
+impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedEmptyRuleAttemptRun<'program, P, E> {
+    /// Number of rule attempts consumed before reaching the empty terminal.
+    #[must_use]
+    pub const fn attempts(&self) -> RuleAttemptCount {
+        self.attempts
+    }
+
+    /// Number of execution steps committed before reaching the empty terminal.
+    #[must_use]
+    pub const fn steps(&self) -> StepCount {
+        self.steps
+    }
+
+    /// Borrow the parsed program used by this terminal state.
+    #[must_use]
+    pub const fn program(&self) -> &'program Program<P> {
+        self.program
+    }
+
+    /// Borrowed final runtime state.
+    #[must_use]
+    pub fn state(&self) -> RuntimeStateView<'_> {
+        self.core.state()
+    }
+
+    /// Materializes this empty rule-attempt run as a run result.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunFinishError` if final state materialization cannot allocate.
+    pub fn into_result(self) -> Result<RunResult, RunFinishError> {
+        self.core.into_stable_result(self.steps)
+    }
+}
+
 impl<P: ParsePolicy, E: ExecutionPolicy> OwnedRuleAttemptStableRun<P, E> {
     /// Number of rule attempts consumed before reaching the stable state.
     #[must_use]
@@ -665,6 +724,51 @@ impl<P: ParsePolicy, E: ExecutionPolicy> OwnedRuleAttemptStableRun<P, E> {
     }
 
     /// Materializes this stable run as a run result.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunFinishError` if final state materialization cannot allocate.
+    pub fn into_result(self) -> Result<RunResult, RunFinishError> {
+        self.core.into_stable_result(self.steps)
+    }
+}
+
+impl<P: ParsePolicy, E: ExecutionPolicy> OwnedEmptyRuleAttemptRun<P, E> {
+    /// Number of rule attempts consumed before reaching the empty terminal.
+    #[must_use]
+    pub const fn attempts(&self) -> RuleAttemptCount {
+        self.attempts
+    }
+
+    /// Number of execution steps committed before reaching the empty terminal.
+    #[must_use]
+    pub const fn steps(&self) -> StepCount {
+        self.steps
+    }
+
+    /// Borrow the parsed program owned by this terminal state.
+    #[must_use]
+    pub const fn program(&self) -> &Program<P> {
+        &self.program
+    }
+
+    /// Discards the terminal state and recovers the owned parsed program.
+    ///
+    /// This drops the final runtime state. Use
+    /// [`OwnedEmptyRuleAttemptRun::into_result`] when the final state bytes are
+    /// the desired output.
+    #[must_use]
+    pub fn into_program(self) -> Program<P> {
+        self.program
+    }
+
+    /// Borrowed final runtime state.
+    #[must_use]
+    pub fn state(&self) -> RuntimeStateView<'_> {
+        self.core.state()
+    }
+
+    /// Materializes this empty rule-attempt run as a run result.
     ///
     /// # Errors
     ///

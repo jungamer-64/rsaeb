@@ -27,7 +27,7 @@ use crate::policy::{ExecutionPolicy, ParsePolicy};
 use crate::source::ProgramSource;
 use crate::trace::TraceRequest;
 
-pub(crate) use rule_set::{RuleCursor, RuleCursorAfterMiss, RuleScan};
+pub(crate) use rule_set::{ActiveRuleCursor, RuleAttemptStart, RuleCursorAfterMiss, RuleScan};
 pub(crate) use rule_set::{RuleSet, RuleSetBuilder};
 
 pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeStateSnapshot};

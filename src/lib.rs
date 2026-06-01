@@ -124,6 +124,67 @@
 //! }
 //! ```
 //!
+//! Rule-attempt execution starts with a typed start state. The start itself
+//! cannot be stepped until the caller proves it is active:
+//!
+//! ```compile_fail
+//! use rsaeb::execution::BorrowedRuleAttempts;
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::{
+//!     DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy,
+//!     StaticRuleAttemptPolicy,
+//! };
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
+//!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
+//!     let start = program.execute::<BorrowedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(admitted)?;
+//!     let _ = start.step();
+//!     Ok(())
+//! }
+//! ```
+//!
+//! Rule-attempt stable terminals expose a final miss directly. The old
+//! stable-reason enum is not part of the public API:
+//!
+//! ```compile_fail
+//! fn main() {
+//!     let _ = rsaeb::execution::RuleAttemptStableReason::<()>::NoExecutableRules;
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::execution::{
+//!     BorrowedRuleAttemptStart, BorrowedRuleAttemptTransition, BorrowedRuleAttempts,
+//! };
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::{
+//!     DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy,
+//!     StaticRuleAttemptPolicy,
+//! };
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
+//!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"z"))?;
+//!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
+//!     let start = program.execute::<BorrowedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(admitted)?;
+//!     let BorrowedRuleAttemptStart::Active(session) = start else {
+//!         return Ok(());
+//!     };
+//!     let stable = match session.step() {
+//!         BorrowedRuleAttemptTransition::Stable(stable) => stable,
+//!         _ => return Ok(()),
+//!     };
+//!     let _ = stable.stable_reason();
+//!     Ok(())
+//! }
+//! ```
+//!
 //! Policy domains are not interchangeable:
 //!
 //! ```compile_fail
@@ -369,7 +430,10 @@
 //! executable rule line, including lines that do not apply to the current runtime state:
 //!
 //! ```
-//! use rsaeb::execution::{BorrowedRuleAttempts, BorrowedRuleAttemptTransition, RuleMissReason};
+//! use rsaeb::execution::{
+//!     BorrowedRuleAttemptStart, BorrowedRuleAttempts, BorrowedRuleAttemptTransition,
+//!     RuleMissReason,
+//! };
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
 //!     DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
@@ -385,7 +449,10 @@
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("z=x\na=b"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<TenSteps>()?;
-//! let execution = program.execute::<BorrowedRuleAttempts<TenAttempts>, _>(admitted)?;
+//! let start = program.execute::<BorrowedRuleAttempts<TenAttempts>, _>(admitted)?;
+//! let BorrowedRuleAttemptStart::Active(execution) = start else {
+//!     return Err("expected executable rules".into());
+//! };
 //!
 //! let execution = match execution.step() {
 //!     BorrowedRuleAttemptTransition::Missed(missed) => {

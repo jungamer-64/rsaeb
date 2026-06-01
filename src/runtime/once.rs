@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
-use crate::program::{RuleCursor, RuleCursorAfterMiss, RuleScan};
+use crate::program::{ActiveRuleCursor, RuleCursorAfterMiss, RuleScan};
 use crate::rule::{Rule, RuleRepeatBehavior};
 
 /// Per-run execution state aligned with the parsed rule table.
@@ -97,14 +97,6 @@ pub(crate) struct RuntimeRuleScan<'program, 'state> {
 }
 
 /// Checked rule-attempt selection produced by a cursor and aligned runtime states.
-pub(crate) enum RuntimeRuleTargetSelection<'program, 'state> {
-    /// The cursor selected an executable target from this rule table and state set.
-    Target(RuntimeRuleAttemptTarget<'program, 'state>),
-    /// The cursor had no executable target left to select.
-    NoExecutableRules,
-}
-
-/// Active rule-attempt cursor paired with the checked target it selected.
 pub(crate) struct RuntimeRuleAttemptTarget<'program, 'state> {
     /// Cursor movement allowed if this target misses.
     after_miss: RuleCursorAfterMiss,
@@ -193,19 +185,19 @@ impl RuntimeRuleStates {
     pub(crate) fn select_attempt_target<'program, 'state>(
         &'state mut self,
         rules: RuleScan<'program>,
-        cursor: &RuleCursor,
-    ) -> RuntimeRuleTargetSelection<'program, 'state> {
-        let Some(rule) = rules.rule_at_cursor(cursor) else {
-            return RuntimeRuleTargetSelection::NoExecutableRules;
-        };
-        let Some(state) = self.states.get_mut(cursor.next_rule_index()) else {
-            return RuntimeRuleTargetSelection::NoExecutableRules;
-        };
+        cursor: ActiveRuleCursor,
+    ) -> RuntimeRuleAttemptTarget<'program, 'state> {
+        let rule = rules.rule_at_cursor(cursor);
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "RuntimeRuleStates is allocated from the same RuleScan that minted the active cursor"
+        )]
+        let state = &mut self.states[cursor.next_rule_index()];
 
-        RuntimeRuleTargetSelection::Target(RuntimeRuleAttemptTarget {
+        RuntimeRuleAttemptTarget {
             after_miss: rules.after_miss(cursor),
             target: RuntimeRule::new(rule, state),
-        })
+        }
     }
 }
 
