@@ -399,6 +399,21 @@ fn executable_program<P: ParsePolicy>(
         .map_err(|_| TestFailure::message("expected executable program"))
 }
 
+/// Executes a parsed program that is expected to contain executable rules.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the program is empty or execution fails.
+fn execute_program<E>(
+    program: &Program<DefaultParsePolicy>,
+    admitted: AdmittedRun<E>,
+) -> Result<RunResult, TestFailure>
+where
+    E: ExecutionPolicy,
+{
+    Ok(executable_program(program)?.execute(admitted)?)
+}
+
 /// Moves an executable program witness for tests that require owned sessions.
 ///
 /// # Errors
@@ -461,27 +476,27 @@ fn execution_rewrite_semantics_follow_public_contract() -> TestResult {
     let limits = DefaultInputRunPolicy::<10_000, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
 
     let program = parse_program("aa=x\na=y")?;
-    let result = program.execute(runtime_input(b"aaaa", limits)?)?;
+    let result = execute_program(&program, runtime_input(b"aaaa", limits)?)?;
     expect_stable_bytes(&result, b"xx")?;
 
     let program = parse_program("(start)a=x")?;
-    let result = program.execute(runtime_input(b"aba", limits)?)?;
+    let result = execute_program(&program, runtime_input(b"aba", limits)?)?;
     expect_stable_bytes(&result, b"xba")?;
 
     let program = parse_program("(end)a=x")?;
-    let result = program.execute(runtime_input(b"aba", limits)?)?;
+    let result = execute_program(&program, runtime_input(b"aba", limits)?)?;
     expect_stable_bytes(&result, b"abx")?;
 
     let program = parse_program("(once)a=b\na=c")?;
-    let result = program.execute(runtime_input(b"aa", limits)?)?;
+    let result = execute_program(&program, runtime_input(b"aa", limits)?)?;
     expect_stable_bytes(&result, b"bc")?;
 
     let program = parse_program("ab=x")?;
-    let result = program.execute(runtime_input(b"a=b", limits)?)?;
+    let result = execute_program(&program, runtime_input(b"a=b", limits)?)?;
     expect_stable_bytes(&result, b"a=b")?;
 
     let program = parse_program("a= b")?;
-    let result = program.execute(runtime_input(b"a bc", limits)?)?;
+    let result = execute_program(&program, runtime_input(b"a bc", limits)?)?;
     expect_stable_bytes(&result, b"b bc")
 }
 
@@ -659,6 +674,16 @@ fn execution_rule_attempt_start_and_final_miss_are_typed() -> TestResult {
         return Err(TestFailure::message("expected borrowed empty program"));
     };
     ensure_eq!(borrowed_empty.program().rule_count().get(), 0)?;
+    let borrowed_empty_result = borrowed_empty.stabilize(runtime_input(b"empty", limits)?)?;
+    expect_stable_bytes(&borrowed_empty_result, b"empty")?;
+    ensure_eq!(borrowed_empty_result.steps().get(), 0)?;
+
+    let Err(owned_empty) = parse_program("# no executable rules")?.into_executable() else {
+        return Err(TestFailure::message("expected owned empty program"));
+    };
+    let owned_empty_result = owned_empty.stabilize(runtime_input(b"owned", limits)?)?;
+    expect_stable_bytes(&owned_empty_result, b"owned")?;
+    ensure_eq!(owned_empty_result.steps().get(), 0)?;
 
     let Err(owned_empty) = parse_program("# no executable rules")?.into_executable() else {
         return Err(TestFailure::message("expected owned empty program"));
@@ -887,7 +912,7 @@ fn execution_borrowed_run_and_owned_session_share_contract() -> TestResult {
     let source = "a=b\nb=(return)ok";
     let limits = default_test_run_policy();
 
-    let borrowed = parse_program(source)?.execute(runtime_input(b"a", limits)?)?;
+    let borrowed = execute_program(&parse_program(source)?, runtime_input(b"a", limits)?)?;
     let owned = owned_executable_program(parse_program(source)?)?
         .into_steps(runtime_input(b"a", limits)?)?
         .finish()?;

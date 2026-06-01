@@ -159,7 +159,7 @@ impl RulePosition {
 /// Rule repeat policy.
 ///
 /// Repeat policy is per runtime invocation. A `(once)` rule can be used again
-/// by a later execution through [`Program::execute`](crate::program::Program::execute).
+/// by a later execution through an executable-program witness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleRepeat {
     /// The rule may apply every time it matches.

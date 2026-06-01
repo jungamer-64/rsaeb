@@ -26,11 +26,12 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b\nb=(return)ok"))?;
+//! let executable = program.as_executable().map_err(|_| "expected executable rules")?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<TenSteps>()?;
 //! let mut retained = Vec::new();
 //!
-//! program.trace(admitted, SnapshotTrace::<SnapshotBytes, _>::new(|event| {
+//! executable.trace(admitted, SnapshotTrace::<SnapshotBytes, _>::new(|event| {
 //!         match event {
 //!             TraceSnapshotEvent::Initial { state } => retained.push(state.into_raw_bytes()),
 //!             TraceSnapshotEvent::Step {
@@ -69,10 +70,11 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
+//! let executable = program.as_executable().map_err(|_| "expected executable rules")?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<TenSteps>()?;
 //!
-//! let result = program.trace(
+//! let result = executable.trace(
 //!     admitted,
 //!     SnapshotTrace::<EmptySnapshot, _>::new(|_event| Ok::<(), Infallible>(())),
 //! );
@@ -102,7 +104,7 @@ use crate::inspect::RuleView;
 use crate::limits::{StepCount, TraceSnapshotByteLimit};
 use crate::policy::{ExecutionPolicy, ParsePolicy, TraceSnapshotPolicy};
 use crate::program::{
-    BorrowedExecutableProgram, ReturnOutput, ReturnOutputView, RunResult, RuntimeStateSnapshot,
+    ExecutableProgramRef, ReturnOutput, ReturnOutputView, RunResult, RuntimeStateSnapshot,
 };
 use alloc::vec::Vec;
 
@@ -146,7 +148,7 @@ pub trait TraceRequest<'program, P: ParsePolicy, E: ExecutionPolicy>:
     /// materialization, or the user callback fails.
     fn trace(
         self,
-        executable: BorrowedExecutableProgram<'program, P>,
+        executable: ExecutableProgramRef<'program, P>,
         admitted: AdmittedRun<E>,
     ) -> Result<RunResult, Self::Error>;
 }
@@ -198,7 +200,7 @@ where
 
     fn trace(
         self,
-        executable: BorrowedExecutableProgram<'program, P>,
+        executable: ExecutableProgramRef<'program, P>,
         admitted: AdmittedRun<E>,
     ) -> Result<RunResult, Self::Error> {
         crate::execution::trace_events(executable, admitted, self.callback)
@@ -216,7 +218,7 @@ where
 
     fn trace(
         self,
-        executable: BorrowedExecutableProgram<'program, P>,
+        executable: ExecutableProgramRef<'program, P>,
         admitted: AdmittedRun<E>,
     ) -> Result<RunResult, Self::Error> {
         let Self {

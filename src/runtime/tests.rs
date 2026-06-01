@@ -19,7 +19,8 @@ use crate::program::RunOutcome;
 use crate::runtime::action::prepare_matched_rule;
 use crate::test_support::{
     DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestFailure, TestInputPolicy, TestResult,
-    TestRunPolicy, admitted_run, ensure_eq, ensure_matches, executable_program, parse_program,
+    TestRunPolicy, admitted_run, ensure_eq, ensure_matches, executable_program, execute_program,
+    parse_program,
 };
 use crate::trace::RuntimeStateView;
 use alloc::vec::Vec;
@@ -494,7 +495,7 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
     ensure_eq!(expect_runtime_byte(&state, 2)?, b'(')?;
     ensure_eq!(expect_runtime_byte(&state, 5)?, b' ')?;
 
-    let result = program.execute(admitted_run(b"a=()# ", limits)?)?;
+    let result = execute_program(&program, admitted_run(b"a=()# ", limits)?)?;
     ensure_matches(
         matches!(
             result.outcome(),
@@ -512,7 +513,7 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
 fn once_rule_commit_proof_allows_only_one_successful_application() -> TestResult {
     let program = parse_program("(once)a=a\na=b")?;
     let limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
-    let result = program.execute(admitted_run(b"a", limits)?)?;
+    let result = execute_program(&program, admitted_run(b"a", limits)?)?;
 
     ensure_eq!(result.steps().get(), 2)?;
     ensure_matches(
@@ -536,7 +537,7 @@ fn rewrite_action_variants_preserve_runtime_placement() -> TestResult {
         ("a=(end)x", b"ab".as_slice(), b"bx".as_slice()),
     ] {
         let limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
-        let result = parse_program(source)?.execute(admitted_run(input, limits)?)?;
+        let result = execute_program(&parse_program(source)?, admitted_run(input, limits)?)?;
 
         ensure_matches(
             matches!(

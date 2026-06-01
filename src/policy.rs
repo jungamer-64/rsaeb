@@ -61,7 +61,7 @@
 //! let _witness = TraceSnapshotPolicyWitness::<DefaultTraceSnapshotPolicy>::new();
 //! ```
 //!
-//! Deleted execution entrypoints cannot be called through a policy fallback:
+//! Shape-erased programs cannot be executed through a policy fallback:
 //!
 //! ```compile_fail
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
@@ -72,7 +72,7 @@
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b")).unwrap();
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a")).unwrap();
 //! let admitted = input.admit::<DefaultExecutionPolicy>().unwrap();
-//! let _result = program.run(admitted).unwrap();
+//! let _result = program.execute(admitted).unwrap();
 //! ```
 
 use crate::limits::{

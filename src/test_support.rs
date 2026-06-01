@@ -16,7 +16,7 @@ use crate::policy::{
     DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy, ExecutionPolicy,
     ParsePolicy, RuntimeInputPolicy, StaticExecutionPolicy, StaticRuntimeInputPolicy,
 };
-use crate::program::{BorrowedExecutableProgram, OwnedExecutableProgram, Program};
+use crate::program::{BorrowedExecutableProgram, OwnedExecutableProgram, Program, RunResult};
 use crate::source::{ProgramSource, SourceColumn, SourceLineNumber, SourcePosition};
 use core::marker::PhantomData;
 
@@ -257,6 +257,39 @@ pub(crate) fn executable_program<P: ParsePolicy>(
     program
         .as_executable()
         .map_err(|_| TestFailure::message("expected executable program"))
+}
+
+/// Executes a parsed program that is expected to contain executable rules.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the program is empty or execution fails.
+pub(crate) fn execute_program<E>(
+    program: &Program<DefaultParsePolicy>,
+    admitted: AdmittedRun<E>,
+) -> Result<RunResult, TestFailure>
+where
+    E: ExecutionPolicy,
+{
+    Ok(executable_program(program)?.execute(admitted)?)
+}
+
+/// Stabilizes a parsed program that is expected to contain no executable rules.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the program is executable or stabilization fails.
+pub(crate) fn stabilize_empty_program<E>(
+    program: &Program<DefaultParsePolicy>,
+    admitted: AdmittedRun<E>,
+) -> Result<RunResult, TestFailure>
+where
+    E: ExecutionPolicy,
+{
+    match program.as_executable() {
+        Ok(_) => Err(TestFailure::message("expected empty program")),
+        Err(empty) => Ok(empty.stabilize(admitted)?),
+    }
 }
 
 /// Moves the expected executable parsed program.

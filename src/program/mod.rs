@@ -2,12 +2,12 @@
 //!
 //! [`Program`] is the immutable parsed A=B rule table. Hosts parse typed
 //! [`ProgramSource`] under a [`ParsePolicy`], then
-//! run with an admitted [`AdmittedRun`]. Runtime budget and byte-count types
+//! run with an admitted [`input::AdmittedRun`](crate::input::AdmittedRun). Runtime budget and byte-count types
 //! live in [`limits`](crate::limits); runtime input lives in [`input`](crate::input).
 //!
 //! A parsed program owns syntax and rule metadata only. Per-run `(once)` state,
 //! runtime bytes, completed-step counts, and execution budgets are created from
-//! an [`AdmittedRun`] each time execution starts. This keeps parsed source
+//! an [`input::AdmittedRun`](crate::input::AdmittedRun) each time execution starts. This keeps parsed source
 //! reuse separate from mutable runtime progress.
 
 /// Executable and empty parsed-program witnesses.
@@ -30,7 +30,8 @@ pub(crate) use rule_set::{ActiveRuleCursor, RuleCursorAfterMiss, RuleScan};
 pub(crate) use rule_set::{RuleSet, RuleSetBuilder};
 
 pub use executable::{
-    BorrowedEmptyProgram, BorrowedExecutableProgram, OwnedEmptyProgram, OwnedExecutableProgram,
+    BorrowedEmptyProgram, BorrowedExecutableProgram, ExecutableProgramRef, OwnedEmptyProgram,
+    OwnedExecutableProgram,
 };
 pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeStateSnapshot};
 
@@ -39,7 +40,7 @@ pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeS
 /// A parsed program is immutable and reusable. Per-run `(once)` state lives in
 /// the runtime invocation, not in this value, so repeated runs with the same
 /// [`Program`] start from fresh rule availability. Running a program requires
-/// an already admitted [`AdmittedRun`], so parsing
+/// an already admitted [`input::AdmittedRun`](crate::input::AdmittedRun), so parsing
 /// never accepts raw runtime input or detached execution policy values.
 pub struct Program<P: ParsePolicy> {
     /// Immutable rule table plus parsed `(once)` metadata.
@@ -135,5 +136,4 @@ impl<P: ParsePolicy> Program<P> {
     pub fn into_executable(self) -> Result<OwnedExecutableProgram<P>, OwnedEmptyProgram<P>> {
         OwnedExecutableProgram::from_program(self)
     }
-
 }

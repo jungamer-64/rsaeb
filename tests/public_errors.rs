@@ -9,7 +9,8 @@ use rsaeb::error::{
     RunFinishError, RunStepError,
 };
 use rsaeb::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
-use rsaeb::policy::DefaultRuntimeInputPolicy;
+use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy, ExecutionPolicy};
+use rsaeb::program::{Program, RunResult};
 use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
@@ -35,6 +36,24 @@ fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: rsaeb::policy::Executi
     limits: TestRunPolicy<I, E>,
 ) -> Result<AdmittedRun<E>, TestFailure> {
     runtime_support::admitted_run(bytes, limits)
+}
+
+/// Executes a parsed program that is expected to contain executable rules.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the program is empty before execution can start.
+fn run_executable_program<E>(
+    program: &Program<DefaultParsePolicy>,
+    admitted: AdmittedRun<E>,
+) -> Result<Result<RunResult, RunError>, TestFailure>
+where
+    E: ExecutionPolicy,
+{
+    Ok(program
+        .as_executable()
+        .map_err(|_| TestFailure::message("expected executable program"))?
+        .execute(admitted))
 }
 
 /// # Errors
@@ -122,7 +141,10 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
     )?;
 
     let return_limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, 1>::new();
-    let return_error = parse_program("a=(return)ok")?.execute(runtime_input(b"a", return_limits)?);
+    let return_error = run_executable_program(
+        &parse_program("a=(return)ok")?,
+        runtime_input(b"a", return_limits)?,
+    )?;
     ensure_matches(
         matches!(
             expect_run_error(return_error)?,

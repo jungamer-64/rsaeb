@@ -13,8 +13,8 @@ use rsaeb::limits::{
     CodeLineByteLimit, PayloadByteLimit, ReturnByteLimit, RuleLimit, RuntimeStateByteLimit,
     SourceByteLimit, StepLimit,
 };
-use rsaeb::policy::{ExecutionPolicy, ParsePolicy, StaticParsePolicy};
-use rsaeb::program::Program;
+use rsaeb::policy::{DefaultParsePolicy, ExecutionPolicy, ParsePolicy, StaticParsePolicy};
+use rsaeb::program::{Program, RunResult};
 use rsaeb::source::ProgramSource;
 use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
@@ -129,7 +129,10 @@ fn ensure_step_limit_run<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolic
     limits: TestRunPolicy<I, E>,
     message: &'static str,
 ) -> TestResult {
-    let result = parse_program(program_source)?.execute(runtime_input(b"a", limits)?);
+    let result = run_executable_program(
+        &parse_program(program_source)?,
+        runtime_input(b"a", limits)?,
+    )?;
     let error = expect_step_limit(expect_run_error(result)?)?;
     ensure_step_limit_details(&error, message)
 }
@@ -197,8 +200,10 @@ fn ensure_parse_limit_error<P: ParsePolicy>(case: ParseLimitCase) -> TestResult 
 fn ensure_run_limit<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolicy>(
     case: RunLimitCase<I, E>,
 ) -> TestResult {
-    let result =
-        parse_program(case.program_source)?.execute(runtime_input(case.input, case.limits)?);
+    let result = run_executable_program(
+        &parse_program(case.program_source)?,
+        runtime_input(case.input, case.limits)?,
+    )?;
     let error = expect_run_error(result)?;
     ensure_matches(
         match (error, case.expected) {
@@ -248,6 +253,24 @@ fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolicy>(
     limits: TestRunPolicy<I, E>,
 ) -> Result<AdmittedRun<E>, TestFailure> {
     runtime_support::admitted_run(bytes, limits)
+}
+
+/// Executes a parsed program that is expected to contain executable rules.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the program is empty before execution can start.
+fn run_executable_program<E>(
+    program: &Program<DefaultParsePolicy>,
+    admitted: AdmittedRun<E>,
+) -> Result<Result<RunResult, RunError>, TestFailure>
+where
+    E: ExecutionPolicy,
+{
+    Ok(program
+        .as_executable()
+        .map_err(|_| TestFailure::message("expected executable program"))?
+        .execute(admitted))
 }
 
 /// # Errors
@@ -408,7 +431,8 @@ fn limits_display_output_names_public_contexts() -> TestResult {
     )?;
 
     let rewrite_limits = DefaultInputRunPolicy::<1, 2, 10>::new();
-    let rewrite_error = parse_program("=a")?.execute(runtime_input(b"aa", rewrite_limits)?);
+    let rewrite_error =
+        run_executable_program(&parse_program("=a")?, runtime_input(b"aa", rewrite_limits)?)?;
     let rewrite_error = expect_state_limit(expect_run_error(rewrite_error)?)?;
     ensure_display_state_limit(&rewrite_error)?;
     ensure_eq!(
@@ -417,7 +441,8 @@ fn limits_display_output_names_public_contexts() -> TestResult {
     )?;
 
     let step_limits = DefaultInputRunPolicy::<0, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
-    let step_error = parse_program("a=b")?.execute(runtime_input(b"a", step_limits)?);
+    let step_error =
+        run_executable_program(&parse_program("a=b")?, runtime_input(b"a", step_limits)?)?;
     let step_error = expect_step_limit(expect_run_error(step_error)?)?;
     ensure_eq!(
         step_error.to_string(),

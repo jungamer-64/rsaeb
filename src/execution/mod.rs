@@ -1,7 +1,6 @@
 //! Public stepwise and rule-attempt run typestates.
 //!
-//! [`Program::execute`](crate::program::Program::execute) runs to completion.
-//! Stepwise and rule-attempt execution start only after
+//! Run-to-completion, tracing, stepwise, and rule-attempt execution start only after
 //! [`Program::as_executable`](crate::program::Program::as_executable) or
 //! [`Program::into_executable`](crate::program::Program::into_executable)
 //! proves that the parsed program has at least one executable rule.

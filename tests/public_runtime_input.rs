@@ -6,8 +6,8 @@ use rsaeb::error::RunAdmissionError;
 use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 use rsaeb::limits::{RuntimeInputByteLimit, RuntimeStateByteLimit};
 use rsaeb::policy::{
-    DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
-    StaticRuntimeInputPolicy,
+    DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy, ExecutionPolicy,
+    StaticExecutionPolicy, StaticRuntimeInputPolicy,
 };
 use rsaeb::program::{Program, RunOutcome, RunResult};
 use rsaeb::source::ProgramSource;
@@ -37,6 +37,42 @@ fn runtime_input(
     RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(bytes))
 }
 
+/// Executes a parsed program that is expected to contain executable rules.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the program is empty or execution fails.
+fn execute_program<E>(
+    program: &Program<DefaultParsePolicy>,
+    admitted: rsaeb::input::AdmittedRun<E>,
+) -> Result<RunResult, TestFailure>
+where
+    E: ExecutionPolicy,
+{
+    Ok(program
+        .as_executable()
+        .map_err(|_| TestFailure::message("expected executable program"))?
+        .execute(admitted)?)
+}
+
+/// Stabilizes a parsed program that is expected to contain no executable rules.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the program is executable or stabilization fails.
+fn stabilize_empty_program<E>(
+    program: &Program<DefaultParsePolicy>,
+    admitted: rsaeb::input::AdmittedRun<E>,
+) -> Result<RunResult, TestFailure>
+where
+    E: ExecutionPolicy,
+{
+    match program.as_executable() {
+        Ok(_) => Err(TestFailure::message("expected empty program")),
+        Err(empty) => Ok(empty.stabilize(admitted)?),
+    }
+}
+
 /// # Errors
 ///
 /// Returns `TestFailure` if runtime input loses owned typed bytes before it is
@@ -51,7 +87,7 @@ fn runtime_input_moves_owned_bytes_into_execution() -> TestResult {
     ensure_matches(!input.is_empty(), "expected non-empty owned input")?;
 
     let program = parse_program("a=b")?;
-    let result = program.execute(input.admit::<DefaultExecutionPolicy>()?)?;
+    let result = execute_program(&program, input.admit::<DefaultExecutionPolicy>()?)?;
     expect_stable_bytes(&result, b"b=()# ")
 }
 
@@ -66,8 +102,10 @@ fn domain_default_policies_support_explicit_names() -> TestResult {
     let explicit_input =
         RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 
-    let explicit_result =
-        explicit_program.execute(explicit_input.admit::<DefaultExecutionPolicy>()?)?;
+    let explicit_result = execute_program(
+        &explicit_program,
+        explicit_input.admit::<DefaultExecutionPolicy>()?,
+    )?;
 
     expect_stable_bytes(&explicit_result, b"b")
 }
@@ -83,7 +121,8 @@ fn runtime_input_validates_ascii_boundary() -> TestResult {
     let runtime_input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(
         RuntimeInputSource::from_bytes(&input),
     )?;
-    let result = program.execute(runtime_input.admit::<DefaultExecutionPolicy>()?)?;
+    let result =
+        stabilize_empty_program(&program, runtime_input.admit::<DefaultExecutionPolicy>()?)?;
     expect_stable_bytes(&result, input.as_slice())?;
     ensure_eq!(result.steps().get(), 0)?;
 

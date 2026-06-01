@@ -44,7 +44,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
     let admitted = input.admit::<DefaultExecutionPolicy>()?;
-    let result = program.execute(admitted)?;
+    let executable = program.as_executable().map_err(|_| "expected executable rules")?;
+    let result = executable.execute(admitted)?;
 
     if !matches!(
         result.outcome(),
@@ -75,21 +76,23 @@ The normal host flow is:
 4. Label host input bytes with `RuntimeInputSource::from_bytes`.
 5. Validate with `RuntimeInput::validate`.
 6. Admit with `RuntimeInput::admit::<E>()` under an `ExecutionPolicy`.
-7. Execute through run-to-completion, stepwise execution, tracing, or
-   rule-attempt stepping.
+7. Classify the parsed program with `Program::as_executable()` or
+   `Program::into_executable()`.
+8. Execute through run-to-completion, stepwise execution, tracing, or
+   rule-attempt stepping from the executable witness.
 
 The crate intentionally contains no filesystem, process, argument parsing,
 environment access, stdout/stderr, or lossy display boundary. Hosts perform I/O
 outside the interpreter and pass already-loaded bytes into typed boundaries.
 
-`Program::execute(admitted)` is the run-to-completion API and remains valid for
-empty programs. Stepwise and rule-attempt execution first require
-`Program::as_executable()` or `Program::into_executable()`, which returns either
-an executable-program witness or a typed empty-program witness. Borrowed
-executable witnesses start reusable sessions with `.steps(admitted)` or
-`.rule_attempts::<A, _>(admitted)`. Owned executable witnesses start ordinary
-step sessions with `.into_steps(admitted)`. Rule-attempt execution is borrowed
-because its resumable cursor is tied to the executable rule table.
+`Program::as_executable()` and `Program::into_executable()` return either an
+executable-program witness or a typed empty-program witness. Borrowed executable
+witnesses start reusable runs with `.execute(admitted)`, `.trace(...)`,
+`.steps(admitted)`, or `.rule_attempts::<A, _>(admitted)`. Owned executable
+witnesses expose `.execute(admitted)`, `.trace(...)`, and `.into_steps(admitted)`.
+Rule-attempt execution is borrowed because its resumable cursor is tied to the
+executable rule table. Empty-program witnesses expose only `.stabilize(admitted)`,
+which materializes the admitted input as a zero-step stable result.
 
 The exact typestate names, transition variants, owned recovery methods, tracing
 events, and error variants are documented in rustdoc.

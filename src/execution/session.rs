@@ -2,7 +2,7 @@ use crate::error::{RunError, RunFinishError, RunStartError, TracedRunError};
 use crate::input::AdmittedRun;
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
-use crate::program::{ActiveRuleCursor, BorrowedExecutableProgram, Program, RunResult};
+use crate::program::{ActiveRuleCursor, ExecutableProgramRef, Program, RunResult};
 use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
 
 use super::advance::{
@@ -91,7 +91,7 @@ struct BorrowedRuleAttemptTerminal<'program, P: ParsePolicy> {
 /// Returns `RunError` when execution setup fails or a later matching rule would
 /// exceed configured limits.
 pub(crate) fn finish_borrowed_run<P: ParsePolicy, E: ExecutionPolicy>(
-    executable: BorrowedExecutableProgram<'_, P>,
+    executable: ExecutableProgramRef<'_, P>,
     admitted: AdmittedRun<E>,
 ) -> Result<RunResult, RunError> {
     Session::new(
@@ -100,9 +100,9 @@ pub(crate) fn finish_borrowed_run<P: ParsePolicy, E: ExecutionPolicy>(
         },
         admitted,
     )
-        .map_err(RunError::from)?
-        .finish()
-        .map_err(RunError::from)
+    .map_err(RunError::from)?
+    .finish()
+    .map_err(RunError::from)
 }
 
 /// Runs a borrowed program to completion while emitting borrowed trace events.
@@ -112,7 +112,7 @@ pub(crate) fn finish_borrowed_run<P: ParsePolicy, E: ExecutionPolicy>(
 /// Returns `TracedRunError::Run` for runtime failures and
 /// `TracedRunError::Trace` for user callback failures.
 pub(crate) fn trace_events<'program, P, E, F, TraceError>(
-    executable: BorrowedExecutableProgram<'program, P>,
+    executable: ExecutableProgramRef<'program, P>,
     admitted: AdmittedRun<E>,
     trace: F,
 ) -> Result<RunResult, TracedRunError<TraceError>>
@@ -127,9 +127,9 @@ where
         },
         admitted,
     )
-        .map_err(RunError::from)
-        .map_err(TracedRunError::Run)?
-        .trace_events(trace)
+    .map_err(RunError::from)
+    .map_err(TracedRunError::Run)?
+    .trace_events(trace)
 }
 
 impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedRunSession<'program, P, E> {
