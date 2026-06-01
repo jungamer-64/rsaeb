@@ -2,7 +2,7 @@ use crate::error::{RunError, RunFinishError, RunStartError, TracedRunError};
 use crate::input::AdmittedRun;
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
-use crate::program::{ActiveRuleCursor, Program, RunResult};
+use crate::program::{ActiveRuleCursor, BorrowedExecutableProgram, Program, RunResult};
 use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
 
 use super::advance::{
@@ -91,10 +91,15 @@ struct BorrowedRuleAttemptTerminal<'program, P: ParsePolicy> {
 /// Returns `RunError` when execution setup fails or a later matching rule would
 /// exceed configured limits.
 pub(crate) fn finish_borrowed_run<P: ParsePolicy, E: ExecutionPolicy>(
-    program: &Program<P>,
+    executable: BorrowedExecutableProgram<'_, P>,
     admitted: AdmittedRun<E>,
 ) -> Result<RunResult, RunError> {
-    Session::new(BorrowedProgram { program }, admitted)
+    Session::new(
+        BorrowedProgram {
+            program: executable.program(),
+        },
+        admitted,
+    )
         .map_err(RunError::from)?
         .finish()
         .map_err(RunError::from)
@@ -107,7 +112,7 @@ pub(crate) fn finish_borrowed_run<P: ParsePolicy, E: ExecutionPolicy>(
 /// Returns `TracedRunError::Run` for runtime failures and
 /// `TracedRunError::Trace` for user callback failures.
 pub(crate) fn trace_events<'program, P, E, F, TraceError>(
-    program: &'program Program<P>,
+    executable: BorrowedExecutableProgram<'program, P>,
     admitted: AdmittedRun<E>,
     trace: F,
 ) -> Result<RunResult, TracedRunError<TraceError>>
@@ -116,7 +121,12 @@ where
     E: ExecutionPolicy,
     F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), TraceError>,
 {
-    Session::new(BorrowedProgram { program }, admitted)
+    Session::new(
+        BorrowedProgram {
+            program: executable.program(),
+        },
+        admitted,
+    )
         .map_err(RunError::from)
         .map_err(TracedRunError::Run)?
         .trace_events(trace)

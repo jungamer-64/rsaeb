@@ -101,7 +101,9 @@ use crate::input::AdmittedRun;
 use crate::inspect::RuleView;
 use crate::limits::{StepCount, TraceSnapshotByteLimit};
 use crate::policy::{ExecutionPolicy, ParsePolicy, TraceSnapshotPolicy};
-use crate::program::{Program, ReturnOutput, ReturnOutputView, RunResult, RuntimeStateSnapshot};
+use crate::program::{
+    BorrowedExecutableProgram, ReturnOutput, ReturnOutputView, RunResult, RuntimeStateSnapshot,
+};
 use alloc::vec::Vec;
 
 /// Sealed implementation detail for trace request types.
@@ -126,7 +128,7 @@ pub struct SnapshotTrace<T: TraceSnapshotPolicy, F> {
     policy: PhantomData<fn() -> T>,
 }
 
-/// Trace request accepted by [`Program::trace`].
+/// Trace request accepted by executable-program trace entrypoints.
 ///
 /// Implementations exist only for crate-defined request wrappers, so callers
 /// choose borrowed or snapshot tracing by type instead of by a runtime selector.
@@ -144,7 +146,7 @@ pub trait TraceRequest<'program, P: ParsePolicy, E: ExecutionPolicy>:
     /// materialization, or the user callback fails.
     fn trace(
         self,
-        program: &'program Program<P>,
+        executable: BorrowedExecutableProgram<'program, P>,
         admitted: AdmittedRun<E>,
     ) -> Result<RunResult, Self::Error>;
 }
@@ -196,10 +198,10 @@ where
 
     fn trace(
         self,
-        program: &'program Program<P>,
+        executable: BorrowedExecutableProgram<'program, P>,
         admitted: AdmittedRun<E>,
     ) -> Result<RunResult, Self::Error> {
-        crate::execution::trace_events(program, admitted, self.callback)
+        crate::execution::trace_events(executable, admitted, self.callback)
     }
 }
 
@@ -214,7 +216,7 @@ where
 
     fn trace(
         self,
-        program: &'program Program<P>,
+        executable: BorrowedExecutableProgram<'program, P>,
         admitted: AdmittedRun<E>,
     ) -> Result<RunResult, Self::Error> {
         let Self {
@@ -222,7 +224,7 @@ where
             policy: _policy,
         } = self;
 
-        let result = crate::execution::trace_events(program, admitted, |event| {
+        let result = crate::execution::trace_events(executable, admitted, |event| {
             let snapshot = event
                 .to_snapshot::<T>()
                 .map_err(SnapshotTraceCallbackError::Snapshot)?;

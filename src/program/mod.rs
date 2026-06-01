@@ -20,13 +20,11 @@ mod result;
 mod rule_set;
 use core::marker::PhantomData;
 
-use crate::error::{ParseError, RunError};
-use crate::input::AdmittedRun;
+use crate::error::ParseError;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::parser::parse_rules_impl;
-use crate::policy::{ExecutionPolicy, ParsePolicy};
+use crate::policy::ParsePolicy;
 use crate::source::ProgramSource;
-use crate::trace::TraceRequest;
 
 pub(crate) use rule_set::{ActiveRuleCursor, RuleCursorAfterMiss, RuleScan};
 pub(crate) use rule_set::{RuleSet, RuleSetBuilder};
@@ -138,41 +136,4 @@ impl<P: ParsePolicy> Program<P> {
         OwnedExecutableProgram::from_program(self)
     }
 
-    /// Executes this program to completion.
-    ///
-    /// Stepwise and rule-attempt execution require an executable-program witness
-    /// from [`Program::as_executable`] or [`Program::into_executable`].
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunError` when execution setup fails or a later matching rule would
-    /// exceed configured limits.
-    pub fn execute<E>(&self, admitted: AdmittedRun<E>) -> Result<RunResult, RunError>
-    where
-        E: ExecutionPolicy,
-    {
-        crate::execution::finish_borrowed_run(self, admitted)
-    }
-
-    /// Runs this program while emitting trace events selected by a typed request.
-    ///
-    /// [`crate::trace::BorrowedTrace`] emits borrowed events without
-    /// materializing snapshots. [`crate::trace::SnapshotTrace`] materializes
-    /// snapshot events under the request's [`TraceSnapshotPolicy`](crate::policy::TraceSnapshotPolicy).
-    ///
-    /// # Errors
-    ///
-    /// Returns the selected trace request's error type when runtime execution,
-    /// snapshot materialization, or the user trace sink fails.
-    pub fn trace<'program, E, R>(
-        &'program self,
-        admitted: AdmittedRun<E>,
-        request: R,
-    ) -> Result<RunResult, R::Error>
-    where
-        E: ExecutionPolicy,
-        R: TraceRequest<'program, P, E>,
-    {
-        request.trace(self, admitted)
-    }
 }
