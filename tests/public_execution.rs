@@ -770,10 +770,10 @@ fn execution_rule_attempt_stable_reason_is_typed() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if interleaved always rules consume `(once)` slots or
+/// Returns `TestFailure` if interleaved always rules consume `(once)` state or
 /// consumed `(once)` rules stop being reported as typed rule-attempt misses.
 #[test]
-fn execution_rule_attempt_preserves_interleaved_once_slots() -> TestResult {
+fn execution_rule_attempt_preserves_interleaved_once_state() -> TestResult {
     let program = parse_program("(once)a=b\nz=z\n(once)b=c")?;
     ensure_eq!(program.once_rule_count().get(), 2)?;
     ensure_eq!(

@@ -27,9 +27,7 @@ use crate::policy::{ExecutionPolicy, ParsePolicy};
 use crate::source::ProgramSource;
 use crate::trace::TraceRequest;
 
-pub(crate) use rule_set::{
-    RuleAttemptTargetSelection, RuleCursor, RuleCursorAfterMiss, RuleScan, RuleTarget,
-};
+pub(crate) use rule_set::{RuleCursor, RuleCursorAfterMiss, RuleScan};
 pub(crate) use rule_set::{RuleSet, RuleSetBuilder};
 
 pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeStateSnapshot};
@@ -174,13 +172,5 @@ impl<P: ParsePolicy> Program<P> {
         R: TraceRequest<'program, P, E>,
     {
         request.trace(self, admitted)
-    }
-
-    /// Selects the next checked rule-attempt target.
-    pub(crate) fn select_attempt_target(
-        &self,
-        cursor: &RuleCursor,
-    ) -> RuleAttemptTargetSelection<'_> {
-        self.rule_set.select_attempt_target(cursor)
     }
 }

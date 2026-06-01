@@ -1,7 +1,5 @@
 use crate::bytes::Payload;
-use crate::inspect::{
-    OnceRuleCount, PayloadView, RuleActionView, RuleAnchor, RulePosition, RuleRepeat,
-};
+use crate::inspect::{PayloadView, RuleActionView, RuleAnchor, RulePosition, RuleRepeat};
 use crate::source::SourceLineNumber;
 
 /// Parsed right-side action after syntax has been assigned a domain.
@@ -94,7 +92,7 @@ pub(crate) struct RuleHead {
 }
 
 impl RuleHead {
-    /// Groups parsed left-side rule fields before once-slot assignment.
+    /// Groups parsed left-side rule fields before program-level repeat assignment.
     pub(crate) fn new(repeat: RuleRepeatSyntax, anchor: RuleAnchorSyntax, lhs: Payload) -> Self {
         Self {
             repeat,
@@ -148,7 +146,7 @@ impl ParsedRule {
         self.line_number
     }
 
-    /// Repeat syntax before `(once)` slot assignment.
+    /// Repeat syntax before program-level repeat assignment.
     pub(crate) const fn repeat_syntax(&self) -> RuleRepeatSyntax {
         self.head.repeat
     }
@@ -159,7 +157,7 @@ impl ParsedRule {
 pub(crate) enum RuleRepeatSyntax {
     /// Rule has no `(once)` modifier.
     Always,
-    /// Rule has a `(once)` modifier and needs a run-local slot.
+    /// Rule has a `(once)` modifier and needs per-run availability state.
     Once,
 }
 
@@ -185,42 +183,21 @@ impl RuleAnchorSyntax {
     }
 }
 
-/// Parser-assigned `(once)` slot used by one runtime invocation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct OnceRuleSlot {
-    /// Zero-based slot in the per-run `(once)` state table.
-    zero_based: usize,
-}
-
-impl OnceRuleSlot {
-    /// Assigns the next slot from the current parsed `(once)` count.
-    pub(crate) const fn from_count(count: OnceRuleCount) -> Self {
-        Self {
-            zero_based: count.get(),
-        }
-    }
-
-    /// Returns the table index assigned by the parser.
-    pub(crate) const fn index(self) -> usize {
-        self.zero_based
-    }
-}
-
-/// Runtime availability assigned after program-level rule construction.
+/// Runtime repeat behavior assigned after program-level rule construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuleAvailability {
+pub(crate) enum RuleRepeatBehavior {
     /// Rule can apply on every match.
     Always,
-    /// Rule can apply once per run and owns this parser-assigned runtime slot.
-    Once(OnceRuleSlot),
+    /// Rule can apply once per run.
+    Once,
 }
 
-impl RuleAvailability {
+impl RuleRepeatBehavior {
     /// Converts internal repeat state into the public inspection repeat.
     pub(crate) const fn public_repeat(self) -> RuleRepeat {
         match self {
             Self::Always => RuleRepeat::Always,
-            Self::Once(_) => RuleRepeat::Once,
+            Self::Once => RuleRepeat::Once,
         }
     }
 }
@@ -232,8 +209,8 @@ pub(crate) struct Rule {
     position: RulePosition,
     /// Original source line for diagnostics and inspection.
     line_number: SourceLineNumber,
-    /// Runtime availability for this rule.
-    availability: RuleAvailability,
+    /// Runtime repeat behavior for this rule.
+    repeat_behavior: RuleRepeatBehavior,
     /// Match anchor used by the runtime matcher.
     anchor: RuleAnchorSyntax,
     /// Left-side executable match payload.
@@ -247,12 +224,12 @@ impl Rule {
     pub(crate) fn from_parsed(
         position: RulePosition,
         parsed: ParsedRule,
-        availability: RuleAvailability,
+        repeat_behavior: RuleRepeatBehavior,
     ) -> Self {
         Self {
             position,
             line_number: parsed.line_number,
-            availability,
+            repeat_behavior,
             anchor: parsed.head.anchor,
             lhs: parsed.head.lhs,
             action: parsed.body.action,
@@ -271,12 +248,12 @@ impl Rule {
 
     /// Public repeat policy for inspection.
     pub(crate) const fn repeat(&self) -> RuleRepeat {
-        self.availability.public_repeat()
+        self.repeat_behavior.public_repeat()
     }
 
-    /// Runtime availability used by the matcher.
-    pub(crate) const fn availability(&self) -> RuleAvailability {
-        self.availability
+    /// Runtime repeat behavior used by the matcher.
+    pub(crate) const fn repeat_behavior(&self) -> RuleRepeatBehavior {
+        self.repeat_behavior
     }
 
     /// Match anchor used by the matcher.

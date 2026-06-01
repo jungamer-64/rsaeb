@@ -146,6 +146,27 @@
 //! }
 //! ```
 //!
+//! Runtime rule-state provenance errors are intentionally absent. Parsed rules
+//! and their per-run repeat state are advanced together inside the runtime, so
+//! callers cannot observe or match a fallback slot-mismatch error:
+//!
+//! ```compile_fail
+//! fn main() {
+//!     let _ = core::mem::size_of::<rsaeb::error::RuleRuntimeStateError>();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::error::RunStepError;
+//!
+//! fn main() {
+//!     let _ = |error: RunStepError| match error {
+//!         RunStepError::RuleRuntimeState(_) => true,
+//!         _ => false,
+//!     };
+//! }
+//! ```
+//!
 //! # Typed boundaries
 //!
 //! Program source and runtime input are different byte domains. Program payload
@@ -191,8 +212,8 @@
 //! ```
 //!
 //! Parse [`program::Program`] once when the same rules should be reused. The
-//! parser assigns private slots to `(once)` rules, and each runtime invocation
-//! owns only those per-run slot states rather than mutating the parsed program:
+//! parser records which rules are `(once)`, and each runtime invocation owns
+//! per-rule repeat state rather than mutating the parsed program:
 //!
 //! ```
 //! use rsaeb::execution::CompleteRun;

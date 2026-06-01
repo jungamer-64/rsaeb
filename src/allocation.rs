@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::error::Error;
 
 use crate::bytes::{PayloadByteCount, RuntimeInputByteCount, RuntimeStateByteCount};
-use crate::inspect::{OnceRuleCount, RuleCount};
+use crate::inspect::RuleCount;
 
 /// Interpreter allocation site reported by [`AllocationError`].
 ///
@@ -21,8 +21,8 @@ pub enum AllocationContext {
     CanonicalSource,
     /// Classifying raw runtime input into owned typed input bytes.
     RuntimeInputValidation,
-    /// Storing `(once)` execution state.
-    RuntimeOnceRuleState,
+    /// Storing per-rule runtime execution state.
+    RuntimeRuleState,
     /// Building the next runtime state after a rewrite.
     RuntimeRewriteState,
     /// Materializing a payload view outside parser/runtime execution.
@@ -91,11 +91,6 @@ impl RequestedCapacity {
 
     /// Requests storage for parsed rule-table entries.
     pub(crate) const fn from_rule_count(count: RuleCount) -> Self {
-        Self { value: count.get() }
-    }
-
-    /// Requests storage for per-run `(once)` slot states.
-    pub(crate) const fn from_once_rule_count(count: OnceRuleCount) -> Self {
         Self { value: count.get() }
     }
 

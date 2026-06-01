@@ -7,16 +7,13 @@ use crate::input::AdmittedRun;
 use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
-use crate::program::{
-    Program, ReturnOutput, RuleAttemptTargetSelection, RuleCursor, RuleCursorAfterMiss, RunResult,
-};
+use crate::program::{Program, ReturnOutput, RuleCursor, RuleCursorAfterMiss, RunResult};
 use crate::runtime::action::{AppliedRule, PreparedRuleApplication, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuleAttemptReservation, RuntimeBudgetState};
 use crate::runtime::matcher::{
     MatchedRuleApplication, RuleAttempt, RuleSearch, attempt_rule, find_next_match,
-    runtime_rule_for_target,
 };
-use crate::runtime::once::OnceStateSet;
+use crate::runtime::once::{RuntimeRuleStates, RuntimeRuleTargetSelection};
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
 use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
@@ -32,8 +29,8 @@ pub(super) struct RunCore<E: ExecutionPolicy> {
     scratch: RewriteScratch,
     /// Runtime limits and completed-step count.
     budget: RuntimeBudgetState<E>,
-    /// Per-run consumption state for `(once)` rules.
-    once_states: OnceStateSet,
+    /// Per-run execution state aligned with the parsed rule table.
+    rule_states: RuntimeRuleStates,
 }
 
 /// Runtime session parameterized by program ownership.
@@ -265,12 +262,12 @@ impl<E: ExecutionPolicy> RunCore<E> {
     ) -> Result<Self, RunStartError> {
         let (input, budget) = admitted.into_runtime_parts();
         let state = State::from_input(input);
-        let once_states = OnceStateSet::new(program.once_rule_count())?;
+        let rule_states = RuntimeRuleStates::new(program.rule_scan())?;
         Ok(Self {
             state,
             scratch: RewriteScratch::new(),
             budget,
-            once_states,
+            rule_states,
         })
     }
 
@@ -333,9 +330,9 @@ impl<P: ProgramOwner, E: ExecutionPolicy> Session<P, E> {
         let program = self.program.program();
         let matched = match find_next_match(
             program.rule_scan(),
-            &mut self.core.once_states,
+            &mut self.core.rule_states,
             &self.core.state,
-        )? {
+        ) {
             RuleSearch::Matched(matched) => matched,
             RuleSearch::Stable => {
                 return Ok(RuntimeStep::Stable(self.core.budget.completed_steps()));
@@ -608,9 +605,9 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<BorrowedProgram<'prog
         let program = self.program.program;
         let matched = match find_next_match(
             program.rule_scan(),
-            &mut self.core.once_states,
+            &mut self.core.rule_states,
             &self.core.state,
-        )? {
+        ) {
             RuleSearch::Matched(matched) => matched,
             RuleSearch::Stable => {
                 return Ok(RuntimeStep::Stable(self.core.budget.completed_steps()));
@@ -636,9 +633,9 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<BorrowedProgram<'prog
     pub(super) fn step_borrowed(&mut self) -> Result<CoreStep<RuleView<'program>>, RunStepError> {
         let matched = match find_next_match(
             self.program.program.rule_scan(),
-            &mut self.core.once_states,
+            &mut self.core.rule_states,
             &self.core.state,
-        )? {
+        ) {
             RuleSearch::Matched(matched) => matched,
             RuleSearch::Stable => return Ok(CoreStep::Stable(self.core.budget.completed_steps())),
         };
@@ -665,9 +662,9 @@ impl<P: ParsePolicy, E: ExecutionPolicy> Session<OwnedProgram<P>, E> {
     pub(super) fn step_owned(&mut self) -> Result<CoreStep<OwnedRuleWitness>, OwnedRunStepError> {
         let matched = match find_next_match(
             self.program.program.rule_scan(),
-            &mut self.core.once_states,
+            &mut self.core.rule_states,
             &self.core.state,
-        )? {
+        ) {
             RuleSearch::Matched(matched) => matched,
             RuleSearch::Stable => return Ok(CoreStep::Stable(self.core.budget.completed_steps())),
         };
@@ -711,19 +708,16 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
             mut attempt_budget,
         } = self;
 
-        let target = match program.program.select_attempt_target(&cursor) {
-            RuleAttemptTargetSelection::Target(target) => target,
-            RuleAttemptTargetSelection::NoExecutableRules => {
+        let target = match core
+            .rule_states
+            .select_attempt_target(program.program.rule_scan(), &cursor)
+        {
+            RuntimeRuleTargetSelection::Target(target) => target,
+            RuntimeRuleTargetSelection::NoExecutableRules => {
                 return no_executable_rule_attempt(program, core, attempt_budget);
             }
         };
-        let (after_miss, target) = target.into_parts();
-        let runtime_rule = match runtime_rule_for_target(&mut core.once_states, target) {
-            Ok(runtime_rule) => runtime_rule,
-            Err(error) => {
-                return failed_rule_attempt(program, core, attempt_budget, error.into());
-            }
-        };
+        let (after_miss, runtime_rule) = target.into_parts();
 
         let reservation = match attempt_budget.reserve_next_attempt(core.state.byte_count()) {
             Ok(reservation) => reservation,
@@ -781,19 +775,16 @@ impl<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
             mut attempt_budget,
         } = self;
 
-        let target = match program.program.select_attempt_target(&cursor) {
-            RuleAttemptTargetSelection::Target(target) => target,
-            RuleAttemptTargetSelection::NoExecutableRules => {
+        let target = match core
+            .rule_states
+            .select_attempt_target(program.program.rule_scan(), &cursor)
+        {
+            RuntimeRuleTargetSelection::Target(target) => target,
+            RuntimeRuleTargetSelection::NoExecutableRules => {
                 return no_executable_rule_attempt(program, core, attempt_budget);
             }
         };
-        let (after_miss, target) = target.into_parts();
-        let runtime_rule = match runtime_rule_for_target(&mut core.once_states, target) {
-            Ok(runtime_rule) => runtime_rule,
-            Err(error) => {
-                return failed_rule_attempt(program, core, attempt_budget, error.into());
-            }
-        };
+        let (after_miss, runtime_rule) = target.into_parts();
 
         let reservation = match attempt_budget.reserve_next_attempt(core.state.byte_count()) {
             Ok(reservation) => reservation,

@@ -6,9 +6,9 @@ use super::{
     InputColumn, LeftModifierKind, OwnedRuleAttemptStepError, OwnedRunStepError, ParseError,
     ParseErrorKind, ParseErrorLocation, ParseRepresentationError, PayloadKind,
     ReturnOutputLimitError, RewriteSizeError, RightActionKind, RuleAttemptLimitError,
-    RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError, RunStartError,
-    RunStepError, RuntimeInputError, RuntimeStateLimitError, StepLimitError,
-    TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
+    RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError, RunStartError, RunStepError,
+    RuntimeInputError, RuntimeStateLimitError, StepLimitError, TraceSnapshotError,
+    TraceSnapshotRunError, TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -19,7 +19,7 @@ impl fmt::Display for AllocationContext {
             Self::ProgramRuleTable => f.write_str("program rule table"),
             Self::CanonicalSource => f.write_str("canonical source bytes"),
             Self::RuntimeInputValidation => f.write_str("runtime input validation"),
-            Self::RuntimeOnceRuleState => f.write_str("runtime once rule state"),
+            Self::RuntimeRuleState => f.write_str("runtime rule state"),
             Self::RuntimeRewriteState => f.write_str("runtime rewrite state"),
             Self::PayloadView => f.write_str("payload view"),
             Self::OwnedRuleWitness => f.write_str("owned execution rule witness"),

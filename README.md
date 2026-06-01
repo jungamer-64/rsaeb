@@ -361,14 +361,14 @@ payload inspection materializes explicitly, and snapshot tracing has its own
 byte limit. During execution, the active state and rewrite scratch buffer remain
 separate typed buffers until a successful continuation step commits.
 
-`(once)` rules carry private slots assigned during parsing. Each execution
-allocates only those slot states, and only a committed application can consume
-its slot.
+`(once)` rules are recorded in the parsed rule table. Each execution allocates
+per-rule runtime state aligned with that table, and only a committed application
+can consume a rule's one-run availability.
 
 ## `no_std + alloc` Boundary
 
 The library crate is `#![no_std]` and uses `alloc` only at owned-buffer
-boundaries such as parsed rules, runtime input validation, per-run `(once)` state,
+boundaries such as parsed rules, runtime input validation, per-rule runtime state,
 run results, canonical rule source, explicit view materialization, and trace
 snapshots. It requires an allocator, but not `std`.
 

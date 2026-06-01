@@ -1,6 +1,6 @@
 use super::budget::RuntimeBudgetState;
 use super::matcher::{RuleSearch, find_next_match};
-use super::once::OnceStateSet;
+use super::once::RuntimeRuleStates;
 use super::rewrite::RewriteScratch;
 use super::state::State;
 use crate::bytes::Payload;
@@ -63,8 +63,7 @@ fn expect_step_limit(error: RunStepError) -> Result<StepLimitError, TestFailure>
         RunStepError::Allocation(_)
         | RunStepError::RewriteSize(_)
         | RunStepError::RuntimeStateLimit(_)
-        | RunStepError::ReturnOutputLimit(_)
-        | RunStepError::RuleRuntimeState(_) => {
+        | RunStepError::ReturnOutputLimit(_) => {
             Err(TestFailure::message("expected step limit error"))
         }
     }
@@ -123,7 +122,7 @@ struct OnceRuleFailureExpectation<I: RuntimeInputPolicy, E: ExecutionPolicy> {
     expected_availability: &'static str,
 }
 
-/// Verifies a failed `(once)` candidate does not commit the once slot.
+/// Verifies a failed `(once)` candidate does not consume once availability.
 ///
 /// # Errors
 ///
@@ -136,11 +135,9 @@ fn ensure_once_rule_failure_does_not_commit_rule<I: RuntimeInputPolicy, E: Execu
     let state = state_from_input_bytes(expectation.input, expectation.limits)?;
     let mut budget: RuntimeBudgetState<E> = RuntimeBudgetState::new();
     let mut scratch = RewriteScratch::new();
-    let mut once_states = OnceStateSet::new(program.once_rule_count())?;
+    let mut rule_states = RuntimeRuleStates::new(program.rule_scan())?;
 
-    let matched = match find_next_match(program.rule_scan(), &mut once_states, &state)
-        .map_err(RunStepError::from)?
-    {
+    let matched = match find_next_match(program.rule_scan(), &mut rule_states, &state) {
         RuleSearch::Matched(matched) => matched,
         RuleSearch::Stable => {
             return Err(TestFailure::message(expectation.expected_match));
@@ -160,8 +157,7 @@ fn ensure_once_rule_failure_does_not_commit_rule<I: RuntimeInputPolicy, E: Execu
 
     ensure_matches(
         matches!(
-            find_next_match(program.rule_scan(), &mut once_states, &state)
-                .map_err(RunStepError::from)?,
+            find_next_match(program.rule_scan(), &mut rule_states, &state),
             RuleSearch::Matched(_)
         ),
         expectation.expected_availability,
@@ -338,7 +334,7 @@ fn return_action_bypasses_rewrite_state_mutation_path() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if any failed `(once)` candidate commits its once slot.
+/// Returns `TestFailure` if any failed `(once)` candidate consumes once availability.
 #[test]
 fn once_limit_failures_do_not_commit_rule() -> TestResult {
     ensure_once_rule_failure_does_not_commit_rule(&OnceRuleFailureExpectation {
@@ -380,12 +376,12 @@ fn once_limit_failures_do_not_commit_rule() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if once-state construction ignores the parser-assigned
-/// once-slot count.
+/// Returns `TestFailure` if runtime rule-state construction loses parsed
+/// `(once)` availability.
 #[test]
-fn once_state_set_is_constructed_from_parser_assigned_slots() -> TestResult {
+fn runtime_rule_states_are_constructed_from_parsed_rules() -> TestResult {
     let program = parse_program("(once)a=b")?;
-    let mut once_states = OnceStateSet::new(program.once_rule_count())?;
+    let mut rule_states = RuntimeRuleStates::new(program.rule_scan())?;
     let state = state_from_input_bytes(
         b"a",
         DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new(),
@@ -393,11 +389,10 @@ fn once_state_set_is_constructed_from_parser_assigned_slots() -> TestResult {
 
     ensure_matches(
         matches!(
-            find_next_match(program.rule_scan(), &mut once_states, &state)
-                .map_err(RunStepError::from)?,
+            find_next_match(program.rule_scan(), &mut rule_states, &state),
             RuleSearch::Matched(_)
         ),
-        "expected parser-assigned once slot state to keep the rule available",
+        "expected aligned runtime rule state to keep the rule available",
     )
 }
 

@@ -3,107 +3,128 @@ use alloc::vec::Vec;
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
-use crate::error::RuleRuntimeStateError;
-use crate::inspect::OnceRuleCount;
-use crate::rule::{OnceRuleSlot, Rule, RuleAvailability};
+use crate::program::{RuleCursor, RuleCursorAfterMiss, RuleScan};
+use crate::rule::{Rule, RuleRepeatBehavior};
 
-/// Per-run execution state for parsed `(once)` slots.
+/// Per-run execution state aligned with the parsed rule table.
 #[derive(Debug)]
-pub(crate) struct OnceStateSet {
-    /// Runtime state for each parser-assigned `(once)` slot.
-    slot_states: Vec<OnceSlotState>,
+pub(crate) struct RuntimeRuleStates {
+    /// Runtime state for each executable rule in parser-owned order.
+    states: Vec<RuntimeRuleState>,
 }
 
-/// Runtime state for one parser-assigned `(once)` slot.
+/// Runtime state for one executable rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum OnceSlotState {
-    /// Slot has not committed during this run.
+enum RuntimeRuleState {
+    /// Rule has no per-run repeat state.
+    Always,
+    /// Rule has per-run `(once)` state.
+    Once(OnceRuleRuntimeState),
+}
+
+/// Runtime state for one parsed `(once)` rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OnceRuleRuntimeState {
+    /// Rule has not committed during this run.
     Fresh,
-    /// Slot has already committed during this run.
+    /// Rule has already committed during this run.
     Committed,
 }
 
 /// Linear commit action for a matched rule.
 #[derive(Debug)]
-pub(super) enum MatchedRuleCommit<'once> {
+pub(super) enum MatchedRuleCommit<'state> {
     /// Rule has no once-state side effect.
     Always,
     /// Rule owns the unique permit to consume its once state.
-    Once(OnceMatchPermit<'once>),
+    Once(OnceMatchPermit<'state>),
 }
 
 /// Availability of a parsed rule together with the only valid commit path.
 #[derive(Debug)]
-pub(super) enum OnceRuleReadiness<'once> {
+pub(super) enum RuntimeRuleReadiness<'state> {
     /// Rule is available and carries the seed for a later successful application.
-    Available(OnceRuleCommitSeed<'once>),
+    Available(RuntimeRuleCommitSeed<'state>),
     /// Rule has already committed during this runtime invocation.
     Consumed,
 }
 
 /// Data that can mint the linear commit action after a rule match is known.
 #[derive(Debug)]
-pub(super) enum OnceRuleCommitSeed<'once> {
+pub(super) enum RuntimeRuleCommitSeed<'state> {
     /// Rule has no once-state side effect.
     Always,
-    /// Rule owns this fresh parser-assigned `(once)` slot.
+    /// Rule owns this fresh per-rule runtime state.
     Once {
-        /// Fresh parser-assigned slot state for the matched rule.
-        slot_state: &'once mut OnceSlotState,
+        /// Fresh per-rule runtime state for the matched rule.
+        state: &'state mut OnceRuleRuntimeState,
     },
-}
-
-/// Availability of a scanned parsed rule without reserving mutable once state yet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ScannedRuleReadiness {
-    /// Rule is available and carries the data needed to mint its commit action.
-    Available(ScannedRuleCommit),
-    /// Rule has already committed during this runtime invocation.
-    Consumed,
-}
-
-/// Commit seed for a scanned rule already proven available.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ScannedRuleCommit {
-    /// Rule has no once-state side effect.
-    Always,
-    /// Rule owns this fresh parser-assigned `(once)` slot.
-    Once(OnceRuleSlot),
 }
 
 /// Private permit that consumes one fresh once-rule state on commit.
 #[derive(Debug)]
-pub(super) struct OnceMatchPermit<'once> {
-    /// Fresh parser-assigned slot reserved for the matched rule.
-    slot_state: &'once mut OnceSlotState,
+pub(super) struct OnceMatchPermit<'state> {
+    /// Fresh per-rule state reserved for the matched rule.
+    state: &'state mut OnceRuleRuntimeState,
     /// Non-copy token that keeps the permit linear even though its witnesses are copyable.
     linearity: OnceMatchPermitLinearity,
 }
 
-/// Parsed rule paired with its runtime availability state.
+/// Parsed rule paired with its aligned runtime repeat state.
 #[derive(Debug)]
-pub(crate) struct RuntimeRule<'program, 'once> {
+pub(crate) struct RuntimeRule<'program, 'state> {
     /// Parsed executable rule.
     rule: &'program Rule,
-    /// Runtime availability selected by this rule's parsed shape.
-    availability: RuntimeRuleAvailability<'once>,
+    /// Runtime repeat state selected by this rule's parsed shape.
+    state: RuntimeRuleStateRef<'state>,
 }
 
-/// Runtime availability paired with one parsed rule.
+/// Runtime repeat state borrowed for one parsed rule.
 #[derive(Debug)]
-enum RuntimeRuleAvailability<'once> {
+enum RuntimeRuleStateRef<'state> {
     /// Rule has no per-run state.
     Always,
-    /// Rule owns this parser-assigned `(once)` slot.
-    Once {
-        /// Parser-assigned once slot state for this rule.
-        slot_state: &'once mut OnceSlotState,
-    },
+    /// Rule owns this aligned `(once)` state.
+    Once(&'state mut OnceRuleRuntimeState),
+}
+
+/// Runtime scan that advances parsed rules and runtime states together.
+pub(crate) struct RuntimeRuleScan<'program, 'state> {
+    /// Parsed executable rules in execution order.
+    rules: core::slice::Iter<'program, Rule>,
+    /// Runtime states in the same execution order.
+    states: core::slice::IterMut<'state, RuntimeRuleState>,
+}
+
+/// Checked rule-attempt selection produced by a cursor and aligned runtime states.
+pub(crate) enum RuntimeRuleTargetSelection<'program, 'state> {
+    /// The cursor selected an executable target from this rule table and state set.
+    Target(RuntimeRuleAttemptTarget<'program, 'state>),
+    /// The cursor had no executable target left to select.
+    NoExecutableRules,
+}
+
+/// Active rule-attempt cursor paired with the checked target it selected.
+pub(crate) struct RuntimeRuleAttemptTarget<'program, 'state> {
+    /// Cursor movement allowed if this target misses.
+    after_miss: RuleCursorAfterMiss,
+    /// Parsed rule selected with its aligned runtime state.
+    target: RuntimeRule<'program, 'state>,
 }
 
 /// Non-copy marker carried by once-rule commit permits.
 #[derive(Debug)]
 struct OnceMatchPermitLinearity;
+
+impl RuntimeRuleState {
+    /// Builds runtime state for one parsed rule.
+    const fn from_rule(rule: &Rule) -> Self {
+        match rule.repeat_behavior() {
+            RuleRepeatBehavior::Always => Self::Always,
+            RuleRepeatBehavior::Once => Self::Once(OnceRuleRuntimeState::Fresh),
+        }
+    }
+}
 
 impl OnceMatchPermitLinearity {
     /// Creates the linearity marker for one permit.
@@ -112,11 +133,11 @@ impl OnceMatchPermitLinearity {
     }
 }
 
-impl<'once> OnceMatchPermit<'once> {
+impl<'state> OnceMatchPermit<'state> {
     /// Creates the commit permit after availability has been checked.
-    fn new(slot_state: &'once mut OnceSlotState) -> Self {
+    fn new(state: &'state mut OnceRuleRuntimeState) -> Self {
         Self {
-            slot_state,
+            state,
             linearity: OnceMatchPermitLinearity::new(),
         }
     }
@@ -132,162 +153,109 @@ impl MatchedRuleCommit<'_> {
     }
 }
 
-impl OnceStateSet {
-    /// Builds per-execution rule availability state from the parsed rule table.
+impl RuntimeRuleStates {
+    /// Builds per-execution rule availability state from the parsed rule scan.
     ///
     /// # Errors
     ///
     /// Returns `AllocationError` if the per-execution rule-state table cannot
     /// be allocated.
-    pub(crate) fn new(once_count: OnceRuleCount) -> Result<Self, AllocationError> {
-        let mut slot_states = Vec::new();
+    pub(crate) fn new(rules: RuleScan<'_>) -> Result<Self, AllocationError> {
+        let mut states = Vec::new();
         try_reserve_total_exact(
-            &mut slot_states,
-            RequestedCapacity::from_once_rule_count(once_count),
-            AllocationContext::RuntimeOnceRuleState,
+            &mut states,
+            RequestedCapacity::from_rule_count(rules.rule_count()),
+            AllocationContext::RuntimeRuleState,
         )?;
-        for _ in 0..once_count.get() {
+        for rule in rules.iter() {
             try_push(
-                &mut slot_states,
-                OnceSlotState::Fresh,
-                AllocationContext::RuntimeOnceRuleState,
+                &mut states,
+                RuntimeRuleState::from_rule(rule),
+                AllocationContext::RuntimeRuleState,
             )?;
         }
 
-        Ok(Self { slot_states })
+        Ok(Self { states })
     }
 
-    /// Pairs one parsed rule with its parser-assigned runtime availability.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RuleRuntimeStateError` if this run-local once-state table was
-    /// not constructed from the same parsed program as `rule`.
-    pub(super) fn runtime_rule_mut<'program, 'once>(
-        &'once mut self,
-        rule: &'program Rule,
-    ) -> Result<RuntimeRule<'program, 'once>, RuleRuntimeStateError> {
-        let availability = match rule.availability() {
-            RuleAvailability::Always => RuntimeRuleAvailability::Always,
-            RuleAvailability::Once(slot) => RuntimeRuleAvailability::Once {
-                slot_state: self.slot_state_mut(slot)?,
-            },
-        };
-
-        Ok(RuntimeRule { rule, availability })
-    }
-
-    /// Returns the scanned rule's readiness without reserving mutable once state.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RuleRuntimeStateError` if this run-local once-state table was
-    /// not constructed from the same parsed program as `rule`.
-    pub(super) fn scanned_rule_readiness(
-        &self,
-        rule: &Rule,
-    ) -> Result<ScannedRuleReadiness, RuleRuntimeStateError> {
-        match rule.availability() {
-            RuleAvailability::Always => {
-                Ok(ScannedRuleReadiness::Available(ScannedRuleCommit::Always))
-            }
-            RuleAvailability::Once(slot) => match self.slot_state(slot) {
-                Ok(OnceSlotState::Fresh) => Ok(ScannedRuleReadiness::Available(
-                    ScannedRuleCommit::Once(slot),
-                )),
-                Ok(OnceSlotState::Committed) => Ok(ScannedRuleReadiness::Consumed),
-                Err(error) => Err(error),
-            },
+    /// Starts scanning parsed rules together with their aligned runtime states.
+    pub(crate) fn scan<'program, 'state>(
+        &'state mut self,
+        rules: RuleScan<'program>,
+    ) -> RuntimeRuleScan<'program, 'state> {
+        RuntimeRuleScan {
+            rules: rules.iter(),
+            states: self.states.iter_mut(),
         }
     }
 
-    /// Returns the runtime state for one parser-assigned `(once)` slot.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RuleRuntimeStateError` if a parsed rule from a different program is paired
-    /// with this run-local once-state table.
-    fn slot_state(&self, slot: OnceRuleSlot) -> Result<OnceSlotState, RuleRuntimeStateError> {
-        self.slot_states
-            .get(slot.index())
-            .copied()
-            .ok_or_else(|| self.slot_error(slot))
-    }
+    /// Selects the next rule-attempt target from a cursor and aligned rule state.
+    pub(crate) fn select_attempt_target<'program, 'state>(
+        &'state mut self,
+        rules: RuleScan<'program>,
+        cursor: &RuleCursor,
+    ) -> RuntimeRuleTargetSelection<'program, 'state> {
+        let Some(rule) = rules.rule_at_cursor(cursor) else {
+            return RuntimeRuleTargetSelection::NoExecutableRules;
+        };
+        let Some(state) = self.states.get_mut(cursor.next_rule_index()) else {
+            return RuntimeRuleTargetSelection::NoExecutableRules;
+        };
 
-    /// Returns mutable runtime state for one parser-assigned `(once)` slot.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RuleRuntimeStateError` if a parsed rule from a different program is paired
-    /// with this run-local once-state table.
-    fn slot_state_mut(
-        &mut self,
-        slot: OnceRuleSlot,
-    ) -> Result<&mut OnceSlotState, RuleRuntimeStateError> {
-        let slot_count = OnceRuleCount::new(self.slot_states.len());
-        self.slot_states
-            .get_mut(slot.index())
-            .ok_or_else(|| RuleRuntimeStateError::once_slot_out_of_range(slot.index(), slot_count))
-    }
-
-    /// Builds an out-of-range slot error for this run-local table.
-    fn slot_error(&self, slot: OnceRuleSlot) -> RuleRuntimeStateError {
-        RuleRuntimeStateError::once_slot_out_of_range(
-            slot.index(),
-            OnceRuleCount::new(self.slot_states.len()),
-        )
+        RuntimeRuleTargetSelection::Target(RuntimeRuleAttemptTarget {
+            after_miss: rules.after_miss(cursor),
+            target: RuntimeRule::new(rule, state),
+        })
     }
 }
 
-impl<'program, 'once> RuntimeRule<'program, 'once> {
+impl<'program, 'state> Iterator for RuntimeRuleScan<'program, 'state> {
+    type Item = RuntimeRule<'program, 'state>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let rule = self.rules.next()?;
+        let state = self.states.next()?;
+        Some(RuntimeRule::new(rule, state))
+    }
+}
+
+impl<'program, 'state> RuntimeRule<'program, 'state> {
+    /// Pairs a parsed rule with its aligned runtime state.
+    fn new(rule: &'program Rule, state: &'state mut RuntimeRuleState) -> Self {
+        let state = match state {
+            RuntimeRuleState::Always => RuntimeRuleStateRef::Always,
+            RuntimeRuleState::Once(state) => RuntimeRuleStateRef::Once(state),
+        };
+        Self { rule, state }
+    }
+
     /// Parsed rule selected with its runtime state.
     pub(super) const fn rule(&self) -> &'program Rule {
         self.rule
     }
 
     /// Returns this rule's current per-run readiness and commit action.
-    pub(super) fn readiness(self) -> OnceRuleReadiness<'once> {
-        match self.availability {
-            RuntimeRuleAvailability::Always => {
-                OnceRuleReadiness::Available(OnceRuleCommitSeed::Always)
+    pub(super) fn readiness(self) -> RuntimeRuleReadiness<'state> {
+        match self.state {
+            RuntimeRuleStateRef::Always => {
+                RuntimeRuleReadiness::Available(RuntimeRuleCommitSeed::Always)
             }
-            RuntimeRuleAvailability::Once { slot_state } => match *slot_state {
-                OnceSlotState::Fresh => {
-                    OnceRuleReadiness::Available(OnceRuleCommitSeed::Once { slot_state })
+            RuntimeRuleStateRef::Once(state) => match *state {
+                OnceRuleRuntimeState::Fresh => {
+                    RuntimeRuleReadiness::Available(RuntimeRuleCommitSeed::Once { state })
                 }
-                OnceSlotState::Committed => OnceRuleReadiness::Consumed,
+                OnceRuleRuntimeState::Committed => RuntimeRuleReadiness::Consumed,
             },
         }
     }
 }
 
-impl<'once> OnceRuleCommitSeed<'once> {
+impl<'state> RuntimeRuleCommitSeed<'state> {
     /// Mints the linear commit action for a rule that has already matched.
-    pub(super) fn into_matched_commit(self) -> MatchedRuleCommit<'once> {
+    pub(super) fn into_matched_commit(self) -> MatchedRuleCommit<'state> {
         match self {
             Self::Always => MatchedRuleCommit::Always,
-            Self::Once { slot_state } => MatchedRuleCommit::Once(OnceMatchPermit::new(slot_state)),
-        }
-    }
-}
-
-impl ScannedRuleCommit {
-    /// Mints the linear commit action for this already selected rule.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RuleRuntimeStateError` if this scanned commit was paired with a
-    /// different program's run-local once-state table.
-    pub(super) fn into_matched_commit(
-        self,
-        table: &mut OnceStateSet,
-    ) -> Result<MatchedRuleCommit<'_>, RuleRuntimeStateError> {
-        match self {
-            Self::Always => Ok(MatchedRuleCommit::Always),
-            Self::Once(slot) => {
-                let slot_state = table.slot_state_mut(slot)?;
-                Ok(MatchedRuleCommit::Once(OnceMatchPermit::new(slot_state)))
-            }
+            Self::Once { state } => MatchedRuleCommit::Once(OnceMatchPermit::new(state)),
         }
     }
 }
@@ -296,9 +264,16 @@ impl OnceMatchPermit<'_> {
     /// Consumes this permit and marks the owning once-rule state as consumed.
     fn commit(self) {
         let Self {
-            slot_state,
+            state,
             linearity: _linearity,
         } = self;
-        *slot_state = OnceSlotState::Committed;
+        *state = OnceRuleRuntimeState::Committed;
+    }
+}
+
+impl<'program, 'state> RuntimeRuleAttemptTarget<'program, 'state> {
+    /// Splits the checked target into cursor progress and selected rule state.
+    pub(crate) fn into_parts(self) -> (RuleCursorAfterMiss, RuntimeRule<'program, 'state>) {
+        (self.after_miss, self.target)
     }
 }

@@ -5,14 +5,14 @@ use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_rese
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError, ParseRepresentationError};
 use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePosition};
 use crate::limits::RuleLimit;
-use crate::rule::{OnceRuleSlot, ParsedRule, Rule, RuleAvailability, RuleRepeatSyntax};
+use crate::rule::{ParsedRule, Rule, RuleRepeatBehavior, RuleRepeatSyntax};
 
 /// Immutable executable rule table built by the parser.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RuleSet {
     /// Parsed rules in execution order.
     rules: Vec<Rule>,
-    /// Parsed `(once)` slot count assigned while building this rule table.
+    /// Parsed `(once)` rule count assigned while building this rule table.
     once_rule_count: PublicOnceRuleCount,
 }
 
@@ -28,7 +28,7 @@ pub(crate) struct RuleScan<'program> {
 pub(crate) struct RuleSetBuilder {
     /// Parsed rules in execution order.
     rules: Vec<Rule>,
-    /// Next `(once)` slot to assign.
+    /// Parsed `(once)` rules seen so far.
     once_rule_count: PublicOnceRuleCount,
 }
 
@@ -62,29 +62,6 @@ pub(crate) enum RuleCursorAfterMiss {
     Stable,
 }
 
-/// Checked rule-attempt selection produced by a cursor and its owning rule table.
-pub(crate) enum RuleAttemptTargetSelection<'program> {
-    /// The cursor selected an executable target from this rule table.
-    Target(RuleAttemptTarget<'program>),
-    /// The cursor had no executable target left to select.
-    NoExecutableRules,
-}
-
-/// Active rule-attempt cursor paired with the checked target it selected.
-pub(crate) struct RuleAttemptTarget<'program> {
-    /// Cursor movement allowed if this target misses.
-    after_miss: RuleCursorAfterMiss,
-    /// Parsed rule selected by the cursor from the same rule table.
-    target: RuleTarget<'program>,
-}
-
-/// Rule target selected by a rule-attempt cursor.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct RuleTarget<'program> {
-    /// Parsed rule selected by the cursor.
-    rule: &'program Rule,
-}
-
 impl RuleInsertionPermit {
     /// Checks rule-count budget and table-position representability together.
     ///
@@ -94,7 +71,7 @@ impl RuleInsertionPermit {
     /// parser rule budget, or cannot be represented as a checked rule position.
     fn new(
         current_len: usize,
-        limit: RuleLimit,
+        limit: crate::limits::RuleLimit,
         line_number: crate::source::SourceLineNumber,
     ) -> Result<Self, ParseError> {
         let attempted_rule_count = current_len.checked_add(1).ok_or_else(|| {
@@ -137,14 +114,14 @@ impl RuleInsertionPermit {
 }
 
 impl PendingRuleInsertion {
-    /// Assigns runtime availability to one parsed rule before storage.
+    /// Assigns runtime repeat behavior to one parsed rule before storage.
     fn from_parsed(
         position: RulePosition,
         parsed: ParsedRule,
-        availability: RuleAvailability,
+        repeat_behavior: RuleRepeatBehavior,
     ) -> Self {
         Self {
-            rule: Rule::from_parsed(position, parsed, availability),
+            rule: Rule::from_parsed(position, parsed, repeat_behavior),
         }
     }
 
@@ -176,10 +153,11 @@ impl RuleSetBuilder {
     ) -> Result<(), ParseError> {
         let line_number = parsed.line_number();
         let insertion = RuleInsertionPermit::new(self.rules.len(), limit, line_number)?;
-        let (availability, next_once_rule_count) =
-            self.assign_rule_availability(&parsed, line_number)?;
+        let (repeat_behavior, next_once_rule_count) =
+            self.assign_rule_repeat_behavior(&parsed, line_number)?;
 
-        let pending = PendingRuleInsertion::from_parsed(insertion.position(), parsed, availability);
+        let pending =
+            PendingRuleInsertion::from_parsed(insertion.position(), parsed, repeat_behavior);
 
         let pending_line_number = pending.line_number();
         try_reserve_total_exact(
@@ -210,21 +188,20 @@ impl RuleSetBuilder {
         }
     }
 
-    /// Assigns parsed repeat syntax to runtime availability.
+    /// Assigns parsed repeat syntax to runtime repeat behavior.
     ///
     /// # Errors
     ///
     /// Returns `ParseError` if the next parsed `(once)` count cannot be
     /// represented.
-    fn assign_rule_availability(
+    fn assign_rule_repeat_behavior(
         &self,
         parsed: &ParsedRule,
         line_number: crate::source::SourceLineNumber,
-    ) -> Result<(RuleAvailability, PublicOnceRuleCount), ParseError> {
+    ) -> Result<(RuleRepeatBehavior, PublicOnceRuleCount), ParseError> {
         match parsed.repeat_syntax() {
-            RuleRepeatSyntax::Always => Ok((RuleAvailability::Always, self.once_rule_count)),
+            RuleRepeatSyntax::Always => Ok((RuleRepeatBehavior::Always, self.once_rule_count)),
             RuleRepeatSyntax::Once => {
-                let slot = OnceRuleSlot::from_count(self.once_rule_count);
                 let next_once_rule_count =
                     self.once_rule_count.checked_next().ok_or_else(|| {
                         ParseError::at_line(
@@ -232,7 +209,7 @@ impl RuleSetBuilder {
                             ParseErrorKind::Representation(ParseRepresentationError::RuleCount),
                         )
                     })?;
-                Ok((RuleAvailability::Once(slot), next_once_rule_count))
+                Ok((RuleRepeatBehavior::Once, next_once_rule_count))
             }
         }
     }
@@ -258,39 +235,34 @@ impl RuleSet {
     pub(crate) fn scan(&self) -> RuleScan<'_> {
         RuleScan { rules: &self.rules }
     }
-
-    /// Selects the next rule-attempt target from a cursor minted by this table.
-    pub(crate) fn select_attempt_target(
-        &self,
-        cursor: &RuleCursor,
-    ) -> RuleAttemptTargetSelection<'_> {
-        let RuleCursor {
-            next_rule_index: rule_index,
-        } = *cursor;
-        let Some(rule) = self.rules.get(rule_index) else {
-            return RuleAttemptTargetSelection::NoExecutableRules;
-        };
-
-        let next_index = rule_index.saturating_add(1);
-        let after_miss = if next_index < self.rules.len() {
-            RuleCursorAfterMiss::Advanced(RuleCursor {
-                next_rule_index: next_index,
-            })
-        } else {
-            RuleCursorAfterMiss::Stable
-        };
-
-        RuleAttemptTargetSelection::Target(RuleAttemptTarget {
-            after_miss,
-            target: RuleTarget { rule },
-        })
-    }
 }
 
 impl<'program> RuleScan<'program> {
     /// Iterates executable rules in parser-owned execution order.
     pub(crate) fn iter(self) -> slice::Iter<'program, Rule> {
         self.rules.iter()
+    }
+
+    /// Number of executable rules in this scan.
+    pub(crate) fn rule_count(self) -> RuleCount {
+        RuleCount::new(self.rules.len())
+    }
+
+    /// Returns the rule at a cursor position.
+    pub(crate) fn rule_at_cursor(self, cursor: &RuleCursor) -> Option<&'program Rule> {
+        self.rules.get(cursor.next_rule_index)
+    }
+
+    /// Cursor movement allowed after the current cursor consumes a miss.
+    pub(crate) fn after_miss(self, cursor: &RuleCursor) -> RuleCursorAfterMiss {
+        let next_index = cursor.next_rule_index.saturating_add(1);
+        if next_index < self.rules.len() {
+            RuleCursorAfterMiss::Advanced(RuleCursor {
+                next_rule_index: next_index,
+            })
+        } else {
+            RuleCursorAfterMiss::Stable
+        }
     }
 }
 
@@ -299,18 +271,9 @@ impl RuleCursor {
     pub(crate) const fn first() -> Self {
         Self { next_rule_index: 0 }
     }
-}
 
-impl<'program> RuleTarget<'program> {
-    /// Parsed rule selected by the cursor.
-    pub(crate) const fn rule(self) -> &'program Rule {
-        self.rule
-    }
-}
-
-impl<'program> RuleAttemptTarget<'program> {
-    /// Splits the checked target into cursor progress and selected rule.
-    pub(crate) const fn into_parts(self) -> (RuleCursorAfterMiss, RuleTarget<'program>) {
-        (self.after_miss, self.target)
+    /// Zero-based rule-table offset selected on the next attempt.
+    pub(crate) const fn next_rule_index(&self) -> usize {
+        self.next_rule_index
     }
 }
