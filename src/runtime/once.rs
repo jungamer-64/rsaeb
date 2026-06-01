@@ -4,6 +4,7 @@ use core::slice;
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
+use crate::error::OnceRuleStateError;
 use crate::inspect::OnceRuleCount;
 use crate::program::{ActiveRuleCursor, RuleCursorAfterMiss, RuleScan};
 use crate::rule::{Rule, RuleAvailability};
@@ -13,6 +14,8 @@ use crate::rule::{Rule, RuleAvailability};
 pub(crate) struct OnceStateSet {
     /// One runtime state cell for each parser-assigned `(once)` slot.
     states: Vec<OnceRuleRuntimeState>,
+    /// Parser-assigned `(once)` count used to allocate this state set.
+    once_rule_count: OnceRuleCount,
 }
 
 /// Runtime state for one parsed `(once)` rule.
@@ -61,6 +64,8 @@ pub(crate) struct RuntimeRulesMut<'program, 'once> {
     rules: slice::Iter<'program, Rule>,
     /// Runtime state cells for parser-assigned `(once)` slots.
     once_states: slice::IterMut<'once, OnceRuleRuntimeState>,
+    /// Parser-assigned `(once)` count used to allocate this state set.
+    once_rule_count: OnceRuleCount,
 }
 
 /// Runtime availability paired with one parsed rule.
@@ -130,7 +135,10 @@ impl OnceStateSet {
             )?;
         }
 
-        Ok(Self { states })
+        Ok(Self {
+            states,
+            once_rule_count: once_count,
+        })
     }
 
     /// Starts scanning parsed rules together with the once-state slots they require.
@@ -141,44 +149,72 @@ impl OnceStateSet {
         RuntimeRulesMut {
             rules: rules.iter(),
             once_states: self.states.iter_mut(),
+            once_rule_count: self.once_rule_count,
         }
     }
 
     /// Selects the next rule-attempt target from a cursor and parser-assigned once slots.
+    ///
+    /// # Errors
+    ///
+    /// Returns `OnceRuleStateError` if the selected rule owns a parser-assigned
+    /// once slot that has no per-run state cell.
     pub(crate) fn attempt_target<'program, 'once>(
         &'once mut self,
         rules: RuleScan<'program>,
         cursor: ActiveRuleCursor<'program>,
-    ) -> RuntimeRuleAttemptTarget<'program, 'once> {
+    ) -> Result<RuntimeRuleAttemptTarget<'program, 'once>, OnceRuleStateError> {
         let (rule, after_miss) = rules.consume_cursor(cursor);
-        let target = RuntimeRule::new(rule, self.runtime_state_for(rule));
+        let target = RuntimeRule::new(rule, self.runtime_state_for(rule)?);
 
-        RuntimeRuleAttemptTarget { after_miss, target }
+        Ok(RuntimeRuleAttemptTarget { after_miss, target })
     }
 
     /// Runtime availability state for one parsed rule.
-    fn runtime_state_for(&mut self, rule: &Rule) -> RuntimeRuleAvailability<'_> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `OnceRuleStateError` if the rule owns a parser-assigned once slot
+    /// that has no per-run state cell.
+    fn runtime_state_for(
+        &mut self,
+        rule: &Rule,
+    ) -> Result<RuntimeRuleAvailability<'_>, OnceRuleStateError> {
         match rule.availability() {
-            RuleAvailability::Always => RuntimeRuleAvailability::Always,
-            RuleAvailability::Once(slot) => self
-                .states
-                .get_mut(slot.index())
-                .map(RuntimeRuleAvailability::Once)
-                .unwrap_or(RuntimeRuleAvailability::Always),
+            RuleAvailability::Always => Ok(RuntimeRuleAvailability::Always),
+            RuleAvailability::Once(slot) => {
+                let state = self.states.get_mut(slot.index()).ok_or_else(|| {
+                    OnceRuleStateError::missing_slot(
+                        rule.position(),
+                        slot.index(),
+                        self.once_rule_count,
+                    )
+                })?;
+                Ok(RuntimeRuleAvailability::Once(state))
+            }
         }
     }
 }
 
 impl<'program, 'once> Iterator for RuntimeRulesMut<'program, 'once> {
-    type Item = RuntimeRule<'program, 'once>;
+    type Item = Result<RuntimeRule<'program, 'once>, OnceRuleStateError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let rule = self.rules.next()?;
         let availability = match rule.availability() {
             RuleAvailability::Always => RuntimeRuleAvailability::Always,
-            RuleAvailability::Once(_) => RuntimeRuleAvailability::Once(self.once_states.next()?),
+            RuleAvailability::Once(slot) => match self.once_states.next() {
+                Some(state) => RuntimeRuleAvailability::Once(state),
+                None => {
+                    return Some(Err(OnceRuleStateError::missing_slot(
+                        rule.position(),
+                        slot.index(),
+                        self.once_rule_count,
+                    )));
+                }
+            },
         };
-        Some(RuntimeRule::new(rule, availability))
+        Some(Ok(RuntimeRule::new(rule, availability)))
     }
 }
 

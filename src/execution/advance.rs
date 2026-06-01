@@ -431,7 +431,9 @@ where
     E: ExecutionPolicy,
     W: RunRuleWitness<'program>,
 {
-    let matched = match find_next_match(program.rule_scan(), &mut core.once_states, &core.state) {
+    let matched = match find_next_match(program.rule_scan(), &mut core.once_states, &core.state)
+        .map_err(RunStepError::from)?
+    {
         RuleSearch::Matched(matched) => matched,
         RuleSearch::Stable => return Ok(CoreStep::Stable(core.budget.completed_steps())),
     };
@@ -482,7 +484,16 @@ where
     A: RuleAttemptPolicy,
     W: AttemptRuleWitness<'program>,
 {
-    let target = core.once_states.attempt_target(rules, cursor);
+    let target = match core.once_states.attempt_target(rules, cursor) {
+        Ok(target) => target,
+        Err(error) => {
+            return failed_rule_attempt(
+                core,
+                attempt_budget,
+                W::Error::from(RunStepError::from(error)),
+            );
+        }
+    };
     let (after_miss, runtime_rule) = target.into_parts();
 
     let reservation = match attempt_budget.reserve_next_attempt(core.state.byte_count()) {

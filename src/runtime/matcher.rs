@@ -1,5 +1,6 @@
 use super::once::{MatchedRuleCommit, OnceStateSet, RuntimeRule, RuntimeRuleReadiness};
 use super::state::{State, StateMatch};
+use crate::error::OnceRuleStateError;
 use crate::program::RuleScan;
 use crate::rule::{Rule, RuleAnchorSyntax};
 
@@ -148,12 +149,18 @@ impl<'program> PreparedMatchedRule<'program, '_> {
 }
 
 /// Finds the first currently available rule that matches `state`.
+///
+/// # Errors
+///
+/// Returns `OnceRuleStateError` if a parsed `(once)` rule refers to a
+/// parser-assigned once slot that has no per-run state cell.
 pub(crate) fn find_next_match<'program, 'state, 'once>(
     rules: RuleScan<'program>,
     once_states: &'once mut OnceStateSet,
     state: &'state State,
-) -> RuleSearch<'program, 'state, 'once> {
+) -> Result<RuleSearch<'program, 'state, 'once>, OnceRuleStateError> {
     for runtime_rule in once_states.scan(rules) {
+        let runtime_rule = runtime_rule?;
         let candidate = match match_rule_state(runtime_rule.rule(), state) {
             RuleStateMatch::Matched(candidate) => candidate,
             RuleStateMatch::Mismatched => continue,
@@ -163,10 +170,10 @@ pub(crate) fn find_next_match<'program, 'state, 'once>(
             RuntimeRuleReadiness::Consumed => continue,
         };
         let commit = commit.into_matched_commit();
-        return RuleSearch::Matched(candidate.into_application(commit));
+        return Ok(RuleSearch::Matched(candidate.into_application(commit)));
     }
 
-    RuleSearch::Stable
+    Ok(RuleSearch::Stable)
 }
 
 /// Evaluates exactly one parsed rule line against the current runtime state.

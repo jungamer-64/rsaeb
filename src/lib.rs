@@ -252,9 +252,10 @@
 //! }
 //! ```
 //!
-//! Runtime rule-state provenance errors are intentionally absent. Parsed rules
-//! and their per-run repeat state are advanced together inside the runtime, so
-//! callers cannot observe or match a fallback slot-mismatch error:
+//! Row-aligned runtime rule-state provenance errors are intentionally absent.
+//! `(once)` repeat state is keyed by parser-assigned once slots, and a missing
+//! slot is reported through the once-state execution error instead of being
+//! treated as an always-available rule:
 //!
 //! ```compile_fail
 //! fn main() {

@@ -7,9 +7,9 @@
 use alloc::string::{FromUtf8Error, String};
 
 use crate::error::{
-    AllocationError, OwnedRunStepError, ParseError, ParseErrorLocation, RuleAttemptStepError,
-    RunAdmissionError, RunError, RunFinishError, RunStartError, RunStepError, RuntimeInputError,
-    TraceSnapshotRunError,
+    AllocationError, OnceRuleStateError, OwnedRunStepError, ParseError, ParseErrorLocation,
+    RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError, RunStartError, RunStepError,
+    RuntimeInputError, TraceSnapshotRunError,
 };
 use crate::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
 use crate::policy::{
@@ -60,6 +60,7 @@ pub(crate) enum TestFailure {
     TraceSnapshot(String),
     Utf8(FromUtf8Error),
     Allocation(AllocationError),
+    OnceRuleState(OnceRuleStateError),
 }
 
 impl TestFailure {
@@ -91,6 +92,9 @@ impl core::fmt::Debug for TestFailure {
             }
             Self::Utf8(error) => formatter.debug_tuple("Utf8").field(error).finish(),
             Self::Allocation(error) => formatter.debug_tuple("Allocation").field(error).finish(),
+            Self::OnceRuleState(error) => {
+                formatter.debug_tuple("OnceRuleState").field(error).finish()
+            }
         }
     }
 }
@@ -122,6 +126,12 @@ impl From<RunFinishError> for TestFailure {
 impl From<RunStepError> for TestFailure {
     fn from(value: RunStepError) -> Self {
         Self::RunStep(value)
+    }
+}
+
+impl From<OnceRuleStateError> for TestFailure {
+    fn from(value: OnceRuleStateError) -> Self {
+        Self::OnceRuleState(value)
     }
 }
 
