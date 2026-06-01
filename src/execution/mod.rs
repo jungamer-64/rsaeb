@@ -63,8 +63,6 @@ mod attempt;
 mod debug;
 /// Shared mutable execution engine behind the public typestates.
 mod engine;
-/// Type-level execution mode selection.
-mod mode;
 /// Public run-session typestates.
 mod session;
 /// Public step and terminal transition typestates.
@@ -73,22 +71,17 @@ mod transition;
 mod witness;
 
 pub use attempt::{RuleMiss, RuleMissReason};
-pub use mode::{
-    BorrowedExecutionMode, BorrowedRuleAttempts, BorrowedSteps, CompleteRun, OwnedExecutionMode,
-    OwnedRuleAttempts, OwnedSteps,
-};
 pub use session::{
-    BorrowedRuleAttemptSession, BorrowedRuleAttemptStart, BorrowedRunSession,
-    OwnedRuleAttemptSession, OwnedRuleAttemptStart, OwnedRunSession,
+    BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRuleAttemptSession, OwnedRunSession,
 };
 pub use transition::{
-    BorrowedAppliedStep, BorrowedEmptyRuleAttemptRun, BorrowedFailedRun, BorrowedMissedRuleAttempt,
-    BorrowedReturnedRun, BorrowedRuleAttemptAppliedStep, BorrowedRuleAttemptFailedRun,
+    BorrowedAppliedStep, BorrowedFailedRun, BorrowedMissedRuleAttempt, BorrowedReturnedRun,
+    BorrowedRuleAttemptAppliedStep, BorrowedRuleAttemptFailedRun,
     BorrowedRuleAttemptReturnedRun, BorrowedRuleAttemptStableRun, BorrowedRuleAttemptTransition,
-    BorrowedStableRun, BorrowedStepTransition, OwnedAppliedStep, OwnedEmptyRuleAttemptRun,
-    OwnedFailedRun, OwnedMissedRuleAttempt, OwnedReturnedRun, OwnedRuleAttemptAppliedStep,
-    OwnedRuleAttemptFailedRun, OwnedRuleAttemptReturnedRun, OwnedRuleAttemptStableRun,
-    OwnedRuleAttemptTransition, OwnedStableRun, OwnedStepTransition,
+    BorrowedStableRun, BorrowedStepTransition, OwnedAppliedStep, OwnedFailedRun,
+    OwnedMissedRuleAttempt, OwnedReturnedRun, OwnedRuleAttemptAppliedStep, OwnedRuleAttemptFailedRun,
+    OwnedRuleAttemptReturnedRun, OwnedRuleAttemptStableRun, OwnedRuleAttemptTransition,
+    OwnedStableRun, OwnedStepTransition,
 };
 pub use witness::{OwnedRuleAction, OwnedRulePayload, OwnedRuleWitness};
 

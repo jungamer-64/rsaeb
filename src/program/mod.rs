@@ -19,7 +19,6 @@ mod rule_set;
 use core::marker::PhantomData;
 
 use crate::error::ParseError;
-use crate::execution::{BorrowedExecutionMode, OwnedExecutionMode};
 use crate::input::AdmittedRun;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::parser::parse_rules_impl;
@@ -27,7 +26,7 @@ use crate::policy::{ExecutionPolicy, ParsePolicy};
 use crate::source::ProgramSource;
 use crate::trace::TraceRequest;
 
-pub(crate) use rule_set::{ActiveRuleCursor, RuleAttemptStart, RuleCursorAfterMiss, RuleScan};
+pub(crate) use rule_set::{ActiveRuleCursor, RuleCursorAfterMiss, RuleScan};
 pub(crate) use rule_set::{RuleSet, RuleSetBuilder};
 
 pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeStateSnapshot};
@@ -112,44 +111,6 @@ impl<P: ParsePolicy> Program<P> {
     /// Mints a private runtime scan over the immutable rule table.
     pub(crate) fn rule_scan(&self) -> RuleScan<'_> {
         self.rule_set.scan()
-    }
-
-    /// Executes this program through a borrowed type-level mode.
-    ///
-    /// `M` selects the execution shape at compile time. Borrowed modes keep
-    /// this parsed program borrowed by the returned value when a session is
-    /// produced. Owned modes are intentionally rejected here and must use
-    /// [`Program::into_execute`].
-    ///
-    /// # Errors
-    ///
-    /// Returns the selected mode's phase-specific error when execution cannot
-    /// start or complete.
-    pub fn execute<M, E>(&self, admitted: AdmittedRun<E>) -> Result<M::Output<'_>, M::Error>
-    where
-        E: ExecutionPolicy,
-        M: BorrowedExecutionMode<P, E>,
-    {
-        M::execute(self, admitted)
-    }
-
-    /// Executes this program through an owned type-level mode.
-    ///
-    /// `M` selects the execution shape at compile time. Owned modes move this
-    /// parsed program into the returned session when a session is produced.
-    /// Borrowed modes are intentionally rejected here and must use
-    /// [`Program::execute`].
-    ///
-    /// # Errors
-    ///
-    /// Returns the selected mode's phase-specific error when execution cannot
-    /// start.
-    pub fn into_execute<M, E>(self, admitted: AdmittedRun<E>) -> Result<M::Output, M::Error>
-    where
-        E: ExecutionPolicy,
-        M: OwnedExecutionMode<P, E>,
-    {
-        M::into_execute(self, admitted)
     }
 
     /// Runs this program while emitting trace events selected by a typed request.

@@ -47,15 +47,6 @@ struct RuleInsertionPermit {
     position: RulePosition,
 }
 
-/// Start state for one rule-attempt run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuleAttemptStart {
-    /// At least one executable rule is available to attempt.
-    Active(ActiveRuleCursor),
-    /// The parsed program has no executable rules.
-    Empty,
-}
-
 /// Cursor pointing to an executable rule line in one active rule-attempt run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ActiveRuleCursor {
@@ -265,16 +256,6 @@ impl<'program> RuleScan<'program> {
     /// Number of executable rules in this scan.
     pub(crate) fn rule_count(self) -> RuleCount {
         RuleCount::new(self.rules.len())
-    }
-
-    /// Selects the start state for rule-attempt execution.
-    pub(crate) fn rule_attempt_start(self) -> RuleAttemptStart {
-        match ActiveRuleCount::new(self.rules.len()) {
-            Some(rule_count) => {
-                RuleAttemptStart::Active(ActiveRuleCursor::at_first_rule(rule_count))
-            }
-            None => RuleAttemptStart::Empty,
-        }
     }
 
     /// Returns the rule at a cursor position.

@@ -3,7 +3,7 @@ use crate::input::AdmittedRun;
 use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
-use crate::program::{ActiveRuleCursor, Program, RuleAttemptStart, RunResult};
+use crate::program::{ActiveRuleCursor, Program, RunResult};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
 use crate::runtime::once::RuntimeRuleStates;
 use crate::runtime::rewrite::RewriteScratch;
@@ -47,14 +47,6 @@ pub(super) struct AttemptSession<P, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     pub(super) cursor: ActiveRuleCursor,
     /// Rule-attempt budget and consumed-attempt count.
     pub(super) attempt_budget: RuleAttemptBudgetState<A>,
-}
-
-/// Start state for a newly constructed rule-attempt run.
-pub(super) enum AttemptSessionStart<P, E: ExecutionPolicy, A: RuleAttemptPolicy> {
-    /// The parsed program has at least one executable rule and can be stepped.
-    Active(AttemptSession<P, E, A>),
-    /// The parsed program has no executable rules and is terminal immediately.
-    Empty(TerminalAttemptSession<P, E, A>),
 }
 
 /// Terminal rule-attempt state after the cursor can no longer resume.
@@ -203,34 +195,6 @@ impl<P: ProgramOwner, E: ExecutionPolicy> Session<P, E> {
 }
 
 impl<P: ProgramOwner, E: ExecutionPolicy, A: RuleAttemptPolicy> AttemptSession<P, E, A> {
-    /// Starts a new rule-attempt session for a parsed program and admitted run witness.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunStartError` if allocating per-run rule state fails.
-    pub(super) fn start(
-        program: P,
-        admitted: AdmittedRun<E>,
-    ) -> Result<AttemptSessionStart<P, E, A>, RunStartError> {
-        let start = program.program().rule_scan().rule_attempt_start();
-        let core = RunCore::new(program.program(), admitted)?;
-        let attempt_budget = RuleAttemptBudgetState::new();
-        Ok(match start {
-            RuleAttemptStart::Active(cursor) => AttemptSessionStart::Active(AttemptSession {
-                program,
-                core,
-                first_cursor: cursor,
-                cursor,
-                attempt_budget,
-            }),
-            RuleAttemptStart::Empty => AttemptSessionStart::Empty(TerminalAttemptSession {
-                program,
-                core,
-                attempt_budget,
-            }),
-        })
-    }
-
     /// Borrows the parsed program.
     pub(super) fn program(&self) -> &Program<P::Policy> {
         self.program.program()
