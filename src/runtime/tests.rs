@@ -63,7 +63,8 @@ fn expect_step_limit(error: RunStepError) -> Result<StepLimitError, TestFailure>
         RunStepError::Allocation(_)
         | RunStepError::RewriteSize(_)
         | RunStepError::RuntimeStateLimit(_)
-        | RunStepError::ReturnOutputLimit(_) => {
+        | RunStepError::ReturnOutputLimit(_)
+        | RunStepError::RuleRuntimeState(_) => {
             Err(TestFailure::message("expected step limit error"))
         }
     }
@@ -137,7 +138,9 @@ fn ensure_once_rule_failure_does_not_commit_rule<I: RuntimeInputPolicy, E: Execu
     let mut scratch = RewriteScratch::new();
     let mut once_states = OnceStateSet::new(program.once_rule_count())?;
 
-    let matched = match find_next_match(program.rule_scan(), &mut once_states, &state) {
+    let matched = match find_next_match(program.rule_scan(), &mut once_states, &state)
+        .map_err(RunStepError::from)?
+    {
         RuleSearch::Matched(matched) => matched,
         RuleSearch::Stable => {
             return Err(TestFailure::message(expectation.expected_match));
@@ -157,7 +160,8 @@ fn ensure_once_rule_failure_does_not_commit_rule<I: RuntimeInputPolicy, E: Execu
 
     ensure_matches(
         matches!(
-            find_next_match(program.rule_scan(), &mut once_states, &state),
+            find_next_match(program.rule_scan(), &mut once_states, &state)
+                .map_err(RunStepError::from)?,
             RuleSearch::Matched(_)
         ),
         expectation.expected_availability,
@@ -389,7 +393,8 @@ fn once_state_set_is_constructed_from_parser_assigned_slots() -> TestResult {
 
     ensure_matches(
         matches!(
-            find_next_match(program.rule_scan(), &mut once_states, &state),
+            find_next_match(program.rule_scan(), &mut once_states, &state)
+                .map_err(RunStepError::from)?,
             RuleSearch::Matched(_)
         ),
         "expected parser-assigned once slot state to keep the rule available",

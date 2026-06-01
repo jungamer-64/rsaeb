@@ -54,7 +54,7 @@ pub(crate) struct RuleCursor {
 }
 
 /// Cursor movement after a non-applying rule line has been consumed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RuleCursorAfterMiss {
     /// Cursor advanced to the next executable rule.
     Advanced(RuleCursor),
@@ -259,17 +259,14 @@ impl RuleSet {
         RuleScan { rules: &self.rules }
     }
 
-    /// Starts rule-attempt execution over this table's executable rules.
-    pub(crate) fn rule_attempt_cursor(&self) -> RuleCursor {
-        RuleCursor { next_rule_index: 0 }
-    }
-
     /// Selects the next rule-attempt target from a cursor minted by this table.
     pub(crate) fn select_attempt_target(
         &self,
-        cursor: RuleCursor,
+        cursor: &RuleCursor,
     ) -> RuleAttemptTargetSelection<'_> {
-        let rule_index = cursor.next_rule_index;
+        let RuleCursor {
+            next_rule_index: rule_index,
+        } = *cursor;
         let Some(rule) = self.rules.get(rule_index) else {
             return RuleAttemptTargetSelection::NoExecutableRules;
         };

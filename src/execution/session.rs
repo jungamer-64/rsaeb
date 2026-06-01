@@ -7,8 +7,8 @@ use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
 
 use super::attempt::{RuleAttemptStableReason, RuleMiss};
 use super::engine::{
-    AttemptSession, BorrowedProgram, CoreAppliedRule, CoreRuleAttempt, CoreStep, OwnedProgram,
-    RunCore, Session,
+    AttemptSession, BorrowedProgram, CoreAppliedRule, CoreRuleAttemptStep, CoreStep, OwnedProgram,
+    RunCore, Session, TerminalAttemptSession,
 };
 use super::transition::{
     BorrowedAppliedStep, BorrowedFailedRun, BorrowedMissedRuleAttempt, BorrowedReturnedRun,
@@ -504,16 +504,15 @@ impl<P: ParsePolicy, E: ExecutionPolicy> OwnedRunTerminal<P, E> {
 }
 
 impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedRuleAttemptTerminal<'program, P, E> {
-    /// Splits a borrowed rule-attempt session into terminal data.
-    fn from_session<A: RuleAttemptPolicy>(
-        session: BorrowedRuleAttemptSession<'program, P, E, A>,
+    /// Projects terminal borrowed rule-attempt state into public terminal data.
+    fn from_terminal<A: RuleAttemptPolicy>(
+        terminal: TerminalAttemptSession<BorrowedProgram<'program, P>, E, A>,
     ) -> Self {
-        let AttemptSession {
+        let TerminalAttemptSession {
             program,
             core,
-            cursor: _,
             attempt_budget,
-        } = session.session;
+        } = terminal;
         Self {
             program: program.program,
             core,
@@ -523,14 +522,15 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedRuleAttemptTerminal<'
 }
 
 impl<P: ParsePolicy, E: ExecutionPolicy> OwnedRuleAttemptTerminal<P, E> {
-    /// Splits an owned rule-attempt session into terminal data.
-    fn from_session<A: RuleAttemptPolicy>(session: OwnedRuleAttemptSession<P, E, A>) -> Self {
-        let AttemptSession {
+    /// Projects terminal owned rule-attempt state into public terminal data.
+    fn from_terminal<A: RuleAttemptPolicy>(
+        terminal: TerminalAttemptSession<OwnedProgram<P>, E, A>,
+    ) -> Self {
+        let TerminalAttemptSession {
             program,
             core,
-            cursor: _,
             attempt_budget,
-        } = session.session;
+        } = terminal;
         Self {
             program: program.program,
             core,
@@ -614,7 +614,7 @@ fn borrowed_rule_attempt_step_parts<
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 >(
-    mut session: BorrowedRuleAttemptSession<'program, P, E, A>,
+    session: BorrowedRuleAttemptSession<'program, P, E, A>,
 ) -> RuleAttemptStepParts<
     BorrowedRuleAttemptSession<'program, P, E, A>,
     BorrowedRuleAttemptTerminal<'program, P, E>,
@@ -622,50 +622,64 @@ fn borrowed_rule_attempt_step_parts<
     crate::error::RuleAttemptStepError,
 > {
     match session.session.step_borrowed() {
-        Ok(CoreRuleAttempt::Missed { attempt, miss }) => RuleAttemptStepParts::Missed {
+        CoreRuleAttemptStep::Missed {
             attempt,
             miss,
-            continuation: session,
-        },
-        Ok(CoreRuleAttempt::Applied {
+            continuation,
+        } => RuleAttemptStepParts::Missed {
             attempt,
-            applied: CoreAppliedRule::Rewrite { step, rule },
-        }) => RuleAttemptStepParts::Applied {
+            miss,
+            continuation: BorrowedRuleAttemptSession {
+                session: continuation,
+            },
+        },
+        CoreRuleAttemptStep::Applied {
             attempt,
             step,
             rule,
-            continuation: session,
-        },
-        Ok(CoreRuleAttempt::Applied {
-            attempt,
-            applied: CoreAppliedRule::Return { step, rule, output },
-        }) => RuleAttemptStepParts::Returned {
+            continuation,
+        } => RuleAttemptStepParts::Applied {
             attempt,
             step,
             rule,
-            terminal: BorrowedRuleAttemptTerminal::from_session(session),
+            continuation: BorrowedRuleAttemptSession {
+                session: continuation,
+            },
+        },
+        CoreRuleAttemptStep::Returned {
+            attempt,
+            step,
+            rule,
+            output,
+            terminal,
+        } => RuleAttemptStepParts::Returned {
+            attempt,
+            step,
+            rule,
+            terminal: BorrowedRuleAttemptTerminal::from_terminal(terminal),
             output,
         },
-        Ok(CoreRuleAttempt::Stable {
+        CoreRuleAttemptStep::Stable {
             attempts,
             steps,
             stable_reason,
-        }) => RuleAttemptStepParts::Stable {
+            terminal,
+        } => RuleAttemptStepParts::Stable {
             attempts,
             steps,
             stable_reason,
-            terminal: BorrowedRuleAttemptTerminal::from_session(session),
+            terminal: BorrowedRuleAttemptTerminal::from_terminal(terminal),
         },
-        Err(error) => RuleAttemptStepParts::Failed {
+        CoreRuleAttemptStep::Failed { error, terminal } => RuleAttemptStepParts::Failed {
             error,
-            terminal: BorrowedRuleAttemptTerminal::from_session(session),
+            terminal: BorrowedRuleAttemptTerminal::from_terminal(terminal),
         },
     }
 }
 
 /// Advances an owned rule-attempt run through the private transition vocabulary.
 fn owned_rule_attempt_step_parts<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>(
-    mut session: OwnedRuleAttemptSession<P, E, A>,
+    session: OwnedRuleAttemptSession<P, E, A>,
 ) -> RuleAttemptStepParts<
     OwnedRuleAttemptSession<P, E, A>,
     OwnedRuleAttemptTerminal<P, E>,
@@ -673,43 +687,57 @@ fn owned_rule_attempt_step_parts<P: ParsePolicy, E: ExecutionPolicy, A: RuleAtte
     crate::error::OwnedRuleAttemptStepError,
 > {
     match session.session.step_owned() {
-        Ok(CoreRuleAttempt::Missed { attempt, miss }) => RuleAttemptStepParts::Missed {
+        CoreRuleAttemptStep::Missed {
             attempt,
             miss,
-            continuation: session,
-        },
-        Ok(CoreRuleAttempt::Applied {
+            continuation,
+        } => RuleAttemptStepParts::Missed {
             attempt,
-            applied: CoreAppliedRule::Rewrite { step, rule },
-        }) => RuleAttemptStepParts::Applied {
+            miss,
+            continuation: OwnedRuleAttemptSession {
+                session: continuation,
+            },
+        },
+        CoreRuleAttemptStep::Applied {
             attempt,
             step,
             rule,
-            continuation: session,
-        },
-        Ok(CoreRuleAttempt::Applied {
-            attempt,
-            applied: CoreAppliedRule::Return { step, rule, output },
-        }) => RuleAttemptStepParts::Returned {
+            continuation,
+        } => RuleAttemptStepParts::Applied {
             attempt,
             step,
             rule,
-            terminal: OwnedRuleAttemptTerminal::from_session(session),
+            continuation: OwnedRuleAttemptSession {
+                session: continuation,
+            },
+        },
+        CoreRuleAttemptStep::Returned {
+            attempt,
+            step,
+            rule,
+            output,
+            terminal,
+        } => RuleAttemptStepParts::Returned {
+            attempt,
+            step,
+            rule,
+            terminal: OwnedRuleAttemptTerminal::from_terminal(terminal),
             output,
         },
-        Ok(CoreRuleAttempt::Stable {
+        CoreRuleAttemptStep::Stable {
             attempts,
             steps,
             stable_reason,
-        }) => RuleAttemptStepParts::Stable {
+            terminal,
+        } => RuleAttemptStepParts::Stable {
             attempts,
             steps,
             stable_reason,
-            terminal: OwnedRuleAttemptTerminal::from_session(session),
+            terminal: OwnedRuleAttemptTerminal::from_terminal(terminal),
         },
-        Err(error) => RuleAttemptStepParts::Failed {
+        CoreRuleAttemptStep::Failed { error, terminal } => RuleAttemptStepParts::Failed {
             error,
-            terminal: OwnedRuleAttemptTerminal::from_session(session),
+            terminal: OwnedRuleAttemptTerminal::from_terminal(terminal),
         },
     }
 }

@@ -97,6 +97,11 @@ impl OnceRuleCount {
     /// ZERO boundary value.
     pub(crate) const ZERO: Self = Self { value: 0 };
 
+    /// Creates a once-rule count from a primitive count.
+    pub(crate) const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
     /// Parsed `(once)` rule count as a primitive value.
     #[must_use]
     pub const fn get(self) -> usize {

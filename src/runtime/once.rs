@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
+use crate::error::RuleRuntimeStateError;
 use crate::inspect::OnceRuleCount;
 use crate::rule::{OnceRuleSlot, Rule, RuleAvailability};
 
@@ -15,7 +16,7 @@ pub(crate) struct OnceStateSet {
 
 /// Runtime state for one parser-assigned `(once)` slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OnceSlotState {
+pub(super) enum OnceSlotState {
     /// Slot has not committed during this run.
     Fresh,
     /// Slot has already committed during this run.
@@ -47,10 +48,8 @@ pub(super) enum OnceRuleCommitSeed<'once> {
     Always,
     /// Rule owns this fresh parser-assigned `(once)` slot.
     Once {
-        /// Table that records once slot states.
-        table: &'once mut OnceStateSet,
-        /// Fresh parser-assigned slot for the matched rule.
-        slot: OnceRuleSlot,
+        /// Fresh parser-assigned slot state for the matched rule.
+        slot_state: &'once mut OnceSlotState,
     },
 }
 
@@ -75,10 +74,8 @@ pub(super) enum ScannedRuleCommit {
 /// Private permit that consumes one fresh once-rule state on commit.
 #[derive(Debug)]
 pub(super) struct OnceMatchPermit<'once> {
-    /// Table that will own the committed slot state after commit.
-    table: &'once mut OnceStateSet,
     /// Fresh parser-assigned slot reserved for the matched rule.
-    slot: OnceRuleSlot,
+    slot_state: &'once mut OnceSlotState,
     /// Non-copy token that keeps the permit linear even though its witnesses are copyable.
     linearity: OnceMatchPermitLinearity,
 }
@@ -99,10 +96,8 @@ enum RuntimeRuleAvailability<'once> {
     Always,
     /// Rule owns this parser-assigned `(once)` slot.
     Once {
-        /// Table that records once slot states.
-        table: &'once mut OnceStateSet,
-        /// Parser-assigned once slot for this rule.
-        slot: OnceRuleSlot,
+        /// Parser-assigned once slot state for this rule.
+        slot_state: &'once mut OnceSlotState,
     },
 }
 
@@ -119,10 +114,9 @@ impl OnceMatchPermitLinearity {
 
 impl<'once> OnceMatchPermit<'once> {
     /// Creates the commit permit after availability has been checked.
-    fn new(table: &'once mut OnceStateSet, slot: OnceRuleSlot) -> Self {
+    fn new(slot_state: &'once mut OnceSlotState) -> Self {
         Self {
-            table,
-            slot,
+            slot_state,
             linearity: OnceMatchPermitLinearity::new(),
         }
     }
@@ -164,43 +158,84 @@ impl OnceStateSet {
     }
 
     /// Pairs one parsed rule with its parser-assigned runtime availability.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RuleRuntimeStateError` if this run-local once-state table was
+    /// not constructed from the same parsed program as `rule`.
     pub(super) fn runtime_rule_mut<'program, 'once>(
         &'once mut self,
         rule: &'program Rule,
-    ) -> RuntimeRule<'program, 'once> {
+    ) -> Result<RuntimeRule<'program, 'once>, RuleRuntimeStateError> {
         let availability = match rule.availability() {
             RuleAvailability::Always => RuntimeRuleAvailability::Always,
-            RuleAvailability::Once(slot) => RuntimeRuleAvailability::Once { table: self, slot },
+            RuleAvailability::Once(slot) => RuntimeRuleAvailability::Once {
+                slot_state: self.slot_state_mut(slot)?,
+            },
         };
 
-        RuntimeRule { rule, availability }
+        Ok(RuntimeRule { rule, availability })
     }
 
     /// Returns the scanned rule's readiness without reserving mutable once state.
-    pub(super) fn scanned_rule_readiness(&self, rule: &Rule) -> ScannedRuleReadiness {
+    ///
+    /// # Errors
+    ///
+    /// Returns `RuleRuntimeStateError` if this run-local once-state table was
+    /// not constructed from the same parsed program as `rule`.
+    pub(super) fn scanned_rule_readiness(
+        &self,
+        rule: &Rule,
+    ) -> Result<ScannedRuleReadiness, RuleRuntimeStateError> {
         match rule.availability() {
-            RuleAvailability::Always => ScannedRuleReadiness::Available(ScannedRuleCommit::Always),
+            RuleAvailability::Always => {
+                Ok(ScannedRuleReadiness::Available(ScannedRuleCommit::Always))
+            }
             RuleAvailability::Once(slot) => match self.slot_state(slot) {
-                OnceSlotState::Fresh => {
-                    ScannedRuleReadiness::Available(ScannedRuleCommit::Once(slot))
-                }
-                OnceSlotState::Committed => ScannedRuleReadiness::Consumed,
+                Ok(OnceSlotState::Fresh) => Ok(ScannedRuleReadiness::Available(
+                    ScannedRuleCommit::Once(slot),
+                )),
+                Ok(OnceSlotState::Committed) => Ok(ScannedRuleReadiness::Consumed),
+                Err(error) => Err(error),
             },
         }
     }
 
     /// Returns the runtime state for one parser-assigned `(once)` slot.
-    fn slot_state(&self, slot: OnceRuleSlot) -> OnceSlotState {
+    ///
+    /// # Errors
+    ///
+    /// Returns `RuleRuntimeStateError` if a parsed rule from a different program is paired
+    /// with this run-local once-state table.
+    fn slot_state(&self, slot: OnceRuleSlot) -> Result<OnceSlotState, RuleRuntimeStateError> {
         self.slot_states
             .get(slot.index())
             .copied()
+            .ok_or_else(|| self.slot_error(slot))
     }
 
-    /// Marks one fresh parser-assigned `(once)` slot as committed.
-    fn commit_slot(&mut self, slot: OnceRuleSlot) {
-        if let Some(state) = self.slot_states.get_mut(slot.index()) {
-            *state = OnceSlotState::Committed;
-        }
+    /// Returns mutable runtime state for one parser-assigned `(once)` slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RuleRuntimeStateError` if a parsed rule from a different program is paired
+    /// with this run-local once-state table.
+    fn slot_state_mut(
+        &mut self,
+        slot: OnceRuleSlot,
+    ) -> Result<&mut OnceSlotState, RuleRuntimeStateError> {
+        let slot_count = OnceRuleCount::new(self.slot_states.len());
+        self.slot_states
+            .get_mut(slot.index())
+            .ok_or_else(|| RuleRuntimeStateError::once_slot_out_of_range(slot.index(), slot_count))
+    }
+
+    /// Builds an out-of-range slot error for this run-local table.
+    fn slot_error(&self, slot: OnceRuleSlot) -> RuleRuntimeStateError {
+        RuleRuntimeStateError::once_slot_out_of_range(
+            slot.index(),
+            OnceRuleCount::new(self.slot_states.len()),
+        )
     }
 }
 
@@ -216,9 +251,9 @@ impl<'program, 'once> RuntimeRule<'program, 'once> {
             RuntimeRuleAvailability::Always => {
                 OnceRuleReadiness::Available(OnceRuleCommitSeed::Always)
             }
-            RuntimeRuleAvailability::Once { table, slot } => match table.slot_state(slot) {
+            RuntimeRuleAvailability::Once { slot_state } => match *slot_state {
                 OnceSlotState::Fresh => {
-                    OnceRuleReadiness::Available(OnceRuleCommitSeed::Once { table, slot })
+                    OnceRuleReadiness::Available(OnceRuleCommitSeed::Once { slot_state })
                 }
                 OnceSlotState::Committed => OnceRuleReadiness::Consumed,
             },
@@ -231,19 +266,28 @@ impl<'once> OnceRuleCommitSeed<'once> {
     pub(super) fn into_matched_commit(self) -> MatchedRuleCommit<'once> {
         match self {
             Self::Always => MatchedRuleCommit::Always,
-            Self::Once { table, slot } => {
-                MatchedRuleCommit::Once(OnceMatchPermit::new(table, slot))
-            }
+            Self::Once { slot_state } => MatchedRuleCommit::Once(OnceMatchPermit::new(slot_state)),
         }
     }
 }
 
 impl ScannedRuleCommit {
     /// Mints the linear commit action for this already selected rule.
-    pub(super) fn into_matched_commit(self, table: &mut OnceStateSet) -> MatchedRuleCommit<'_> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `RuleRuntimeStateError` if this scanned commit was paired with a
+    /// different program's run-local once-state table.
+    pub(super) fn into_matched_commit(
+        self,
+        table: &mut OnceStateSet,
+    ) -> Result<MatchedRuleCommit<'_>, RuleRuntimeStateError> {
         match self {
-            Self::Always => MatchedRuleCommit::Always,
-            Self::Once(slot) => MatchedRuleCommit::Once(OnceMatchPermit::new(table, slot)),
+            Self::Always => Ok(MatchedRuleCommit::Always),
+            Self::Once(slot) => {
+                let slot_state = table.slot_state_mut(slot)?;
+                Ok(MatchedRuleCommit::Once(OnceMatchPermit::new(slot_state)))
+            }
         }
     }
 }
@@ -252,10 +296,9 @@ impl OnceMatchPermit<'_> {
     /// Consumes this permit and marks the owning once-rule state as consumed.
     fn commit(self) {
         let Self {
-            table,
-            slot,
+            slot_state,
             linearity: _linearity,
         } = self;
-        table.commit_slot(slot);
+        *slot_state = OnceSlotState::Committed;
     }
 }

@@ -1,3 +1,4 @@
+use crate::bytes::RuntimeStateByteCount;
 use crate::error::{
     OwnedRuleAttemptStepError, OwnedRunStepError, RuleAttemptStepError, RunError, RunFinishError,
     RunStartError, RunStepError, TracedRunError,
@@ -10,9 +11,10 @@ use crate::program::{
     Program, ReturnOutput, RuleAttemptTargetSelection, RuleCursor, RuleCursorAfterMiss, RunResult,
 };
 use crate::runtime::action::{AppliedRule, PreparedRuleApplication, prepare_matched_rule};
-use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
+use crate::runtime::budget::{RuleAttemptBudgetState, RuleAttemptReservation, RuntimeBudgetState};
 use crate::runtime::matcher::{
-    RuleAttempt, RuleSearch, attempt_rule, find_next_match, runtime_rule_for_target,
+    MatchedRuleApplication, RuleAttempt, RuleSearch, attempt_rule, find_next_match,
+    runtime_rule_for_target,
 };
 use crate::runtime::once::OnceStateSet;
 use crate::runtime::rewrite::RewriteScratch;
@@ -54,22 +56,14 @@ pub(super) struct AttemptSession<P, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     pub(super) attempt_budget: RuleAttemptBudgetState<A>,
 }
 
-/// Mutable rule-attempt state needed to consume one executable rule line.
-struct RuleAttemptContext<
-    'attempt,
-    'program,
-    P: ParsePolicy,
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-> {
-    /// Parsed program that owns the rule selected by the cursor.
-    program: &'program Program<P>,
-    /// Mutable runtime state observed by the attempted rule.
-    core: &'attempt mut RunCore<E>,
-    /// Next executable rule line to evaluate.
-    cursor: &'attempt mut RuleCursor,
+/// Terminal rule-attempt state after the cursor can no longer resume.
+pub(super) struct TerminalAttemptSession<P, E: ExecutionPolicy, A: RuleAttemptPolicy> {
+    /// Borrowed or owned parsed program.
+    pub(super) program: P,
+    /// Mutable execution state retained for terminal observation.
+    pub(super) core: RunCore<E>,
     /// Rule-attempt budget and consumed-attempt count.
-    attempt_budget: &'attempt mut RuleAttemptBudgetState<A>,
+    pub(super) attempt_budget: RuleAttemptBudgetState<A>,
 }
 
 /// Rule application after the public witness has been created but before runtime side effects commit.
@@ -138,21 +132,46 @@ pub(super) enum CoreAppliedRule<RuleWitness> {
     },
 }
 
-/// Internal non-error result of one rule-attempt step.
-pub(super) enum CoreRuleAttempt<RuleWitness> {
-    /// A rule line was consumed without applying.
+/// Program-bound result of consuming one rule-attempt session step.
+pub(super) enum CoreRuleAttemptStep<
+    P,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+    RuleWitness,
+    StepError,
+> {
+    /// A non-applying rule line was consumed and the run can continue.
     Missed {
         /// Rule-attempt count committed by this transition.
         attempt: RuleAttemptCount,
         /// Non-applying rule information.
         miss: RuleMiss<RuleWitness>,
+        /// Continuation session with the returned next cursor.
+        continuation: AttemptSession<P, E, A>,
     },
-    /// A rule committed and may have terminal side effects.
+    /// A rewrite committed and the rule-attempt run can continue.
     Applied {
         /// Rule-attempt count committed by this transition.
         attempt: RuleAttemptCount,
-        /// Applied rule effect.
-        applied: CoreAppliedRule<RuleWitness>,
+        /// Committed rewrite step count.
+        step: StepCount,
+        /// Rule witness paired with the committed rewrite.
+        rule: RuleWitness,
+        /// Continuation session with a fresh cursor.
+        continuation: AttemptSession<P, E, A>,
+    },
+    /// A return rule committed and the run is terminal.
+    Returned {
+        /// Rule-attempt count committed by this transition.
+        attempt: RuleAttemptCount,
+        /// Committed return step count.
+        step: StepCount,
+        /// Rule witness paired with the committed return.
+        rule: RuleWitness,
+        /// Materialized return output.
+        output: ReturnOutput,
+        /// Terminal session with no resumable cursor.
+        terminal: TerminalAttemptSession<P, E, A>,
     },
     /// No rule in the current pass matched the current runtime state.
     Stable {
@@ -162,6 +181,15 @@ pub(super) enum CoreRuleAttempt<RuleWitness> {
         steps: StepCount,
         /// Why the rule-attempt pass reached stability.
         stable_reason: RuleAttemptStableReason<RuleWitness>,
+        /// Terminal session with no resumable cursor.
+        terminal: TerminalAttemptSession<P, E, A>,
+    },
+    /// A candidate attempt failed before committing runtime state.
+    Failed {
+        /// Error that prevented commit.
+        error: StepError,
+        /// Terminal session preserving the uncommitted state.
+        terminal: TerminalAttemptSession<P, E, A>,
     },
 }
 
@@ -268,7 +296,6 @@ impl<E: ExecutionPolicy> RunCore<E> {
             .map_err(RunFinishError::FinalOutput)?;
         Ok(RunResult::stable(output, steps))
     }
-
 }
 
 impl<P: ProgramOwner, E: ExecutionPolicy> Session<P, E> {
@@ -297,13 +324,49 @@ impl<P: ProgramOwner, E: ExecutionPolicy> Session<P, E> {
         self.core.state()
     }
 
+    /// Advances this program-bound runtime state against its own parsed program.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunStepError` if applying the matched rule exceeds limits or allocation fails.
+    fn step_runtime(&mut self) -> Result<RuntimeStep<'_>, RunStepError> {
+        let program = self.program.program();
+        let matched = match find_next_match(
+            program.rule_scan(),
+            &mut self.core.once_states,
+            &self.core.state,
+        )? {
+            RuleSearch::Matched(matched) => matched,
+            RuleSearch::Stable => {
+                return Ok(RuntimeStep::Stable(self.core.budget.completed_steps()));
+            }
+        };
+
+        let state_len = self.core.state.byte_count();
+        let prepared = prepare_matched_rule(
+            &mut self.core.scratch,
+            &mut self.core.budget,
+            state_len,
+            matched,
+        )?;
+        let applied = prepared.commit(&mut self.core.state, &mut self.core.scratch);
+        Ok(RuntimeStep::Applied(applied))
+    }
+
     /// Advances this run by exactly one matching rule when possible.
     ///
     /// # Errors
     ///
     /// Returns `RunStepError` if rule matching or rule application fails.
     pub(super) fn step(&mut self) -> Result<CoreStep<()>, RunStepError> {
-        self.core.step(self.program.program())
+        let applied = match self.step_runtime()? {
+            RuntimeStep::Applied(applied) => applied,
+            RuntimeStep::Stable(steps) => return Ok(CoreStep::Stable(steps)),
+        };
+        Ok(CoreStep::Applied(CoreAppliedRule::from_applied_rule(
+            applied,
+            (),
+        )))
     }
 
     /// Runs this session to completion.
@@ -332,7 +395,7 @@ impl<P: ProgramOwner, E: ExecutionPolicy, A: RuleAttemptPolicy> AttemptSession<P
     ///
     /// Returns `RunStartError` if allocating per-run rule state fails.
     pub(super) fn new(program: P, admitted: AdmittedRun<E>) -> Result<Self, RunStartError> {
-        let cursor = program.program().rule_attempt_cursor();
+        let cursor = RuleCursor::first();
         let core = RunCore::new(program.program(), admitted)?;
         Ok(Self {
             program,
@@ -363,14 +426,232 @@ impl<P: ProgramOwner, E: ExecutionPolicy, A: RuleAttemptPolicy> AttemptSession<P
     }
 }
 
+/// Builds terminal rule-attempt state after the cursor has no valid continuation.
+fn terminal_rule_attempt_session<P, E, A>(
+    program: P,
+    core: RunCore<E>,
+    attempt_budget: RuleAttemptBudgetState<A>,
+) -> TerminalAttemptSession<P, E, A>
+where
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+{
+    TerminalAttemptSession {
+        program,
+        core,
+        attempt_budget,
+    }
+}
+
+/// Builds a resumable rule-attempt session from transition parts.
+fn continuing_rule_attempt_session<P, E, A>(
+    program: P,
+    core: RunCore<E>,
+    cursor: RuleCursor,
+    attempt_budget: RuleAttemptBudgetState<A>,
+) -> AttemptSession<P, E, A>
+where
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+{
+    AttemptSession {
+        program,
+        core,
+        cursor,
+        attempt_budget,
+    }
+}
+
+/// Reports stability when a cursor cannot select any executable rule.
+fn no_executable_rule_attempt<P, E, A, RuleWitness, StepError>(
+    program: P,
+    core: RunCore<E>,
+    attempt_budget: RuleAttemptBudgetState<A>,
+) -> CoreRuleAttemptStep<P, E, A, RuleWitness, StepError>
+where
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+{
+    let attempts = attempt_budget.completed_attempts();
+    let steps = core.completed_steps();
+    let terminal = terminal_rule_attempt_session(program, core, attempt_budget);
+    CoreRuleAttemptStep::Stable {
+        attempts,
+        steps,
+        stable_reason: RuleAttemptStableReason::NoExecutableRules,
+        terminal,
+    }
+}
+
+/// Reports a rule-attempt failure with the uncommitted runtime state.
+fn failed_rule_attempt<P, E, A, RuleWitness, StepError>(
+    program: P,
+    core: RunCore<E>,
+    attempt_budget: RuleAttemptBudgetState<A>,
+    error: StepError,
+) -> CoreRuleAttemptStep<P, E, A, RuleWitness, StepError>
+where
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+{
+    let terminal = terminal_rule_attempt_session(program, core, attempt_budget);
+    CoreRuleAttemptStep::Failed { error, terminal }
+}
+
+/// Commits a non-applying rule attempt and returns the next typed state.
+fn committed_rule_miss<P, E, A, RuleWitness, StepError>(
+    program: P,
+    core: RunCore<E>,
+    attempt_budget: RuleAttemptBudgetState<A>,
+    attempt: RuleAttemptCount,
+    after_miss: RuleCursorAfterMiss,
+    miss: RuleMiss<RuleWitness>,
+) -> CoreRuleAttemptStep<P, E, A, RuleWitness, StepError>
+where
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+{
+    match after_miss {
+        RuleCursorAfterMiss::Stable => {
+            let attempts = attempt_budget.completed_attempts();
+            let steps = core.completed_steps();
+            let terminal = terminal_rule_attempt_session(program, core, attempt_budget);
+            CoreRuleAttemptStep::Stable {
+                attempts,
+                steps,
+                stable_reason: RuleAttemptStableReason::FinalMiss(miss),
+                terminal,
+            }
+        }
+        RuleCursorAfterMiss::Advanced(cursor) => CoreRuleAttemptStep::Missed {
+            attempt,
+            miss,
+            continuation: continuing_rule_attempt_session(program, core, cursor, attempt_budget),
+        },
+    }
+}
+
+/// Projects a committed rule application into the next rule-attempt state.
+fn committed_rule_attempt_application<P, E, A, RuleWitness, StepError>(
+    program: P,
+    core: RunCore<E>,
+    attempt_budget: RuleAttemptBudgetState<A>,
+    attempt: RuleAttemptCount,
+    applied: CoreAppliedRule<RuleWitness>,
+) -> CoreRuleAttemptStep<P, E, A, RuleWitness, StepError>
+where
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+{
+    match applied {
+        CoreAppliedRule::Rewrite { step, rule } => CoreRuleAttemptStep::Applied {
+            attempt,
+            step,
+            rule,
+            continuation: continuing_rule_attempt_session(
+                program,
+                core,
+                RuleCursor::first(),
+                attempt_budget,
+            ),
+        },
+        CoreAppliedRule::Return { step, rule, output } => {
+            let terminal = terminal_rule_attempt_session(program, core, attempt_budget);
+            CoreRuleAttemptStep::Returned {
+                attempt,
+                step,
+                rule,
+                output,
+                terminal,
+            }
+        }
+    }
+}
+
+/// Prepares a matched rule-attempt application and commits its consumed-attempt count.
+///
+/// # Errors
+///
+/// Returns `Error` if step preparation or rule-witness materialization fails.
+fn prepare_witnessed_rule_attempt<'program, 'once, 'budget, E, A, RuleWitness, Error>(
+    scratch: &mut RewriteScratch,
+    budget: &'budget mut RuntimeBudgetState<E>,
+    state_len: RuntimeStateByteCount,
+    attempt_reservation: RuleAttemptReservation<'_, A>,
+    matched: MatchedRuleApplication<'program, '_, 'once>,
+    make_witness: impl FnOnce(RuleView<'program>) -> Result<RuleWitness, Error>,
+) -> Result<
+    (
+        RuleAttemptCount,
+        WitnessedApplication<'program, 'once, 'budget, E, RuleWitness>,
+    ),
+    Error,
+>
+where
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+    Error: From<RunStepError>,
+{
+    let prepared = prepare_matched_rule(scratch, budget, state_len, matched)?;
+    let witnessed = WitnessedApplication::new(prepared, make_witness)?;
+    let attempt = attempt_reservation.commit();
+    Ok((attempt, witnessed))
+}
+
 impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<BorrowedProgram<'program, P>, E> {
+    /// Advances this borrowed program-bound runtime state without materializing a rule witness.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunStepError` if applying the matched rule exceeds limits or allocation fails.
+    fn step_runtime_borrowed(&mut self) -> Result<RuntimeStep<'program>, RunStepError> {
+        let program = self.program.program;
+        let matched = match find_next_match(
+            program.rule_scan(),
+            &mut self.core.once_states,
+            &self.core.state,
+        )? {
+            RuleSearch::Matched(matched) => matched,
+            RuleSearch::Stable => {
+                return Ok(RuntimeStep::Stable(self.core.budget.completed_steps()));
+            }
+        };
+
+        let state_len = self.core.state.byte_count();
+        let prepared = prepare_matched_rule(
+            &mut self.core.scratch,
+            &mut self.core.budget,
+            state_len,
+            matched,
+        )?;
+        let applied = prepared.commit(&mut self.core.state, &mut self.core.scratch);
+        Ok(RuntimeStep::Applied(applied))
+    }
+
     /// Advances this run by one matching rule with borrowed rule witnesses.
     ///
     /// # Errors
     ///
     /// Returns `RunStepError` if matching, preparation, or application fails.
     pub(super) fn step_borrowed(&mut self) -> Result<CoreStep<RuleView<'program>>, RunStepError> {
-        step_with_witness(&mut self.core, self.program.program, Ok)
+        let matched = match find_next_match(
+            self.program.program.rule_scan(),
+            &mut self.core.once_states,
+            &self.core.state,
+        )? {
+            RuleSearch::Matched(matched) => matched,
+            RuleSearch::Stable => return Ok(CoreStep::Stable(self.core.budget.completed_steps())),
+        };
+        let state_len = self.core.state.byte_count();
+        let prepared = prepare_matched_rule(
+            &mut self.core.scratch,
+            &mut self.core.budget,
+            state_len,
+            matched,
+        )?;
+        let witnessed = WitnessedApplication::new(prepared, Ok::<_, RunStepError>)?;
+        let applied = witnessed.commit(&mut self.core.state, &mut self.core.scratch);
+        Ok(CoreStep::Applied(applied))
     }
 }
 
@@ -382,9 +663,26 @@ impl<P: ParsePolicy, E: ExecutionPolicy> Session<OwnedProgram<P>, E> {
     /// Returns `OwnedRunStepError` if matching, preparation, witness materialization,
     /// or application fails.
     pub(super) fn step_owned(&mut self) -> Result<CoreStep<OwnedRuleWitness>, OwnedRunStepError> {
-        step_with_witness(&mut self.core, &self.program.program, |rule| {
+        let matched = match find_next_match(
+            self.program.program.rule_scan(),
+            &mut self.core.once_states,
+            &self.core.state,
+        )? {
+            RuleSearch::Matched(matched) => matched,
+            RuleSearch::Stable => return Ok(CoreStep::Stable(self.core.budget.completed_steps())),
+        };
+        let state_len = self.core.state.byte_count();
+        let prepared = prepare_matched_rule(
+            &mut self.core.scratch,
+            &mut self.core.budget,
+            state_len,
+            matched,
+        )?;
+        let witnessed = WitnessedApplication::new(prepared, |rule| {
             OwnedRuleWitness::from_rule_view(rule).map_err(OwnedRunStepError::RuleWitnessAllocation)
-        })
+        })?;
+        let applied = witnessed.commit(&mut self.core.state, &mut self.core.scratch);
+        Ok(CoreStep::Applied(applied))
     }
 }
 
@@ -398,15 +696,68 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
     /// Returns `RuleAttemptStepError` if rule-attempt matching, preparation, or application
     /// fails.
     pub(super) fn step_borrowed(
-        &mut self,
-    ) -> Result<CoreRuleAttempt<RuleView<'program>>, RuleAttemptStepError> {
-        let mut context = RuleAttemptContext {
-            program: self.program.program,
-            core: &mut self.core,
-            cursor: &mut self.cursor,
-            attempt_budget: &mut self.attempt_budget,
+        self,
+    ) -> CoreRuleAttemptStep<
+        BorrowedProgram<'program, P>,
+        E,
+        A,
+        RuleView<'program>,
+        RuleAttemptStepError,
+    > {
+        let Self {
+            program,
+            mut core,
+            cursor,
+            mut attempt_budget,
+        } = self;
+
+        let target = match program.program.select_attempt_target(&cursor) {
+            RuleAttemptTargetSelection::Target(target) => target,
+            RuleAttemptTargetSelection::NoExecutableRules => {
+                return no_executable_rule_attempt(program, core, attempt_budget);
+            }
         };
-        attempt_current_rule_with_witness(&mut context, Ok)
+        let (after_miss, target) = target.into_parts();
+        let runtime_rule = match runtime_rule_for_target(&mut core.once_states, target) {
+            Ok(runtime_rule) => runtime_rule,
+            Err(error) => {
+                return failed_rule_attempt(program, core, attempt_budget, error.into());
+            }
+        };
+
+        let reservation = match attempt_budget.reserve_next_attempt(core.state.byte_count()) {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                return failed_rule_attempt(program, core, attempt_budget, error);
+            }
+        };
+        let attempted = attempt_rule(runtime_rule, &core.state);
+
+        match attempted {
+            RuleAttempt::Missed(missed) => {
+                let miss = RuleMiss::new(RuleView::new(missed.rule()), missed.reason());
+                let attempt = reservation.commit();
+                committed_rule_miss(program, core, attempt_budget, attempt, after_miss, miss)
+            }
+            RuleAttempt::Matched(matched) => {
+                let state_len = core.state.byte_count();
+                let (attempt, witnessed) = match prepare_witnessed_rule_attempt(
+                    &mut core.scratch,
+                    &mut core.budget,
+                    state_len,
+                    reservation,
+                    matched,
+                    Ok,
+                ) {
+                    Ok(committed) => committed,
+                    Err(error) => {
+                        return failed_rule_attempt(program, core, attempt_budget, error);
+                    }
+                };
+                let applied = witnessed.commit(&mut core.state, &mut core.scratch);
+                committed_rule_attempt_application(program, core, attempt_budget, attempt, applied)
+            }
+        }
     }
 }
 
@@ -420,136 +771,75 @@ impl<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
     /// Returns `OwnedRuleAttemptStepError` if rule-attempt matching, preparation, witness
     /// materialization, or application fails.
     pub(super) fn step_owned(
-        &mut self,
-    ) -> Result<CoreRuleAttempt<OwnedRuleWitness>, OwnedRuleAttemptStepError> {
-        let mut context = RuleAttemptContext {
-            program: &self.program.program,
-            core: &mut self.core,
-            cursor: &mut self.cursor,
-            attempt_budget: &mut self.attempt_budget,
-        };
-        attempt_current_rule_with_witness(&mut context, |rule| {
-            OwnedRuleWitness::from_rule_view(rule)
-                .map_err(OwnedRuleAttemptStepError::RuleWitnessAllocation)
-        })
-    }
-}
+        self,
+    ) -> CoreRuleAttemptStep<OwnedProgram<P>, E, A, OwnedRuleWitness, OwnedRuleAttemptStepError>
+    {
+        let Self {
+            program,
+            mut core,
+            cursor,
+            mut attempt_budget,
+        } = self;
 
-/// Advances the current run using the supplied rule-witness boundary.
-///
-/// # Errors
-///
-/// Returns `Error` if matching, rule preparation, rule-witness materialization,
-/// or rule application fails.
-fn step_with_witness<'program, P: ParsePolicy, E: ExecutionPolicy, RuleWitness, Error>(
-    core: &mut RunCore<E>,
-    program: &'program Program<P>,
-    make_witness: impl FnOnce(RuleView<'program>) -> Result<RuleWitness, Error>,
-) -> Result<CoreStep<RuleWitness>, Error>
-where
-    Error: From<RunStepError>,
-{
-    let matched = match find_next_match(program.rule_scan(), &mut core.once_states, &core.state) {
-        RuleSearch::Matched(matched) => matched,
-        RuleSearch::Stable => return Ok(CoreStep::Stable(core.budget.completed_steps())),
-    };
-    let state_len = core.state.byte_count();
-    let prepared = prepare_matched_rule(&mut core.scratch, &mut core.budget, state_len, matched)?;
-    let witnessed = WitnessedApplication::new(prepared, make_witness)?;
-    let applied = witnessed.commit(&mut core.state, &mut core.scratch);
-    Ok(CoreStep::Applied(applied))
-}
-
-/// Evaluates the current cursor against a parsed program.
-///
-/// # Errors
-///
-/// Returns `Error` if rule-attempt, rule matching, or rule application
-/// fails.
-fn attempt_current_rule_with_witness<
-    'program,
-    P: ParsePolicy,
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-    RuleWitness,
-    Error,
->(
-    context: &mut RuleAttemptContext<'_, 'program, P, E, A>,
-    make_witness: impl FnOnce(RuleView<'program>) -> Result<RuleWitness, Error>,
-) -> Result<CoreRuleAttempt<RuleWitness>, Error>
-where
-    Error: From<RuleAttemptStepError> + From<RunStepError>,
-{
-    let target = match context.program.select_attempt_target(*context.cursor) {
-        RuleAttemptTargetSelection::Target(target) => target,
-        RuleAttemptTargetSelection::NoExecutableRules => return Ok(no_executable_rules(context)),
-    };
-    let (after_miss, target) = target.into_parts();
-    let runtime_rule = runtime_rule_for_target(&mut context.core.once_states, target);
-
-    let reservation = context
-        .attempt_budget
-        .reserve_next_attempt(context.core.state.byte_count())?;
-    let attempted = attempt_rule(runtime_rule, &context.core.state);
-
-    match attempted {
-        RuleAttempt::Missed(missed) => {
-            let witness = make_witness(RuleView::new(missed.rule()))?;
-            let attempt = reservation.commit();
-            Ok(commit_miss(MissCommit {
-                cursor: &mut *context.cursor,
-                attempt_budget: &*context.attempt_budget,
-                core: &*context.core,
-                attempt,
-                after_miss,
-                miss: RuleMiss::new(witness, missed.reason()),
-            }))
-        }
-        RuleAttempt::Matched(matched) => {
-            let state_len = context.core.state.byte_count();
-            let prepared = prepare_matched_rule(
-                &mut context.core.scratch,
-                &mut context.core.budget,
-                state_len,
-                matched,
-            )?;
-            let witnessed = WitnessedApplication::new(prepared, make_witness)?;
-            let attempt = reservation.commit();
-            let applied = witnessed.commit(&mut context.core.state, &mut context.core.scratch);
-            if matches!(applied, CoreAppliedRule::Rewrite { .. }) {
-                *context.cursor = RuleCursor::first();
+        let target = match program.program.select_attempt_target(&cursor) {
+            RuleAttemptTargetSelection::Target(target) => target,
+            RuleAttemptTargetSelection::NoExecutableRules => {
+                return no_executable_rule_attempt(program, core, attempt_budget);
             }
-            Ok(CoreRuleAttempt::Applied { attempt, applied })
-        }
-    }
-}
+        };
+        let (after_miss, target) = target.into_parts();
+        let runtime_rule = match runtime_rule_for_target(&mut core.once_states, target) {
+            Ok(runtime_rule) => runtime_rule,
+            Err(error) => {
+                return failed_rule_attempt(program, core, attempt_budget, error.into());
+            }
+        };
 
-/// Materializes a stable rule-attempt result when the cursor has no executable target.
-fn no_executable_rules<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy, RuleWitness>(
-    context: &RuleAttemptContext<'_, '_, P, E, A>,
-) -> CoreRuleAttempt<RuleWitness> {
-    CoreRuleAttempt::Stable {
-        attempts: context.attempt_budget.completed_attempts(),
-        steps: context.core.completed_steps(),
-        stable_reason: RuleAttemptStableReason::NoExecutableRules,
-    }
-}
+        let reservation = match attempt_budget.reserve_next_attempt(core.state.byte_count()) {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                return failed_rule_attempt(program, core, attempt_budget, error.into());
+            }
+        };
+        let attempted = attempt_rule(runtime_rule, &core.state);
 
-/// Commits a non-applying rule attempt and decides whether the run is stable.
-fn commit_miss<E: ExecutionPolicy, A: RuleAttemptPolicy, RuleWitness>(
-    context: MissCommit<'_, E, A, RuleWitness>,
-) -> CoreRuleAttempt<RuleWitness> {
-    match context.after_miss {
-        RuleCursorAfterMiss::Stable => CoreRuleAttempt::Stable {
-            attempts: context.attempt_budget.completed_attempts(),
-            steps: context.core.completed_steps(),
-            stable_reason: RuleAttemptStableReason::FinalMiss(context.miss),
-        },
-        RuleCursorAfterMiss::Advanced(cursor) => {
-            *context.cursor = cursor;
-            CoreRuleAttempt::Missed {
-                attempt: context.attempt,
-                miss: context.miss,
+        match attempted {
+            RuleAttempt::Missed(missed) => {
+                let witness = match OwnedRuleWitness::from_rule_view(RuleView::new(missed.rule())) {
+                    Ok(witness) => witness,
+                    Err(error) => {
+                        return failed_rule_attempt(
+                            program,
+                            core,
+                            attempt_budget,
+                            OwnedRuleAttemptStepError::RuleWitnessAllocation(error),
+                        );
+                    }
+                };
+                let miss = RuleMiss::new(witness, missed.reason());
+                let attempt = reservation.commit();
+                committed_rule_miss(program, core, attempt_budget, attempt, after_miss, miss)
+            }
+            RuleAttempt::Matched(matched) => {
+                let state_len = core.state.byte_count();
+                let (attempt, witnessed) = match prepare_witnessed_rule_attempt(
+                    &mut core.scratch,
+                    &mut core.budget,
+                    state_len,
+                    reservation,
+                    matched,
+                    |rule| {
+                        OwnedRuleWitness::from_rule_view(rule)
+                            .map_err(OwnedRuleAttemptStepError::RuleWitnessAllocation)
+                    },
+                ) {
+                    Ok(committed) => committed,
+                    Err(error) => {
+                        return failed_rule_attempt(program, core, attempt_budget, error);
+                    }
+                };
+                let applied = witnessed.commit(&mut core.state, &mut core.scratch);
+                committed_rule_attempt_application(program, core, attempt_budget, attempt, applied)
             }
         }
     }
@@ -576,8 +866,7 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<BorrowedProgram<'prog
 
         loop {
             match self
-                .core
-                .step_runtime(self.program.program)
+                .step_runtime_borrowed()
                 .map_err(RunFinishError::from)
                 .map_err(RunError::from)
                 .map_err(TracedRunError::Run)?

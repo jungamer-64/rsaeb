@@ -189,7 +189,7 @@ pub(crate) fn prepare_matched_rule<'program, 'once, 'budget, E: ExecutionPolicy>
         ParsedRuleAction::Return(output) => {
             let output_view = ReturnOutputView::new(output);
             let output_len = ReturnOutputByteCount::from_payload_count(output.byte_count());
-            step.ensure_return_len(output_len)?;
+            RuntimeBudgetState::<E>::ensure_return_len(output_len)?;
             let materialized_output = materialize_return_output(output_view)?;
 
             Ok(PreparedRuleApplication::Return(PreparedReturnRule {

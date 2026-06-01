@@ -176,15 +176,10 @@ impl<P: ParsePolicy> Program<P> {
         request.trace(self, admitted)
     }
 
-    /// Starts a rule-attempt cursor minted from this parsed rule table.
-    pub(crate) fn rule_attempt_cursor(&self) -> RuleCursor {
-        self.rule_set.rule_attempt_cursor()
-    }
-
     /// Selects the next checked rule-attempt target.
     pub(crate) fn select_attempt_target(
         &self,
-        cursor: RuleCursor,
+        cursor: &RuleCursor,
     ) -> RuleAttemptTargetSelection<'_> {
         self.rule_set.select_attempt_target(cursor)
     }

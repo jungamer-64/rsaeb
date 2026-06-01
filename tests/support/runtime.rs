@@ -6,7 +6,6 @@
 use core::marker::PhantomData;
 
 use rsaeb::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
-use rsaeb::limits::{ReturnByteLimit, RuntimeInputByteLimit, RuntimeStateByteLimit, StepLimit};
 use rsaeb::policy::{
     DefaultExecutionPolicy, DefaultRuntimeInputPolicy, ExecutionPolicy, RuntimeInputPolicy,
     StaticExecutionPolicy, StaticRuntimeInputPolicy,
@@ -61,26 +60,6 @@ impl<I: RuntimeInputPolicy, E: ExecutionPolicy> TestRunPolicy<I, E> {
         Self {
             policy: PhantomData,
         }
-    }
-
-    #[must_use]
-    pub const fn input_limit(self) -> RuntimeInputByteLimit {
-        I::INPUT_BYTE_LIMIT
-    }
-
-    #[must_use]
-    pub const fn step_limit(self) -> StepLimit {
-        E::STEP_LIMIT
-    }
-
-    #[must_use]
-    pub const fn state_limit(self) -> RuntimeStateByteLimit {
-        E::STATE_BYTE_LIMIT
-    }
-
-    #[must_use]
-    pub const fn return_limit(self) -> ReturnByteLimit {
-        E::RETURN_BYTE_LIMIT
     }
 }
 

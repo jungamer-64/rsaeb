@@ -5,6 +5,7 @@ use crate::bytes::{
     NonAsciiInputByte, PayloadByteCount, ReturnOutputByteCount, RuntimeInputByteCount,
     RuntimeStateByteCount,
 };
+use crate::inspect::OnceRuleCount;
 use crate::limits::{
     ReturnByteLimit, RuleAttemptCount, RuleAttemptLimit, RuntimeInputByteLimit,
     RuntimeStateByteLimit, StepCount, StepLimit,
@@ -79,6 +80,8 @@ pub enum RunStepError {
     ReturnOutputLimit(ReturnOutputLimitError),
     /// The candidate step would exceed the step limit.
     StepLimit(StepLimitError),
+    /// Program-bound runtime rule state contradicted the parsed rule table.
+    RuleRuntimeState(RuleRuntimeStateError),
 }
 
 impl Error for RunStepError {
@@ -89,6 +92,7 @@ impl Error for RunStepError {
             Self::RuntimeStateLimit(error) => Some(error),
             Self::ReturnOutputLimit(error) => Some(error),
             Self::StepLimit(error) => Some(error),
+            Self::RuleRuntimeState(error) => Some(error),
         }
     }
 }
@@ -123,6 +127,52 @@ impl From<StepLimitError> for RunStepError {
     }
 }
 
+impl From<RuleRuntimeStateError> for RunStepError {
+    fn from(value: RuleRuntimeStateError) -> Self {
+        Self::RuleRuntimeState(value)
+    }
+}
+
+/// Internal runtime rule-state provenance error.
+///
+/// Program-bound runtime sessions construct per-run `(once)` state from the
+/// same parsed program that supplies once slots. This error reports a broken
+/// internal provenance path instead of treating the slot as consumed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleRuntimeStateError {
+    /// Parser-assigned once-slot index requested by a rule.
+    slot_index: usize,
+    /// Number of once slots allocated for the run.
+    slot_count: OnceRuleCount,
+}
+
+impl RuleRuntimeStateError {
+    /// Builds an out-of-range once-slot error.
+    pub(crate) const fn once_slot_out_of_range(
+        slot_index: usize,
+        slot_count: OnceRuleCount,
+    ) -> Self {
+        Self {
+            slot_index,
+            slot_count,
+        }
+    }
+
+    /// Parser-assigned once-slot index requested by a rule.
+    #[must_use]
+    pub const fn slot_index(&self) -> usize {
+        self.slot_index
+    }
+
+    /// Number of once slots allocated for the run.
+    #[must_use]
+    pub const fn slot_count(&self) -> OnceRuleCount {
+        self.slot_count
+    }
+}
+
+impl Error for RuleRuntimeStateError {}
+
 /// Error while advancing an owned ordinary step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OwnedRunStepError {
@@ -147,6 +197,12 @@ impl From<RunStepError> for OwnedRunStepError {
     }
 }
 
+impl From<RuleRuntimeStateError> for OwnedRunStepError {
+    fn from(value: RuleRuntimeStateError) -> Self {
+        Self::Step(value.into())
+    }
+}
+
 /// Error while advancing one rule-attempt step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuleAttemptStepError {
@@ -168,6 +224,12 @@ impl Error for RuleAttemptStepError {
 impl From<RunStepError> for RuleAttemptStepError {
     fn from(value: RunStepError) -> Self {
         Self::Step(value)
+    }
+}
+
+impl From<RuleRuntimeStateError> for RuleAttemptStepError {
+    fn from(value: RuleRuntimeStateError) -> Self {
+        Self::Step(value.into())
     }
 }
 
@@ -204,6 +266,12 @@ impl From<RuleAttemptStepError> for OwnedRuleAttemptStepError {
 impl From<RunStepError> for OwnedRuleAttemptStepError {
     fn from(value: RunStepError) -> Self {
         Self::Attempt(RuleAttemptStepError::Step(value))
+    }
+}
+
+impl From<RuleRuntimeStateError> for OwnedRuleAttemptStepError {
+    fn from(value: RuleRuntimeStateError) -> Self {
+        Self::Attempt(value.into())
     }
 }
 

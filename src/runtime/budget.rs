@@ -64,7 +64,6 @@ impl<E: ExecutionPolicy> RuntimeBudgetState<E> {
     /// Returns `RunStepError` if the rewritten state would exceed the configured
     /// runtime state limit.
     pub(crate) fn ensure_rewrite_state_len(
-        &self,
         attempted_len: RuntimeStateByteCount,
     ) -> Result<(), RunStepError> {
         let limit = E::STATE_BYTE_LIMIT;
@@ -82,7 +81,6 @@ impl<E: ExecutionPolicy> RuntimeBudgetState<E> {
     /// Returns `RunStepError` if the return payload exceeds the configured return
     /// output limit.
     pub(crate) fn ensure_return_len(
-        &self,
         attempted_len: ReturnOutputByteCount,
     ) -> Result<(), RunStepError> {
         let limit = E::RETURN_BYTE_LIMIT;
@@ -114,32 +112,6 @@ impl<E: ExecutionPolicy> RuntimeBudgetState<E> {
 }
 
 impl<E: ExecutionPolicy> StepReservation<'_, E> {
-    /// Checks a candidate rewrite state against runtime state limits.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunStepError` if the rewritten state would exceed the configured
-    /// runtime state limit.
-    pub(crate) fn ensure_rewrite_state_len(
-        &self,
-        attempted_len: RuntimeStateByteCount,
-    ) -> Result<(), RunStepError> {
-        self.budget.ensure_rewrite_state_len(attempted_len)
-    }
-
-    /// Checks a `(return)` payload against return-output limits.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunStepError` if the return payload exceeds the configured return
-    /// output limit.
-    pub(crate) fn ensure_return_len(
-        &self,
-        attempted_len: ReturnOutputByteCount,
-    ) -> Result<(), RunStepError> {
-        self.budget.ensure_return_len(attempted_len)
-    }
-
     /// Publishes the reserved step count.
     pub(crate) fn commit(self) -> StepCount {
         self.budget.completed_steps = self.next_step;

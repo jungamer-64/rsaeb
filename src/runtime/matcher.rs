@@ -2,6 +2,7 @@ use super::once::{
     MatchedRuleCommit, OnceRuleReadiness, OnceStateSet, RuntimeRule, ScannedRuleReadiness,
 };
 use super::state::{State, StateMatch};
+use crate::error::RuleRuntimeStateError;
 use crate::program::{RuleScan, RuleTarget};
 use crate::rule::{Rule, RuleAnchorSyntax};
 
@@ -165,25 +166,30 @@ impl<'program> CommittedRule<'program> {
 }
 
 /// Finds the first currently available rule that matches `state`.
+///
+/// # Errors
+///
+/// Returns `RuleRuntimeStateError` if a parsed `(once)` rule is paired with a
+/// run-local once-state table that was not constructed for the same program.
 pub(crate) fn find_next_match<'program, 'state, 'once>(
     rules: RuleScan<'program>,
     once_states: &'once mut OnceStateSet,
     state: &'state State,
-) -> RuleSearch<'program, 'state, 'once> {
+) -> Result<RuleSearch<'program, 'state, 'once>, RuleRuntimeStateError> {
     for rule in rules.iter() {
         let candidate = match match_rule_state(rule, state) {
             RuleStateMatch::Matched(candidate) => candidate,
             RuleStateMatch::Mismatched => continue,
         };
-        let commit = match once_states.scanned_rule_readiness(rule) {
+        let commit = match once_states.scanned_rule_readiness(rule)? {
             ScannedRuleReadiness::Available(commit) => commit,
             ScannedRuleReadiness::Consumed => continue,
         };
-        let commit = commit.into_matched_commit(once_states);
-        return RuleSearch::Matched(candidate.into_application(commit));
+        let commit = commit.into_matched_commit(once_states)?;
+        return Ok(RuleSearch::Matched(candidate.into_application(commit)));
     }
 
-    RuleSearch::Stable
+    Ok(RuleSearch::Stable)
 }
 
 /// Evaluates exactly one parsed rule line against the current runtime state.
@@ -211,10 +217,15 @@ pub(crate) fn attempt_rule<'program, 'state, 'once>(
 }
 
 /// Pairs a rule-attempt target with aligned runtime state.
+///
+/// # Errors
+///
+/// Returns `RuleRuntimeStateError` if the target came from a parsed program
+/// other than the one that created the run-local once-state table.
 pub(crate) fn runtime_rule_for_target<'program, 'once>(
     once_states: &'once mut OnceStateSet,
     target: RuleTarget<'program>,
-) -> RuntimeRule<'program, 'once> {
+) -> Result<RuntimeRule<'program, 'once>, RuleRuntimeStateError> {
     once_states.runtime_rule_mut(target.rule())
 }
 

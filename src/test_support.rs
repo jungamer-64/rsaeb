@@ -12,7 +12,6 @@ use crate::error::{
     RuntimeInputError, TraceSnapshotRunError,
 };
 use crate::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
-use crate::limits::{ReturnByteLimit, RuntimeInputByteLimit, RuntimeStateByteLimit, StepLimit};
 use crate::policy::{
     DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy, ExecutionPolicy,
     RuntimeInputPolicy, StaticExecutionPolicy, StaticRuntimeInputPolicy,
@@ -210,26 +209,6 @@ impl<I: RuntimeInputPolicy, E: ExecutionPolicy> TestRunPolicy<I, E> {
     #[must_use]
     pub(crate) const fn default() -> Self {
         Self::new()
-    }
-
-    #[must_use]
-    pub(crate) const fn input_limit(self) -> RuntimeInputByteLimit {
-        I::INPUT_BYTE_LIMIT
-    }
-
-    #[must_use]
-    pub(crate) const fn step_limit(self) -> StepLimit {
-        E::STEP_LIMIT
-    }
-
-    #[must_use]
-    pub(crate) const fn state_limit(self) -> RuntimeStateByteLimit {
-        E::STATE_BYTE_LIMIT
-    }
-
-    #[must_use]
-    pub(crate) const fn return_limit(self) -> ReturnByteLimit {
-        E::RETURN_BYTE_LIMIT
     }
 }
 

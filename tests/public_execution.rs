@@ -800,6 +800,39 @@ fn execution_rule_attempt_preserves_interleaved_once_slots() -> TestResult {
 
 /// # Errors
 ///
+/// Returns `TestFailure` if rule-attempt execution leaks `(once)` consumption
+/// between separate runs of the same parsed program.
+#[test]
+fn execution_rule_attempt_once_state_is_run_local_for_reused_program() -> TestResult {
+    let program = parse_program("(once)a=b\nb=c")?;
+    let expected = vec![
+        borrowed_apply!(1, 1, 1, b"b"),
+        borrowed_miss!(2, 1, RuleMissReason::OnceConsumed, b"b"),
+        borrowed_apply!(3, 2, 2, b"c"),
+        borrowed_miss!(4, 1, RuleMissReason::OnceConsumed, b"c"),
+        borrowed_stable!(
+            5,
+            2,
+            StableReasonSignature::FinalMiss {
+                rule_position: 2,
+                reason: RuleMissReason::StateMismatch,
+            },
+            b"c",
+        ),
+    ];
+
+    ensure_eq!(
+        borrowed_rule_attempt_signatures::<10>(&program, b"a")?,
+        expected
+    )?;
+    ensure_eq!(
+        borrowed_rule_attempt_signatures::<10>(&program, b"a")?,
+        expected
+    )
+}
+
+/// # Errors
+///
 /// Returns `TestFailure` if rule-attempt budget is folded into execution-step
 /// budget or fails to report typed details.
 #[test]
@@ -1267,7 +1300,25 @@ fn execution_owned_rule_attempt_terminals_can_return_program() -> TestResult {
             return Err(TestFailure::message("expected owned rule-attempt return"));
         }
     };
-    ensure_eq!(returned_program.rule_count().get(), 1)
+    ensure_eq!(returned_program.rule_count().get(), 1)?;
+
+    let failed_limits = DefaultInputRunPolicy::<10, 1, DEFAULT_BYTE_BUDGET>::new();
+    let failed_program = match parse_program("a=aa")?
+        .into_execute::<OwnedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(runtime_input(
+            b"a",
+            failed_limits,
+        )?)?
+        .step()
+    {
+        OwnedRuleAttemptTransition::Failed(failed) => failed.into_program(),
+        OwnedRuleAttemptTransition::Missed(_)
+        | OwnedRuleAttemptTransition::Applied(_)
+        | OwnedRuleAttemptTransition::Stable(_)
+        | OwnedRuleAttemptTransition::Returned(_) => {
+            return Err(TestFailure::message("expected owned rule-attempt failure"));
+        }
+    };
+    ensure_eq!(failed_program.rule_count().get(), 1)
 }
 
 /// # Errors

@@ -75,8 +75,8 @@ pub use parse::{
 };
 pub use run::{
     InputColumn, OwnedRuleAttemptStepError, OwnedRunStepError, ReturnOutputLimitError,
-    RewriteSizeError, RuleAttemptLimitError, RuleAttemptStepError, RunAdmissionError, RunError,
-    RunFinishError, RunStartError, RunStepError, RuntimeInputError, RuntimeStateLimitError,
-    StepLimitError,
+    RewriteSizeError, RuleAttemptLimitError, RuleAttemptStepError, RuleRuntimeStateError,
+    RunAdmissionError, RunError, RunFinishError, RunStartError, RunStepError, RuntimeInputError,
+    RuntimeStateLimitError, StepLimitError,
 };
 pub use traced::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};

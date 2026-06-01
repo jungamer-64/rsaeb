@@ -1,4 +1,4 @@
-use super::budget::StepReservation;
+use super::budget::{RuntimeBudgetState, StepReservation};
 use super::rewrite::{PreparedRewrite, RewriteScratch};
 use crate::allocation::AllocationError;
 use crate::bytes::{
@@ -310,9 +310,9 @@ impl<'state> StateMatch<'state> {
         self,
         action: &RewriteAction,
         output: &mut RewriteScratch,
-        step: &StepReservation<'_, E>,
+        _step: &StepReservation<'_, E>,
     ) -> Result<PreparedRewrite, RunStepError> {
-        self.prepare_replacement_buffer(action.payload(), output, step)?;
+        self.prepare_replacement_buffer::<E>(action.payload(), output)?;
         match action {
             RewriteAction::Replace(rhs) => {
                 output.push_existing(self.prefix_bytes())?;
@@ -362,11 +362,10 @@ impl<'state> StateMatch<'state> {
         self,
         rhs: &Payload,
         output: &mut RewriteScratch,
-        step: &StepReservation<'_, E>,
     ) -> Result<(), RunStepError> {
         let capacity = self.replaced_byte_count(rhs)?;
 
-        step.ensure_rewrite_state_len(capacity)?;
+        RuntimeBudgetState::<E>::ensure_rewrite_state_len(capacity)?;
 
         output.clear_and_reserve(capacity)?;
         Ok(())
