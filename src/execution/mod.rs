@@ -14,8 +14,8 @@
 //! additionally let the caller recover the owned parsed program or split it
 //! from the error.
 //! Rule-attempt transitions additionally expose typed miss reasons through
-//! [`RuleMissReason`] and expose stable reasons through
-//! [`RuleAttemptStableReason`].
+//! [`RuleMissReason`]. Stable rule-attempt terminals carry the final
+//! non-applying rule directly.
 //!
 //! ```
 //! use rsaeb::error::RunStepError;
@@ -57,7 +57,7 @@
 
 /// Type-selected execution advance kernel.
 mod advance;
-/// Rule miss and stable-reason values.
+/// Rule miss values.
 mod attempt;
 /// Manual debug formatting for public typestates.
 mod debug;
@@ -72,7 +72,7 @@ mod transition;
 /// Owned execution rule witnesses.
 mod witness;
 
-pub use attempt::{RuleAttemptStableReason, RuleMiss, RuleMissReason};
+pub use attempt::{RuleMiss, RuleMissReason};
 pub use mode::{
     BorrowedExecutionMode, BorrowedRuleAttempts, BorrowedSteps, CompleteRun, OwnedExecutionMode,
     OwnedRuleAttempts, OwnedSteps,

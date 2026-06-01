@@ -9,15 +9,6 @@ pub struct RuleMiss<RuleWitness> {
     reason: RuleMissReason,
 }
 
-/// Why a rule-attempt run reached stability.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuleAttemptStableReason<RuleWitness> {
-    /// The parsed program contains no executable rules.
-    NoExecutableRules,
-    /// The final executable rule line was consumed without applying.
-    FinalMiss(RuleMiss<RuleWitness>),
-}
-
 impl<RuleWitness> RuleMiss<RuleWitness> {
     /// Captures the rule and reason for one consumed non-applying rule line.
     pub(crate) const fn new(rule: RuleWitness, reason: RuleMissReason) -> Self {

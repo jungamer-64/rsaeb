@@ -8,7 +8,7 @@ use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::program::{Program, ReturnOutput, RunResult};
 use crate::trace::RuntimeStateView;
 
-use super::attempt::{RuleAttemptStableReason, RuleMiss};
+use super::attempt::RuleMiss;
 use super::engine::RunCore;
 use super::session::{
     BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRuleAttemptSession, OwnedRunSession,
@@ -133,8 +133,8 @@ pub struct BorrowedRuleAttemptStableRun<'program, P: ParsePolicy, E: ExecutionPo
     pub(super) attempts: RuleAttemptCount,
     /// Number of committed execution steps before stability.
     pub(super) steps: StepCount,
-    /// Why the rule-attempt run reached stability.
-    pub(super) stable_reason: RuleAttemptStableReason<RuleView<'program>>,
+    /// Final non-applying rule that exhausted the current pass.
+    pub(super) final_miss: RuleMiss<RuleView<'program>>,
     /// Parsed program borrowed by the terminal state.
     pub(super) program: &'program Program<P>,
     /// Terminal runtime core containing the stable state.
@@ -269,8 +269,8 @@ pub struct OwnedRuleAttemptStableRun<P: ParsePolicy, E: ExecutionPolicy> {
     pub(super) attempts: RuleAttemptCount,
     /// Number of committed execution steps before stability.
     pub(super) steps: StepCount,
-    /// Why the rule-attempt run reached stability.
-    pub(super) stable_reason: RuleAttemptStableReason<OwnedRuleWitness>,
+    /// Final non-applying rule that exhausted the current pass.
+    pub(super) final_miss: RuleMiss<OwnedRuleWitness>,
     /// Parsed program retained by the owned terminal state.
     pub(super) program: Program<P>,
     /// Terminal runtime core containing the stable state.
@@ -595,10 +595,10 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedRuleAttemptStableRun<
         self.steps
     }
 
-    /// Why this rule-attempt pass reached stability.
+    /// Final non-applying rule that exhausted this rule-attempt pass.
     #[must_use]
-    pub const fn stable_reason(&self) -> &RuleAttemptStableReason<RuleView<'program>> {
-        &self.stable_reason
+    pub const fn final_miss(&self) -> &RuleMiss<RuleView<'program>> {
+        &self.final_miss
     }
 
     /// Borrow the parsed program used by this terminal state.
@@ -636,10 +636,10 @@ impl<P: ParsePolicy, E: ExecutionPolicy> OwnedRuleAttemptStableRun<P, E> {
         self.steps
     }
 
-    /// Why this rule-attempt pass reached stability.
+    /// Final non-applying rule that exhausted this rule-attempt pass.
     #[must_use]
-    pub const fn stable_reason(&self) -> &RuleAttemptStableReason<OwnedRuleWitness> {
-        &self.stable_reason
+    pub const fn final_miss(&self) -> &RuleMiss<OwnedRuleWitness> {
+        &self.final_miss
     }
 
     /// Borrow the parsed program owned by this terminal state.
