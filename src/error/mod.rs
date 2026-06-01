@@ -74,7 +74,7 @@ pub use parse::{
     ParseRepresentationError, PayloadKind, RightActionKind,
 };
 pub use run::{
-    InputColumn, OnceRuleStateError, OwnedRunStepError, ReturnOutputLimitError, RewriteSizeError,
+    InputColumn, OwnedRunStepError, ReturnOutputLimitError, RewriteSizeError,
     RuleAttemptLimitError, RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError,
     RunStartError, RunStepError, RuntimeInputError, RuntimeStateLimitError, StepLimitError,
 };

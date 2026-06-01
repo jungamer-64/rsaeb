@@ -5,7 +5,6 @@ use crate::bytes::{
     NonAsciiInputByte, PayloadByteCount, ReturnOutputByteCount, RuntimeInputByteCount,
     RuntimeStateByteCount,
 };
-use crate::inspect::{OnceRuleCount, RulePosition};
 use crate::limits::{
     ReturnByteLimit, RuleAttemptCount, RuleAttemptLimit, RuntimeInputByteLimit,
     RuntimeStateByteLimit, StepCount, StepLimit,
@@ -72,8 +71,6 @@ impl From<AllocationError> for RunStartError {
 pub enum RunStepError {
     /// Runtime allocation failed while preparing or committing the candidate step.
     Allocation(AllocationError),
-    /// Parsed `(once)` slot metadata did not match the per-run once-state table.
-    OnceRuleState(OnceRuleStateError),
     /// Rewrite length arithmetic could not be represented.
     RewriteSize(RewriteSizeError),
     /// The candidate rewrite would exceed the runtime-state limit.
@@ -88,7 +85,6 @@ impl Error for RunStepError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Allocation(error) => Some(error),
-            Self::OnceRuleState(error) => Some(error),
             Self::RewriteSize(error) => Some(error),
             Self::RuntimeStateLimit(error) => Some(error),
             Self::ReturnOutputLimit(error) => Some(error),
@@ -100,12 +96,6 @@ impl Error for RunStepError {
 impl From<AllocationError> for RunStepError {
     fn from(value: AllocationError) -> Self {
         Self::Allocation(value)
-    }
-}
-
-impl From<OnceRuleStateError> for RunStepError {
-    fn from(value: OnceRuleStateError) -> Self {
-        Self::OnceRuleState(value)
     }
 }
 
@@ -210,52 +200,6 @@ impl From<RunStepError> for RunFinishError {
         Self::Step(value)
     }
 }
-
-/// Runtime once-state table did not contain a parser-assigned slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OnceRuleStateError {
-    /// Rule whose parser-assigned slot was missing.
-    rule_position: RulePosition,
-    /// Zero-based parser-assigned `(once)` slot index.
-    slot_index: usize,
-    /// Number of once-state cells allocated for the run.
-    once_rule_count: OnceRuleCount,
-}
-
-impl OnceRuleStateError {
-    /// Builds a missing once-slot error.
-    pub(crate) const fn missing_slot(
-        rule_position: RulePosition,
-        slot_index: usize,
-        once_rule_count: OnceRuleCount,
-    ) -> Self {
-        Self {
-            rule_position,
-            slot_index,
-            once_rule_count,
-        }
-    }
-
-    /// Rule whose parser-assigned slot was missing.
-    #[must_use]
-    pub const fn rule_position(&self) -> RulePosition {
-        self.rule_position
-    }
-
-    /// Zero-based parser-assigned `(once)` slot index.
-    #[must_use]
-    pub const fn slot_index(&self) -> usize {
-        self.slot_index
-    }
-
-    /// Number of once-state cells allocated for the run.
-    #[must_use]
-    pub const fn once_rule_count(&self) -> OnceRuleCount {
-        self.once_rule_count
-    }
-}
-
-impl Error for OnceRuleStateError {}
 
 /// Runtime input validation boundary error.
 ///
