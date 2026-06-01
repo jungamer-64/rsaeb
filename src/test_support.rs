@@ -14,9 +14,9 @@ use crate::error::{
 use crate::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
 use crate::policy::{
     DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy, ExecutionPolicy,
-    RuntimeInputPolicy, StaticExecutionPolicy, StaticRuntimeInputPolicy,
+    ParsePolicy, RuntimeInputPolicy, StaticExecutionPolicy, StaticRuntimeInputPolicy,
 };
-use crate::program::Program;
+use crate::program::{BorrowedExecutableProgram, OwnedExecutableProgram, Program};
 use crate::source::{ProgramSource, SourceColumn, SourceLineNumber, SourcePosition};
 use core::marker::PhantomData;
 
@@ -245,6 +245,32 @@ pub(crate) fn admitted_run<I: RuntimeInputPolicy, E: ExecutionPolicy>(
 /// allocation constraints.
 pub(crate) fn parse_program(source: &str) -> Result<Program<DefaultParsePolicy>, ParseError> {
     Program::parse(ProgramSource::from_text(source))
+}
+
+/// Borrows the expected executable parsed program.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the parsed program has no executable rules.
+pub(crate) fn executable_program<P: ParsePolicy>(
+    program: &Program<P>,
+) -> Result<BorrowedExecutableProgram<'_, P>, TestFailure> {
+    program
+        .as_executable()
+        .map_err(|_| TestFailure::message("expected executable program"))
+}
+
+/// Moves the expected executable parsed program.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the parsed program has no executable rules.
+pub(crate) fn owned_executable_program<P: ParsePolicy>(
+    program: Program<P>,
+) -> Result<OwnedExecutableProgram<P>, TestFailure> {
+    program
+        .into_executable()
+        .map_err(|_| TestFailure::message("expected executable program"))
 }
 
 /// Parses source bytes with the default parser limits.

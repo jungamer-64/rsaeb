@@ -258,6 +258,11 @@ impl<'program> RuleScan<'program> {
         RuleCount::new(self.rules.len())
     }
 
+    /// Mints the first active rule cursor for a non-empty rule table.
+    pub(crate) fn first_cursor(self) -> Option<ActiveRuleCursor> {
+        ActiveRuleCount::new(self.rules.len()).map(ActiveRuleCursor::at_first_rule)
+    }
+
     /// Returns the rule at a cursor position.
     #[expect(
         clippy::indexing_slicing,

@@ -36,10 +36,9 @@
 //!   [`input::AdmittedRun`] admits validated input under a
 //!   [`policy::ExecutionPolicy`], and [`policy::TraceSnapshotPolicy`] bounds
 //!   trace snapshot materialization.
-//! - [`program::Program::execute`] selects borrowed run-to-completion,
-//!   borrowed stepwise, or borrowed rule-attempt execution by type.
-//! - [`program::Program::into_execute`] selects owned stepwise or owned
-//!   rule-attempt execution by type.
+//! - [`program::Program::execute`] runs a program to completion.
+//! - [`program::Program::as_executable`] and [`program::Program::into_executable`]
+//!   classify a parsed program before stepwise or rule-attempt execution can start.
 //! - [`program::Program::trace`] emits borrowed or materialized snapshot trace
 //!   events from a typed trace request.
 //! - [`inspect`] exposes borrowed structured rule views, and [`error`] exposes
@@ -51,21 +50,15 @@
 //! part of the public API:
 //!
 //! ```compile_fail
-//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
-//! use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
-//! use rsaeb::program::Program;
-//! use rsaeb::source::ProgramSource;
+//! use rsaeb::execution::{
+//!     BorrowedExecutionMode, BorrowedRuleAttempts, BorrowedSteps, CompleteRun,
+//!     OwnedExecutionMode, OwnedRuleAttempts, OwnedSteps,
+//! };
 //!
-//! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
-//!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
-//!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
-//!     let _ = program.run(admitted)?;
-//!     Ok(())
-//! }
+//! fn main() {}
 //! ```
 //!
-//! Borrowed and owned execution modes are different compile-time domains:
+//! `Program::execute` no longer accepts a mode marker:
 //!
 //! ```compile_fail
 //! use rsaeb::execution::BorrowedSteps;
@@ -83,52 +76,9 @@
 //! }
 //! ```
 //!
-//! Execution entrypoints require admitted input. Validated input cannot be run
-//! directly:
+//! Rule-attempt execution cannot start from a shape-erased [`program::Program`]:
 //!
 //! ```compile_fail
-//! use rsaeb::execution::CompleteRun;
-//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
-//! use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy};
-//! use rsaeb::program::Program;
-//! use rsaeb::source::ProgramSource;
-//!
-//! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
-//!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
-//!     let _ = program.execute::<CompleteRun, _>(input)?;
-//!     Ok(())
-//! }
-//! ```
-//!
-//! Terminal transitions do not carry a continuation session, so they cannot be
-//! stepped again:
-//!
-//! ```compile_fail
-//! use rsaeb::execution::{BorrowedStepTransition, BorrowedSteps};
-//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
-//! use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
-//! use rsaeb::program::Program;
-//! use rsaeb::source::ProgramSource;
-//!
-//! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text(""))?;
-//!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
-//!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
-//!     let terminal = match program.execute::<BorrowedSteps, _>(admitted)?.step() {
-//!         BorrowedStepTransition::Stable(stable) => stable,
-//!         _ => return Ok(()),
-//!     };
-//!     let _ = terminal.step();
-//!     Ok(())
-//! }
-//! ```
-//!
-//! Rule-attempt execution starts with a typed start state. The start itself
-//! cannot be stepped until the caller proves it is active:
-//!
-//! ```compile_fail
-//! use rsaeb::execution::BorrowedRuleAttempts;
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
 //!     DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy,
@@ -141,8 +91,77 @@
 //!     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
 //!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
-//!     let start = program.execute::<BorrowedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(admitted)?;
-//!     let _ = start.step();
+//!     let _ = program.rule_attempts::<StaticRuleAttemptPolicy<10>, _>(admitted)?;
+//!     Ok(())
+//! }
+//! ```
+//!
+//! Empty rule-attempt terminal types are gone; empty programs are classified at
+//! the executable-program witness boundary:
+//!
+//! ```compile_fail
+//! use rsaeb::execution::{BorrowedEmptyRuleAttemptRun, OwnedEmptyRuleAttemptRun};
+//!
+//! fn main() {}
+//! ```
+//!
+//! Execution entrypoints require admitted input. Validated input cannot be run
+//! directly:
+//!
+//! ```compile_fail
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy};
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
+//!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//!     let _ = program.execute(input)?;
+//!     Ok(())
+//! }
+//! ```
+//!
+//! Terminal transitions do not carry a continuation session, so they cannot be
+//! stepped again:
+//!
+//! ```compile_fail
+//! use rsaeb::execution::BorrowedStepTransition;
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text(""))?;
+//!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
+//!     let executable = program.as_executable().map_err(|_| "expected executable rules")?;
+//!     let terminal = match executable.steps(admitted)?.step() {
+//!         BorrowedStepTransition::Stable(stable) => stable,
+//!         _ => return Ok(()),
+//!     };
+//!     let _ = terminal.step();
+//!     Ok(())
+//! }
+//! ```
+//!
+//! Rule-attempt execution starts only from an executable-program witness:
+//!
+//! ```compile_fail
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::{
+//!     DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy,
+//!     StaticRuleAttemptPolicy,
+//! };
+//! use rsaeb::program::Program;
+//! use rsaeb::source::ProgramSource;
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
+//!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
+//!     let _ = program.rule_attempts::<StaticRuleAttemptPolicy<10>, _>(admitted)?;
 //!     Ok(())
 //! }
 //! ```
@@ -157,9 +176,7 @@
 //! ```
 //!
 //! ```compile_fail
-//! use rsaeb::execution::{
-//!     BorrowedRuleAttemptStart, BorrowedRuleAttemptTransition, BorrowedRuleAttempts,
-//! };
+//! use rsaeb::execution::BorrowedRuleAttemptTransition;
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
 //!     DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy,
@@ -172,10 +189,10 @@
 //!     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
 //!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"z"))?;
 //!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
-//!     let start = program.execute::<BorrowedRuleAttempts<StaticRuleAttemptPolicy<10>>, _>(admitted)?;
-//!     let BorrowedRuleAttemptStart::Active(session) = start else {
-//!         return Ok(());
-//!     };
+//!     let session = program
+//!         .as_executable()
+//!         .map_err(|_| "expected executable rules")?
+//!         .rule_attempts::<StaticRuleAttemptPolicy<10>, _>(admitted)?;
 //!     let stable = match session.step() {
 //!         BorrowedRuleAttemptTransition::Stable(stable) => stable,
 //!         _ => return Ok(()),
@@ -250,7 +267,6 @@
 //! admit an [`input::AdmittedRun`] before running:
 //!
 //! ```
-//! use rsaeb::execution::CompleteRun;
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
 //! use rsaeb::program::{Program, RunOutcome};
@@ -260,7 +276,7 @@
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<DefaultExecutionPolicy>()?;
-//! let result = program.execute::<CompleteRun, _>(admitted)?;
+//! let result = program.execute(admitted)?;
 //!
 //! if !matches!(
 //!     result.outcome(),
@@ -277,7 +293,6 @@
 //! per-rule repeat state rather than mutating the parsed program:
 //!
 //! ```
-//! use rsaeb::execution::CompleteRun;
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy};
 //! use rsaeb::program::{Program, RunOutcome};
@@ -291,8 +306,8 @@
 //! let first_input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"aa"))?;
 //! let second_input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"aa"))?;
 //!
-//! let first = program.execute::<CompleteRun, _>(first_input.admit::<ShortRun>()?)?;
-//! let second = program.execute::<CompleteRun, _>(second_input.admit::<ShortRun>()?)?;
+//! let first = program.execute(first_input.admit::<ShortRun>()?)?;
+//! let second = program.execute(second_input.admit::<ShortRun>()?)?;
 //!
 //! if !matches!(
 //!     first.outcome(),
@@ -318,7 +333,6 @@
 //!
 //! ```
 //! use rsaeb::error::{RunError, RunFinishError, RunStepError};
-//! use rsaeb::execution::CompleteRun;
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultParsePolicy, StaticExecutionPolicy, StaticRuntimeInputPolicy};
 //! use rsaeb::program::Program;
@@ -331,7 +345,7 @@
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
 //! let input = RuntimeInput::<TinyInput>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<NoSteps>()?;
-//! let result = program.execute::<CompleteRun, _>(admitted);
+//! let result = program.execute(admitted);
 //!
 //! if !matches!(
 //!     result,
@@ -346,11 +360,11 @@
 //!
 //! # Step Execution
 //!
-//! Use [`program::Program::execute`] with [`execution::BorrowedSteps`] when a
-//! host wants to wait after each applied rule while keeping the parsed program reusable:
+//! Use [`program::BorrowedExecutableProgram::steps`] when a host wants to wait
+//! after each applied rule while keeping the parsed program reusable:
 //!
 //! ```
-//! use rsaeb::execution::{BorrowedSteps, BorrowedStepTransition};
+//! use rsaeb::execution::BorrowedStepTransition;
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy};
 //! use rsaeb::program::Program;
@@ -362,7 +376,8 @@
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b\nb=c"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<TenSteps>()?;
-//! let execution = program.execute::<BorrowedSteps, _>(admitted)?;
+//! let executable = program.as_executable().map_err(|_| "expected executable rules")?;
+//! let execution = executable.steps(admitted)?;
 //!
 //! let execution = match execution.step() {
 //!     BorrowedStepTransition::Applied(applied) => {
@@ -425,15 +440,12 @@
 //! expose `into_parts` methods so callers can keep the owned witness and the
 //! continuation session together.
 //!
-//! Use [`program::Program::execute`] with
-//! [`execution::BorrowedRuleAttempts`] when the host needs to observe every
-//! executable rule line, including lines that do not apply to the current runtime state:
+//! Use [`program::BorrowedExecutableProgram::rule_attempts`] when the host needs
+//! to observe every executable rule line, including lines that do not apply to
+//! the current runtime state:
 //!
 //! ```
-//! use rsaeb::execution::{
-//!     BorrowedRuleAttemptStart, BorrowedRuleAttempts, BorrowedRuleAttemptTransition,
-//!     RuleMissReason,
-//! };
+//! use rsaeb::execution::{BorrowedRuleAttemptTransition, RuleMissReason};
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
 //!     DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
@@ -449,10 +461,8 @@
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("z=x\na=b"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<TenSteps>()?;
-//! let start = program.execute::<BorrowedRuleAttempts<TenAttempts>, _>(admitted)?;
-//! let BorrowedRuleAttemptStart::Active(execution) = start else {
-//!     return Err("expected executable rules".into());
-//! };
+//! let executable = program.as_executable().map_err(|_| "expected executable rules")?;
+//! let execution = executable.rule_attempts::<TenAttempts, _>(admitted)?;
 //!
 //! let execution = match execution.step() {
 //!     BorrowedRuleAttemptTransition::Missed(missed) => {

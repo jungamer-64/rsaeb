@@ -1,10 +1,10 @@
-//! Public execution mode markers and stepwise run typestates.
+//! Public stepwise and rule-attempt run typestates.
 //!
-//! [`Program::execute`](crate::program::Program::execute) and
-//! [`Program::into_execute`](crate::program::Program::into_execute) select
-//! execution through sealed mode marker types. Borrowed and owned modes are
-//! intentionally different traits, so the public API rejects ownership-domain
-//! mixups at compile time.
+//! [`Program::execute`](crate::program::Program::execute) runs to completion.
+//! Stepwise and rule-attempt execution start only after
+//! [`Program::as_executable`](crate::program::Program::as_executable) or
+//! [`Program::into_executable`](crate::program::Program::into_executable)
+//! proves that the parsed program has at least one executable rule.
 //!
 //! A step transition is a typestate value, not a status flag. Applied steps
 //! carry the continuation session. Stable and returned states are terminal.
@@ -30,9 +30,8 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=aaaa"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
-//! let session = program.execute::<rsaeb::execution::BorrowedSteps, _>(
-//!     input.admit::<TinyState>()?,
-//! )?;
+//! let executable = program.as_executable().map_err(|_| "expected executable rules")?;
+//! let session = executable.steps(input.admit::<TinyState>()?)?;
 //!
 //! let BorrowedStepTransition::Failed(failed) = session.step() else {
 //!     return Err("expected oversized rewrite to fail before commit".into());
@@ -76,13 +75,13 @@ pub use session::{
 };
 pub use transition::{
     BorrowedAppliedStep, BorrowedFailedRun, BorrowedMissedRuleAttempt, BorrowedReturnedRun,
-    BorrowedRuleAttemptAppliedStep, BorrowedRuleAttemptFailedRun,
-    BorrowedRuleAttemptReturnedRun, BorrowedRuleAttemptStableRun, BorrowedRuleAttemptTransition,
-    BorrowedStableRun, BorrowedStepTransition, OwnedAppliedStep, OwnedFailedRun,
-    OwnedMissedRuleAttempt, OwnedReturnedRun, OwnedRuleAttemptAppliedStep, OwnedRuleAttemptFailedRun,
+    BorrowedRuleAttemptAppliedStep, BorrowedRuleAttemptFailedRun, BorrowedRuleAttemptReturnedRun,
+    BorrowedRuleAttemptStableRun, BorrowedRuleAttemptTransition, BorrowedStableRun,
+    BorrowedStepTransition, OwnedAppliedStep, OwnedFailedRun, OwnedMissedRuleAttempt,
+    OwnedReturnedRun, OwnedRuleAttemptAppliedStep, OwnedRuleAttemptFailedRun,
     OwnedRuleAttemptReturnedRun, OwnedRuleAttemptStableRun, OwnedRuleAttemptTransition,
     OwnedStableRun, OwnedStepTransition,
 };
 pub use witness::{OwnedRuleAction, OwnedRulePayload, OwnedRuleWitness};
 
-pub(crate) use session::trace_events;
+pub(crate) use session::{finish_borrowed_run, trace_events};

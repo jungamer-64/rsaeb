@@ -36,7 +36,6 @@ one execution under an execution policy, then run:
 
 ```rust
 use rsaeb::input::{RuntimeInput, RuntimeInputSource};
-use rsaeb::execution::CompleteRun;
 use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
 use rsaeb::program::{Program, RunOutcome};
 use rsaeb::source::ProgramSource;
@@ -45,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
     let admitted = input.admit::<DefaultExecutionPolicy>()?;
-    let result = program.execute::<CompleteRun, _>(admitted)?;
+    let result = program.execute(admitted)?;
 
     if !matches!(
         result.outcome(),
@@ -81,15 +80,13 @@ The crate intentionally contains no filesystem, process, argument parsing,
 environment access, stdout/stderr, or lossy display boundary. Hosts perform I/O
 outside the interpreter and pass already-loaded bytes into typed boundaries.
 
-`Program::execute::<CompleteRun, _>(admitted)` is the run-to-completion API.
-`Program::execute::<BorrowedSteps, _>(admitted)` starts a borrowed stepwise run
-for hosts that keep a reusable parsed program.
-`Program::into_execute::<OwnedSteps, _>(admitted)` transfers ownership of the
-parsed program into the stepwise session. Rule-attempt stepping is explicit:
-use `BorrowedRuleAttempts<A>` or `OwnedRuleAttempts<A>` as the execution mode so
-both the execution policy and rule-attempt policy stay visible in the start
-typestate. Empty programs produce an empty terminal start state; only active
-starts expose a step-capable rule-attempt session.
+`Program::execute(admitted)` is the run-to-completion API and remains valid for
+empty programs. Stepwise and rule-attempt execution first require
+`Program::as_executable()` or `Program::into_executable()`, which returns either
+an executable-program witness or a typed empty-program witness. Borrowed
+executable witnesses start reusable sessions with `.steps(admitted)` or
+`.rule_attempts::<A, _>(admitted)`; owned witnesses start the corresponding
+owned sessions with `.into_steps(admitted)` or `.into_rule_attempts::<A, _>(admitted)`.
 
 The exact typestate names, transition variants, owned recovery methods, tracing
 events, and error variants are documented in rustdoc.

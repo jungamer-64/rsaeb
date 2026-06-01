@@ -18,7 +18,7 @@ use crate::runtime::state::State;
 
 use super::attempt::RuleMiss;
 use super::engine::{
-    AttemptSession, BorrowedProgram, OwnedProgram, RunCore, TerminalAttemptSession,
+    ActiveRunCore, AttemptSession, BorrowedProgram, OwnedProgram, TerminalAttemptSession,
 };
 use super::witness::OwnedRuleWitness;
 
@@ -141,25 +141,23 @@ pub(super) enum CoreRuleAttemptStep<
         /// Materialized return output.
         output: ReturnOutput,
         /// Terminal session with no resumable cursor.
-        terminal: TerminalAttemptSession<P, E, A>,
+        terminal: TerminalAttemptSession<P>,
     },
     /// No rule in the current pass matched the current runtime state.
     Stable {
         /// Rule attempts consumed before stability.
         attempts: RuleAttemptCount,
-        /// Rewrite steps committed before stability.
-        steps: StepCount,
         /// Final non-applying rule that exhausted the current pass.
         final_miss: RuleMiss<RuleWitness>,
         /// Terminal session with no resumable cursor.
-        terminal: TerminalAttemptSession<P, E, A>,
+        terminal: TerminalAttemptSession<P>,
     },
     /// A candidate attempt failed before committing runtime state.
     Failed {
         /// Error that prevented commit.
         error: StepError,
         /// Terminal session preserving the uncommitted state.
-        terminal: TerminalAttemptSession<P, E, A>,
+        terminal: TerminalAttemptSession<P>,
     },
 }
 
@@ -172,7 +170,7 @@ enum RuleAttemptAdvance<E: ExecutionPolicy, A: RuleAttemptPolicy, RuleWitness, S
         /// Non-applying rule information.
         miss: RuleMiss<RuleWitness>,
         /// Mutable runtime state after the miss.
-        core: RunCore<E>,
+        core: ActiveRunCore<E>,
         /// First executable rule cursor for reset after a rewrite.
         first_cursor: ActiveRuleCursor,
         /// Cursor selected for the next attempt.
@@ -189,7 +187,7 @@ enum RuleAttemptAdvance<E: ExecutionPolicy, A: RuleAttemptPolicy, RuleWitness, S
         /// Rule witness paired with the committed rewrite.
         rule: RuleWitness,
         /// Mutable runtime state after the rewrite.
-        core: RunCore<E>,
+        core: ActiveRunCore<E>,
         /// First executable rule cursor for reset after a rewrite.
         first_cursor: ActiveRuleCursor,
         /// Rule-attempt budget after the rewrite.
@@ -206,7 +204,7 @@ enum RuleAttemptAdvance<E: ExecutionPolicy, A: RuleAttemptPolicy, RuleWitness, S
         /// Materialized return output.
         output: ReturnOutput,
         /// Mutable runtime state retained for terminal observation.
-        core: RunCore<E>,
+        core: ActiveRunCore<E>,
         /// Rule-attempt budget after the return.
         attempt_budget: RuleAttemptBudgetState<A>,
     },
@@ -219,16 +217,14 @@ enum RuleAttemptAdvance<E: ExecutionPolicy, A: RuleAttemptPolicy, RuleWitness, S
         /// Final non-applying rule that exhausted the current pass.
         final_miss: RuleMiss<RuleWitness>,
         /// Mutable runtime state retained for terminal observation.
-        core: RunCore<E>,
-        /// Rule-attempt budget at stability.
-        attempt_budget: RuleAttemptBudgetState<A>,
+        core: ActiveRunCore<E>,
     },
     /// A candidate attempt failed before committing runtime state.
     Failed {
         /// Error that prevented commit.
         error: StepError,
         /// Mutable runtime state retained for diagnostic observation.
-        core: RunCore<E>,
+        core: ActiveRunCore<E>,
         /// Rule-attempt budget at failure.
         attempt_budget: RuleAttemptBudgetState<A>,
     },
@@ -398,8 +394,8 @@ where
                 output,
                 terminal: TerminalAttemptSession {
                     program,
-                    core,
-                    attempt_budget,
+                    core: core.into_terminal(),
+                    attempts: attempt_budget.completed_attempts(),
                 },
             },
             Self::Stable {
@@ -407,15 +403,13 @@ where
                 steps,
                 final_miss,
                 core,
-                attempt_budget,
             } => CoreRuleAttemptStep::Stable {
                 attempts,
-                steps,
                 final_miss,
                 terminal: TerminalAttemptSession {
                     program,
-                    core,
-                    attempt_budget,
+                    core: core.into_terminal_at(steps),
+                    attempts,
                 },
             },
             Self::Failed {
@@ -426,8 +420,8 @@ where
                 error,
                 terminal: TerminalAttemptSession {
                     program,
-                    core,
-                    attempt_budget,
+                    core: core.into_terminal(),
+                    attempts: attempt_budget.completed_attempts(),
                 },
             },
         }
@@ -442,7 +436,7 @@ where
 /// construction fails.
 pub(super) fn advance_run<'program, P, E, W>(
     program: &'program crate::program::Program<P>,
-    core: &mut RunCore<E>,
+    core: &mut ActiveRunCore<E>,
 ) -> Result<CoreStep<'program, W::Witness>, W::Error>
 where
     P: ParsePolicy,
@@ -516,7 +510,7 @@ where
 /// Advances one rule-attempt step under a compile-time witness policy.
 fn advance_rule_attempt<'program, E, A, W>(
     rules: RuleScan<'program>,
-    mut core: RunCore<E>,
+    mut core: ActiveRunCore<E>,
     first_cursor: ActiveRuleCursor,
     cursor: ActiveRuleCursor,
     mut attempt_budget: RuleAttemptBudgetState<A>,
@@ -578,7 +572,7 @@ where
 
 /// Reports a rule-attempt failure with the uncommitted runtime state.
 fn failed_rule_attempt<E, A, RuleWitness, StepError>(
-    core: RunCore<E>,
+    core: ActiveRunCore<E>,
     attempt_budget: RuleAttemptBudgetState<A>,
     error: StepError,
 ) -> RuleAttemptAdvance<E, A, RuleWitness, StepError>
@@ -595,7 +589,7 @@ where
 
 /// Commits a non-applying rule attempt and returns the next typed state.
 fn committed_rule_miss<E, A, RuleWitness, StepError>(
-    core: RunCore<E>,
+    core: ActiveRunCore<E>,
     first_cursor: ActiveRuleCursor,
     attempt_budget: RuleAttemptBudgetState<A>,
     attempt: RuleAttemptCount,
@@ -615,7 +609,6 @@ where
                 steps,
                 final_miss: miss,
                 core,
-                attempt_budget,
             }
         }
         RuleCursorAfterMiss::Advanced(cursor) => RuleAttemptAdvance::Missed {
@@ -631,7 +624,7 @@ where
 
 /// Projects a committed rule application into the next rule-attempt state.
 fn committed_rule_attempt_application<'program, E, A, RuleWitness, StepError>(
-    core: RunCore<E>,
+    core: ActiveRunCore<E>,
     first_cursor: ActiveRuleCursor,
     attempt_budget: RuleAttemptBudgetState<A>,
     attempt: RuleAttemptCount,

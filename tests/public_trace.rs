@@ -8,12 +8,12 @@ use rsaeb::error::{
     RunError, RunFinishError, RunStepError, TraceSnapshotError, TraceSnapshotRunError,
     TracedRunError,
 };
-use rsaeb::execution::{OwnedStepTransition, OwnedSteps};
+use rsaeb::execution::OwnedStepTransition;
 use rsaeb::input::AdmittedRun;
 use rsaeb::limits::TraceSnapshotByteLimit;
-use rsaeb::policy::DefaultParsePolicy;
+use rsaeb::policy::{DefaultParsePolicy, ParsePolicy};
 use rsaeb::policy::{DefaultTraceSnapshotPolicy, StaticTraceSnapshotPolicy};
-use rsaeb::program::{Program, RunOutcome, RunResult};
+use rsaeb::program::{OwnedExecutableProgram, Program, RunOutcome, RunResult};
 use rsaeb::trace::{
     BorrowedTrace, BorrowedTraceEffect, BorrowedTraceEvent, SnapshotTrace, TraceSnapshotEffect,
     TraceSnapshotEvent,
@@ -100,6 +100,19 @@ fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: rsaeb::policy::Executi
     runtime_support::admitted_run(bytes, limits)
 }
 
+/// Moves an executable program witness for owned stepwise trace comparisons.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the parsed program has no executable rules.
+fn owned_executable_program<P: ParsePolicy>(
+    program: Program<P>,
+) -> Result<OwnedExecutableProgram<P>, TestFailure> {
+    program
+        .into_executable()
+        .map_err(|_| TestFailure::message("expected executable program"))
+}
+
 /// Collects committed step signatures from borrowed tracing.
 ///
 /// # Errors
@@ -149,7 +162,7 @@ fn owned_step_signatures(
     admitted: AdmittedRun<impl rsaeb::policy::ExecutionPolicy>,
 ) -> Result<Vec<CommittedStepSignature>, TestFailure> {
     let mut signatures = Vec::new();
-    let mut session = program.into_execute::<OwnedSteps, _>(admitted)?;
+    let mut session = owned_executable_program(program)?.into_steps(admitted)?;
     loop {
         match session.step() {
             OwnedStepTransition::Applied(applied) => {

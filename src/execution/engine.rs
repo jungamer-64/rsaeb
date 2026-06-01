@@ -14,9 +14,9 @@ use super::advance::{
     BorrowedRunWitness, CoreAppliedRule, CoreStep, DiscardedRunWitness, advance_run,
 };
 
-/// Mutable runtime state independent of program ownership mode.
+/// Active mutable runtime state independent of program ownership mode.
 #[derive(Debug)]
-pub(super) struct RunCore<E: ExecutionPolicy> {
+pub(super) struct ActiveRunCore<E: ExecutionPolicy> {
     /// Current runtime byte state.
     pub(super) state: State,
     /// Reusable buffer for candidate rewrites.
@@ -27,12 +27,21 @@ pub(super) struct RunCore<E: ExecutionPolicy> {
     pub(super) rule_states: RuntimeRuleStates,
 }
 
+/// Terminal runtime state after active execution can no longer resume.
+#[derive(Debug)]
+pub(super) struct TerminalRunCore {
+    /// Runtime byte state preserved for terminal observation.
+    state: State,
+    /// Steps committed before the terminal boundary.
+    steps: StepCount,
+}
+
 /// Runtime session parameterized by program ownership.
 pub(super) struct Session<P, E: ExecutionPolicy> {
     /// Borrowed or owned parsed program.
     pub(super) program: P,
     /// Mutable execution state.
-    pub(super) core: RunCore<E>,
+    pub(super) core: ActiveRunCore<E>,
 }
 
 /// Runtime rule-attempt session parameterized by program ownership.
@@ -40,7 +49,7 @@ pub(super) struct AttemptSession<P, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     /// Borrowed or owned parsed program.
     pub(super) program: P,
     /// Mutable execution state.
-    pub(super) core: RunCore<E>,
+    pub(super) core: ActiveRunCore<E>,
     /// First executable rule cursor for resetting after a committed rewrite.
     pub(super) first_cursor: ActiveRuleCursor,
     /// Next executable rule line to evaluate.
@@ -50,13 +59,13 @@ pub(super) struct AttemptSession<P, E: ExecutionPolicy, A: RuleAttemptPolicy> {
 }
 
 /// Terminal rule-attempt state after the cursor can no longer resume.
-pub(super) struct TerminalAttemptSession<P, E: ExecutionPolicy, A: RuleAttemptPolicy> {
+pub(super) struct TerminalAttemptSession<P> {
     /// Borrowed or owned parsed program.
     pub(super) program: P,
-    /// Mutable execution state retained for terminal observation.
-    pub(super) core: RunCore<E>,
-    /// Rule-attempt budget and consumed-attempt count.
-    pub(super) attempt_budget: RuleAttemptBudgetState<A>,
+    /// Terminal runtime state retained for observation.
+    pub(super) core: TerminalRunCore,
+    /// Rule attempts consumed before terminal state.
+    pub(super) attempts: RuleAttemptCount,
 }
 
 /// Program ownership shape used by the internal runtime session.
@@ -97,7 +106,7 @@ impl<P: ParsePolicy> ProgramOwner for OwnedProgram<P> {
     }
 }
 
-impl<E: ExecutionPolicy> RunCore<E> {
+impl<E: ExecutionPolicy> ActiveRunCore<E> {
     /// Builds the mutable runtime core for one execution.
     ///
     /// # Errors
@@ -128,17 +137,46 @@ impl<E: ExecutionPolicy> RunCore<E> {
         self.state.view()
     }
 
-    /// Materializes a stable terminal result.
+    /// Converts active runtime state into terminal runtime state.
+    pub(super) fn into_terminal(self) -> TerminalRunCore {
+        let steps = self.completed_steps();
+        TerminalRunCore {
+            state: self.state,
+            steps,
+        }
+    }
+
+    /// Converts active runtime state into terminal runtime state with an explicit step count.
+    pub(super) fn into_terminal_at(self, steps: StepCount) -> TerminalRunCore {
+        TerminalRunCore {
+            state: self.state,
+            steps,
+        }
+    }
+}
+
+impl TerminalRunCore {
+    /// Number of steps completed before the terminal boundary.
+    pub(super) const fn completed_steps(&self) -> StepCount {
+        self.steps
+    }
+
+    /// Borrows the terminal runtime state.
+    pub(super) fn state(&self) -> RuntimeStateView<'_> {
+        self.state.view()
+    }
+
+    /// Materializes this terminal core as a stable result.
     ///
     /// # Errors
     ///
     /// Returns `RunFinishError` if final state materialization cannot allocate.
-    pub(super) fn into_stable_result(self, steps: StepCount) -> Result<RunResult, RunFinishError> {
+    pub(super) fn into_stable_result(self) -> Result<RunResult, RunFinishError> {
         let output = self
             .state
             .into_snapshot()
             .map_err(RunFinishError::FinalOutput)?;
-        Ok(RunResult::stable(output, steps))
+        Ok(RunResult::stable(output, self.steps))
     }
 }
 
@@ -149,7 +187,7 @@ impl<P: ProgramOwner, E: ExecutionPolicy> Session<P, E> {
     ///
     /// Returns `RunStartError` if allocating per-run rule state fails.
     pub(super) fn new(program: P, admitted: AdmittedRun<E>) -> Result<Self, RunStartError> {
-        let core = RunCore::new(program.program(), admitted)?;
+        let core = ActiveRunCore::new(program.program(), admitted)?;
         Ok(Self { program, core })
     }
 
@@ -188,13 +226,35 @@ impl<P: ProgramOwner, E: ExecutionPolicy> Session<P, E> {
                 }) => {
                     return Ok(RunResult::from_return(output, step));
                 }
-                CoreStep::Stable(steps) => return self.core.into_stable_result(steps),
+                CoreStep::Stable(steps) => {
+                    return self.core.into_terminal_at(steps).into_stable_result();
+                }
             }
         }
     }
 }
 
 impl<P: ProgramOwner, E: ExecutionPolicy, A: RuleAttemptPolicy> AttemptSession<P, E, A> {
+    /// Starts active rule-attempt execution from an executable program witness.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunStartError` if allocating per-run rule state fails.
+    pub(super) fn new(
+        program: P,
+        admitted: AdmittedRun<E>,
+        first_cursor: ActiveRuleCursor,
+    ) -> Result<Self, RunStartError> {
+        let core = ActiveRunCore::new(program.program(), admitted)?;
+        Ok(Self {
+            program,
+            core,
+            first_cursor,
+            cursor: first_cursor,
+            attempt_budget: RuleAttemptBudgetState::new(),
+        })
+    }
+
     /// Borrows the parsed program.
     pub(super) fn program(&self) -> &Program<P::Policy> {
         self.program.program()
@@ -270,7 +330,8 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<BorrowedProgram<'prog
                 CoreStep::Stable(steps) => {
                     return self
                         .core
-                        .into_stable_result(steps)
+                        .into_terminal_at(steps)
+                        .into_stable_result()
                         .map_err(RunError::from)
                         .map_err(TracedRunError::Run);
                 }
@@ -298,7 +359,7 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<BorrowedProgram<'prog
 
 impl<P: ParsePolicy, E: ExecutionPolicy> Session<OwnedProgram<P>, E> {
     /// Splits an owned session into its program and mutable core.
-    pub(super) fn into_program_core(self) -> (Program<P>, RunCore<E>) {
+    pub(super) fn into_program_core(self) -> (Program<P>, ActiveRunCore<E>) {
         (self.program.program, self.core)
     }
 }
@@ -307,7 +368,7 @@ impl<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
     AttemptSession<OwnedProgram<P>, E, A>
 {
     /// Splits an owned rule-attempt session into its program and mutable core.
-    pub(super) fn into_program_core(self) -> (Program<P>, RunCore<E>) {
+    pub(super) fn into_program_core(self) -> (Program<P>, ActiveRunCore<E>) {
         (self.program.program, self.core)
     }
 }

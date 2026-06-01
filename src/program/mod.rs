@@ -10,6 +10,8 @@
 //! an [`AdmittedRun`] each time execution starts. This keeps parsed source
 //! reuse separate from mutable runtime progress.
 
+/// Executable and empty parsed-program witnesses.
+mod executable;
 /// Parser limit value types and defaults.
 pub(crate) mod limits;
 /// Run result and output byte domains.
@@ -18,7 +20,7 @@ mod result;
 mod rule_set;
 use core::marker::PhantomData;
 
-use crate::error::ParseError;
+use crate::error::{ParseError, RunError};
 use crate::input::AdmittedRun;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::parser::parse_rules_impl;
@@ -29,6 +31,9 @@ use crate::trace::TraceRequest;
 pub(crate) use rule_set::{ActiveRuleCursor, RuleCursorAfterMiss, RuleScan};
 pub(crate) use rule_set::{RuleSet, RuleSetBuilder};
 
+pub use executable::{
+    BorrowedEmptyProgram, BorrowedExecutableProgram, OwnedEmptyProgram, OwnedExecutableProgram,
+};
 pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeStateSnapshot};
 
 /// Parsed A=B rewrite program.
@@ -111,6 +116,42 @@ impl<P: ParsePolicy> Program<P> {
     /// Mints a private runtime scan over the immutable rule table.
     pub(crate) fn rule_scan(&self) -> RuleScan<'_> {
         self.rule_set.scan()
+    }
+
+    /// Borrows this parsed program as an executable program when at least one rule exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BorrowedEmptyProgram` when the parsed program has no executable rules.
+    pub fn as_executable(
+        &self,
+    ) -> Result<BorrowedExecutableProgram<'_, P>, BorrowedEmptyProgram<'_, P>> {
+        BorrowedExecutableProgram::from_program(self)
+    }
+
+    /// Moves this parsed program into an executable program when at least one rule exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns `OwnedEmptyProgram` when the parsed program has no executable rules.
+    pub fn into_executable(self) -> Result<OwnedExecutableProgram<P>, OwnedEmptyProgram<P>> {
+        OwnedExecutableProgram::from_program(self)
+    }
+
+    /// Executes this program to completion.
+    ///
+    /// Stepwise and rule-attempt execution require an executable-program witness
+    /// from [`Program::as_executable`] or [`Program::into_executable`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `RunError` when execution setup fails or a later matching rule would
+    /// exceed configured limits.
+    pub fn execute<E>(&self, admitted: AdmittedRun<E>) -> Result<RunResult, RunError>
+    where
+        E: ExecutionPolicy,
+    {
+        crate::execution::finish_borrowed_run(self, admitted)
     }
 
     /// Runs this program while emitting trace events selected by a typed request.
