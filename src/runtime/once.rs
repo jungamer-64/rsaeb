@@ -20,8 +20,6 @@ enum OnceSlotState {
     Fresh,
     /// Slot has already committed during this run.
     Committed,
-    /// Slot is not part of this run's parser-assigned once-state table.
-    Unassigned,
 }
 
 /// Linear commit action for a matched rule.
@@ -186,9 +184,7 @@ impl OnceStateSet {
                 OnceSlotState::Fresh => {
                     ScannedRuleReadiness::Available(ScannedRuleCommit::Once(slot))
                 }
-                OnceSlotState::Committed | OnceSlotState::Unassigned => {
-                    ScannedRuleReadiness::Consumed
-                }
+                OnceSlotState::Committed => ScannedRuleReadiness::Consumed,
             },
         }
     }
@@ -198,7 +194,6 @@ impl OnceStateSet {
         self.slot_states
             .get(slot.index())
             .copied()
-            .unwrap_or(OnceSlotState::Unassigned)
     }
 
     /// Marks one fresh parser-assigned `(once)` slot as committed.
@@ -225,7 +220,7 @@ impl<'program, 'once> RuntimeRule<'program, 'once> {
                 OnceSlotState::Fresh => {
                     OnceRuleReadiness::Available(OnceRuleCommitSeed::Once { table, slot })
                 }
-                OnceSlotState::Committed | OnceSlotState::Unassigned => OnceRuleReadiness::Consumed,
+                OnceSlotState::Committed => OnceRuleReadiness::Consumed,
             },
         }
     }

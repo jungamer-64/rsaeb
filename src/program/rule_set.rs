@@ -47,7 +47,7 @@ struct RuleInsertionPermit {
 }
 
 /// Cursor pointing to the next executable rule line in one rule-attempt run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RuleCursor {
     /// Zero-based rule-table offset selected on the next attempt.
     next_rule_index: usize,

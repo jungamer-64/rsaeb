@@ -54,22 +54,6 @@ pub(super) struct AttemptSession<P, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     pub(super) attempt_budget: RuleAttemptBudgetState<A>,
 }
 
-/// All data needed to commit one non-applying rule attempt.
-struct MissCommit<'attempt, E: ExecutionPolicy, A: RuleAttemptPolicy, RuleWitness> {
-    /// Cursor to advance when the miss is not the final executable rule.
-    cursor: &'attempt mut RuleCursor,
-    /// Rule-attempt budget after the miss has been committed.
-    attempt_budget: &'attempt RuleAttemptBudgetState<A>,
-    /// Runtime core observed by the attempted rule.
-    core: &'attempt RunCore<E>,
-    /// Committed attempt count assigned to this miss.
-    attempt: RuleAttemptCount,
-    /// Active cursor that selected the missed rule.
-    after_miss: RuleCursorAfterMiss,
-    /// Non-applying rule selected by the current cursor.
-    miss: RuleMiss<RuleWitness>,
-}
-
 /// Mutable rule-attempt state needed to consume one executable rule line.
 struct RuleAttemptContext<
     'attempt,
@@ -285,45 +269,6 @@ impl<E: ExecutionPolicy> RunCore<E> {
         Ok(RunResult::stable(output, steps))
     }
 
-    /// Advances the mutable runtime core against the supplied immutable program.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunStepError` if applying the matched rule exceeds limits or allocation fails.
-    fn step_runtime<'program, P: ParsePolicy>(
-        &mut self,
-        program: &'program Program<P>,
-    ) -> Result<RuntimeStep<'program>, RunStepError> {
-        let matched = match find_next_match(program.rule_scan(), &mut self.once_states, &self.state)
-        {
-            RuleSearch::Matched(matched) => matched,
-            RuleSearch::Stable => {
-                return Ok(RuntimeStep::Stable(self.budget.completed_steps()));
-            }
-        };
-
-        let state_len = self.state.byte_count();
-        let prepared =
-            prepare_matched_rule(&mut self.scratch, &mut self.budget, state_len, matched)?;
-        let applied = prepared.commit(&mut self.state, &mut self.scratch);
-        Ok(RuntimeStep::Applied(applied))
-    }
-
-    /// Advances the mutable runtime core against the supplied immutable program.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunStepError` if applying the matched rule exceeds limits or allocation fails.
-    fn step<P: ParsePolicy>(&mut self, program: &Program<P>) -> Result<CoreStep<()>, RunStepError> {
-        let applied = match self.step_runtime(program)? {
-            RuntimeStep::Applied(applied) => applied,
-            RuntimeStep::Stable(steps) => return Ok(CoreStep::Stable(steps)),
-        };
-        Ok(CoreStep::Applied(CoreAppliedRule::from_applied_rule(
-            applied,
-            (),
-        )))
-    }
 }
 
 impl<P: ProgramOwner, E: ExecutionPolicy> Session<P, E> {
