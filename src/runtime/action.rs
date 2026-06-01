@@ -14,7 +14,7 @@ use super::state::State;
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum AppliedRule<'program> {
     /// One rewrite rule committed and execution may continue.
-    Rewrite(CommittedRewriteRule<'program>),
+    Rewrite(CommittedRewriteRule),
     /// One return rule committed and execution is terminal.
     Return(CommittedReturnRule<'program>),
 }
@@ -30,11 +30,9 @@ pub(crate) enum PreparedRuleApplication<'program, 'once, 'budget, E: ExecutionPo
 
 /// Committed non-terminal rewrite rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CommittedRewriteRule<'program> {
+pub(crate) struct CommittedRewriteRule {
     /// Step number assigned by the runtime budget.
     step: StepCount,
-    /// Parsed rule whose rewrite committed.
-    rule: &'program Rule,
 }
 
 /// Committed terminal return rule.
@@ -42,8 +40,6 @@ pub(crate) struct CommittedRewriteRule<'program> {
 pub(crate) struct CommittedReturnRule<'program> {
     /// Step number assigned by the runtime budget.
     step: StepCount,
-    /// Parsed rule whose return committed.
-    rule: &'program Rule,
     /// Borrowed return output payload from the committed parsed rule.
     output_view: ReturnOutputView<'program>,
     /// Materialized return output produced before committing the terminal step.
@@ -74,17 +70,10 @@ pub(crate) struct PreparedReturnRule<'program, 'once, 'budget, E: ExecutionPolic
     output: ReturnOutput,
 }
 
-impl CommittedRewriteRule<'_> {
+impl CommittedRewriteRule {
     /// Step number assigned by the runtime budget.
     pub(crate) const fn step(self) -> StepCount {
         self.step
-    }
-}
-
-impl<'program> CommittedRewriteRule<'program> {
-    /// Parsed rule whose rewrite committed.
-    pub(crate) const fn rule(self) -> &'program Rule {
-        self.rule
     }
 }
 
@@ -96,11 +85,6 @@ impl CommittedReturnRule<'_> {
 }
 
 impl<'program> CommittedReturnRule<'program> {
-    /// Parsed rule whose return committed.
-    pub(crate) const fn rule(&self) -> &'program Rule {
-        self.rule
-    }
-
     /// Borrowed return output payload from the committed parsed rule.
     pub(crate) const fn output_view(&self) -> ReturnOutputView<'program> {
         self.output_view
@@ -130,20 +114,16 @@ impl<'program, E: ExecutionPolicy> PreparedRuleApplication<'program, '_, '_, E> 
     ) -> AppliedRule<'program> {
         match self {
             Self::Rewrite(prepared) => {
-                let committed = prepared.matched.commit();
+                prepared.matched.commit();
                 let step = prepared.step.commit();
                 state.commit_rewrite(prepared.rewrite, scratch);
-                AppliedRule::Rewrite(CommittedRewriteRule {
-                    step,
-                    rule: committed.rule(),
-                })
+                AppliedRule::Rewrite(CommittedRewriteRule { step })
             }
             Self::Return(prepared) => {
-                let committed = prepared.matched.commit();
+                prepared.matched.commit();
                 let step = prepared.step.commit();
                 AppliedRule::Return(CommittedReturnRule {
                     step,
-                    rule: committed.rule(),
                     output_view: prepared.output_view,
                     output: prepared.output,
                 })

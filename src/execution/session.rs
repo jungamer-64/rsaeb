@@ -2,13 +2,15 @@ use crate::error::{RunError, RunFinishError, RunStartError, TracedRunError};
 use crate::input::AdmittedRun;
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
-use crate::program::{Program, ReturnOutput, RunResult};
+use crate::program::{Program, RunResult};
 use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
 
-use super::attempt::{RuleAttemptStableReason, RuleMiss};
+use super::advance::{
+    BorrowedRunWitness, CoreAppliedRule, CoreRuleAttemptStep, CoreStep, OwnedRunWitness,
+    advance_borrowed_rule_attempt, advance_owned_rule_attempt, advance_run,
+};
 use super::engine::{
-    AttemptSession, BorrowedProgram, CoreAppliedRule, CoreRuleAttemptStep, CoreStep, OwnedProgram,
-    RunCore, Session, TerminalAttemptSession,
+    AttemptSession, BorrowedProgram, OwnedProgram, RunCore, Session, TerminalAttemptSession,
 };
 use super::transition::{
     BorrowedAppliedStep, BorrowedFailedRun, BorrowedMissedRuleAttempt, BorrowedReturnedRun,
@@ -102,99 +104,6 @@ struct OwnedRuleAttemptTerminal<P: ParsePolicy, E: ExecutionPolicy> {
     core: RunCore<E>,
     /// Rule attempts consumed before the terminal boundary was reached.
     attempts: RuleAttemptCount,
-}
-
-/// Private ordinary-run transition vocabulary before projection into public borrowed/owned types.
-enum RunStepParts<Continuation, Terminal, RuleWitness, StepError> {
-    /// A rewrite committed and the run can continue.
-    Applied {
-        /// Committed step count.
-        step: StepCount,
-        /// Rule witness paired with the committed step.
-        rule: RuleWitness,
-        /// Continuation session after the committed step.
-        continuation: Continuation,
-    },
-    /// A return rule committed and the run is terminal.
-    Returned {
-        /// Committed step count.
-        step: StepCount,
-        /// Rule witness paired with the committed return.
-        rule: RuleWitness,
-        /// Terminal session data.
-        terminal: Terminal,
-        /// Materialized return output.
-        output: ReturnOutput,
-    },
-    /// No rule matched the final runtime state.
-    Stable {
-        /// Steps committed before stability.
-        steps: StepCount,
-        /// Terminal session data.
-        terminal: Terminal,
-    },
-    /// A candidate step failed before commit.
-    Failed {
-        /// Error that prevented commit.
-        error: StepError,
-        /// Terminal session data preserving the uncommitted state.
-        terminal: Terminal,
-    },
-}
-
-/// Private rule-attempt transition vocabulary before projection into public borrowed/owned types.
-enum RuleAttemptStepParts<Continuation, Terminal, RuleWitness, StepError> {
-    /// A non-applying rule line was consumed and the run can continue.
-    Missed {
-        /// Committed rule-attempt count.
-        attempt: RuleAttemptCount,
-        /// Rule miss witness.
-        miss: RuleMiss<RuleWitness>,
-        /// Continuation session after the consumed attempt.
-        continuation: Continuation,
-    },
-    /// A rewrite committed and the rule-attempt run can continue.
-    Applied {
-        /// Committed rule-attempt count.
-        attempt: RuleAttemptCount,
-        /// Committed rewrite step count.
-        step: StepCount,
-        /// Rule witness paired with the committed step.
-        rule: RuleWitness,
-        /// Continuation session after the committed step.
-        continuation: Continuation,
-    },
-    /// A return rule committed and the run is terminal.
-    Returned {
-        /// Committed rule-attempt count.
-        attempt: RuleAttemptCount,
-        /// Committed step count.
-        step: StepCount,
-        /// Rule witness paired with the committed return.
-        rule: RuleWitness,
-        /// Terminal session data.
-        terminal: Terminal,
-        /// Materialized return output.
-        output: ReturnOutput,
-    },
-    /// A rule pass completed without a match.
-    Stable {
-        /// Attempts consumed before stability.
-        attempts: RuleAttemptCount,
-        /// Steps committed before stability.
-        steps: StepCount,
-        /// Typed reason for stability.
-        stable_reason: RuleAttemptStableReason<RuleWitness>,
-        /// Terminal session data.
-        terminal: Terminal,
-    },
-    /// A candidate rule attempt failed before committing runtime state.
-    Failed {
-        /// Error that prevented commit.
-        error: StepError,
-        /// Terminal session data preserving the uncommitted state.
-        terminal: Terminal,
-    },
 }
 
 /// Runs a borrowed program to completion.
@@ -539,477 +448,96 @@ impl<P: ParsePolicy, E: ExecutionPolicy> OwnedRuleAttemptTerminal<P, E> {
     }
 }
 
-/// Advances a borrowed ordinary run through the private transition vocabulary.
-fn borrowed_run_step_parts<'program, P: ParsePolicy, E: ExecutionPolicy>(
+/// Advances a borrowed ordinary run and projects the private transition into the public type.
+fn step_borrowed_run<'program, P: ParsePolicy, E: ExecutionPolicy>(
     mut session: BorrowedRunSession<'program, P, E>,
-) -> RunStepParts<
-    BorrowedRunSession<'program, P, E>,
-    BorrowedRunTerminal<'program, P, E>,
-    crate::inspect::RuleView<'program>,
-    crate::error::RunStepError,
-> {
-    match session.session.step_borrowed() {
-        Ok(CoreStep::Applied(CoreAppliedRule::Rewrite { step, rule })) => RunStepParts::Applied {
-            step,
-            rule,
-            continuation: session,
-        },
-        Ok(CoreStep::Applied(CoreAppliedRule::Return { step, rule, output })) => {
-            RunStepParts::Returned {
+) -> BorrowedStepTransition<'program, P, E> {
+    match advance_run::<_, _, BorrowedRunWitness>(
+        session.session.program.program,
+        &mut session.session.core,
+    ) {
+        Ok(CoreStep::Applied(CoreAppliedRule::Rewrite { step, rule })) => {
+            BorrowedStepTransition::Applied(BorrowedAppliedStep {
                 step,
                 rule,
-                terminal: BorrowedRunTerminal::from_session(session),
-                output,
-            }
+                session,
+            })
         }
-        Ok(CoreStep::Stable(steps)) => RunStepParts::Stable {
-            steps,
-            terminal: BorrowedRunTerminal::from_session(session),
-        },
-        Err(error) => RunStepParts::Failed {
-            error,
-            terminal: BorrowedRunTerminal::from_session(session),
-        },
-    }
-}
-
-/// Advances an owned ordinary run through the private transition vocabulary.
-fn owned_run_step_parts<P: ParsePolicy, E: ExecutionPolicy>(
-    mut session: OwnedRunSession<P, E>,
-) -> RunStepParts<
-    OwnedRunSession<P, E>,
-    OwnedRunTerminal<P, E>,
-    super::witness::OwnedRuleWitness,
-    crate::error::OwnedRunStepError,
-> {
-    match session.session.step_owned() {
-        Ok(CoreStep::Applied(CoreAppliedRule::Rewrite { step, rule })) => RunStepParts::Applied {
+        Ok(CoreStep::Applied(CoreAppliedRule::Return {
             step,
             rule,
-            continuation: session,
-        },
-        Ok(CoreStep::Applied(CoreAppliedRule::Return { step, rule, output })) => {
-            RunStepParts::Returned {
-                step,
-                rule,
-                terminal: OwnedRunTerminal::from_session(session),
-                output,
-            }
-        }
-        Ok(CoreStep::Stable(steps)) => RunStepParts::Stable {
-            steps,
-            terminal: OwnedRunTerminal::from_session(session),
-        },
-        Err(error) => RunStepParts::Failed {
-            error,
-            terminal: OwnedRunTerminal::from_session(session),
-        },
-    }
-}
-
-/// Advances a borrowed rule-attempt run through the private transition vocabulary.
-fn borrowed_rule_attempt_step_parts<
-    'program,
-    P: ParsePolicy,
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
->(
-    session: BorrowedRuleAttemptSession<'program, P, E, A>,
-) -> RuleAttemptStepParts<
-    BorrowedRuleAttemptSession<'program, P, E, A>,
-    BorrowedRuleAttemptTerminal<'program, P, E>,
-    crate::inspect::RuleView<'program>,
-    crate::error::RuleAttemptStepError,
-> {
-    match session.session.step_borrowed() {
-        CoreRuleAttemptStep::Missed {
-            attempt,
-            miss,
-            continuation,
-        } => RuleAttemptStepParts::Missed {
-            attempt,
-            miss,
-            continuation: BorrowedRuleAttemptSession {
-                session: continuation,
-            },
-        },
-        CoreRuleAttemptStep::Applied {
-            attempt,
-            step,
-            rule,
-            continuation,
-        } => RuleAttemptStepParts::Applied {
-            attempt,
-            step,
-            rule,
-            continuation: BorrowedRuleAttemptSession {
-                session: continuation,
-            },
-        },
-        CoreRuleAttemptStep::Returned {
-            attempt,
-            step,
-            rule,
+            output_view: _,
             output,
-            terminal,
-        } => RuleAttemptStepParts::Returned {
-            attempt,
-            step,
-            rule,
-            terminal: BorrowedRuleAttemptTerminal::from_terminal(terminal),
-            output,
-        },
-        CoreRuleAttemptStep::Stable {
-            attempts,
-            steps,
-            stable_reason,
-            terminal,
-        } => RuleAttemptStepParts::Stable {
-            attempts,
-            steps,
-            stable_reason,
-            terminal: BorrowedRuleAttemptTerminal::from_terminal(terminal),
-        },
-        CoreRuleAttemptStep::Failed { error, terminal } => RuleAttemptStepParts::Failed {
-            error,
-            terminal: BorrowedRuleAttemptTerminal::from_terminal(terminal),
-        },
-    }
-}
-
-/// Advances an owned rule-attempt run through the private transition vocabulary.
-fn owned_rule_attempt_step_parts<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>(
-    session: OwnedRuleAttemptSession<P, E, A>,
-) -> RuleAttemptStepParts<
-    OwnedRuleAttemptSession<P, E, A>,
-    OwnedRuleAttemptTerminal<P, E>,
-    super::witness::OwnedRuleWitness,
-    crate::error::OwnedRuleAttemptStepError,
-> {
-    match session.session.step_owned() {
-        CoreRuleAttemptStep::Missed {
-            attempt,
-            miss,
-            continuation,
-        } => RuleAttemptStepParts::Missed {
-            attempt,
-            miss,
-            continuation: OwnedRuleAttemptSession {
-                session: continuation,
-            },
-        },
-        CoreRuleAttemptStep::Applied {
-            attempt,
-            step,
-            rule,
-            continuation,
-        } => RuleAttemptStepParts::Applied {
-            attempt,
-            step,
-            rule,
-            continuation: OwnedRuleAttemptSession {
-                session: continuation,
-            },
-        },
-        CoreRuleAttemptStep::Returned {
-            attempt,
-            step,
-            rule,
-            output,
-            terminal,
-        } => RuleAttemptStepParts::Returned {
-            attempt,
-            step,
-            rule,
-            terminal: OwnedRuleAttemptTerminal::from_terminal(terminal),
-            output,
-        },
-        CoreRuleAttemptStep::Stable {
-            attempts,
-            steps,
-            stable_reason,
-            terminal,
-        } => RuleAttemptStepParts::Stable {
-            attempts,
-            steps,
-            stable_reason,
-            terminal: OwnedRuleAttemptTerminal::from_terminal(terminal),
-        },
-        CoreRuleAttemptStep::Failed { error, terminal } => RuleAttemptStepParts::Failed {
-            error,
-            terminal: OwnedRuleAttemptTerminal::from_terminal(terminal),
-        },
-    }
-}
-
-impl<'program, P: ParsePolicy, E: ExecutionPolicy>
-    From<
-        RunStepParts<
-            BorrowedRunSession<'program, P, E>,
-            BorrowedRunTerminal<'program, P, E>,
-            crate::inspect::RuleView<'program>,
-            crate::error::RunStepError,
-        >,
-    > for BorrowedStepTransition<'program, P, E>
-{
-    fn from(
-        parts: RunStepParts<
-            BorrowedRunSession<'program, P, E>,
-            BorrowedRunTerminal<'program, P, E>,
-            crate::inspect::RuleView<'program>,
-            crate::error::RunStepError,
-        >,
-    ) -> Self {
-        match parts {
-            RunStepParts::Applied {
-                step,
-                rule,
-                continuation,
-            } => Self::Applied(BorrowedAppliedStep {
-                step,
-                rule,
-                session: continuation,
-            }),
-            RunStepParts::Returned {
-                step,
-                rule,
-                terminal,
-                output,
-            } => Self::Returned(BorrowedReturnedRun {
+        })) => {
+            let terminal = BorrowedRunTerminal::from_session(session);
+            BorrowedStepTransition::Returned(BorrowedReturnedRun {
                 step,
                 rule,
                 program: terminal.program,
                 output,
-            }),
-            RunStepParts::Stable { steps, terminal } => Self::Stable(BorrowedStableRun {
+            })
+        }
+        Ok(CoreStep::Stable(steps)) => {
+            let terminal = BorrowedRunTerminal::from_session(session);
+            BorrowedStepTransition::Stable(BorrowedStableRun {
                 steps,
                 program: terminal.program,
                 core: terminal.core,
-            }),
-            RunStepParts::Failed { error, terminal } => Self::Failed(BorrowedFailedRun::new(
+            })
+        }
+        Err(error) => {
+            let terminal = BorrowedRunTerminal::from_session(session);
+            BorrowedStepTransition::Failed(BorrowedFailedRun::new(
                 error,
                 terminal.program,
                 terminal.core,
-            )),
+            ))
         }
     }
-}
-
-impl<P: ParsePolicy, E: ExecutionPolicy>
-    From<
-        RunStepParts<
-            OwnedRunSession<P, E>,
-            OwnedRunTerminal<P, E>,
-            super::witness::OwnedRuleWitness,
-            crate::error::OwnedRunStepError,
-        >,
-    > for OwnedStepTransition<P, E>
-{
-    fn from(
-        parts: RunStepParts<
-            OwnedRunSession<P, E>,
-            OwnedRunTerminal<P, E>,
-            super::witness::OwnedRuleWitness,
-            crate::error::OwnedRunStepError,
-        >,
-    ) -> Self {
-        match parts {
-            RunStepParts::Applied {
-                step,
-                rule,
-                continuation,
-            } => Self::Applied(OwnedAppliedStep {
-                step,
-                rule,
-                session: continuation,
-            }),
-            RunStepParts::Returned {
-                step,
-                rule,
-                terminal,
-                output,
-            } => Self::Returned(OwnedReturnedRun {
-                step,
-                rule,
-                program: terminal.program,
-                output,
-            }),
-            RunStepParts::Stable { steps, terminal } => Self::Stable(OwnedStableRun {
-                steps,
-                program: terminal.program,
-                core: terminal.core,
-            }),
-            RunStepParts::Failed { error, terminal } => {
-                Self::Failed(OwnedFailedRun::new(error, terminal.program, terminal.core))
-            }
-        }
-    }
-}
-
-impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
-    From<
-        RuleAttemptStepParts<
-            BorrowedRuleAttemptSession<'program, P, E, A>,
-            BorrowedRuleAttemptTerminal<'program, P, E>,
-            crate::inspect::RuleView<'program>,
-            crate::error::RuleAttemptStepError,
-        >,
-    > for BorrowedRuleAttemptTransition<'program, P, E, A>
-{
-    fn from(
-        parts: RuleAttemptStepParts<
-            BorrowedRuleAttemptSession<'program, P, E, A>,
-            BorrowedRuleAttemptTerminal<'program, P, E>,
-            crate::inspect::RuleView<'program>,
-            crate::error::RuleAttemptStepError,
-        >,
-    ) -> Self {
-        match parts {
-            RuleAttemptStepParts::Missed {
-                attempt,
-                miss,
-                continuation,
-            } => Self::Missed(BorrowedMissedRuleAttempt {
-                attempt,
-                miss,
-                session: continuation,
-            }),
-            RuleAttemptStepParts::Applied {
-                attempt,
-                step,
-                rule,
-                continuation,
-            } => Self::Applied(BorrowedRuleAttemptAppliedStep {
-                attempt,
-                step,
-                rule,
-                session: continuation,
-            }),
-            RuleAttemptStepParts::Returned {
-                attempt,
-                step,
-                rule,
-                terminal,
-                output,
-            } => Self::Returned(BorrowedRuleAttemptReturnedRun {
-                attempt,
-                step,
-                rule,
-                program: terminal.program,
-                output,
-            }),
-            RuleAttemptStepParts::Stable {
-                attempts,
-                steps,
-                stable_reason,
-                terminal,
-            } => Self::Stable(BorrowedRuleAttemptStableRun {
-                attempts,
-                steps,
-                stable_reason,
-                program: terminal.program,
-                core: terminal.core,
-            }),
-            RuleAttemptStepParts::Failed { error, terminal } => {
-                Self::Failed(BorrowedRuleAttemptFailedRun::new(
-                    error,
-                    terminal.attempts,
-                    terminal.program,
-                    terminal.core,
-                ))
-            }
-        }
-    }
-}
-
-impl<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
-    From<
-        RuleAttemptStepParts<
-            OwnedRuleAttemptSession<P, E, A>,
-            OwnedRuleAttemptTerminal<P, E>,
-            super::witness::OwnedRuleWitness,
-            crate::error::OwnedRuleAttemptStepError,
-        >,
-    > for OwnedRuleAttemptTransition<P, E, A>
-{
-    fn from(
-        parts: RuleAttemptStepParts<
-            OwnedRuleAttemptSession<P, E, A>,
-            OwnedRuleAttemptTerminal<P, E>,
-            super::witness::OwnedRuleWitness,
-            crate::error::OwnedRuleAttemptStepError,
-        >,
-    ) -> Self {
-        match parts {
-            RuleAttemptStepParts::Missed {
-                attempt,
-                miss,
-                continuation,
-            } => Self::Missed(OwnedMissedRuleAttempt {
-                attempt,
-                miss,
-                session: continuation,
-            }),
-            RuleAttemptStepParts::Applied {
-                attempt,
-                step,
-                rule,
-                continuation,
-            } => Self::Applied(OwnedRuleAttemptAppliedStep {
-                attempt,
-                step,
-                rule,
-                session: continuation,
-            }),
-            RuleAttemptStepParts::Returned {
-                attempt,
-                step,
-                rule,
-                terminal,
-                output,
-            } => Self::Returned(OwnedRuleAttemptReturnedRun {
-                attempt,
-                step,
-                rule,
-                program: terminal.program,
-                output,
-            }),
-            RuleAttemptStepParts::Stable {
-                attempts,
-                steps,
-                stable_reason,
-                terminal,
-            } => Self::Stable(OwnedRuleAttemptStableRun {
-                attempts,
-                steps,
-                stable_reason,
-                program: terminal.program,
-                core: terminal.core,
-            }),
-            RuleAttemptStepParts::Failed { error, terminal } => {
-                Self::Failed(OwnedRuleAttemptFailedRun::new(
-                    error,
-                    terminal.attempts,
-                    terminal.program,
-                    terminal.core,
-                ))
-            }
-        }
-    }
-}
-
-/// Advances a borrowed ordinary run and projects the private transition into the public type.
-fn step_borrowed_run<'program, P: ParsePolicy, E: ExecutionPolicy>(
-    session: BorrowedRunSession<'program, P, E>,
-) -> BorrowedStepTransition<'program, P, E> {
-    borrowed_run_step_parts(session).into()
 }
 
 /// Advances an owned ordinary run and projects the private transition into the public type.
 fn step_owned_run<P: ParsePolicy, E: ExecutionPolicy>(
-    session: OwnedRunSession<P, E>,
+    mut session: OwnedRunSession<P, E>,
 ) -> OwnedStepTransition<P, E> {
-    owned_run_step_parts(session).into()
+    match advance_run::<_, _, OwnedRunWitness>(
+        &session.session.program.program,
+        &mut session.session.core,
+    ) {
+        Ok(CoreStep::Applied(CoreAppliedRule::Rewrite { step, rule })) => {
+            OwnedStepTransition::Applied(OwnedAppliedStep {
+                step,
+                rule,
+                session,
+            })
+        }
+        Ok(CoreStep::Applied(CoreAppliedRule::Return {
+            step,
+            rule,
+            output_view: _,
+            output,
+        })) => {
+            let terminal = OwnedRunTerminal::from_session(session);
+            OwnedStepTransition::Returned(OwnedReturnedRun {
+                step,
+                rule,
+                program: terminal.program,
+                output,
+            })
+        }
+        Ok(CoreStep::Stable(steps)) => {
+            let terminal = OwnedRunTerminal::from_session(session);
+            OwnedStepTransition::Stable(OwnedStableRun {
+                steps,
+                program: terminal.program,
+                core: terminal.core,
+            })
+        }
+        Err(error) => {
+            let terminal = OwnedRunTerminal::from_session(session);
+            OwnedStepTransition::Failed(OwnedFailedRun::new(error, terminal.program, terminal.core))
+        }
+    }
 }
 
 /// Advances a borrowed rule-attempt run and projects the private transition into the public type.
@@ -1021,12 +549,142 @@ fn step_borrowed_rule_attempt_run<
 >(
     session: BorrowedRuleAttemptSession<'program, P, E, A>,
 ) -> BorrowedRuleAttemptTransition<'program, P, E, A> {
-    borrowed_rule_attempt_step_parts(session).into()
+    match advance_borrowed_rule_attempt(session.session) {
+        CoreRuleAttemptStep::Missed {
+            attempt,
+            miss,
+            continuation,
+        } => BorrowedRuleAttemptTransition::Missed(BorrowedMissedRuleAttempt {
+            attempt,
+            miss,
+            session: BorrowedRuleAttemptSession {
+                session: continuation,
+            },
+        }),
+        CoreRuleAttemptStep::Applied {
+            attempt,
+            step,
+            rule,
+            continuation,
+        } => BorrowedRuleAttemptTransition::Applied(BorrowedRuleAttemptAppliedStep {
+            attempt,
+            step,
+            rule,
+            session: BorrowedRuleAttemptSession {
+                session: continuation,
+            },
+        }),
+        CoreRuleAttemptStep::Returned {
+            attempt,
+            step,
+            rule,
+            output,
+            terminal,
+        } => {
+            let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
+            BorrowedRuleAttemptTransition::Returned(BorrowedRuleAttemptReturnedRun {
+                attempt,
+                step,
+                rule,
+                program: terminal.program,
+                output,
+            })
+        }
+        CoreRuleAttemptStep::Stable {
+            attempts,
+            steps,
+            stable_reason,
+            terminal,
+        } => {
+            let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
+            BorrowedRuleAttemptTransition::Stable(BorrowedRuleAttemptStableRun {
+                attempts,
+                steps,
+                stable_reason,
+                program: terminal.program,
+                core: terminal.core,
+            })
+        }
+        CoreRuleAttemptStep::Failed { error, terminal } => {
+            let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
+            BorrowedRuleAttemptTransition::Failed(BorrowedRuleAttemptFailedRun::new(
+                error,
+                terminal.attempts,
+                terminal.program,
+                terminal.core,
+            ))
+        }
+    }
 }
 
 /// Advances an owned rule-attempt run and projects the private transition into the public type.
 fn step_owned_rule_attempt_run<P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>(
     session: OwnedRuleAttemptSession<P, E, A>,
 ) -> OwnedRuleAttemptTransition<P, E, A> {
-    owned_rule_attempt_step_parts(session).into()
+    match advance_owned_rule_attempt(session.session) {
+        CoreRuleAttemptStep::Missed {
+            attempt,
+            miss,
+            continuation,
+        } => OwnedRuleAttemptTransition::Missed(OwnedMissedRuleAttempt {
+            attempt,
+            miss,
+            session: OwnedRuleAttemptSession {
+                session: continuation,
+            },
+        }),
+        CoreRuleAttemptStep::Applied {
+            attempt,
+            step,
+            rule,
+            continuation,
+        } => OwnedRuleAttemptTransition::Applied(OwnedRuleAttemptAppliedStep {
+            attempt,
+            step,
+            rule,
+            session: OwnedRuleAttemptSession {
+                session: continuation,
+            },
+        }),
+        CoreRuleAttemptStep::Returned {
+            attempt,
+            step,
+            rule,
+            output,
+            terminal,
+        } => {
+            let terminal = OwnedRuleAttemptTerminal::from_terminal(terminal);
+            OwnedRuleAttemptTransition::Returned(OwnedRuleAttemptReturnedRun {
+                attempt,
+                step,
+                rule,
+                program: terminal.program,
+                output,
+            })
+        }
+        CoreRuleAttemptStep::Stable {
+            attempts,
+            steps,
+            stable_reason,
+            terminal,
+        } => {
+            let terminal = OwnedRuleAttemptTerminal::from_terminal(terminal);
+            OwnedRuleAttemptTransition::Stable(OwnedRuleAttemptStableRun {
+                attempts,
+                steps,
+                stable_reason,
+                program: terminal.program,
+                core: terminal.core,
+            })
+        }
+        CoreRuleAttemptStep::Failed { error, terminal } => {
+            let terminal = OwnedRuleAttemptTerminal::from_terminal(terminal);
+            OwnedRuleAttemptTransition::Failed(OwnedRuleAttemptFailedRun::new(
+                error,
+                terminal.attempts,
+                terminal.program,
+                terminal.core,
+            ))
+        }
+    }
 }

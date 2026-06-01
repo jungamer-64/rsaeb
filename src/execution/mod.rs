@@ -55,6 +55,8 @@
 //! # }
 //! ```
 
+/// Type-selected execution advance kernel.
+mod advance;
 /// Rule miss and stable-reason values.
 mod attempt;
 /// Manual debug formatting for public typestates.

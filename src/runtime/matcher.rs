@@ -75,13 +75,6 @@ enum RuleStateMatch<'program, 'state> {
     Mismatched,
 }
 
-/// Rule view after all runtime side effects have committed.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct CommittedRule<'program> {
-    /// Parsed rule whose runtime side effects committed.
-    rule: &'program Rule,
-}
-
 impl<'program> RuleAttemptMiss<'program> {
     /// Captures a consumed non-applying rule line.
     const fn new(rule: &'program Rule, reason: RuleMissReason) -> Self {
@@ -149,16 +142,8 @@ impl<'program> PreparedMatchedRule<'program, '_> {
     }
 
     /// Commits the matched rule's deferred side effects.
-    pub(crate) fn commit(self) -> CommittedRule<'program> {
+    pub(crate) fn commit(self) {
         self.commit.commit();
-        CommittedRule { rule: self.rule }
-    }
-}
-
-impl<'program> CommittedRule<'program> {
-    /// Parsed rule whose runtime side effects committed.
-    pub(crate) const fn rule(self) -> &'program Rule {
-        self.rule
     }
 }
 
