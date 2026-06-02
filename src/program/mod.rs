@@ -1,9 +1,10 @@
 //! Parsed program and run-to-completion result types.
 //!
-//! A=B source parsing is split by expected program shape. Hosts parse typed
-//! [`ProgramSource`](crate::source::ProgramSource) under a
-//! [`ParsePolicy`](crate::policy::ParsePolicy) directly into either
-//! [`EmptyProgram`] or [`ExecutableProgram`].
+//! A=B source parsing is split by expected program shape. Hosts parse
+//! [`ExecutableProgramSource`](crate::source::ExecutableProgramSource) or
+//! [`EmptyProgramSource`](crate::source::EmptyProgramSource) under a
+//! [`ParsePolicy`](crate::policy::ParsePolicy) directly into the matching
+//! [`ExecutableProgram`] or [`EmptyProgram`].
 //!
 //! [`ExecutableProgram`] owns immutable syntax and rule metadata only. Per-run
 //! `(once)` availability, runtime bytes, completed-step counts, and execution

@@ -12,6 +12,38 @@
 //! Comments may contain arbitrary bytes, while executable source code is
 //! validated by the parser and runtime input is validated by the runtime-input
 //! boundary.
+//!
+//! ```
+//! use rsaeb::policy::DefaultParsePolicy;
+//! use rsaeb::program::ExecutableProgram;
+//! use rsaeb::source::ExecutableProgramSource;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let source = ExecutableProgramSource::from_bytes(b"a=b # arbitrary comment bytes: \xff");
+//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse(source)?;
+//!
+//! if executable.rule_count().get() != 1 {
+//!     return Err("unexpected rule count".into());
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ```
+//! use rsaeb::policy::DefaultParsePolicy;
+//! use rsaeb::program::EmptyProgram;
+//! use rsaeb::source::EmptyProgramSource;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let source = EmptyProgramSource::from_text("# no executable rules");
+//! let empty = EmptyProgram::<DefaultParsePolicy>::parse(source)?;
+//!
+//! if empty.rule_count().get() != 0 {
+//!     return Err("unexpected rule count".into());
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 /// Borrowed source expected to parse into an executable program.
 ///

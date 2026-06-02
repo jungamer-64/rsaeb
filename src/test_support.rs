@@ -17,7 +17,9 @@ use crate::policy::{
     RuntimeInputPolicy, StaticExecutionPolicy, StaticRuntimeInputPolicy,
 };
 use crate::program::{EmptyProgram, ExecutableProgram, RunResult};
-use crate::source::{ProgramSource, SourceColumn, SourceLineNumber, SourcePosition};
+use crate::source::{
+    EmptyProgramSource, ExecutableProgramSource, SourceColumn, SourceLineNumber, SourcePosition,
+};
 use core::marker::PhantomData;
 
 pub(crate) const DEFAULT_BYTE_BUDGET: usize = 16_777_216;
@@ -245,7 +247,7 @@ pub(crate) fn admitted_run<I: RuntimeInputPolicy, E: ExecutionPolicy>(
 pub(crate) fn parse_program(
     source: &str,
 ) -> Result<ExecutableProgram<DefaultParsePolicy>, ExecutableProgramParseError> {
-    ExecutableProgram::parse(ProgramSource::from_text(source))
+    ExecutableProgram::parse(ExecutableProgramSource::from_text(source))
 }
 
 /// Parses empty source text with the default parser limits.
@@ -257,7 +259,7 @@ pub(crate) fn parse_program(
 pub(crate) fn parse_empty_program(
     source: &str,
 ) -> Result<EmptyProgram<DefaultParsePolicy>, EmptyProgramParseError> {
-    EmptyProgram::parse(ProgramSource::from_text(source))
+    EmptyProgram::parse(EmptyProgramSource::from_text(source))
 }
 
 /// Executes a parsed program that is expected to contain executable rules.
@@ -300,7 +302,7 @@ where
 pub(crate) fn parse_program_bytes(
     source: &[u8],
 ) -> Result<ExecutableProgram<DefaultParsePolicy>, ExecutableProgramParseError> {
-    ExecutableProgram::parse(ProgramSource::from_bytes(source))
+    ExecutableProgram::parse(ExecutableProgramSource::from_bytes(source))
 }
 
 /// Converts a boolean assertion into the shared test result type.

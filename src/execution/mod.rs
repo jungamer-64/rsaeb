@@ -22,12 +22,12 @@
 //! use rsaeb::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy};
 //! use rsaeb::program::ExecutableProgram;
-//! use rsaeb::source::ProgramSource;
+//! use rsaeb::source::ExecutableProgramSource;
 //!
 //! type TinyState = StaticExecutionPolicy<10, 1, 16_777_216>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=aaaa"))?;
+//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse(ExecutableProgramSource::from_text("a=aaaa"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let session = executable.steps(input.admit::<TinyState>()?)?;
 //!
