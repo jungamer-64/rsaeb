@@ -1,4 +1,4 @@
-use alloc::vec::Vec;
+use alloc::{collections::VecDeque, vec::Vec};
 use core::slice;
 
 use crate::allocation::{
@@ -17,11 +17,42 @@ pub(crate) struct RuntimeRuleStates {
 
 /// Per-run rule-attempt pass over executable rules and their availability cells.
 #[derive(Debug)]
-pub(crate) struct RuntimeRulePass<'program> {
+pub(crate) enum RuntimeRulePass<'program> {
+    /// The current rule is not the final target in this pass.
+    Continuing(ContinuingRuntimeRulePass<'program>),
+    /// The current rule is the final target in this pass.
+    Final(FinalRuntimeRulePass<'program>),
+}
+
+/// Rule-attempt pass state whose current target has at least one successor.
+#[derive(Debug)]
+pub(crate) struct ContinuingRuntimeRulePass<'program> {
     /// Current executable rule attempt target.
     current: RuntimeRuleCell<'program>,
-    /// Remaining executable rules after the current target, in attempt order.
-    remaining: Vec<RuntimeRuleCell<'program>>,
+    /// Non-empty tail after the current target.
+    pending: PendingRuntimeRules<'program>,
+    /// Rules already missed in this pass, in original rule order.
+    attempted: VecDeque<RuntimeRuleCell<'program>>,
+}
+
+/// Rule-attempt pass state whose current target exhausts the pass.
+#[derive(Debug)]
+pub(crate) struct FinalRuntimeRulePass<'program> {
+    /// Current executable rule attempt target.
+    current: RuntimeRuleCell<'program>,
+    /// Rules already missed in this pass, in original rule order.
+    attempted: VecDeque<RuntimeRuleCell<'program>>,
+    /// Empty pre-reserved buffer used when a later rewrite resets the pass.
+    spare: VecDeque<RuntimeRuleCell<'program>>,
+}
+
+/// Non-empty tail of unattempted rules after a continuing current target.
+#[derive(Debug)]
+struct PendingRuntimeRules<'program> {
+    /// Next rule after the current target.
+    next: RuntimeRuleCell<'program>,
+    /// Remaining rules after `next`, in original rule order.
+    remaining: VecDeque<RuntimeRuleCell<'program>>,
 }
 
 /// One executable rule paired with its run-local availability state.
@@ -191,23 +222,36 @@ impl<'program> RuntimeRulePass<'program> {
     /// be allocated.
     fn from_rule_scan(rules: RuleScan<'program>) -> Result<Self, AllocationError> {
         let (first, remaining_rules) = rules.split_first();
-        let mut remaining = Vec::new();
-        try_reserve_total_exact(
+        let mut remaining = VecDeque::new();
+        let remaining_capacity = RequestedCapacity::new(remaining_rules.len());
+        try_reserve_rule_queue(
             &mut remaining,
-            RequestedCapacity::new(remaining_rules.len()),
+            remaining_capacity,
             AllocationContext::RuntimeRuleAvailability,
         )?;
         for rule in remaining_rules {
-            try_push(
-                &mut remaining,
-                RuntimeRuleCell::from_rule(rule),
-                AllocationContext::RuntimeRuleAvailability,
-            )?;
+            remaining.push_back(RuntimeRuleCell::from_rule(rule));
         }
-        Ok(Self {
+        let mut attempted = VecDeque::new();
+        try_reserve_rule_queue(
+            &mut attempted,
+            remaining_capacity,
+            AllocationContext::RuntimeRuleAvailability,
+        )?;
+        Ok(RuntimeRulePassParts {
             current: RuntimeRuleCell::from_rule(first),
             remaining,
-        })
+            attempted,
+        }
+        .into_pass())
+    }
+
+    /// Resets this pass to the first executable rule after a rewrite.
+    pub(crate) fn reset_after_rewrite(self) -> Self {
+        match self {
+            Self::Continuing(pass) => pass.reset_after_rewrite(),
+            Self::Final(pass) => pass.reset_after_rewrite(),
+        }
     }
 }
 
@@ -224,6 +268,196 @@ impl<'program> RuntimeRuleCell<'program> {
     fn as_runtime_rule(&mut self) -> RuntimeRule<'program, '_> {
         RuntimeRule::new(self.rule, RuntimeRuleAvailability::new(&mut self.state))
     }
+}
+
+impl<'program> PendingRuntimeRules<'program> {
+    /// Builds a non-empty pending tail from its head and remaining rules.
+    fn new(
+        next: RuntimeRuleCell<'program>,
+        remaining: VecDeque<RuntimeRuleCell<'program>>,
+    ) -> Self {
+        Self { next, remaining }
+    }
+
+    /// Moves the pending tail to the current target after a non-final miss.
+    fn advance(
+        mut self,
+    ) -> (
+        RuntimeRuleCell<'program>,
+        AdvancedPendingRuntimeRules<'program>,
+    ) {
+        let current = self.next;
+        let advanced = match self.remaining.pop_front() {
+            Some(next) => AdvancedPendingRuntimeRules::Continuing(Self::new(next, self.remaining)),
+            None => AdvancedPendingRuntimeRules::Final {
+                spare: self.remaining,
+            },
+        };
+        (current, advanced)
+    }
+
+    /// Appends pending rules to `output` in executable order.
+    fn append_to(
+        self,
+        output: &mut VecDeque<RuntimeRuleCell<'program>>,
+    ) -> VecDeque<RuntimeRuleCell<'program>> {
+        output.push_back(self.next);
+        let mut remaining = self.remaining;
+        while let Some(rule) = remaining.pop_front() {
+            output.push_back(rule);
+        }
+        remaining
+    }
+}
+
+/// Result of advancing a non-empty pending tail.
+#[derive(Debug)]
+enum AdvancedPendingRuntimeRules<'program> {
+    /// Another target remains after the new current target.
+    Continuing(PendingRuntimeRules<'program>),
+    /// The new current target is final.
+    Final {
+        /// Empty pre-reserved buffer retained for a later rewrite reset.
+        spare: VecDeque<RuntimeRuleCell<'program>>,
+    },
+}
+
+/// Rule-attempt pass under construction from a current target and ordered tail.
+struct RuntimeRulePassParts<'program> {
+    /// Current executable rule attempt target.
+    current: RuntimeRuleCell<'program>,
+    /// Remaining executable rules after the current target, in attempt order.
+    remaining: VecDeque<RuntimeRuleCell<'program>>,
+    /// Empty pre-reserved buffer for missed rules in the current pass.
+    attempted: VecDeque<RuntimeRuleCell<'program>>,
+}
+
+impl<'program> RuntimeRulePassParts<'program> {
+    /// Classifies the current target by whether the ordered tail is empty.
+    fn into_pass(mut self) -> RuntimeRulePass<'program> {
+        match self.remaining.pop_front() {
+            Some(next) => RuntimeRulePass::Continuing(ContinuingRuntimeRulePass {
+                current: self.current,
+                pending: PendingRuntimeRules::new(next, self.remaining),
+                attempted: self.attempted,
+            }),
+            None => RuntimeRulePass::Final(FinalRuntimeRulePass {
+                current: self.current,
+                attempted: self.attempted,
+                spare: self.remaining,
+            }),
+        }
+    }
+}
+
+impl<'program> ContinuingRuntimeRulePass<'program> {
+    /// Borrows the current target as a runtime rule with availability state.
+    pub(crate) fn current_rule(&mut self) -> RuntimeRule<'program, '_> {
+        self.current.as_runtime_rule()
+    }
+
+    /// Commits a non-applying attempt and returns the next typed pass state.
+    pub(crate) fn commit_miss(mut self) -> RuntimeRulePass<'program> {
+        self.attempted.push_back(self.current);
+        let (current, advanced) = self.pending.advance();
+        match advanced {
+            AdvancedPendingRuntimeRules::Continuing(pending) => RuntimeRulePass::Continuing(Self {
+                current,
+                pending,
+                attempted: self.attempted,
+            }),
+            AdvancedPendingRuntimeRules::Final { spare } => {
+                RuntimeRulePass::Final(FinalRuntimeRulePass {
+                    current,
+                    attempted: self.attempted,
+                    spare,
+                })
+            }
+        }
+    }
+
+    /// Resets this pass to its first executable rule after a rewrite.
+    fn reset_after_rewrite(self) -> RuntimeRulePass<'program> {
+        let Self {
+            current,
+            pending,
+            mut attempted,
+        } = self;
+        let Some(first) = attempted.pop_front() else {
+            return RuntimeRulePass::Continuing(Self {
+                current,
+                pending,
+                attempted,
+            });
+        };
+
+        let mut remaining = attempted;
+        remaining.push_back(current);
+        let attempted = pending.append_to(&mut remaining);
+        RuntimeRulePassParts {
+            current: first,
+            remaining,
+            attempted,
+        }
+        .into_pass()
+    }
+}
+
+impl<'program> FinalRuntimeRulePass<'program> {
+    /// Borrows the current target as a runtime rule with availability state.
+    pub(crate) fn current_rule(&mut self) -> RuntimeRule<'program, '_> {
+        self.current.as_runtime_rule()
+    }
+
+    /// Resets this final pass to its first executable rule after a rewrite.
+    fn reset_after_rewrite(self) -> RuntimeRulePass<'program> {
+        let Self {
+            current,
+            mut attempted,
+            spare,
+        } = self;
+        let Some(first) = attempted.pop_front() else {
+            return RuntimeRulePass::Final(Self {
+                current,
+                attempted,
+                spare,
+            });
+        };
+
+        let mut remaining = attempted;
+        remaining.push_back(current);
+        RuntimeRulePassParts {
+            current: first,
+            remaining,
+            attempted: spare,
+        }
+        .into_pass()
+    }
+}
+
+/// Reserves a rule queue through the runtime-rule allocation boundary.
+///
+/// # Errors
+///
+/// Returns `AllocationError` if the requested capacity cannot be represented
+/// or if the allocator rejects the reservation.
+fn try_reserve_rule_queue<T>(
+    queue: &mut VecDeque<T>,
+    total_capacity: RequestedCapacity,
+    context: AllocationContext,
+) -> Result<(), AllocationError> {
+    if queue.capacity() >= total_capacity.get() {
+        return Ok(());
+    }
+
+    let additional = total_capacity
+        .get()
+        .checked_sub(queue.len())
+        .ok_or_else(|| AllocationError::capacity_overflow(context))?;
+
+    queue
+        .try_reserve_exact(additional)
+        .map_err(|_| AllocationError::reservation_failed(context, total_capacity))
 }
 
 impl RuntimeRuleAvailabilityState {

@@ -7,7 +7,7 @@ use crate::program::{ReturnOutput, ReturnOutputView};
 use crate::runtime::action::{AppliedRule, PreparedRuleApplication, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuleAttemptReservation, RuntimeBudgetState};
 use crate::runtime::matcher::{MatchedRuleApplication, RuleAttempt, attempt_rule};
-use crate::runtime::once::{RuntimeRuleAdvancePermit, RuntimeRuleAttemptTarget};
+use crate::runtime::once::{ContinuingRuntimeRulePass, FinalRuntimeRulePass, RuntimeRulePass};
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
 
@@ -441,7 +441,36 @@ where
 
 /// Advances one rule-attempt step under a compile-time witness policy.
 fn advance_rule_attempt<'program, E, A, W>(
-    mut core: AttemptRunCore<'program, E>,
+    core: AttemptRunCore<'program, E>,
+    attempt_budget: RuleAttemptBudgetState<A>,
+) -> RuleAttemptAdvance<'program, E, A, W::Witness, W::Error>
+where
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+    W: AttemptRuleWitness<'program>,
+{
+    let AttemptRunCore {
+        state,
+        scratch,
+        budget,
+        runtime_rules,
+    } = core;
+    match runtime_rules {
+        RuntimeRulePass::Continuing(pass) => {
+            advance_continuing_rule_attempt::<_, _, W>(state, scratch, budget, pass, attempt_budget)
+        }
+        RuntimeRulePass::Final(pass) => {
+            advance_final_rule_attempt::<_, _, W>(state, scratch, budget, pass, attempt_budget)
+        }
+    }
+}
+
+/// Advances a rule-attempt step whose selected rule is not final in the pass.
+fn advance_continuing_rule_attempt<'program, E, A, W>(
+    mut state: State,
+    mut scratch: RewriteScratch,
+    mut budget: RuntimeBudgetState<E>,
+    mut pass: ContinuingRuntimeRulePass<'program>,
     mut attempt_budget: RuleAttemptBudgetState<A>,
 ) -> RuleAttemptAdvance<'program, E, A, W::Witness, W::Error>
 where
@@ -449,9 +478,11 @@ where
     A: RuleAttemptPolicy,
     W: AttemptRuleWitness<'program>,
 {
-    let reservation = match attempt_budget.reserve_next_attempt(core.state.byte_count()) {
+    let reservation = match attempt_budget.reserve_next_attempt(state.byte_count()) {
         Ok(reservation) => reservation,
         Err(error) => {
+            let core =
+                active_attempt_core(state, scratch, budget, RuntimeRulePass::Continuing(pass));
             return failed_rule_attempt(
                 core,
                 attempt_budget,
@@ -460,65 +491,132 @@ where
         }
     };
 
-    match core.runtime_rules.attempt_target() {
-        RuntimeRuleAttemptTarget::Continuing(target) => {
-            let (runtime_rule, advance) = target.into_parts();
-            match attempt_rule(runtime_rule, &core.state) {
-                RuleAttempt::Missed(missed) => {
-                    let witness = match W::from_rule(RuleView::new(missed.rule())) {
-                        Ok(witness) => witness,
-                        Err(error) => return failed_rule_attempt(core, attempt_budget, error),
-                    };
-                    let miss = RuleMiss::new(witness, missed.reason());
-                    let attempt = reservation.commit();
-                    committed_rule_miss(core, attempt_budget, attempt, advance, miss)
+    match attempt_rule(pass.current_rule(), &state) {
+        RuleAttempt::Missed(missed) => {
+            let witness = match W::from_rule(RuleView::new(missed.rule())) {
+                Ok(witness) => witness,
+                Err(error) => {
+                    let core = active_attempt_core(
+                        state,
+                        scratch,
+                        budget,
+                        RuntimeRulePass::Continuing(pass),
+                    );
+                    return failed_rule_attempt(core, attempt_budget, error);
                 }
-                RuleAttempt::Matched(matched) => {
-                    let state_len = core.state.byte_count();
-                    let (attempt, witnessed) = match prepare_attempt_application::<_, _, W>(
-                        &mut core.scratch,
-                        &mut core.budget,
-                        state_len,
-                        reservation,
-                        matched,
-                    ) {
-                        Ok(committed) => committed,
-                        Err(error) => return failed_rule_attempt(core, attempt_budget, error),
-                    };
-                    let applied = witnessed.commit(&mut core.state, &mut core.scratch);
-                    committed_rule_attempt_application(core, attempt_budget, attempt, applied)
-                }
-            }
+            };
+            let miss = RuleMiss::new(witness, missed.reason());
+            let attempt = reservation.commit();
+            let runtime_rules = pass.commit_miss();
+            let core = active_attempt_core(state, scratch, budget, runtime_rules);
+            committed_rule_miss(core, attempt_budget, attempt, miss)
         }
-        RuntimeRuleAttemptTarget::Final(target) => {
-            let runtime_rule = target.into_rule();
-            match attempt_rule(runtime_rule, &core.state) {
-                RuleAttempt::Missed(missed) => {
-                    let witness = match W::from_rule(RuleView::new(missed.rule())) {
-                        Ok(witness) => witness,
-                        Err(error) => return failed_rule_attempt(core, attempt_budget, error),
-                    };
-                    let miss = RuleMiss::new(witness, missed.reason());
-                    let attempt = reservation.commit();
-                    committed_final_rule_miss(core, attempt_budget, attempt, miss)
+        RuleAttempt::Matched(matched) => {
+            let state_len = state.byte_count();
+            let (attempt, witnessed) = match prepare_attempt_application::<_, _, W>(
+                &mut scratch,
+                &mut budget,
+                state_len,
+                reservation,
+                matched,
+            ) {
+                Ok(committed) => committed,
+                Err(error) => {
+                    let core = active_attempt_core(
+                        state,
+                        scratch,
+                        budget,
+                        RuntimeRulePass::Continuing(pass),
+                    );
+                    return failed_rule_attempt(core, attempt_budget, error);
                 }
-                RuleAttempt::Matched(matched) => {
-                    let state_len = core.state.byte_count();
-                    let (attempt, witnessed) = match prepare_attempt_application::<_, _, W>(
-                        &mut core.scratch,
-                        &mut core.budget,
-                        state_len,
-                        reservation,
-                        matched,
-                    ) {
-                        Ok(committed) => committed,
-                        Err(error) => return failed_rule_attempt(core, attempt_budget, error),
-                    };
-                    let applied = witnessed.commit(&mut core.state, &mut core.scratch);
-                    committed_rule_attempt_application(core, attempt_budget, attempt, applied)
-                }
-            }
+            };
+            let applied = witnessed.commit(&mut state, &mut scratch);
+            let core =
+                active_attempt_core(state, scratch, budget, RuntimeRulePass::Continuing(pass));
+            committed_rule_attempt_application(core, attempt_budget, attempt, applied)
         }
+    }
+}
+
+/// Advances a rule-attempt step whose selected rule exhausts the pass.
+fn advance_final_rule_attempt<'program, E, A, W>(
+    mut state: State,
+    mut scratch: RewriteScratch,
+    mut budget: RuntimeBudgetState<E>,
+    mut pass: FinalRuntimeRulePass<'program>,
+    mut attempt_budget: RuleAttemptBudgetState<A>,
+) -> RuleAttemptAdvance<'program, E, A, W::Witness, W::Error>
+where
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+    W: AttemptRuleWitness<'program>,
+{
+    let reservation = match attempt_budget.reserve_next_attempt(state.byte_count()) {
+        Ok(reservation) => reservation,
+        Err(error) => {
+            let core = active_attempt_core(state, scratch, budget, RuntimeRulePass::Final(pass));
+            return failed_rule_attempt(
+                core,
+                attempt_budget,
+                <W::Error as From<RuleAttemptStepError>>::from(error),
+            );
+        }
+    };
+
+    match attempt_rule(pass.current_rule(), &state) {
+        RuleAttempt::Missed(missed) => {
+            let witness = match W::from_rule(RuleView::new(missed.rule())) {
+                Ok(witness) => witness,
+                Err(error) => {
+                    let core =
+                        active_attempt_core(state, scratch, budget, RuntimeRulePass::Final(pass));
+                    return failed_rule_attempt(core, attempt_budget, error);
+                }
+            };
+            let miss = RuleMiss::new(witness, missed.reason());
+            let attempt = reservation.commit();
+            let core = active_attempt_core(state, scratch, budget, RuntimeRulePass::Final(pass));
+            committed_final_rule_miss(core, attempt_budget, attempt, miss)
+        }
+        RuleAttempt::Matched(matched) => {
+            let state_len = state.byte_count();
+            let (attempt, witnessed) = match prepare_attempt_application::<_, _, W>(
+                &mut scratch,
+                &mut budget,
+                state_len,
+                reservation,
+                matched,
+            ) {
+                Ok(committed) => committed,
+                Err(error) => {
+                    let core =
+                        active_attempt_core(state, scratch, budget, RuntimeRulePass::Final(pass));
+                    return failed_rule_attempt(core, attempt_budget, error);
+                }
+            };
+            let applied = witnessed.commit(&mut state, &mut scratch);
+            let core = active_attempt_core(state, scratch, budget, RuntimeRulePass::Final(pass));
+            committed_rule_attempt_application(core, attempt_budget, attempt, applied)
+        }
+    }
+}
+
+/// Rebuilds an active attempt core after its typed pass state has changed.
+fn active_attempt_core<'program, E>(
+    state: State,
+    scratch: RewriteScratch,
+    budget: RuntimeBudgetState<E>,
+    runtime_rules: RuntimeRulePass<'program>,
+) -> AttemptRunCore<'program, E>
+where
+    E: ExecutionPolicy,
+{
+    AttemptRunCore {
+        state,
+        scratch,
+        budget,
+        runtime_rules,
     }
 }
 
@@ -541,17 +639,15 @@ where
 
 /// Commits a non-applying rule attempt and returns the next typed state.
 fn committed_rule_miss<'program, E, A, RuleWitness, StepError>(
-    mut core: AttemptRunCore<'program, E>,
+    core: AttemptRunCore<'program, E>,
     attempt_budget: RuleAttemptBudgetState<A>,
     attempt: RuleAttemptCount,
-    advance: RuntimeRuleAdvancePermit,
     miss: RuleMiss<RuleWitness>,
 ) -> RuleAttemptAdvance<'program, E, A, RuleWitness, StepError>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
-    core.runtime_rules.commit_miss(advance);
     RuleAttemptAdvance::Missed {
         attempt,
         miss,
@@ -583,7 +679,7 @@ where
 
 /// Projects a committed rule application into the next rule-attempt state.
 fn committed_rule_attempt_application<'program, E, A, RuleWitness, StepError>(
-    mut core: AttemptRunCore<'program, E>,
+    core: AttemptRunCore<'program, E>,
     attempt_budget: RuleAttemptBudgetState<A>,
     attempt: RuleAttemptCount,
     applied: CoreAppliedRule<'program, RuleWitness>,
@@ -594,7 +690,14 @@ where
 {
     match applied {
         CoreAppliedRule::Rewrite { step, rule } => {
-            core.runtime_rules.reset_after_rewrite();
+            let AttemptRunCore {
+                state,
+                scratch,
+                budget,
+                runtime_rules,
+            } = core;
+            let core =
+                active_attempt_core(state, scratch, budget, runtime_rules.reset_after_rewrite());
             RuleAttemptAdvance::Applied {
                 attempt,
                 step,
