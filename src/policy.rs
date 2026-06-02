@@ -28,22 +28,22 @@
 //!
 //! ```compile_fail
 //! use rsaeb::policy::DefaultExecutionPolicy;
-//! use rsaeb::program::Program;
+//! use rsaeb::program::ParsedProgram;
 //! use rsaeb::source::ProgramSource;
 //!
 //! type ExecutionOnly = DefaultExecutionPolicy;
 //!
-//! let _program = Program::<ExecutionOnly>::parse(ProgramSource::from_text("a=b"));
+//! let _program = ParsedProgram::<ExecutionOnly>::parse(ProgramSource::from_text("a=b"));
 //! ```
 //!
 //! Public boundary types no longer infer default policy domains. The policy
 //! type must be named at construction:
 //!
 //! ```compile_fail
-//! use rsaeb::program::Program;
+//! use rsaeb::program::ParsedProgram;
 //! use rsaeb::source::ProgramSource;
 //!
-//! let _program: Program = Program::parse(ProgramSource::from_text("a=b")).unwrap();
+//! let _program: ParsedProgram = ParsedProgram::parse(ProgramSource::from_text("a=b")).unwrap();
 //! ```
 //!
 //! ```compile_fail
@@ -61,15 +61,16 @@
 //! let _witness = TraceSnapshotPolicyWitness::<DefaultTraceSnapshotPolicy>::new();
 //! ```
 //!
-//! Shape-erased programs cannot be executed through a policy fallback:
+//! Parsed programs cannot be executed through a policy fallback before matching
+//! the executable branch:
 //!
 //! ```compile_fail
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
-//! use rsaeb::program::Program;
+//! use rsaeb::program::ParsedProgram;
 //! use rsaeb::source::ProgramSource;
 //!
-//! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b")).unwrap();
+//! let program = ParsedProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b")).unwrap();
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a")).unwrap();
 //! let admitted = input.admit::<DefaultExecutionPolicy>().unwrap();
 //! let _result = program.execute(admitted).unwrap();

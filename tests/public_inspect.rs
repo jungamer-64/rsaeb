@@ -4,7 +4,7 @@ mod support;
 
 use rsaeb::inspect::{OnceRuleCount, RuleActionView, RuleAnchor, RuleRepeat};
 use rsaeb::policy::DefaultParsePolicy;
-use rsaeb::program::Program;
+use rsaeb::program::ParsedProgram;
 use rsaeb::source::ProgramSource;
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
@@ -13,7 +13,10 @@ use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program}
 /// Returns `TestFailure` if rule views lose structured public data.
 #[test]
 fn inspect_rule_views_expose_structured_public_data() -> TestResult {
-    let inspected = parse_program("a = b # comment\n(start)c=(end)d")?;
+    let ParsedProgram::Executable(inspected) = parse_program("a = b # comment\n(start)c=(end)d")?
+    else {
+        return Err(TestFailure::message("expected executable program"));
+    };
     let mut rules = inspected.rules();
     let first = rules
         .next()
@@ -60,15 +63,23 @@ fn inspect_rule_views_expose_structured_public_data() -> TestResult {
 /// public rule view.
 #[test]
 fn inspect_canonical_source_reparses_to_same_public_rule_view() -> TestResult {
-    let program = parse_program("( once ) ( start ) a = ( end ) b # comment")?;
+    let ParsedProgram::Executable(program) =
+        parse_program("( once ) ( start ) a = ( end ) b # comment")?
+    else {
+        return Err(TestFailure::message("expected executable program"));
+    };
     let rule = program
         .rules()
         .next()
         .ok_or(TestFailure::message("expected parsed rule"))?;
     let canonical = rule.canonical_source()?;
 
-    let reparsed =
-        Program::<DefaultParsePolicy>::parse(ProgramSource::from_bytes(canonical.as_slice()))?;
+    let ParsedProgram::Executable(reparsed) = ParsedProgram::<DefaultParsePolicy>::parse(
+        ProgramSource::from_bytes(canonical.as_slice()),
+    )?
+    else {
+        return Err(TestFailure::message("expected executable program"));
+    };
     let reparsed_rule = reparsed
         .rules()
         .next()

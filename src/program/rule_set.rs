@@ -5,9 +5,9 @@ use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_rese
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError, ParseRepresentationError};
 use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePosition};
 use crate::limits::RuleLimit;
-use crate::rule::{OnceRuleSlot, ParsedRule, Rule, RuleAvailability, RuleRepeatSyntax};
+use crate::rule::{ParsedRule, Rule, RuleAvailability, RuleRepeatSyntax};
 
-/// Immutable executable rule table built by the parser.
+/// Parser-built rule table before executable shape classification.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RuleSet {
     /// Parsed rules in execution order.
@@ -16,11 +16,43 @@ pub(crate) struct RuleSet {
     once_rule_count: PublicOnceRuleCount,
 }
 
-/// Borrowed executable rule scan minted from one parsed rule table.
+/// Non-empty immutable executable rule table.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ExecutableRuleSet {
+    /// First executable rule, separated so executable scans have an infallible head.
+    first: Rule,
+    /// Remaining executable rules in execution order.
+    remaining: Vec<Rule>,
+    /// Total executable rule count.
+    rule_count: RuleCount,
+    /// Parsed `(once)` rule count assigned while building this rule table.
+    once_rule_count: PublicOnceRuleCount,
+}
+
+/// Parser-built shape after empty/executable classification.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RuleSetShape {
+    /// No executable rules were parsed.
+    Empty,
+    /// At least one executable rule was parsed.
+    Executable(ExecutableRuleSet),
+}
+
+/// Borrowed executable rule scan minted from one non-empty parsed rule table.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RuleScan<'program> {
-    /// Parsed executable rules in execution order.
-    rules: &'program [Rule],
+    /// First parsed executable rule.
+    first: &'program Rule,
+    /// Remaining parsed executable rules in execution order.
+    remaining: &'program [Rule],
+}
+
+/// Iterator over a non-empty executable rule scan.
+pub(crate) struct RuleScanIter<'program> {
+    /// First rule that has not yet been yielded.
+    first: Option<&'program Rule>,
+    /// Remaining parsed executable rules.
+    remaining: slice::Iter<'program, Rule>,
 }
 
 /// Parser-owned rule table builder.
@@ -44,24 +76,6 @@ struct RuleInsertionPermit {
     attempted_rule_count: RuleCount,
     /// Execution-order position assigned to the accepted rule.
     position: RulePosition,
-}
-
-/// Cursor pointing to an executable rule line in one active rule-attempt run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ActiveRuleCursor<'program> {
-    /// Parsed executable rule selected on the next attempt.
-    current: &'program Rule,
-    /// Remaining parsed rules after the current target.
-    remaining_after_current: &'program [Rule],
-}
-
-/// Cursor movement after a non-applying rule line has been consumed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuleCursorAfterMiss<'program> {
-    /// Cursor advanced to the next executable rule.
-    Advanced(ActiveRuleCursor<'program>),
-    /// The consumed miss was the final executable rule.
-    Exhausted,
 }
 
 impl RuleInsertionPermit {
@@ -203,7 +217,6 @@ impl RuleSetBuilder {
         match parsed.repeat_syntax() {
             RuleRepeatSyntax::Always => Ok((RuleAvailability::Always, self.once_rule_count)),
             RuleRepeatSyntax::Once => {
-                let slot = OnceRuleSlot::from_count(self.once_rule_count);
                 let next_once_rule_count =
                     self.once_rule_count.checked_next().ok_or_else(|| {
                         ParseError::at_line(
@@ -211,70 +224,76 @@ impl RuleSetBuilder {
                             ParseErrorKind::Representation(ParseRepresentationError::RuleCount),
                         )
                     })?;
-                Ok((RuleAvailability::Once(slot), next_once_rule_count))
+                Ok((RuleAvailability::Once, next_once_rule_count))
             }
         }
     }
 }
 
 impl RuleSet {
+    /// Classifies this parser-built rule table by executable shape.
+    pub(crate) fn into_shape(self) -> RuleSetShape {
+        let rule_count = RuleCount::new(self.rules.len());
+        let mut rules = self.rules.into_iter();
+        match rules.next() {
+            Some(first) => RuleSetShape::Executable(ExecutableRuleSet {
+                first,
+                remaining: rules.collect(),
+                rule_count,
+                once_rule_count: self.once_rule_count,
+            }),
+            None => RuleSetShape::Empty,
+        }
+    }
+}
+
+impl ExecutableRuleSet {
     /// Total executable rules in this table.
-    pub(crate) fn rule_count(&self) -> RuleCount {
-        RuleCount::new(self.rules.len())
+    pub(crate) const fn rule_count(&self) -> RuleCount {
+        self.rule_count
     }
 
     /// Public count of parsed `(once)` rules.
-    pub(crate) fn once_rule_count(&self) -> PublicOnceRuleCount {
+    pub(crate) const fn once_rule_count(&self) -> PublicOnceRuleCount {
         self.once_rule_count
     }
 
-    /// Borrows rules in execution order.
-    pub(crate) fn as_slice(&self) -> &[Rule] {
-        &self.rules
+    /// Iterates executable rules in execution order.
+    pub(crate) fn iter(&self) -> RuleScanIter<'_> {
+        self.scan().iter()
     }
 
-    /// Starts a runtime scan over this table's executable rules.
+    /// Starts a runtime scan over this non-empty table's executable rules.
     pub(crate) fn scan(&self) -> RuleScan<'_> {
-        RuleScan { rules: &self.rules }
+        RuleScan {
+            first: &self.first,
+            remaining: self.remaining.as_slice(),
+        }
     }
 }
 
 impl<'program> RuleScan<'program> {
     /// Iterates executable rules in parser-owned execution order.
-    pub(crate) fn iter(self) -> slice::Iter<'program, Rule> {
-        self.rules.iter()
+    pub(crate) fn iter(self) -> RuleScanIter<'program> {
+        RuleScanIter {
+            first: Some(self.first),
+            remaining: self.remaining.iter(),
+        }
     }
 
-    /// Mints the first active rule cursor for a non-empty rule table.
-    pub(crate) fn first_cursor(self) -> Option<ActiveRuleCursor<'program>> {
-        ActiveRuleCursor::from_rules(self.rules)
-    }
-
-    /// Splits a cursor into the selected rule and the only legal post-miss cursor movement.
-    pub(crate) fn consume_cursor(
-        self,
-        cursor: ActiveRuleCursor<'program>,
-    ) -> (&'program Rule, RuleCursorAfterMiss<'program>) {
-        cursor.into_target()
+    /// Splits this non-empty scan into its first rule and remaining rules.
+    pub(crate) const fn split_first(self) -> (&'program Rule, &'program [Rule]) {
+        (self.first, self.remaining)
     }
 }
 
-impl<'program> ActiveRuleCursor<'program> {
-    /// Builds a cursor from a non-empty parsed rule slice.
-    fn from_rules(rules: &'program [Rule]) -> Option<Self> {
-        let (current, remaining_after_current) = rules.split_first()?;
-        Some(Self {
-            current,
-            remaining_after_current,
-        })
-    }
+impl<'program> Iterator for RuleScanIter<'program> {
+    type Item = &'program Rule;
 
-    /// Splits this cursor into its selected rule and miss continuation.
-    fn into_target(self) -> (&'program Rule, RuleCursorAfterMiss<'program>) {
-        let after_miss = match Self::from_rules(self.remaining_after_current) {
-            Some(cursor) => RuleCursorAfterMiss::Advanced(cursor),
-            None => RuleCursorAfterMiss::Exhausted,
-        };
-        (self.current, after_miss)
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.first.take() {
+            Some(first) => Some(first),
+            None => self.remaining.next(),
+        }
     }
 }

@@ -2,7 +2,7 @@ use crate::error::{RunError, RunFinishError, RunStartError, TracedRunError};
 use crate::input::AdmittedRun;
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
-use crate::program::{ActiveRuleCursor, ExecutableProgramRef, Program, RunResult};
+use crate::program::{ExecutableProgram, ExecutableProgramRef, RunResult};
 use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
 
 use super::advance::{
@@ -23,7 +23,7 @@ use super::transition::{
 /// Stateful run session that borrows a reusable parsed program.
 ///
 /// This is the stepwise form returned by
-/// [`BorrowedExecutableProgram::steps`](crate::program::BorrowedExecutableProgram::steps).
+/// [`ExecutableProgram::steps`](crate::program::ExecutableProgram::steps).
 /// It consumes itself on every step so callers must handle the returned
 /// [`BorrowedStepTransition`] before they can continue.
 pub struct BorrowedRunSession<'program, P: ParsePolicy, E: ExecutionPolicy> {
@@ -34,9 +34,9 @@ pub struct BorrowedRunSession<'program, P: ParsePolicy, E: ExecutionPolicy> {
 /// Stateful run session that owns its parsed program.
 ///
 /// This is the stepwise form returned by
-/// [`OwnedExecutableProgram::into_steps`](crate::program::OwnedExecutableProgram::into_steps).
+/// [`ExecutableProgram::into_steps`](crate::program::ExecutableProgram::into_steps).
 /// It is useful when the session must move independently of a borrowed
-/// [`Program`]. Owned terminal and failed states retain a way to recover the
+/// [`ExecutableProgram`]. Owned terminal and failed states retain a way to recover the
 /// parsed program instead of leaking ownership through a parallel API.
 pub struct OwnedRunSession<P: ParsePolicy, E: ExecutionPolicy> {
     /// Internal session using the public owned program boundary.
@@ -61,7 +61,7 @@ pub struct BorrowedRuleAttemptSession<
 /// Terminal data split out of a borrowed ordinary run session.
 struct BorrowedRunTerminal<'program, P: ParsePolicy> {
     /// Parsed program borrowed by the terminal state.
-    program: &'program Program<P>,
+    program: &'program ExecutableProgram<P>,
     /// Runtime core retained for terminal state observation or materialization.
     core: TerminalRunCore,
 }
@@ -69,7 +69,7 @@ struct BorrowedRunTerminal<'program, P: ParsePolicy> {
 /// Terminal data split out of an owned ordinary run session.
 struct OwnedRunTerminal<P: ParsePolicy> {
     /// Parsed program retained by the terminal state.
-    program: Program<P>,
+    program: ExecutableProgram<P>,
     /// Runtime core retained for terminal state observation or materialization.
     core: TerminalRunCore,
 }
@@ -77,7 +77,7 @@ struct OwnedRunTerminal<P: ParsePolicy> {
 /// Terminal data split out of a borrowed rule-attempt run session.
 struct BorrowedRuleAttemptTerminal<'program, P: ParsePolicy> {
     /// Parsed program borrowed by the terminal state.
-    program: &'program Program<P>,
+    program: &'program ExecutableProgram<P>,
     /// Runtime core retained for terminal state observation or materialization.
     core: TerminalRunCore,
     /// Rule attempts consumed before the terminal boundary was reached.
@@ -140,7 +140,7 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedRunSession<'program, 
     ///
     /// Returns `RunStartError` if allocating per-run rule state fails.
     pub(crate) fn new(
-        program: &'program Program<P>,
+        program: &'program ExecutableProgram<P>,
         admitted: AdmittedRun<E>,
     ) -> Result<Self, RunStartError> {
         Ok(Self {
@@ -158,7 +158,7 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedRunSession<'program, 
 
     /// Borrow the parsed program used by this session.
     #[must_use]
-    pub fn program(&self) -> &'program Program<P> {
+    pub fn program(&self) -> &'program ExecutableProgram<P> {
         self.session.program.program
     }
 
@@ -201,12 +201,11 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
     ///
     /// Returns `RunStartError` if allocating per-run rule state fails.
     pub(crate) fn new(
-        program: &'program Program<P>,
-        first_cursor: ActiveRuleCursor<'program>,
+        program: &'program ExecutableProgram<P>,
         admitted: AdmittedRun<E>,
     ) -> Result<Self, RunStartError> {
         Ok(Self {
-            session: AttemptSession::new(BorrowedProgram { program }, admitted, first_cursor)?,
+            session: AttemptSession::new(BorrowedProgram { program }, admitted)?,
         })
     }
 
@@ -229,7 +228,7 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
 
     /// Borrow the parsed program used by this session.
     #[must_use]
-    pub fn program(&self) -> &'program Program<P> {
+    pub fn program(&self) -> &'program ExecutableProgram<P> {
         self.session.program.program
     }
 
@@ -262,7 +261,7 @@ impl<P: ParsePolicy, E: ExecutionPolicy> OwnedRunSession<P, E> {
     ///
     /// Returns `RunStartError` if allocating per-run rule state fails.
     pub(crate) fn new(
-        program: Program<P>,
+        program: ExecutableProgram<P>,
         admitted: AdmittedRun<E>,
     ) -> Result<Self, RunStartError> {
         Ok(Self {
@@ -278,7 +277,7 @@ impl<P: ParsePolicy, E: ExecutionPolicy> OwnedRunSession<P, E> {
 
     /// Borrow the parsed program owned by this session.
     #[must_use]
-    pub fn program(&self) -> &Program<P> {
+    pub fn program(&self) -> &ExecutableProgram<P> {
         self.session.program()
     }
 
@@ -287,7 +286,7 @@ impl<P: ParsePolicy, E: ExecutionPolicy> OwnedRunSession<P, E> {
     /// This intentionally drops the in-progress runtime state; it is for
     /// ownership recovery, not for retrying the same admitted run.
     #[must_use]
-    pub fn into_program(self) -> Program<P> {
+    pub fn into_program(self) -> ExecutableProgram<P> {
         let (program, _core) = self.session.into_program_core();
         program
     }

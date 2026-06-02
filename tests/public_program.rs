@@ -1,4 +1,4 @@
-//! Public `Program` contract tests.
+//! Public parsed-program contract tests.
 
 #[path = "support/runtime.rs"]
 mod runtime_support;
@@ -7,7 +7,7 @@ mod support;
 use rsaeb::input::AdmittedRun;
 use rsaeb::inspect::OnceRuleCount;
 use rsaeb::policy::{DefaultParsePolicy, ExecutionPolicy};
-use rsaeb::program::{Program, RunOutcome, RunResult};
+use rsaeb::program::{ParsedProgram, RunOutcome, RunResult};
 use rsaeb::source::ProgramSource;
 use runtime_support::{
     DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, DefaultRunPolicy, TestRunPolicy,
@@ -65,16 +65,16 @@ fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: rsaeb::policy::Executi
 ///
 /// Returns `TestFailure` if the program is empty or execution fails.
 fn execute_program<E>(
-    program: &Program<DefaultParsePolicy>,
+    program: &ParsedProgram<DefaultParsePolicy>,
     admitted: AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
     E: ExecutionPolicy,
 {
-    Ok(program
-        .as_executable()
-        .map_err(|_| TestFailure::message("expected executable program"))?
-        .execute(admitted)?)
+    match program {
+        ParsedProgram::Executable(program) => Ok(program.execute(admitted)?),
+        ParsedProgram::Empty(_) => Err(TestFailure::message("expected executable program")),
+    }
 }
 
 /// Stabilizes a parsed program that is expected to contain no executable rules.
@@ -83,15 +83,15 @@ where
 ///
 /// Returns `TestFailure` if the program is executable or stabilization fails.
 fn stabilize_empty_program<E>(
-    program: &Program<DefaultParsePolicy>,
+    program: &ParsedProgram<DefaultParsePolicy>,
     admitted: AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
     E: ExecutionPolicy,
 {
-    match program.as_executable() {
-        Ok(_) => Err(TestFailure::message("expected empty program")),
-        Err(empty) => Ok(empty.stabilize(admitted)?),
+    match program {
+        ParsedProgram::Empty(program) => Ok(program.stabilize(admitted)?),
+        ParsedProgram::Executable(_) => Err(TestFailure::message("expected empty program")),
     }
 }
 
@@ -109,7 +109,8 @@ fn program_parse_accepts_text_and_byte_sources() -> TestResult {
     expect_stable_bytes(&result, b"b")?;
     ensure_matches(result.steps().get() == 1, "expected one execution step")?;
 
-    let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_bytes(b"a=b#\xff"))?;
+    let program =
+        ParsedProgram::<DefaultParsePolicy>::parse(ProgramSource::from_bytes(b"a=b#\xff"))?;
     let input = runtime_input(b"a", limits)?;
     let result = execute_program(&program, input)?;
     expect_stable_bytes(&result, b"b")?;
@@ -170,6 +171,9 @@ fn program_values_are_reusable_across_runs() -> TestResult {
 
     expect_stable_bytes(&first, b"bc")?;
     expect_stable_bytes(&second, b"bc")?;
+    let ParsedProgram::Executable(program) = &program else {
+        return Err(TestFailure::message("expected executable program"));
+    };
     ensure_eq!(program.rule_count().get(), 2)?;
     let once_rules: OnceRuleCount = program.once_rule_count();
     ensure_eq!(once_rules.get(), 1)

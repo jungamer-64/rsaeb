@@ -31,20 +31,22 @@ types live under their domain modules, such as `source`, `input`, `program`,
 
 ## Quick Start
 
-Parse source into an immutable `Program`, validate runtime input, admit it into
-one execution under an execution policy, then run:
+Parse source into `ParsedProgram`, validate runtime input, admit it into one
+execution under an execution policy, then run the executable branch:
 
 ```rust
 use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
-use rsaeb::program::{Program, RunOutcome};
+use rsaeb::program::{ParsedProgram, RunOutcome};
 use rsaeb::source::ProgramSource;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
+    let parsed = ParsedProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
+    let ParsedProgram::Executable(executable) = parsed else {
+        return Err("expected executable program".into());
+    };
     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
     let admitted = input.admit::<DefaultExecutionPolicy>()?;
-    let executable = program.as_executable().map_err(|_| "expected executable rules")?;
     let result = executable.execute(admitted)?;
 
     if !matches!(
@@ -59,12 +61,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 `ProgramSource::from_text` and `ProgramSource::from_bytes` only label source
-input; `Program::parse` performs source validation. `RuntimeInputSource` and
-`RuntimeInput::validate` do the same for runtime input bytes. Reuse parsed
-programs freely: a `Program` is immutable, and `(once)` consumption is local to
-each execution. The parser assigns each `(once)` rule a dense once slot; per-run
-once state is allocated from that once-rule count, so interleaved ordinary rules
-do not consume once-state cells.
+input; `ParsedProgram::parse` performs source validation and immediately
+classifies the parsed shape as `EmptyProgram` or `ExecutableProgram`.
+`RuntimeInputSource` and `RuntimeInput::validate` do the same for runtime input
+bytes. Reuse parsed executable programs freely: an `ExecutableProgram` is
+immutable, and `(once)` consumption is local to each execution. Runtime state
+uses one availability cell per executable rule, so `(once)` availability cannot
+become a parser-assigned lookup failure.
 
 ## Execution Shape
 
@@ -72,27 +75,24 @@ The normal host flow is:
 
 1. Load source bytes or text outside the interpreter.
 2. Construct `ProgramSource`.
-3. Parse with `Program::parse`.
+3. Parse with `ParsedProgram::parse`.
 4. Label host input bytes with `RuntimeInputSource::from_bytes`.
 5. Validate with `RuntimeInput::validate`.
 6. Admit with `RuntimeInput::admit::<E>()` under an `ExecutionPolicy`.
-7. Classify the parsed program with `Program::as_executable()` or
-   `Program::into_executable()`.
-8. Execute through run-to-completion, stepwise execution, tracing, or
-   rule-attempt stepping from the executable witness.
+7. Pattern-match `ParsedProgram::{Empty, Executable}`.
+8. Execute, step, trace, or rule-attempt step from `ExecutableProgram`, or call
+   `EmptyProgram::stabilize` for empty source.
 
 The crate intentionally contains no filesystem, process, argument parsing,
 environment access, stdout/stderr, or lossy display boundary. Hosts perform I/O
 outside the interpreter and pass already-loaded bytes into typed boundaries.
 
-`Program::as_executable()` and `Program::into_executable()` return either an
-executable-program witness or a typed empty-program witness. Borrowed executable
-witnesses start reusable runs with `.execute(admitted)`, `.trace(...)`,
-`.steps(admitted)`, or `.rule_attempts::<A, _>(admitted)`. Owned executable
-witnesses expose `.execute(admitted)`, `.trace(...)`, and `.into_steps(admitted)`.
-Rule-attempt execution is borrowed because its resumable cursor is tied to the
-executable rule table. Empty-program witnesses expose only `.stabilize(admitted)`,
-which materializes the admitted input as a zero-step stable result.
+`ExecutableProgram` starts reusable runs with `.execute(admitted)`,
+`.trace(admitted, request)`, `.steps(admitted)`, `.into_steps(admitted)`, or
+`.rule_attempts::<A, _>(admitted)`. Rule-attempt execution is borrowed because
+its resumable cursor is tied to the executable rule table. `EmptyProgram`
+exposes only inspection and `.stabilize(admitted)`, which materializes the
+admitted input as a zero-step stable result.
 
 The exact typestate names, transition variants, owned recovery methods, tracing
 events, and error variants are documented in rustdoc.

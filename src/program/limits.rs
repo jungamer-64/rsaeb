@@ -60,7 +60,8 @@ impl fmt::Display for CodeLineByteCount {
     }
 }
 
-/// Maximum source length accepted by [`program::Program::parse`](crate::program::Program::parse).
+/// Maximum source length accepted by
+/// [`program::ParsedProgram::parse`](crate::program::ParsedProgram::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceByteLimit {
     /// Maximum accepted source byte length.
@@ -94,7 +95,8 @@ impl SourceByteLimit {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SourceBytePermit;
 
-/// Maximum executable code-line length accepted by [`program::Program::parse`](crate::program::Program::parse).
+/// Maximum executable code-line length accepted by
+/// [`program::ParsedProgram::parse`](crate::program::ParsedProgram::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CodeLineByteLimit {
     /// Maximum accepted executable code-line byte length.
@@ -131,7 +133,8 @@ impl CodeLineByteLimit {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CodeLineBytePermit;
 
-/// Maximum parsed payload length accepted by [`program::Program::parse`](crate::program::Program::parse).
+/// Maximum parsed payload length accepted by
+/// [`program::ParsedProgram::parse`](crate::program::ParsedProgram::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PayloadByteLimit {
     /// Maximum accepted executable payload byte length.
@@ -165,7 +168,8 @@ impl PayloadByteLimit {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PayloadBytePermit;
 
-/// Maximum executable rule count accepted by [`program::Program::parse`](crate::program::Program::parse).
+/// Maximum executable rule count accepted by
+/// [`program::ParsedProgram::parse`](crate::program::ParsedProgram::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleLimit {
     /// Maximum accepted executable rule count.

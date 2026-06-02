@@ -3,7 +3,7 @@ use crate::error::{
 };
 use crate::inspect::{RuleActionView, RuleAnchor, RuleCount, RuleRepeat};
 use crate::policy::DefaultParsePolicy;
-use crate::program::Program;
+use crate::program::ParsedProgram;
 use crate::test_support::{
     TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_error_position,
     expect_parse_error, parse_program, parse_program_bytes, source_line_number,
@@ -15,13 +15,24 @@ use crate::test_support::{
 ///
 /// Returns `TestFailure` if the program has no rule at `index`.
 fn expect_rule(
-    program: &Program<DefaultParsePolicy>,
+    program: &ParsedProgram<DefaultParsePolicy>,
     index: usize,
 ) -> Result<crate::inspect::RuleView<'_>, TestFailure> {
-    program
-        .rules()
-        .nth(index)
-        .ok_or(TestFailure::message("expected parsed rule"))
+    match program {
+        ParsedProgram::Executable(program) => program
+            .rules()
+            .nth(index)
+            .ok_or(TestFailure::message("expected parsed rule")),
+        ParsedProgram::Empty(_) => Err(TestFailure::message("expected executable program")),
+    }
+}
+
+/// Returns the parsed executable rule count.
+fn rule_count(program: &ParsedProgram<DefaultParsePolicy>) -> RuleCount {
+    match program {
+        ParsedProgram::Executable(program) => program.rule_count(),
+        ParsedProgram::Empty(program) => program.rule_count(),
+    }
 }
 
 /// # Errors
@@ -36,7 +47,7 @@ fn compacting_source_whitespace_and_comments_preserves_rule_domain() -> TestResu
          ( once ) ( start ) x = ( end ) y",
     )?;
 
-    ensure_eq!(program.rule_count(), RuleCount::new(3))?;
+    ensure_eq!(rule_count(&program), RuleCount::new(3))?;
     ensure_eq!(
         expect_rule(&program, 0)?.canonical_source()?.as_slice(),
         b"ab=bb".as_slice(),
@@ -58,7 +69,7 @@ fn compacting_source_whitespace_and_comments_preserves_rule_domain() -> TestResu
 #[test]
 fn empty_code_lines_and_comments_do_not_become_rules() -> TestResult {
     let program = parse_program(" \t\r\n# comment\n")?;
-    ensure_eq!(program.rule_count(), RuleCount::new(0))
+    ensure_eq!(rule_count(&program), RuleCount::new(0))
 }
 
 /// # Errors
@@ -69,7 +80,7 @@ fn comments_may_contain_non_utf8_bytes_because_source_is_byte_oriented() -> Test
     let program = parse_program_bytes(b"a=b#\xff\xfe\n")?;
     let rule = expect_rule(&program, 0)?;
 
-    ensure_eq!(program.rule_count(), RuleCount::new(1))?;
+    ensure_eq!(rule_count(&program), RuleCount::new(1))?;
     ensure_eq!(rule.canonical_source()?.as_slice(), b"a=b".as_slice())
 }
 
@@ -238,8 +249,8 @@ fn spaced_source_and_compact_source_parse_to_the_same_rule_view() -> TestResult 
     let compact_rule = expect_rule(&compact, 0)?;
     let spaced_rule = expect_rule(&spaced, 0)?;
 
-    ensure_eq!(compact.rule_count(), RuleCount::new(1))?;
-    ensure_eq!(spaced.rule_count(), RuleCount::new(1))?;
+    ensure_eq!(rule_count(&compact), RuleCount::new(1))?;
+    ensure_eq!(rule_count(&spaced), RuleCount::new(1))?;
     ensure_eq!(spaced_rule.repeat(), RuleRepeat::Once)?;
     ensure_eq!(spaced_rule.anchor(), RuleAnchor::Start)?;
     ensure_eq!(spaced_rule.lhs().materialize()?.as_slice(), b"a".as_slice())?;

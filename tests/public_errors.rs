@@ -10,7 +10,7 @@ use rsaeb::error::{
 };
 use rsaeb::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
 use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy, ExecutionPolicy};
-use rsaeb::program::{Program, RunResult};
+use rsaeb::program::{ParsedProgram, RunResult};
 use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
@@ -44,16 +44,16 @@ fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: rsaeb::policy::Executi
 ///
 /// Returns `TestFailure` if the program is empty before execution can start.
 fn run_executable_program<E>(
-    program: &Program<DefaultParsePolicy>,
+    program: &ParsedProgram<DefaultParsePolicy>,
     admitted: AdmittedRun<E>,
 ) -> Result<Result<RunResult, RunError>, TestFailure>
 where
     E: ExecutionPolicy,
 {
-    Ok(program
-        .as_executable()
-        .map_err(|_| TestFailure::message("expected executable program"))?
-        .execute(admitted))
+    match program {
+        ParsedProgram::Executable(program) => Ok(program.execute(admitted)),
+        ParsedProgram::Empty(_) => Err(TestFailure::message("expected executable program")),
+    }
 }
 
 /// # Errors

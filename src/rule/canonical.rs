@@ -22,7 +22,7 @@ pub(crate) fn canonical_source(rule: &Rule) -> Result<Vec<u8>, AllocationError> 
         AllocationContext::CanonicalSource,
     )?;
 
-    if matches!(rule.availability(), RuleAvailability::Once(_)) {
+    if matches!(rule.availability(), RuleAvailability::Once) {
         push_token(&mut output, SyntaxToken::Once)?;
     }
 
@@ -76,7 +76,7 @@ fn canonical_source_len(rule: &Rule) -> Result<usize, AllocationError> {
 fn repeat_token_len(availability: RuleAvailability) -> usize {
     match availability {
         RuleAvailability::Always => 0,
-        RuleAvailability::Once(_) => SyntaxToken::Once.len(),
+        RuleAvailability::Once => SyntaxToken::Once.len(),
     }
 }
 

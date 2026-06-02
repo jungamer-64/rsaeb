@@ -1,9 +1,9 @@
 //! Public stepwise and rule-attempt run typestates.
 //!
-//! Run-to-completion, tracing, stepwise, and rule-attempt execution start only after
-//! [`Program::as_executable`](crate::program::Program::as_executable) or
-//! [`Program::into_executable`](crate::program::Program::into_executable)
-//! proves that the parsed program has at least one executable rule.
+//! Run-to-completion, tracing, stepwise, and rule-attempt execution start only
+//! from [`ExecutableProgram`](crate::program::ExecutableProgram), which is
+//! produced by matching [`ParsedProgram::Executable`](crate::program::ParsedProgram::Executable)
+//! after parsing.
 //!
 //! A step transition is a typestate value, not a status flag. Applied steps
 //! carry the continuation session. Stable and returned states are terminal.
@@ -21,15 +21,17 @@
 //! use rsaeb::execution::BorrowedStepTransition;
 //! use rsaeb::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy};
-//! use rsaeb::program::Program;
+//! use rsaeb::program::ParsedProgram;
 //! use rsaeb::source::ProgramSource;
 //!
 //! type TinyState = StaticExecutionPolicy<10, 1, 16_777_216>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=aaaa"))?;
+//! let parsed = ParsedProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=aaaa"))?;
+//! let ParsedProgram::Executable(executable) = parsed else {
+//!     return Err("expected executable program".into());
+//! };
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
-//! let executable = program.as_executable().map_err(|_| "expected executable rules")?;
 //! let session = executable.steps(input.admit::<TinyState>()?)?;
 //!
 //! let BorrowedStepTransition::Failed(failed) = session.step() else {

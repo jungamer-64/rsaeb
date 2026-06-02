@@ -9,7 +9,7 @@ use rsaeb::policy::{
     DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy, ExecutionPolicy,
     StaticExecutionPolicy, StaticRuntimeInputPolicy,
 };
-use rsaeb::program::{Program, RunOutcome, RunResult};
+use rsaeb::program::{ParsedProgram, RunOutcome, RunResult};
 use rsaeb::source::ProgramSource;
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
@@ -43,16 +43,16 @@ fn runtime_input(
 ///
 /// Returns `TestFailure` if the program is empty or execution fails.
 fn execute_program<E>(
-    program: &Program<DefaultParsePolicy>,
+    program: &ParsedProgram<DefaultParsePolicy>,
     admitted: rsaeb::input::AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
     E: ExecutionPolicy,
 {
-    Ok(program
-        .as_executable()
-        .map_err(|_| TestFailure::message("expected executable program"))?
-        .execute(admitted)?)
+    match program {
+        ParsedProgram::Executable(program) => Ok(program.execute(admitted)?),
+        ParsedProgram::Empty(_) => Err(TestFailure::message("expected executable program")),
+    }
 }
 
 /// Stabilizes a parsed program that is expected to contain no executable rules.
@@ -61,15 +61,15 @@ where
 ///
 /// Returns `TestFailure` if the program is executable or stabilization fails.
 fn stabilize_empty_program<E>(
-    program: &Program<DefaultParsePolicy>,
+    program: &ParsedProgram<DefaultParsePolicy>,
     admitted: rsaeb::input::AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
     E: ExecutionPolicy,
 {
-    match program.as_executable() {
-        Ok(_) => Err(TestFailure::message("expected empty program")),
-        Err(empty) => Ok(empty.stabilize(admitted)?),
+    match program {
+        ParsedProgram::Empty(program) => Ok(program.stabilize(admitted)?),
+        ParsedProgram::Executable(_) => Err(TestFailure::message("expected empty program")),
     }
 }
 
@@ -97,7 +97,8 @@ fn runtime_input_moves_owned_bytes_into_execution() -> TestResult {
 /// explicit default names.
 #[test]
 fn domain_default_policies_support_explicit_names() -> TestResult {
-    let explicit_program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
+    let explicit_program =
+        ParsedProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
 
     let explicit_input =
         RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;

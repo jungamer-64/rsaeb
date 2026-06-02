@@ -16,9 +16,7 @@ use rsaeb::limits::{ReturnByteLimit, RuleAttemptLimit, RuntimeStateByteLimit};
 use rsaeb::policy::{
     DefaultParsePolicy, ExecutionPolicy, ParsePolicy, RuleAttemptPolicy, StaticRuleAttemptPolicy,
 };
-use rsaeb::program::{
-    BorrowedExecutableProgram, OwnedExecutableProgram, Program, RunOutcome, RunResult,
-};
+use rsaeb::program::{ExecutableProgram, ParsedProgram, RunOutcome, RunResult};
 use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
@@ -291,7 +289,7 @@ fn default_test_run_policy() -> DefaultInputRunPolicy<10, DEFAULT_BYTE_BUDGET, D
 /// Returns `TestFailure` if the program cannot be parsed, input is rejected, or
 /// rule-attempt execution fails.
 fn borrowed_rule_attempt_signatures<const ATTEMPTS: usize>(
-    program: &Program<DefaultParsePolicy>,
+    program: &ParsedProgram<DefaultParsePolicy>,
     input: &'static [u8],
 ) -> Result<Vec<BorrowedRuleAttemptSignature>, TestFailure> {
     let execution =
@@ -392,11 +390,12 @@ fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolicy>(
 ///
 /// Returns `TestFailure` if the parsed program has no executable rules.
 fn executable_program<P: ParsePolicy>(
-    program: &Program<P>,
-) -> Result<BorrowedExecutableProgram<'_, P>, TestFailure> {
-    program
-        .as_executable()
-        .map_err(|_| TestFailure::message("expected executable program"))
+    program: &ParsedProgram<P>,
+) -> Result<&ExecutableProgram<P>, TestFailure> {
+    match program {
+        ParsedProgram::Executable(program) => Ok(program),
+        ParsedProgram::Empty(_) => Err(TestFailure::message("expected executable program")),
+    }
 }
 
 /// Executes a parsed program that is expected to contain executable rules.
@@ -405,7 +404,7 @@ fn executable_program<P: ParsePolicy>(
 ///
 /// Returns `TestFailure` if the program is empty or execution fails.
 fn execute_program<E>(
-    program: &Program<DefaultParsePolicy>,
+    program: &ParsedProgram<DefaultParsePolicy>,
     admitted: AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
@@ -420,11 +419,12 @@ where
 ///
 /// Returns `TestFailure` if the parsed program has no executable rules.
 fn owned_executable_program<P: ParsePolicy>(
-    program: Program<P>,
-) -> Result<OwnedExecutableProgram<P>, TestFailure> {
-    program
-        .into_executable()
-        .map_err(|_| TestFailure::message("expected executable program"))
+    program: ParsedProgram<P>,
+) -> Result<ExecutableProgram<P>, TestFailure> {
+    match program {
+        ParsedProgram::Executable(program) => Ok(program),
+        ParsedProgram::Empty(_) => Err(TestFailure::message("expected executable program")),
+    }
 }
 
 /// Returns the expected successful rule-attempt transition.
@@ -670,25 +670,25 @@ fn execution_rule_attempt_start_and_final_miss_are_typed() -> TestResult {
         }
     }
     let empty_program = parse_program("# no executable rules")?;
-    let Err(borrowed_empty) = empty_program.as_executable() else {
-        return Err(TestFailure::message("expected borrowed empty program"));
+    let ParsedProgram::Empty(empty_program) = empty_program else {
+        return Err(TestFailure::message("expected empty program"));
     };
-    ensure_eq!(borrowed_empty.program().rule_count().get(), 0)?;
-    let borrowed_empty_result = borrowed_empty.stabilize(runtime_input(b"empty", limits)?)?;
+    ensure_eq!(empty_program.rule_count().get(), 0)?;
+    let borrowed_empty_result = empty_program.stabilize(runtime_input(b"empty", limits)?)?;
     expect_stable_bytes(&borrowed_empty_result, b"empty")?;
     ensure_eq!(borrowed_empty_result.steps().get(), 0)?;
 
-    let Err(owned_empty) = parse_program("# no executable rules")?.into_executable() else {
-        return Err(TestFailure::message("expected owned empty program"));
+    let ParsedProgram::Empty(owned_empty) = parse_program("# no executable rules")? else {
+        return Err(TestFailure::message("expected empty program"));
     };
     let owned_empty_result = owned_empty.stabilize(runtime_input(b"owned", limits)?)?;
     expect_stable_bytes(&owned_empty_result, b"owned")?;
     ensure_eq!(owned_empty_result.steps().get(), 0)?;
 
-    let Err(owned_empty) = parse_program("# no executable rules")?.into_executable() else {
-        return Err(TestFailure::message("expected owned empty program"));
+    let ParsedProgram::Empty(owned_empty) = parse_program("# no executable rules")? else {
+        return Err(TestFailure::message("expected empty program"));
     };
-    ensure_eq!(owned_empty.into_program().rule_count().get(), 0)
+    ensure_eq!(owned_empty.rule_count().get(), 0)
 }
 
 /// # Errors
@@ -698,7 +698,10 @@ fn execution_rule_attempt_start_and_final_miss_are_typed() -> TestResult {
 #[test]
 fn execution_rule_attempt_preserves_interleaved_once_state() -> TestResult {
     let program = parse_program("(once)a=b\nz=z\n(once)b=c")?;
-    ensure_eq!(program.once_rule_count().get(), 2)?;
+    let ParsedProgram::Executable(executable) = &program else {
+        return Err(TestFailure::message("expected executable program"));
+    };
+    ensure_eq!(executable.once_rule_count().get(), 2)?;
     ensure_eq!(
         borrowed_rule_attempt_signatures::<10>(&program, b"a")?,
         vec![

@@ -3,12 +3,12 @@ use core::fmt;
 use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind};
 
 use super::{
-    InputColumn, LeftModifierKind, OnceRuleStateError, OwnedRunStepError, ParseError,
-    ParseErrorKind, ParseErrorLocation, ParseRepresentationError, PayloadKind,
-    ReturnOutputLimitError, RewriteSizeError, RightActionKind, RuleAttemptLimitError,
-    RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError, RunStartError, RunStepError,
-    RuntimeInputError, RuntimeStateLimitError, StepLimitError, TraceSnapshotError,
-    TraceSnapshotRunError, TracedRunError,
+    InputColumn, LeftModifierKind, OwnedRunStepError, ParseError, ParseErrorKind,
+    ParseErrorLocation, ParseRepresentationError, PayloadKind, ReturnOutputLimitError,
+    RewriteSizeError, RightActionKind, RuleAttemptLimitError, RuleAttemptStepError,
+    RunAdmissionError, RunError, RunFinishError, RunStartError, RunStepError, RuntimeInputError,
+    RuntimeStateLimitError, StepLimitError, TraceSnapshotError, TraceSnapshotRunError,
+    TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -19,7 +19,7 @@ impl fmt::Display for AllocationContext {
             Self::ProgramRuleTable => f.write_str("program rule table"),
             Self::CanonicalSource => f.write_str("canonical source bytes"),
             Self::RuntimeInputValidation => f.write_str("runtime input validation"),
-            Self::OnceRuleState => f.write_str("once rule state"),
+            Self::RuntimeRuleAvailability => f.write_str("runtime rule availability"),
             Self::RuntimeRewriteState => f.write_str("runtime rewrite state"),
             Self::PayloadView => f.write_str("payload view"),
             Self::OwnedRuleWitness => f.write_str("owned execution rule witness"),
@@ -212,24 +212,11 @@ impl fmt::Display for RunStepError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Allocation(error) => error.fmt(f),
-            Self::OnceRuleState(error) => error.fmt(f),
             Self::RewriteSize(error) => error.fmt(f),
             Self::RuntimeStateLimit(error) => error.fmt(f),
             Self::ReturnOutputLimit(error) => error.fmt(f),
             Self::StepLimit(error) => error.fmt(f),
         }
-    }
-}
-
-impl fmt::Display for OnceRuleStateError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "parser-assigned once slot {} for rule {} has no runtime once-state cell; once-state cells: {}",
-            self.slot_index(),
-            self.rule_position().number().get(),
-            self.once_rule_count().get(),
-        )
     }
 }
 

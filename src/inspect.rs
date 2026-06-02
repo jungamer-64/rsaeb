@@ -2,8 +2,9 @@
 //!
 //! Inspection exposes the parsed program structure without exposing the
 //! internal rule table or storing a second copy of source text. Rule and payload
-//! views borrow from [`program::Program`](crate::program::Program), so they are cheap to copy and
-//! cannot outlive the parsed program they describe.
+//! views borrow from [`program::ExecutableProgram`](crate::program::ExecutableProgram)
+//! or [`program::EmptyProgram`](crate::program::EmptyProgram), so they are cheap
+//! to copy and cannot outlive the parsed program they describe.
 //!
 //! Materializing payload or canonical-source bytes is explicit because it can
 //! allocate. Inspection views are the cheap borrowed contract; owned bytes are
@@ -14,14 +15,17 @@
 //! ```
 //! use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
 //! use rsaeb::policy::DefaultParsePolicy;
-//! use rsaeb::program::Program;
+//! use rsaeb::program::ParsedProgram;
 //! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let program = Program::<DefaultParsePolicy>::parse(ProgramSource::from_text(
+//! let parsed = ParsedProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text(
 //!     "(once)(start)a=(return)done",
 //! ))?;
-//! let rule = program.rules().next().ok_or("missing rule")?;
+//! let ParsedProgram::Executable(executable) = parsed else {
+//!     return Err("expected executable program".into());
+//! };
+//! let rule = executable.rules().next().ok_or("missing rule")?;
 //!
 //! if rule.position().number().get() != 1 {
 //!     return Err("unexpected rule position".into());

@@ -13,9 +13,7 @@ use rsaeb::input::AdmittedRun;
 use rsaeb::limits::TraceSnapshotByteLimit;
 use rsaeb::policy::{DefaultParsePolicy, ParsePolicy};
 use rsaeb::policy::{DefaultTraceSnapshotPolicy, StaticTraceSnapshotPolicy};
-use rsaeb::program::{
-    BorrowedExecutableProgram, OwnedExecutableProgram, Program, RunOutcome, RunResult,
-};
+use rsaeb::program::{ExecutableProgram, ParsedProgram, RunOutcome, RunResult};
 use rsaeb::trace::{
     BorrowedTrace, BorrowedTraceEffect, BorrowedTraceEvent, SnapshotTrace, TraceSnapshotEffect,
     TraceSnapshotEvent,
@@ -44,7 +42,7 @@ fn expect_trace_snapshot_error<T>(
 /// Returns `TestFailure` if parsing, input validation, runtime execution, or
 /// trace snapshot materialization fails.
 fn trace_snapshot_example(
-    program: &Program<DefaultParsePolicy>,
+    program: &ParsedProgram<DefaultParsePolicy>,
 ) -> Result<(RunResult, Vec<TraceSnapshotEvent<'_>>), TestFailure> {
     let mut events = Vec::new();
     let limits = DefaultInputRunPolicy::<10_000, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
@@ -108,11 +106,12 @@ fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: rsaeb::policy::Executi
 ///
 /// Returns `TestFailure` if the parsed program has no executable rules.
 fn executable_program<P: ParsePolicy>(
-    program: &Program<P>,
-) -> Result<BorrowedExecutableProgram<'_, P>, TestFailure> {
-    program
-        .as_executable()
-        .map_err(|_| TestFailure::message("expected executable program"))
+    program: &ParsedProgram<P>,
+) -> Result<&ExecutableProgram<P>, TestFailure> {
+    match program {
+        ParsedProgram::Executable(program) => Ok(program),
+        ParsedProgram::Empty(_) => Err(TestFailure::message("expected executable program")),
+    }
 }
 
 /// Moves an executable program witness for owned stepwise trace comparisons.
@@ -121,11 +120,12 @@ fn executable_program<P: ParsePolicy>(
 ///
 /// Returns `TestFailure` if the parsed program has no executable rules.
 fn owned_executable_program<P: ParsePolicy>(
-    program: Program<P>,
-) -> Result<OwnedExecutableProgram<P>, TestFailure> {
-    program
-        .into_executable()
-        .map_err(|_| TestFailure::message("expected executable program"))
+    program: ParsedProgram<P>,
+) -> Result<ExecutableProgram<P>, TestFailure> {
+    match program {
+        ParsedProgram::Executable(program) => Ok(program),
+        ParsedProgram::Empty(_) => Err(TestFailure::message("expected executable program")),
+    }
 }
 
 /// Collects committed step signatures from borrowed tracing.
@@ -134,7 +134,7 @@ fn owned_executable_program<P: ParsePolicy>(
 ///
 /// Returns `TestFailure` if tracing or materialization fails.
 fn borrowed_trace_step_signatures(
-    program: &Program<DefaultParsePolicy>,
+    program: &ParsedProgram<DefaultParsePolicy>,
     admitted: AdmittedRun<impl rsaeb::policy::ExecutionPolicy>,
 ) -> Result<Vec<CommittedStepSignature>, TestFailure> {
     let mut signatures = Vec::new();
@@ -173,7 +173,7 @@ fn borrowed_trace_step_signatures(
 ///
 /// Returns `TestFailure` if stepping or materialization fails.
 fn owned_step_signatures(
-    program: Program<DefaultParsePolicy>,
+    program: ParsedProgram<DefaultParsePolicy>,
     admitted: AdmittedRun<impl rsaeb::policy::ExecutionPolicy>,
 ) -> Result<Vec<CommittedStepSignature>, TestFailure> {
     let mut signatures = Vec::new();

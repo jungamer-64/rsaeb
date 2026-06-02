@@ -9,7 +9,7 @@ use rsaeb::error::{
     TraceSnapshotRunError,
 };
 use rsaeb::policy::DefaultParsePolicy;
-use rsaeb::program::Program;
+use rsaeb::program::ParsedProgram;
 use rsaeb::source::ProgramSource;
 
 pub enum TestFailure {
@@ -144,8 +144,8 @@ pub type TestResult = Result<(), TestFailure>;
 ///
 /// Returns `ParseError` if the source violates parser syntax, resource, or
 /// allocation constraints.
-pub fn parse_program(source: &str) -> Result<Program<DefaultParsePolicy>, ParseError> {
-    Program::parse(ProgramSource::from_text(source))
+pub fn parse_program(source: &str) -> Result<ParsedProgram<DefaultParsePolicy>, ParseError> {
+    ParsedProgram::parse(ProgramSource::from_text(source))
 }
 
 /// Converts a pattern-match assertion into the shared test result type.

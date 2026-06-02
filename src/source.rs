@@ -1,7 +1,8 @@
 //! Program-source boundary and source-position value types.
 //!
 //! A [`ProgramSource`] only labels bytes as source input; it does not validate
-//! A=B syntax. Validation belongs to [`program::Program::parse`](crate::program::Program::parse),
+//! A=B syntax. Validation belongs to
+//! [`program::ParsedProgram::parse`](crate::program::ParsedProgram::parse),
 //! which can then report parse failures with [`SourceLineNumber`],
 //! [`SourceColumn`], and [`SourcePosition`].
 //!
@@ -12,14 +13,17 @@
 //!
 //! ```
 //! use rsaeb::policy::DefaultParsePolicy;
-//! use rsaeb::program::Program;
+//! use rsaeb::program::ParsedProgram;
 //! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let source = ProgramSource::from_bytes(b"a=b # arbitrary comment bytes: \xff");
-//! let program = Program::<DefaultParsePolicy>::parse(source)?;
+//! let program = ParsedProgram::<DefaultParsePolicy>::parse(source)?;
+//! let ParsedProgram::Executable(executable) = program else {
+//!     return Err("expected executable program".into());
+//! };
 //!
-//! if program.rule_count().get() != 1 {
+//! if executable.rule_count().get() != 1 {
 //!     return Err("unexpected rule count".into());
 //! }
 //! # Ok(())
@@ -30,7 +34,8 @@
 ///
 /// Program source remains a byte format because comments may contain arbitrary
 /// non-UTF-8 bytes. Constructing this value labels a byte slice as source
-/// input; syntax validation still happens in [`program::Program::parse`](crate::program::Program::parse).
+/// input; syntax validation still happens in
+/// [`program::ParsedProgram::parse`](crate::program::ParsedProgram::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgramSource<'source> {
     /// Raw source bytes owned by the caller.
@@ -41,9 +46,10 @@ impl<'source> ProgramSource<'source> {
     /// Labels raw bytes as parser input.
     ///
     /// This constructor accepts any byte slice. Executable code bytes are
-    /// checked later by [`program::Program::parse`](crate::program::Program::parse); bytes after a
-    /// line-comment marker remain part of the source byte stream but are not
-    /// executable code.
+    /// checked later by
+    /// [`program::ParsedProgram::parse`](crate::program::ParsedProgram::parse);
+    /// bytes after a line-comment marker remain part of the source byte stream
+    /// but are not executable code.
     #[must_use]
     pub const fn from_bytes(bytes: &'source [u8]) -> Self {
         Self { bytes }
