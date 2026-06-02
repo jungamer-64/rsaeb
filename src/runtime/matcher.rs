@@ -1,16 +1,6 @@
-use super::once::{MatchedRuleCommit, RuntimeRule, RuntimeRuleReadiness, RuntimeRuleStates};
+use super::once::{MatchedRuleCommit, RuntimeRule, RuntimeRuleReadiness};
 use super::state::{State, StateMatch};
-use crate::program::RuleScan;
 use crate::rule::{Rule, RuleAnchorSyntax};
-
-/// Outcome of scanning the rule table for the next applicable rule.
-#[derive(Debug)]
-pub(crate) enum RuleSearch<'program, 'state, 'once> {
-    /// A rule matched and carries the commit permit needed after success.
-    Matched(MatchedRuleApplication<'program, 'state, 'once>),
-    /// No currently available rule matched the runtime state.
-    Stable,
-}
 
 /// Outcome of evaluating one executable rule line against the current state.
 #[derive(Debug)]
@@ -145,28 +135,6 @@ impl<'program> PreparedMatchedRule<'program, '_> {
     pub(crate) fn commit(self) {
         self.commit.commit();
     }
-}
-
-/// Finds the first currently available rule that matches `state`.
-pub(crate) fn find_next_match<'program, 'state, 'once>(
-    rules: RuleScan<'program>,
-    runtime_rules: &'once mut RuntimeRuleStates,
-    state: &'state State,
-) -> RuleSearch<'program, 'state, 'once> {
-    for runtime_rule in runtime_rules.scan(rules) {
-        let candidate = match match_rule_state(runtime_rule.rule(), state) {
-            RuleStateMatch::Matched(candidate) => candidate,
-            RuleStateMatch::Mismatched => continue,
-        };
-        let commit = match runtime_rule.readiness() {
-            RuntimeRuleReadiness::Available(commit) => commit,
-            RuntimeRuleReadiness::Consumed => continue,
-        };
-        let commit = commit.into_matched_commit();
-        return RuleSearch::Matched(candidate.into_application(commit));
-    }
-
-    RuleSearch::Stable
 }
 
 /// Evaluates exactly one parsed rule line against the current runtime state.

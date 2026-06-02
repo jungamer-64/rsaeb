@@ -9,9 +9,7 @@
 //! carry the continuation session. Stable and returned states are terminal.
 //! Failed states are also terminal for the borrowed API: they preserve the
 //! uncommitted state for diagnostics and then let the caller discard the run
-//! into its [`RunStepError`](crate::error::RunStepError). Owned failed states
-//! additionally let the caller recover the owned parsed program or split it
-//! from the error.
+//! into its [`RunStepError`](crate::error::RunStepError).
 //! Rule-attempt transitions additionally expose typed miss reasons through
 //! [`RuleMissReason`]. Stable rule-attempt terminals carry the final
 //! non-applying rule directly.
@@ -67,18 +65,13 @@ mod engine;
 mod session;
 /// Public step and terminal transition typestates.
 mod transition;
-/// Owned execution rule witnesses.
-mod witness;
-
 pub use attempt::{RuleMiss, RuleMissReason};
-pub use session::{BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRunSession};
+pub use session::{BorrowedRuleAttemptSession, BorrowedRunSession};
 pub use transition::{
     BorrowedAppliedStep, BorrowedFailedRun, BorrowedMissedRuleAttempt, BorrowedReturnedRun,
     BorrowedRuleAttemptAppliedStep, BorrowedRuleAttemptFailedRun, BorrowedRuleAttemptReturnedRun,
     BorrowedRuleAttemptStableRun, BorrowedRuleAttemptTransition, BorrowedStableRun,
-    BorrowedStepTransition, OwnedAppliedStep, OwnedFailedRun, OwnedReturnedRun, OwnedStableRun,
-    OwnedStepTransition,
+    BorrowedStepTransition,
 };
-pub use witness::{OwnedRuleAction, OwnedRulePayload, OwnedRuleWitness};
 
 pub(crate) use session::{finish_borrowed_run, trace_events};

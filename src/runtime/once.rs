@@ -1,5 +1,4 @@
-use alloc::{collections::VecDeque, vec::Vec};
-use core::slice;
+use alloc::collections::VecDeque;
 
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
@@ -7,13 +6,6 @@ use crate::allocation::{
 use crate::policy::ParsePolicy;
 use crate::program::{ExecutableProgram, RuleScan, RuleScanIter};
 use crate::rule::{Rule, RuleAvailability};
-
-/// Per-run execution state for executable rule availability.
-#[derive(Debug)]
-pub(crate) struct RuntimeRuleStates {
-    /// One runtime availability cell for each executable rule.
-    states: Vec<RuntimeRuleAvailabilityState>,
-}
 
 /// Per-run rule-attempt pass over executable rules and their availability cells.
 #[derive(Debug)]
@@ -106,14 +98,6 @@ pub(crate) struct RuntimeRule<'program, 'state> {
     availability: RuntimeRuleAvailability<'state>,
 }
 
-/// Iterator pairing parsed rules with their per-run runtime availability states.
-pub(crate) struct RuntimeRulesMut<'program, 'state> {
-    /// Parsed executable rules in execution order.
-    rules: RuleScanIter<'program>,
-    /// Runtime state cells for executable rules.
-    states: slice::IterMut<'state, RuntimeRuleAvailabilityState>,
-}
-
 /// Runtime availability paired with one parsed rule.
 #[derive(Debug)]
 enum RuntimeRuleAvailability<'state> {
@@ -148,56 +132,6 @@ impl OnceMatchPermitLinearity {
     /// Creates the linearity marker for one permit.
     const fn new() -> Self {
         Self
-    }
-}
-
-impl RuntimeRuleStates {
-    /// Builds per-execution rule state from an executable program.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AllocationError` if the per-execution rule-state table cannot be
-    /// allocated.
-    pub(crate) fn from_program<P: ParsePolicy>(
-        program: &ExecutableProgram<P>,
-    ) -> Result<Self, AllocationError> {
-        Self::from_rule_scan(program.rule_scan())
-    }
-
-    /// Builds per-execution rule state from the executable rule table.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AllocationError` if the per-execution rule-state table cannot be
-    /// allocated.
-    fn from_rule_scan(rules: RuleScan<'_>) -> Result<Self, AllocationError> {
-        let rule_count = rules.iter().count();
-        let mut states = Vec::new();
-        try_reserve_total_exact(
-            &mut states,
-            RequestedCapacity::new(rule_count),
-            AllocationContext::RuntimeRuleAvailability,
-        )?;
-        for rule in rules.iter() {
-            try_push(
-                &mut states,
-                RuntimeRuleAvailabilityState::from_rule(rule),
-                AllocationContext::RuntimeRuleAvailability,
-            )?;
-        }
-
-        Ok(Self { states })
-    }
-
-    /// Starts scanning parsed rules together with their runtime states.
-    pub(crate) fn scan<'program, 'state>(
-        &'state mut self,
-        rules: RuleScan<'program>,
-    ) -> RuntimeRulesMut<'program, 'state> {
-        RuntimeRulesMut {
-            rules: rules.iter(),
-            states: self.states.iter_mut(),
-        }
     }
 }
 
@@ -467,16 +401,6 @@ impl RuntimeRuleAvailabilityState {
             RuleAvailability::Always => Self::Always,
             RuleAvailability::Once => Self::FreshOnce,
         }
-    }
-}
-
-impl<'program, 'state> Iterator for RuntimeRulesMut<'program, 'state> {
-    type Item = RuntimeRule<'program, 'state>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let rule = self.rules.next()?;
-        let state = self.states.next()?;
-        Some(RuntimeRule::new(rule, RuntimeRuleAvailability::new(state)))
     }
 }
 

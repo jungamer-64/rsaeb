@@ -1,7 +1,7 @@
 use core::{fmt, marker::PhantomData};
 
 use crate::error::{ParseError, RunError, RunFinishError, RunStartError};
-use crate::execution::{BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRunSession};
+use crate::execution::{BorrowedRuleAttemptSession, BorrowedRunSession};
 use crate::input::AdmittedRun;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::limits::StepCount;
@@ -206,21 +206,6 @@ impl<P: ParsePolicy> ExecutableProgram<P> {
         E: ExecutionPolicy,
     {
         BorrowedRunSession::new(self, admitted)
-    }
-
-    /// Starts owned stepwise execution.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunStartError` if allocating per-run rule state fails.
-    pub fn into_steps<E>(
-        self,
-        admitted: AdmittedRun<E>,
-    ) -> Result<OwnedRunSession<P, E>, RunStartError>
-    where
-        E: ExecutionPolicy,
-    {
-        OwnedRunSession::new(self, admitted)
     }
 
     /// Starts borrowed rule-attempt execution.

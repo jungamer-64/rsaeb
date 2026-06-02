@@ -1,5 +1,5 @@
 use crate::bytes::RuntimeStateByteCount;
-use crate::error::{OwnedRunStepError, RuleAttemptStepError, RunStepError};
+use crate::error::{RuleAttemptStepError, RunStepError};
 use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
@@ -13,7 +13,6 @@ use crate::runtime::state::State;
 
 use super::attempt::RuleMiss;
 use super::engine::{AttemptRunCore, AttemptSession, BorrowedProgram, TerminalAttemptSession};
-use super::witness::OwnedRuleWitness;
 
 /// Compile-time rule witness policy for ordinary execution steps.
 pub(super) trait RunRuleWitness<'program> {
@@ -52,10 +51,6 @@ pub(super) enum DiscardedRunWitness {}
 /// Ordinary-run witness policy that borrows parsed rule metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BorrowedRunWitness {}
-
-/// Ordinary-run witness policy that owns parsed rule metadata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum OwnedRunWitness {}
 
 /// Rule-attempt witness policy that borrows parsed rule metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,15 +239,6 @@ impl<'program> RunRuleWitness<'program> for BorrowedRunWitness {
 
     fn from_rule(rule: RuleView<'program>) -> Result<Self::Witness, Self::Error> {
         Ok(rule)
-    }
-}
-
-impl<'program> RunRuleWitness<'program> for OwnedRunWitness {
-    type Witness = OwnedRuleWitness;
-    type Error = OwnedRunStepError;
-
-    fn from_rule(rule: RuleView<'program>) -> Result<Self::Witness, Self::Error> {
-        OwnedRuleWitness::from_rule_view(rule).map_err(OwnedRunStepError::RuleWitnessAllocation)
     }
 }
 
