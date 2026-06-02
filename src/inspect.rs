@@ -13,7 +13,7 @@
 //! cannot allocate.
 //!
 //! ```
-//! use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
+//! use rsaeb::inspect::{RuleAnchor, RuleView};
 //! use rsaeb::policy::DefaultParsePolicy;
 //! use rsaeb::program::ExecutableProgram;
 //! use rsaeb::source::ExecutableProgramSource;
@@ -27,24 +27,18 @@
 //! if rule.position().number().get() != 1 {
 //!     return Err("unexpected rule position".into());
 //! }
-//! if rule.repeat() != RuleRepeat::Once {
-//!     return Err("unexpected rule repeat".into());
-//! }
 //! if rule.anchor() != RuleAnchor::Start {
 //!     return Err("unexpected rule anchor".into());
 //! }
 //! if rule.lhs().materialize()?.as_slice() != b"a" {
 //!     return Err("unexpected left side".into());
 //! }
-//! match rule.action() {
-//!     RuleActionView::Return(output) => {
-//!         if output.materialize()?.as_slice() != b"done" {
-//!             return Err("unexpected return output".into());
-//!         }
-//!     }
-//!     RuleActionView::Replace(_) | RuleActionView::MoveStart(_) | RuleActionView::MoveEnd(_) => {
-//!         return Err("expected return action".into());
-//!     }
+//! let RuleView::Once(rule) = rule else {
+//!     return Err("unexpected rule repeat".into());
+//! };
+//! let return_rule = rule.as_return().ok_or("expected return action")?;
+//! if return_rule.output().materialize()?.as_slice() != b"done" {
+//!     return Err("unexpected return output".into());
 //! }
 //! # Ok(())
 //! # }
@@ -155,18 +149,6 @@ impl RulePosition {
     pub const fn number(self) -> RuleNumber {
         self.number
     }
-}
-
-/// Rule repeat policy.
-///
-/// Repeat policy is per runtime invocation. A `(once)` rule can be used again
-/// by a later execution through an executable-program witness.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuleRepeat {
-    /// The rule may apply every time it matches.
-    Always,
-    /// The rule may apply at most once during one runtime invocation.
-    Once,
 }
 
 /// Rule match anchor.
@@ -322,36 +304,6 @@ impl fmt::Debug for PayloadView<'_> {
     }
 }
 
-/// Structured borrowed rule action.
-///
-/// Each variant carries the right-side payload in the domain implied by the
-/// parsed action token. There is no boolean flag that can confuse ordinary
-/// replacement, movement, and return behavior.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuleActionView<'program> {
-    /// Replace the matched bytes with the payload.
-    Replace(PayloadView<'program>),
-    /// Remove the matched bytes and insert the payload at the start.
-    MoveStart(PayloadView<'program>),
-    /// Remove the matched bytes and append the payload at the end.
-    MoveEnd(PayloadView<'program>),
-    /// Stop execution and return the payload as output.
-    Return(PayloadView<'program>),
-}
-
-impl<'program> RuleActionView<'program> {
-    /// Borrow the payload carried by this action.
-    #[must_use]
-    pub const fn payload(self) -> PayloadView<'program> {
-        match self {
-            Self::Replace(payload)
-            | Self::MoveStart(payload)
-            | Self::MoveEnd(payload)
-            | Self::Return(payload) => payload,
-        }
-    }
-}
-
 /// Read-only structured view of a parsed rule.
 ///
 /// The view borrows the parsed rule and carries the rule's execution position.
@@ -369,10 +321,8 @@ impl core::fmt::Debug for RuleView<'_> {
             .debug_struct("RuleView")
             .field("position", &self.position())
             .field("line_number", &self.line_number())
-            .field("repeat", &self.repeat())
             .field("anchor", &self.anchor())
             .field("lhs", &self.lhs())
-            .field("action", &self.action())
             .finish()
     }
 }
@@ -381,10 +331,8 @@ impl PartialEq for RuleView<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.position() == other.position()
             && self.line_number() == other.line_number()
-            && self.repeat() == other.repeat()
             && self.anchor() == other.anchor()
             && self.lhs() == other.lhs()
-            && self.action() == other.action()
     }
 }
 
@@ -408,12 +356,6 @@ impl<'program> RuleView<'program> {
         self.rule.line_number()
     }
 
-    /// Rule repeat policy.
-    #[must_use]
-    pub fn repeat(self) -> RuleRepeat {
-        self.rule.repeat()
-    }
-
     /// Rule match anchor.
     #[must_use]
     pub fn anchor(self) -> RuleAnchor {
@@ -424,12 +366,6 @@ impl<'program> RuleView<'program> {
     #[must_use]
     pub fn lhs(self) -> PayloadView<'program> {
         PayloadView::new(self.rule.lhs())
-    }
-
-    /// Right-side action.
-    #[must_use]
-    pub fn action(self) -> RuleActionView<'program> {
-        self.rule.action_view()
     }
 
     /// Generates canonical executable source for diagnostics/display.
