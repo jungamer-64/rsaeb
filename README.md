@@ -86,7 +86,9 @@ outside the interpreter and pass already-loaded bytes into typed boundaries.
 `ExecutableProgram` starts reusable runs with `.execute(admitted)`,
 `.trace(admitted, request)`, `.steps(admitted)`, or
 `.rule_attempts::<A, _>(admitted)`. Rule-attempt execution is borrowed because
-its resumable cursor is tied to the executable rule table. `EmptyProgram`
+its resumable cursor is tied to the executable rule table. The rule-attempt
+cursor must be matched as continuing or final before stepping, so a final rule
+cannot be confused with a missed rule that still has a successor. `EmptyProgram`
 exposes only inspection and `.stabilize(admitted)`, which materializes the
 admitted input as a zero-step stable result.
 

@@ -27,7 +27,7 @@ pub(crate) enum RuntimeRuleSearch<'program, 'state, 'once> {
 
 /// Per-run rule-attempt pass over executable rules and their availability cells.
 #[derive(Debug)]
-pub(crate) enum RuntimeRulePass<'program> {
+pub(crate) enum RuntimeRulePassCursor<'program> {
     /// The current rule is not the final target in this pass.
     Continuing(ContinuingRuntimeRulePass<'program>),
     /// The current rule is the final target in this pass.
@@ -221,7 +221,7 @@ impl<'program> RuntimeRuleTable<'program> {
     }
 }
 
-impl<'program> RuntimeRulePass<'program> {
+impl<'program> RuntimeRulePassCursor<'program> {
     /// Builds a rule-attempt pass from an executable program.
     ///
     /// # Errors
@@ -258,7 +258,7 @@ impl<'program> RuntimeRulePass<'program> {
             remaining_capacity,
             AllocationContext::RuntimeRuleCell,
         )?;
-        Ok(RuntimeRulePassParts {
+        Ok(RuntimeRulePassCursorParts {
             current: RuntimeRuleCell::from_rule(first),
             remaining,
             attempted,
@@ -344,7 +344,7 @@ enum AdvancedPendingRuntimeRules<'program> {
 }
 
 /// Rule-attempt pass under construction from a current target and ordered tail.
-struct RuntimeRulePassParts<'program> {
+struct RuntimeRulePassCursorParts<'program> {
     /// Current executable rule attempt target.
     current: RuntimeRuleCell<'program>,
     /// Remaining executable rules after the current target, in attempt order.
@@ -353,16 +353,16 @@ struct RuntimeRulePassParts<'program> {
     attempted: VecDeque<RuntimeRuleCell<'program>>,
 }
 
-impl<'program> RuntimeRulePassParts<'program> {
+impl<'program> RuntimeRulePassCursorParts<'program> {
     /// Classifies the current target by whether the ordered tail is empty.
-    fn into_pass(mut self) -> RuntimeRulePass<'program> {
+    fn into_pass(mut self) -> RuntimeRulePassCursor<'program> {
         match self.remaining.pop_front() {
-            Some(next) => RuntimeRulePass::Continuing(ContinuingRuntimeRulePass {
+            Some(next) => RuntimeRulePassCursor::Continuing(ContinuingRuntimeRulePass {
                 current: self.current,
                 pending: PendingRuntimeRules::new(next, self.remaining),
                 attempted: self.attempted,
             }),
-            None => RuntimeRulePass::Final(FinalRuntimeRulePass {
+            None => RuntimeRulePassCursor::Final(FinalRuntimeRulePass {
                 current: self.current,
                 attempted: self.attempted,
                 spare: self.remaining,
@@ -378,17 +378,19 @@ impl<'program> ContinuingRuntimeRulePass<'program> {
     }
 
     /// Commits a non-applying attempt and returns the next typed pass state.
-    pub(crate) fn commit_miss(mut self) -> RuntimeRulePass<'program> {
+    pub(crate) fn commit_miss(mut self) -> RuntimeRulePassCursor<'program> {
         self.attempted.push_back(self.current);
         let (current, advanced) = self.pending.advance();
         match advanced {
-            AdvancedPendingRuntimeRules::Continuing(pending) => RuntimeRulePass::Continuing(Self {
-                current,
-                pending,
-                attempted: self.attempted,
-            }),
+            AdvancedPendingRuntimeRules::Continuing(pending) => {
+                RuntimeRulePassCursor::Continuing(Self {
+                    current,
+                    pending,
+                    attempted: self.attempted,
+                })
+            }
             AdvancedPendingRuntimeRules::Final { spare } => {
-                RuntimeRulePass::Final(FinalRuntimeRulePass {
+                RuntimeRulePassCursor::Final(FinalRuntimeRulePass {
                     current,
                     attempted: self.attempted,
                     spare,
@@ -398,14 +400,14 @@ impl<'program> ContinuingRuntimeRulePass<'program> {
     }
 
     /// Resets this pass to its first executable rule after a rewrite.
-    pub(crate) fn reset_after_rewrite(self) -> RuntimeRulePass<'program> {
+    pub(crate) fn reset_after_rewrite(self) -> RuntimeRulePassCursor<'program> {
         let Self {
             current,
             pending,
             mut attempted,
         } = self;
         let Some(first) = attempted.pop_front() else {
-            return RuntimeRulePass::Continuing(Self {
+            return RuntimeRulePassCursor::Continuing(Self {
                 current,
                 pending,
                 attempted,
@@ -415,7 +417,7 @@ impl<'program> ContinuingRuntimeRulePass<'program> {
         let mut remaining = attempted;
         remaining.push_back(current);
         let attempted = pending.append_to(&mut remaining);
-        RuntimeRulePassParts {
+        RuntimeRulePassCursorParts {
             current: first,
             remaining,
             attempted,
@@ -431,14 +433,14 @@ impl<'program> FinalRuntimeRulePass<'program> {
     }
 
     /// Resets this final pass to its first executable rule after a rewrite.
-    pub(crate) fn reset_after_rewrite(self) -> RuntimeRulePass<'program> {
+    pub(crate) fn reset_after_rewrite(self) -> RuntimeRulePassCursor<'program> {
         let Self {
             current,
             mut attempted,
             spare,
         } = self;
         let Some(first) = attempted.pop_front() else {
-            return RuntimeRulePass::Final(Self {
+            return RuntimeRulePassCursor::Final(Self {
                 current,
                 attempted,
                 spare,
@@ -447,7 +449,7 @@ impl<'program> FinalRuntimeRulePass<'program> {
 
         let mut remaining = attempted;
         remaining.push_back(current);
-        RuntimeRulePassParts {
+        RuntimeRulePassCursorParts {
             current: first,
             remaining,
             attempted: spare,

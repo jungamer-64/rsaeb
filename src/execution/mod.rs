@@ -9,9 +9,12 @@
 //! Failed states are also terminal for the borrowed API: they preserve the
 //! uncommitted state for diagnostics and then let the caller discard the run
 //! into its [`RunStepError`](crate::error::RunStepError).
-//! Rule-attempt transitions additionally expose typed miss reasons through
-//! [`RuleMissReason`]. Stable rule-attempt terminals carry the final
-//! non-applying rule directly.
+//! Rule-attempt execution starts as a cursor that must be matched into a
+//! continuing or final session before stepping. Continuing transitions can miss
+//! and keep running; final transitions can stabilize. The two impossible
+//! outcomes are absent from their transition types. Rule-attempt transitions
+//! additionally expose typed miss reasons through [`RuleMissReason`]. Stable
+//! rule-attempt terminals carry the final non-applying rule directly.
 //!
 //! ```
 //! use rsaeb::error::RunStepError;
@@ -62,10 +65,15 @@ mod session;
 /// Public step and terminal transition typestates.
 mod transition;
 pub use attempt::{RuleMiss, RuleMissReason};
-pub use session::BorrowedRunSession;
+pub use session::{
+    BorrowedContinuingRuleAttemptSession, BorrowedFinalRuleAttemptSession,
+    BorrowedRuleAttemptCursor, BorrowedRunSession,
+};
 pub use transition::{
-    BorrowedAppliedStep, BorrowedFailedRun, BorrowedReturnedRun, BorrowedStableRun,
-    BorrowedStepTransition,
+    BorrowedAppliedStep, BorrowedContinuingRuleAttemptTransition, BorrowedFailedRun,
+    BorrowedFinalRuleAttemptTransition, BorrowedMissedRuleAttempt, BorrowedReturnedRun,
+    BorrowedRuleAttemptAppliedStep, BorrowedRuleAttemptFailedRun, BorrowedRuleAttemptReturnedRun,
+    BorrowedRuleAttemptStableRun, BorrowedStableRun, BorrowedStepTransition,
 };
 
 pub(crate) use session::{finish_borrowed_run, trace_events};

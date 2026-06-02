@@ -6,8 +6,9 @@ mod support;
 
 use rsaeb::error::{RuleAttemptStepError, RunStepError};
 use rsaeb::execution::{
-    BorrowedAppliedStep, BorrowedFailedRun, BorrowedReturnedRun, BorrowedRuleAttemptSession,
-    BorrowedRuleAttemptTransition, BorrowedRunSession, BorrowedStableRun, BorrowedStepTransition,
+    BorrowedAppliedStep, BorrowedContinuingRuleAttemptTransition, BorrowedFailedRun,
+    BorrowedFinalRuleAttemptTransition, BorrowedReturnedRun, BorrowedRuleAttemptCursor,
+    BorrowedRuleAttemptFailedRun, BorrowedRunSession, BorrowedStableRun, BorrowedStepTransition,
     RuleMissReason,
 };
 use rsaeb::input::AdmittedRun;
@@ -133,50 +134,79 @@ macro_rules! expect_non_failed_transition {
 
 macro_rules! collect_borrowed_rule_attempt_signatures {
     ($execution:expr) => {{
-        let mut execution = $execution;
+        let mut cursor = $execution;
         let mut signatures = Vec::new();
         loop {
-            match expect_rule_attempt_transition(execution.step())? {
-                BorrowedRuleAttemptTransition::Missed(missed) => {
-                    signatures.push(BorrowedRuleAttemptSignature::Missed {
-                        attempt: missed.attempt().get(),
-                        rule_position: missed.miss().rule().position().number().get(),
-                        reason: missed.miss().reason(),
-                        state: runtime_view_bytes(missed.state())?,
-                    });
-                    execution = missed.into_session();
+            match cursor {
+                BorrowedRuleAttemptCursor::Continuing(execution) => {
+                    match expect_continuing_rule_attempt_transition(execution.step())? {
+                        BorrowedContinuingRuleAttemptTransition::Missed(missed) => {
+                            signatures.push(BorrowedRuleAttemptSignature::Missed {
+                                attempt: missed.attempt().get(),
+                                rule_position: missed.miss().rule().position().number().get(),
+                                reason: missed.miss().reason(),
+                                state: runtime_view_bytes(missed.state())?,
+                            });
+                            cursor = missed.into_cursor();
+                        }
+                        BorrowedContinuingRuleAttemptTransition::Applied(applied) => {
+                            signatures.push(BorrowedRuleAttemptSignature::Applied {
+                                attempt: applied.attempt().get(),
+                                step: applied.step().get(),
+                                rule_position: applied.rule().position().number().get(),
+                                state: runtime_view_bytes(applied.state())?,
+                            });
+                            cursor = applied.into_cursor();
+                        }
+                        BorrowedContinuingRuleAttemptTransition::Returned(returned) => {
+                            signatures.push(BorrowedRuleAttemptSignature::Return {
+                                attempt: returned.attempt().get(),
+                                step: returned.step().get(),
+                                rule_position: returned.rule().position().number().get(),
+                                output: returned.output().as_slice().to_vec(),
+                            });
+                            return Ok(signatures);
+                        }
+                        BorrowedContinuingRuleAttemptTransition::Failed(failed) => {
+                            return Err(TestFailure::from(failed.into_error()));
+                        }
+                    }
                 }
-                BorrowedRuleAttemptTransition::Applied(applied) => {
-                    signatures.push(BorrowedRuleAttemptSignature::Applied {
-                        attempt: applied.attempt().get(),
-                        step: applied.step().get(),
-                        rule_position: applied.rule().position().number().get(),
-                        state: runtime_view_bytes(applied.state())?,
-                    });
-                    execution = applied.into_session();
-                }
-                BorrowedRuleAttemptTransition::Stable(stable) => {
-                    signatures.push(BorrowedRuleAttemptSignature::Stable {
-                        attempts: stable.attempts().get(),
-                        steps: stable.steps().get(),
-                        final_miss: final_miss_signature(stable.final_miss(), |rule| {
-                            rule.position().number().get()
-                        }),
-                        state: runtime_view_bytes(stable.state())?,
-                    });
-                    return Ok(signatures);
-                }
-                BorrowedRuleAttemptTransition::Returned(returned) => {
-                    signatures.push(BorrowedRuleAttemptSignature::Return {
-                        attempt: returned.attempt().get(),
-                        step: returned.step().get(),
-                        rule_position: returned.rule().position().number().get(),
-                        output: returned.output().as_slice().to_vec(),
-                    });
-                    return Ok(signatures);
-                }
-                BorrowedRuleAttemptTransition::Failed(failed) => {
-                    return Err(TestFailure::from(failed.into_error()));
+                BorrowedRuleAttemptCursor::Final(execution) => {
+                    match expect_final_rule_attempt_transition(execution.step())? {
+                        BorrowedFinalRuleAttemptTransition::Stable(stable) => {
+                            signatures.push(BorrowedRuleAttemptSignature::Stable {
+                                attempts: stable.attempts().get(),
+                                steps: stable.steps().get(),
+                                final_miss: final_miss_signature(stable.final_miss(), |rule| {
+                                    rule.position().number().get()
+                                }),
+                                state: runtime_view_bytes(stable.state())?,
+                            });
+                            return Ok(signatures);
+                        }
+                        BorrowedFinalRuleAttemptTransition::Applied(applied) => {
+                            signatures.push(BorrowedRuleAttemptSignature::Applied {
+                                attempt: applied.attempt().get(),
+                                step: applied.step().get(),
+                                rule_position: applied.rule().position().number().get(),
+                                state: runtime_view_bytes(applied.state())?,
+                            });
+                            cursor = applied.into_cursor();
+                        }
+                        BorrowedFinalRuleAttemptTransition::Returned(returned) => {
+                            signatures.push(BorrowedRuleAttemptSignature::Return {
+                                attempt: returned.attempt().get(),
+                                step: returned.step().get(),
+                                rule_position: returned.rule().position().number().get(),
+                                output: returned.output().as_slice().to_vec(),
+                            });
+                            return Ok(signatures);
+                        }
+                        BorrowedFinalRuleAttemptTransition::Failed(failed) => {
+                            return Err(TestFailure::from(failed.into_error()));
+                        }
+                    }
                 }
             }
         }
@@ -335,7 +365,7 @@ fn finish_step_signatures<P: ParsePolicy, E: ExecutionPolicy>(
 ///
 /// Returns `TestFailure` if a rule attempt fails or state materialization fails.
 fn finish_borrowed_rule_attempt_signatures<P, E, A>(
-    execution: BorrowedRuleAttemptSession<'_, P, E, A>,
+    execution: BorrowedRuleAttemptCursor<'_, P, E, A>,
 ) -> Result<Vec<BorrowedRuleAttemptSignature>, TestFailure>
 where
     P: ParsePolicy,
@@ -399,41 +429,79 @@ where
     Ok(program.execute(admitted)?)
 }
 
-/// Returns the expected successful rule-attempt transition.
+/// Returns the expected successful continuing rule-attempt transition.
 ///
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping fails.
-fn expect_rule_attempt_transition<'program, P, E, A>(
-    result: BorrowedRuleAttemptTransition<'program, P, E, A>,
-) -> Result<BorrowedRuleAttemptTransition<'program, P, E, A>, TestFailure>
+fn expect_continuing_rule_attempt_transition<'program, P, E, A>(
+    result: BorrowedContinuingRuleAttemptTransition<'program, P, E, A>,
+) -> Result<BorrowedContinuingRuleAttemptTransition<'program, P, E, A>, TestFailure>
 where
     P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
-    expect_non_failed_transition!(result, BorrowedRuleAttemptTransition::Failed)
+    expect_non_failed_transition!(result, BorrowedContinuingRuleAttemptTransition::Failed)
 }
 
-/// Returns the expected failed rule-attempt transition.
+/// Returns the expected successful final rule-attempt transition.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if stepping fails.
+fn expect_final_rule_attempt_transition<'program, P, E, A>(
+    result: BorrowedFinalRuleAttemptTransition<'program, P, E, A>,
+) -> Result<BorrowedFinalRuleAttemptTransition<'program, P, E, A>, TestFailure>
+where
+    P: ParsePolicy,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+{
+    expect_non_failed_transition!(result, BorrowedFinalRuleAttemptTransition::Failed)
+}
+
+/// Returns the expected failed continuing rule-attempt transition.
 ///
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping does not fail.
-fn expect_failed_rule_attempt<'program, P, E, A>(
-    result: BorrowedRuleAttemptTransition<'program, P, E, A>,
-) -> Result<rsaeb::execution::BorrowedRuleAttemptFailedRun<'program, P>, TestFailure>
+fn expect_failed_continuing_rule_attempt<'program, P, E, A>(
+    result: BorrowedContinuingRuleAttemptTransition<'program, P, E, A>,
+) -> Result<BorrowedRuleAttemptFailedRun<'program, P>, TestFailure>
 where
     P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
     match result {
-        BorrowedRuleAttemptTransition::Failed(failed) => Ok(failed),
-        BorrowedRuleAttemptTransition::Missed(_)
-        | BorrowedRuleAttemptTransition::Applied(_)
-        | BorrowedRuleAttemptTransition::Stable(_)
-        | BorrowedRuleAttemptTransition::Returned(_) => {
+        BorrowedContinuingRuleAttemptTransition::Failed(failed) => Ok(failed),
+        BorrowedContinuingRuleAttemptTransition::Missed(_)
+        | BorrowedContinuingRuleAttemptTransition::Applied(_)
+        | BorrowedContinuingRuleAttemptTransition::Returned(_) => {
+            Err(TestFailure::message("expected failed rule attempt"))
+        }
+    }
+}
+
+/// Returns the expected failed final rule-attempt transition.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if stepping does not fail.
+fn expect_failed_final_rule_attempt<'program, P, E, A>(
+    result: BorrowedFinalRuleAttemptTransition<'program, P, E, A>,
+) -> Result<BorrowedRuleAttemptFailedRun<'program, P>, TestFailure>
+where
+    P: ParsePolicy,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+{
+    match result {
+        BorrowedFinalRuleAttemptTransition::Failed(failed) => Ok(failed),
+        BorrowedFinalRuleAttemptTransition::Stable(_)
+        | BorrowedFinalRuleAttemptTransition::Applied(_)
+        | BorrowedFinalRuleAttemptTransition::Returned(_) => {
             Err(TestFailure::message("expected failed rule attempt"))
         }
     }
@@ -619,10 +687,15 @@ fn execution_rule_attempt_start_and_final_miss_are_typed() -> TestResult {
     let limits = default_test_run_policy();
     let program = parse_program("a=b")?;
     let input = runtime_input(b"z", limits)?;
-    let execution = program.rule_attempts::<StaticRuleAttemptPolicy<10>, _>(input)?;
+    let cursor = program.rule_attempts::<StaticRuleAttemptPolicy<10>, _>(input)?;
 
-    match expect_rule_attempt_transition(execution.step())? {
-        BorrowedRuleAttemptTransition::Stable(stable) => {
+    let BorrowedRuleAttemptCursor::Final(execution) = cursor else {
+        return Err(TestFailure::message(
+            "expected single-rule start as final cursor",
+        ));
+    };
+    match expect_final_rule_attempt_transition(execution.step())? {
+        BorrowedFinalRuleAttemptTransition::Stable(stable) => {
             ensure_eq!(stable.attempts().get(), 1)?;
             ensure_eq!(stable.steps().get(), 0)?;
             let final_miss = stable.final_miss();
@@ -633,10 +706,9 @@ fn execution_rule_attempt_start_and_final_miss_are_typed() -> TestResult {
                 b"z".as_slice(),
             )?;
         }
-        BorrowedRuleAttemptTransition::Missed(_)
-        | BorrowedRuleAttemptTransition::Applied(_)
-        | BorrowedRuleAttemptTransition::Returned(_)
-        | BorrowedRuleAttemptTransition::Failed(_) => {
+        BorrowedFinalRuleAttemptTransition::Applied(_)
+        | BorrowedFinalRuleAttemptTransition::Returned(_)
+        | BorrowedFinalRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message("expected immediate stable terminal"));
         }
     }
@@ -659,6 +731,60 @@ fn execution_rule_attempt_start_and_final_miss_are_typed() -> TestResult {
         "# no executable rules",
     ))?;
     ensure_eq!(owned_empty.rule_count().get(), 0)
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if a committed rewrite resets the rule-attempt cursor
+/// to a shape-erased state instead of the typed first-rule cursor.
+#[test]
+fn execution_rule_attempt_rewrite_reset_returns_typed_cursor() -> TestResult {
+    let limits = default_test_run_policy();
+
+    let single_rule = parse_program("a=b")?;
+    let input = runtime_input(b"a", limits)?;
+    let cursor = single_rule.rule_attempts::<StaticRuleAttemptPolicy<10>, _>(input)?;
+    let BorrowedRuleAttemptCursor::Final(execution) = cursor else {
+        return Err(TestFailure::message(
+            "expected single-rule start as final cursor",
+        ));
+    };
+    let cursor = match expect_final_rule_attempt_transition(execution.step())? {
+        BorrowedFinalRuleAttemptTransition::Applied(applied) => applied.into_cursor(),
+        BorrowedFinalRuleAttemptTransition::Stable(_)
+        | BorrowedFinalRuleAttemptTransition::Returned(_)
+        | BorrowedFinalRuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message("expected single-rule rewrite apply"));
+        }
+    };
+    let BorrowedRuleAttemptCursor::Final(_) = cursor else {
+        return Err(TestFailure::message(
+            "expected single-rule rewrite reset to final cursor",
+        ));
+    };
+
+    let multi_rule = parse_program("a=b\nb=c")?;
+    let input = runtime_input(b"a", limits)?;
+    let cursor = multi_rule.rule_attempts::<StaticRuleAttemptPolicy<10>, _>(input)?;
+    let BorrowedRuleAttemptCursor::Continuing(execution) = cursor else {
+        return Err(TestFailure::message(
+            "expected multi-rule start as continuing cursor",
+        ));
+    };
+    let cursor = match expect_continuing_rule_attempt_transition(execution.step())? {
+        BorrowedContinuingRuleAttemptTransition::Applied(applied) => applied.into_cursor(),
+        BorrowedContinuingRuleAttemptTransition::Missed(_)
+        | BorrowedContinuingRuleAttemptTransition::Returned(_)
+        | BorrowedContinuingRuleAttemptTransition::Failed(_) => {
+            return Err(TestFailure::message("expected multi-rule rewrite apply"));
+        }
+    };
+    let BorrowedRuleAttemptCursor::Continuing(_) = cursor else {
+        return Err(TestFailure::message(
+            "expected multi-rule rewrite reset to continuing cursor",
+        ));
+    };
+    Ok(())
 }
 
 /// # Errors
@@ -733,26 +859,56 @@ fn execution_rule_attempt_limit_is_independent_from_step_limit() -> TestResult {
     let limits = DefaultInputRunPolicy::<0, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     let program = parse_program("x=y\na=b")?;
     let input = runtime_input(b"a", limits)?;
-    let execution = program.rule_attempts::<StaticRuleAttemptPolicy<1>, _>(input)?;
+    let cursor = program.rule_attempts::<StaticRuleAttemptPolicy<0>, _>(input)?;
+    let BorrowedRuleAttemptCursor::Continuing(execution) = cursor else {
+        return Err(TestFailure::message(
+            "expected multi-rule start as continuing cursor",
+        ));
+    };
+    let failed = expect_failed_continuing_rule_attempt(execution.step())?;
+    ensure_eq!(failed.completed_attempts().get(), 0)?;
+    ensure_eq!(failed.completed_steps().get(), 0)?;
+    ensure_matches(
+        matches!(
+            failed.into_error(),
+            RuleAttemptStepError::RuleAttemptLimit(error)
+                if error.max_attempts() == RuleAttemptLimit::new(0)
+                    && error.completed_attempts().get() == 0
+                    && error.state_len().get() == 1
+        ),
+        "expected continuing rule-attempt limit details",
+    )?;
 
-    let execution = match expect_rule_attempt_transition(execution.step())? {
-        BorrowedRuleAttemptTransition::Missed(missed) => {
+    let input = runtime_input(b"a", limits)?;
+    let cursor = program.rule_attempts::<StaticRuleAttemptPolicy<1>, _>(input)?;
+    let BorrowedRuleAttemptCursor::Continuing(execution) = cursor else {
+        return Err(TestFailure::message(
+            "expected multi-rule start as continuing cursor",
+        ));
+    };
+
+    let cursor = match expect_continuing_rule_attempt_transition(execution.step())? {
+        BorrowedContinuingRuleAttemptTransition::Missed(missed) => {
             ensure_eq!(missed.attempt().get(), 1)?;
             ensure_eq!((*missed.miss().rule()).position().number().get(), 1)?;
             ensure_eq!(missed.miss().reason(), RuleMissReason::StateMismatch)?;
-            missed.into_session()
+            missed.into_cursor()
         }
-        BorrowedRuleAttemptTransition::Applied(_)
-        | BorrowedRuleAttemptTransition::Stable(_)
-        | BorrowedRuleAttemptTransition::Returned(_)
-        | BorrowedRuleAttemptTransition::Failed(_) => {
+        BorrowedContinuingRuleAttemptTransition::Applied(_)
+        | BorrowedContinuingRuleAttemptTransition::Returned(_)
+        | BorrowedContinuingRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message(
                 "expected miss despite zero execution-step limit",
             ));
         }
     };
 
-    let failed = expect_failed_rule_attempt(execution.step())?;
+    let BorrowedRuleAttemptCursor::Final(execution) = cursor else {
+        return Err(TestFailure::message(
+            "expected miss to advance into final cursor",
+        ));
+    };
+    let failed = expect_failed_final_rule_attempt(execution.step())?;
     ensure_eq!(failed.completed_attempts().get(), 1)?;
     ensure_eq!(failed.completed_steps().get(), 0)?;
     ensure_matches(
@@ -776,9 +932,14 @@ fn execution_rule_attempt_preparation_failure_drops_attempt_reservation() -> Tes
     let limits = DefaultInputRunPolicy::<10, 1, DEFAULT_BYTE_BUDGET>::new();
     let program = parse_program("a=aa")?;
     let input = runtime_input(b"a", limits)?;
-    let execution = program.rule_attempts::<StaticRuleAttemptPolicy<10>, _>(input)?;
+    let cursor = program.rule_attempts::<StaticRuleAttemptPolicy<10>, _>(input)?;
+    let BorrowedRuleAttemptCursor::Final(execution) = cursor else {
+        return Err(TestFailure::message(
+            "expected single-rule start as final cursor",
+        ));
+    };
 
-    let failed = expect_failed_rule_attempt(execution.step())?;
+    let failed = expect_failed_final_rule_attempt(execution.step())?;
     ensure_eq!(failed.completed_attempts().get(), 0)?;
     ensure_eq!(failed.completed_steps().get(), 0)?;
     ensure_eq!(

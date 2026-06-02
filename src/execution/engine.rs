@@ -6,7 +6,7 @@ use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, ReturnOutput, ReturnOutputView, RunResult};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
 use crate::runtime::once::{
-    ContinuingRuntimeRulePass, FinalRuntimeRulePass, RuntimeRulePass, RuntimeRuleSearch,
+    ContinuingRuntimeRulePass, FinalRuntimeRulePass, RuntimeRulePassCursor, RuntimeRuleSearch,
     RuntimeRuleTable,
 };
 use crate::runtime::rewrite::RewriteScratch;
@@ -88,7 +88,7 @@ pub(super) struct AttemptSession<
 }
 
 /// Newly started rule-attempt session classified by pass shape.
-pub(super) enum AttemptSessionStart<
+pub(super) enum AttemptSessionCursor<
     'program,
     P: ParsePolicy,
     E: ExecutionPolicy,
@@ -458,7 +458,7 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy, Pass>
 }
 
 impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
-    AttemptSessionStart<'program, P, E, A>
+    AttemptSessionCursor<'program, P, E, A>
 {
     /// Starts active rule-attempt execution from an executable program witness.
     ///
@@ -469,12 +469,12 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
         program: BorrowedProgram<'program, P>,
         admitted: AdmittedRun<E>,
     ) -> Result<Self, RunStartError> {
-        let runtime_rules = RuntimeRulePass::from_program(program.program)?;
+        let runtime_rules = RuntimeRulePassCursor::from_program(program.program)?;
         Ok(match runtime_rules {
-            RuntimeRulePass::Continuing(pass) => {
+            RuntimeRulePassCursor::Continuing(pass) => {
                 Self::Continuing(AttemptSession::from_pass(program, admitted, pass))
             }
-            RuntimeRulePass::Final(pass) => {
+            RuntimeRulePassCursor::Final(pass) => {
                 Self::Final(AttemptSession::from_pass(program, admitted, pass))
             }
         })

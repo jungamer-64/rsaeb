@@ -134,9 +134,20 @@
 //! fn main() {}
 //! ```
 //!
+//! Shape-erased rule-attempt session and transition types have been deleted:
+//!
+//! ```compile_fail
+//! use rsaeb::execution::{BorrowedRuleAttemptSession, BorrowedRuleAttemptTransition};
+//!
+//! fn main() {}
+//! ```
+//!
 //! ```compile_fail
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
-//! use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
+//! use rsaeb::policy::{
+//!     DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuleAttemptPolicy,
+//!     DefaultRuntimeInputPolicy,
+//! };
 //! use rsaeb::program::ExecutableProgram;
 //! use rsaeb::source::ProgramSource;
 //!
@@ -146,6 +157,83 @@
 //!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
 //!     let _ = executable.into_steps(admitted)?;
 //!     Ok(())
+//! }
+//! ```
+//!
+//! Rule-attempt cursors must be matched before stepping:
+//!
+//! ```compile_fail
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::{
+//!     DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuleAttemptPolicy,
+//!     DefaultRuntimeInputPolicy,
+//! };
+//! use rsaeb::program::ExecutableProgram;
+//! use rsaeb::source::ProgramSource;
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let executable = ExecutableProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
+//!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
+//!     let cursor = executable.rule_attempts::<DefaultRuleAttemptPolicy, _>(admitted)?;
+//!     let _ = cursor.step();
+//!     Ok(())
+//! }
+//! ```
+//!
+//! Continuing rule-attempt transitions cannot report stable terminals:
+//!
+//! ```compile_fail
+//! use rsaeb::execution::BorrowedContinuingRuleAttemptTransition;
+//! use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuleAttemptPolicy};
+//!
+//! fn main() {
+//!     let _ = |transition: BorrowedContinuingRuleAttemptTransition<
+//!         'static,
+//!         DefaultParsePolicy,
+//!         DefaultExecutionPolicy,
+//!         DefaultRuleAttemptPolicy,
+//!     >| match transition {
+//!         BorrowedContinuingRuleAttemptTransition::Stable(_) => true,
+//!         _ => false,
+//!     };
+//! }
+//! ```
+//!
+//! Final rule-attempt transitions cannot report missed continuations:
+//!
+//! ```compile_fail
+//! use rsaeb::execution::BorrowedFinalRuleAttemptTransition;
+//! use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuleAttemptPolicy};
+//!
+//! fn main() {
+//!     let _ = |transition: BorrowedFinalRuleAttemptTransition<
+//!         'static,
+//!         DefaultParsePolicy,
+//!         DefaultExecutionPolicy,
+//!         DefaultRuleAttemptPolicy,
+//!     >| match transition {
+//!         BorrowedFinalRuleAttemptTransition::Missed(_) => true,
+//!         _ => false,
+//!     };
+//! }
+//! ```
+//!
+//! Rule-attempt continuations return cursors, not old shape-erased sessions:
+//!
+//! ```compile_fail
+//! use rsaeb::execution::BorrowedRuleAttemptAppliedStep;
+//! use rsaeb::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
+//!
+//! fn old_continuation<'program, P, E, A>(
+//!     applied: BorrowedRuleAttemptAppliedStep<'program, P, E, A>,
+//! )
+//! where
+//!     P: ParsePolicy,
+//!     E: ExecutionPolicy,
+//!     A: RuleAttemptPolicy,
+//! {
+//!     let _ = applied.into_session();
 //! }
 //! ```
 //!
@@ -411,7 +499,10 @@
 //! current runtime state:
 //!
 //! ```
-//! use rsaeb::execution::{BorrowedRuleAttemptTransition, RuleMissReason};
+//! use rsaeb::execution::{
+//!     BorrowedContinuingRuleAttemptTransition, BorrowedFinalRuleAttemptTransition,
+//!     BorrowedRuleAttemptCursor, RuleMissReason,
+//! };
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
 //!     DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
@@ -429,29 +520,33 @@
 //! let admitted = input.admit::<TenSteps>()?;
 //! let execution = executable.rule_attempts::<TenAttempts, _>(admitted)?;
 //!
+//! let BorrowedRuleAttemptCursor::Continuing(execution) = execution else {
+//!     return Err("expected first rule to have a successor".into());
+//! };
 //! let execution = match execution.step() {
-//!     BorrowedRuleAttemptTransition::Missed(missed) => {
+//!     BorrowedContinuingRuleAttemptTransition::Missed(missed) => {
 //!         if missed.miss().reason() != RuleMissReason::StateMismatch {
 //!             return Err("unexpected miss reason".into());
 //!         }
-//!         missed.into_session()
+//!         missed.into_cursor()
 //!     }
-//!     BorrowedRuleAttemptTransition::Applied(_)
-//!     | BorrowedRuleAttemptTransition::Stable(_)
-//!     | BorrowedRuleAttemptTransition::Returned(_)
-//!     | BorrowedRuleAttemptTransition::Failed(_) => return Err("expected first rule to miss".into()),
+//!     BorrowedContinuingRuleAttemptTransition::Applied(_)
+//!     | BorrowedContinuingRuleAttemptTransition::Returned(_)
+//!     | BorrowedContinuingRuleAttemptTransition::Failed(_) => return Err("expected first rule to miss".into()),
 //! };
 //!
+//! let BorrowedRuleAttemptCursor::Final(execution) = execution else {
+//!     return Err("expected final cursor after first miss".into());
+//! };
 //! match execution.step() {
-//!     BorrowedRuleAttemptTransition::Applied(applied) => {
+//!     BorrowedFinalRuleAttemptTransition::Applied(applied) => {
 //!         if applied.step().get() != 1 || applied.rule().position().number().get() != 2 {
 //!             return Err("unexpected applied rule attempt".into());
 //!         }
 //!     }
-//!     BorrowedRuleAttemptTransition::Missed(_)
-//!     | BorrowedRuleAttemptTransition::Stable(_)
-//!     | BorrowedRuleAttemptTransition::Returned(_)
-//!     | BorrowedRuleAttemptTransition::Failed(_) => return Err("expected second rule to apply".into()),
+//!     BorrowedFinalRuleAttemptTransition::Stable(_)
+//!     | BorrowedFinalRuleAttemptTransition::Returned(_)
+//!     | BorrowedFinalRuleAttemptTransition::Failed(_) => return Err("expected second rule to apply".into()),
 //! }
 //! # Ok(())
 //! # }
