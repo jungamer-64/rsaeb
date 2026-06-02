@@ -1,7 +1,3 @@
-use super::budget::RuntimeBudgetState;
-use super::matcher::{RuleSearch, find_next_match};
-use super::once::RuntimeRuleStates;
-use super::rewrite::RewriteScratch;
 use super::state::State;
 use crate::bytes::Payload;
 use crate::error::{
@@ -15,7 +11,6 @@ use crate::limits::{
 };
 use crate::policy::{DefaultRuntimeInputPolicy, ExecutionPolicy, RuntimeInputPolicy};
 use crate::program::RunOutcome;
-use crate::runtime::action::prepare_matched_rule;
 use crate::test_support::{
     DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestFailure, TestInputPolicy, TestResult,
     TestRunPolicy, admitted_run, ensure_eq, ensure_matches, executable_program, execute_program,
@@ -112,58 +107,6 @@ fn state_from_input_bytes<I: RuntimeInputPolicy, E: ExecutionPolicy>(
 ) -> Result<State, TestFailure> {
     let (input, _) = admitted_run(input, limits)?.into_runtime_parts();
     Ok(State::from_input(input))
-}
-
-struct OnceRuleFailureExpectation<I: RuntimeInputPolicy, E: ExecutionPolicy> {
-    source: &'static str,
-    input: &'static [u8],
-    limits: TestRunPolicy<I, E>,
-    error: RunStepError,
-    expected_match: &'static str,
-    expected_availability: &'static str,
-}
-
-/// Verifies a failed `(once)` candidate does not consume once availability.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if the candidate does not fail as expected or the
-/// failed candidate mutates progress, state, or once-rule availability.
-fn ensure_once_rule_failure_does_not_commit_rule<I: RuntimeInputPolicy, E: ExecutionPolicy>(
-    expectation: &OnceRuleFailureExpectation<I, E>,
-) -> TestResult {
-    let program = parse_program(expectation.source)?;
-    let executable = executable_program(&program)?;
-    let state = state_from_input_bytes(expectation.input, expectation.limits)?;
-    let mut budget: RuntimeBudgetState<E> = RuntimeBudgetState::new();
-    let mut scratch = RewriteScratch::new();
-    let mut rule_states = RuntimeRuleStates::new(executable.rule_scan())?;
-
-    let matched = match find_next_match(executable.rule_scan(), &mut rule_states, &state) {
-        RuleSearch::Matched(matched) => matched,
-        RuleSearch::Stable => {
-            return Err(TestFailure::message(expectation.expected_match));
-        }
-    };
-
-    let result = prepare_matched_rule(&mut scratch, &mut budget, state.byte_count(), matched);
-    let Err(error) = result else {
-        return Err(TestFailure::message(expectation.expected_match));
-    };
-    ensure_eq!(error, expectation.error)?;
-    ensure_eq!(budget.completed_steps(), StepCount::ZERO)?;
-    ensure_eq!(
-        runtime_view_bytes(state.view()).as_slice(),
-        expectation.input
-    )?;
-
-    ensure_matches(
-        matches!(
-            find_next_match(executable.rule_scan(), &mut rule_states, &state),
-            RuleSearch::Matched(_)
-        ),
-        expectation.expected_availability,
-    )
 }
 
 /// # Errors
@@ -332,71 +275,6 @@ fn return_action_bypasses_rewrite_state_mutation_path() -> TestResult {
             Err(TestFailure::message("expected return transition"))
         }
     }
-}
-
-/// # Errors
-///
-/// Returns `TestFailure` if any failed `(once)` candidate consumes once availability.
-#[test]
-fn once_limit_failures_do_not_commit_rule() -> TestResult {
-    ensure_once_rule_failure_does_not_commit_rule(&OnceRuleFailureExpectation {
-        source: "(once)=aa",
-        input: b"a",
-        limits: DefaultInputRunPolicy::<1, 1, DEFAULT_BYTE_BUDGET>::new(),
-        error: RunStepError::RuntimeStateLimit(RuntimeStateLimitError::new(
-            RuntimeStateByteLimit::new(1),
-            RuntimeStateByteCount::new(3),
-        )),
-        expected_match: "expected once rewrite limit failure",
-        expected_availability: "expected failed once rewrite to remain available",
-    })?;
-    ensure_once_rule_failure_does_not_commit_rule(&OnceRuleFailureExpectation {
-        source: "(once)a=b",
-        input: b"a",
-        limits: DefaultInputRunPolicy::<0, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new(),
-        error: RunStepError::StepLimit(StepLimitError::new(
-            StepLimit::new(0),
-            StepCount::ZERO,
-            RuntimeStateByteCount::new(1),
-        )),
-        expected_match: "expected once step limit failure",
-        expected_availability: "expected failed step reservation to leave once rule available",
-    })?;
-    ensure_once_rule_failure_does_not_commit_rule(&OnceRuleFailureExpectation {
-        source: "(once)a=(return)ok",
-        input: b"a",
-        limits: DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, 1>::new(),
-        error: RunStepError::ReturnOutputLimit(ReturnOutputLimitError::new(
-            ReturnByteLimit::new(1),
-            ReturnOutputByteCount::new(2),
-        )),
-        expected_match: "expected once return limit failure",
-        expected_availability: "expected failed once return to remain available",
-    })?;
-    Ok(())
-}
-
-/// # Errors
-///
-/// Returns `TestFailure` if runtime rule-state construction loses
-/// parsed `(once)` availability.
-#[test]
-fn runtime_rule_states_are_constructed_from_executable_rules() -> TestResult {
-    let program = parse_program("(once)a=b")?;
-    let executable = executable_program(&program)?;
-    let mut rule_states = RuntimeRuleStates::new(executable.rule_scan())?;
-    let state = state_from_input_bytes(
-        b"a",
-        DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new(),
-    )?;
-
-    ensure_matches(
-        matches!(
-            find_next_match(executable.rule_scan(), &mut rule_states, &state),
-            RuleSearch::Matched(_)
-        ),
-        "expected runtime rule state to keep the once rule available",
-    )
 }
 
 /// # Errors

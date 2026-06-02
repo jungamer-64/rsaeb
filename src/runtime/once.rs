@@ -86,15 +86,6 @@ pub(crate) struct RuntimeRulesMut<'program, 'state> {
     states: slice::IterMut<'state, RuntimeRuleAvailabilityState>,
 }
 
-/// Cursor movement after a non-applying rule-attempt line has been consumed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuntimeRuleMissProgress {
-    /// Cursor advanced to the next executable rule.
-    Advanced,
-    /// The consumed miss was the final executable rule.
-    Exhausted,
-}
-
 /// Runtime availability paired with one parsed rule.
 #[derive(Debug)]
 enum RuntimeRuleAvailability<'state> {
@@ -127,8 +118,6 @@ pub(super) enum RuntimeRuleCommitSeed<'state> {
 
 /// Checked rule-attempt selection produced by a cursor and runtime rule states.
 pub(crate) struct RuntimeRuleAttemptTarget<'program, 'state> {
-    /// Cursor movement allowed if this target misses.
-    after_miss: RuntimeRuleMissProgress,
     /// Parsed rule selected with its runtime state.
     target: RuntimeRule<'program, 'state>,
 }
@@ -211,23 +200,15 @@ impl<'program> RuntimeRulePass<'program> {
 
     /// Selects the current rule-attempt target.
     pub(crate) fn attempt_target(&mut self) -> RuntimeRuleAttemptTarget<'program, '_> {
-        let after_miss = if self.remaining_attempts == 1 {
-            RuntimeRuleMissProgress::Exhausted
-        } else {
-            RuntimeRuleMissProgress::Advanced
-        };
         RuntimeRuleAttemptTarget {
-            after_miss,
             target: self.current.as_runtime_rule(),
         }
     }
 
     /// Commits a non-applying attempt and advances to the next target when one exists.
-    pub(crate) fn commit_miss(&mut self, after_miss: RuntimeRuleMissProgress) {
-        if matches!(after_miss, RuntimeRuleMissProgress::Advanced) {
-            self.advance_current_to_back();
-            self.remaining_attempts = self.remaining_attempts.saturating_sub(1);
-        }
+    pub(crate) fn commit_miss(&mut self) {
+        self.advance_current_to_back();
+        self.remaining_attempts = self.remaining_attempts.saturating_sub(1);
     }
 
     /// Resets the attempt pass to the first executable rule after a rewrite.
@@ -365,7 +346,7 @@ impl OnceMatchPermit<'_> {
 
 impl<'program, 'state> RuntimeRuleAttemptTarget<'program, 'state> {
     /// Splits the checked target into cursor progress and selected rule state.
-    pub(crate) fn into_parts(self) -> (RuntimeRuleMissProgress, RuntimeRule<'program, 'state>) {
-        (self.after_miss, self.target)
+    pub(crate) fn into_parts(self) -> RuntimeRule<'program, 'state> {
+        self.target
     }
 }
