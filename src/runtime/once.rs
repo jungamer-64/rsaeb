@@ -139,27 +139,6 @@ pub(crate) struct OnceRuntimeRule<'program, 'state> {
     state: &'state mut OnceRuleRuntimeState,
 }
 
-/// Availability of a parsed rule together with the only valid commit path.
-#[derive(Debug)]
-pub(super) enum RuntimeRuleReadiness<'state> {
-    /// Rule is available and carries the seed for a later successful application.
-    Available(RuntimeRuleCommitSeed<'state>),
-    /// Rule has already committed during this runtime invocation.
-    Consumed,
-}
-
-/// Data that can mint the linear commit action after a rule match is known.
-#[derive(Debug)]
-pub(super) enum RuntimeRuleCommitSeed<'state> {
-    /// Rule has no once-state side effect.
-    Always,
-    /// Rule owns this fresh per-rule runtime state.
-    Once {
-        /// Fresh per-rule runtime state for the matched rule.
-        state: &'state mut OnceRuleRuntimeState,
-    },
-}
-
 impl OnceMatchPermitLinearity {
     /// Creates the linearity marker for one permit.
     const fn new() -> Self {
@@ -268,17 +247,6 @@ impl<'program> RuntimeRulePassCursor<'program> {
 }
 
 impl<'program> RuntimeRuleCell<'program> {
-    /// Builds a runtime rule cell from parsed rule data.
-    fn from_rule(rule: &'program Rule) -> Self {
-        match rule.repeat_behavior() {
-            RuleRepeatBehavior::Always => Self::Always(AlwaysRuntimeRuleCell { rule }),
-            RuleRepeatBehavior::Once => Self::Once(OnceRuntimeRuleCell {
-                rule,
-                state: OnceRuleRuntimeState::Fresh,
-            }),
-        }
-    }
-
     /// Borrows this cell as a rule target with availability state.
     fn as_runtime_rule(&mut self) -> RuntimeRule<'program, '_> {
         match self {
@@ -492,20 +460,6 @@ impl<'program, 'state> RuntimeRule<'program, 'state> {
         }
     }
 
-    /// Returns this rule's current per-run readiness and commit action.
-    pub(super) fn readiness(self) -> RuntimeRuleReadiness<'state> {
-        match self {
-            Self::Always(_rule) => RuntimeRuleReadiness::Available(RuntimeRuleCommitSeed::Always),
-            Self::Once(rule) => match *rule.state {
-                OnceRuleRuntimeState::Fresh => {
-                    RuntimeRuleReadiness::Available(RuntimeRuleCommitSeed::Once {
-                        state: rule.state,
-                    })
-                }
-                OnceRuleRuntimeState::Committed => RuntimeRuleReadiness::Consumed,
-            },
-        }
-    }
 }
 
 impl<'state> OnceMatchPermit<'state> {
@@ -524,16 +478,6 @@ impl MatchedRuleCommit<'_> {
         match self {
             Self::Always => {}
             Self::Once(commit) => commit.commit(),
-        }
-    }
-}
-
-impl<'state> RuntimeRuleCommitSeed<'state> {
-    /// Mints the linear commit action for a rule that has already matched.
-    pub(super) fn into_matched_commit(self) -> MatchedRuleCommit<'state> {
-        match self {
-            Self::Always => MatchedRuleCommit::Always,
-            Self::Once { state } => MatchedRuleCommit::Once(OnceMatchPermit::new(state)),
         }
     }
 }

@@ -2,15 +2,6 @@ use crate::bytes::Payload;
 use crate::inspect::{PayloadView, RuleActionView, RuleAnchor, RulePosition, RuleRepeat};
 use crate::source::SourceLineNumber;
 
-/// Parsed right-side action after syntax has been assigned a domain.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ParsedRuleAction {
-    /// Rewrite the runtime state and optionally continue.
-    Rewrite(RewriteAction),
-    /// Stop execution and materialize the payload as return output.
-    Return(Payload),
-}
-
 /// Parsed non-return rewrite action.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RewriteAction {
@@ -62,42 +53,6 @@ pub(crate) enum CanonicalRightSide<'rule> {
     Return(&'rule Payload),
 }
 
-/// Internal rule head.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct RuleHead {
-    /// Parsed repeat behavior.
-    repeat: RuleRepeatBehavior,
-    /// Parsed match anchor modifier.
-    anchor: RuleAnchorSyntax,
-    /// Left-side executable match payload.
-    lhs: Payload,
-}
-
-impl RuleHead {
-    /// Groups parsed left-side rule fields before program-level rule insertion.
-    pub(crate) fn new(repeat: RuleRepeatBehavior, anchor: RuleAnchorSyntax, lhs: Payload) -> Self {
-        Self {
-            repeat,
-            anchor,
-            lhs,
-        }
-    }
-}
-
-/// Internal rule body.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct RuleBody {
-    /// Parsed right-side action.
-    action: ParsedRuleAction,
-}
-
-impl RuleBody {
-    /// Wraps the parsed right-side action.
-    pub(crate) const fn new(action: ParsedRuleAction) -> Self {
-        Self { action }
-    }
-}
-
 /// Internal parsed rule.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ParsedRule {
@@ -134,15 +89,6 @@ impl ParsedRule {
     }
 }
 
-/// Repeat behavior parsed for one rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuleRepeatBehavior {
-    /// Rule has no `(once)` modifier.
-    Always,
-    /// Rule has a `(once)` modifier and needs run-local availability state.
-    Once,
-}
-
 /// Match anchor as it appears in parsed syntax.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuleAnchorSyntax {
@@ -165,16 +111,6 @@ impl RuleAnchorSyntax {
     }
 }
 
-impl RuleRepeatBehavior {
-    /// Converts internal repeat state into the public inspection repeat.
-    pub(crate) const fn public_repeat(self) -> RuleRepeat {
-        match self {
-            Self::Always => RuleRepeat::Always,
-            Self::Once => RuleRepeat::Once,
-        }
-    }
-}
-
 /// Match fields shared by rewrite and return rules.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RuleMatch {
@@ -182,40 +118,15 @@ pub(crate) struct RuleMatch {
     position: RulePosition,
     /// Original source line for diagnostics and inspection.
     line_number: SourceLineNumber,
-    /// Runtime repeat behavior for this rule.
-    repeat: RuleRepeatBehavior,
     /// Match anchor used by the runtime matcher.
     anchor: RuleAnchorSyntax,
     /// Left-side executable match payload.
     lhs: Payload,
 }
 
-/// Internal parsed rewrite rule.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct RewriteRule {
-    /// Shared executable match fields.
-    matcher: RuleMatch,
-    /// Right-side rewrite action applied after a match.
-    action: RewriteAction,
-}
-
-/// Internal parsed return rule.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ReturnRule {
-    /// Shared executable match fields.
-    matcher: RuleMatch,
-    /// Right-side output returned after a match.
-    output: Payload,
-}
-
 /// Internal rule split by terminal behavior.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Rule {
-    /// Non-terminal rewrite rule.
-    Rewrite(RewriteRule),
-    /// Terminal return rule.
-    Return(ReturnRule),
-}
+pub(crate) enum Rule {}
 
 /// Borrowed right-side action for inspection and canonical rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,44 +143,9 @@ impl RuleMatch {
         Self {
             position,
             line_number,
-            repeat: head.repeat,
             anchor: head.anchor,
             lhs: head.lhs,
         }
-    }
-}
-
-impl RewriteRule {
-    /// Combines shared match fields with a rewrite action.
-    fn from_parts(matcher: RuleMatch, action: RewriteAction) -> Self {
-        Self { matcher, action }
-    }
-
-    /// Shared executable match fields.
-    pub(crate) const fn matcher(&self) -> &RuleMatch {
-        &self.matcher
-    }
-
-    /// Right-side rewrite action.
-    pub(crate) const fn action(&self) -> &RewriteAction {
-        &self.action
-    }
-}
-
-impl ReturnRule {
-    /// Combines shared match fields with a return output.
-    fn from_parts(matcher: RuleMatch, output: Payload) -> Self {
-        Self { matcher, output }
-    }
-
-    /// Shared executable match fields.
-    pub(crate) const fn matcher(&self) -> &RuleMatch {
-        &self.matcher
-    }
-
-    /// Right-side return output.
-    pub(crate) const fn output(&self) -> &Payload {
-        &self.output
     }
 }
 
