@@ -2,7 +2,7 @@
 
 mod support;
 
-use rsaeb::inspect::{OnceRuleCount, RepeatRuleView, RewriteActionView, RuleAnchor, RuleView};
+use rsaeb::inspect::{OnceRuleCount, RewriteActionView, RuleAnchor, RuleView};
 use rsaeb::policy::DefaultParsePolicy;
 use rsaeb::program::ExecutableProgram;
 use rsaeb::source::ExecutableProgramSource;
@@ -28,7 +28,7 @@ fn inspect_rule_views_expose_structured_public_data() -> TestResult {
     ensure_eq!(first.anchor(), RuleAnchor::Anywhere)?;
     ensure_eq!(first.lhs().materialize()?.as_slice(), b"a".as_slice())?;
     match first {
-        RuleView::Always(RepeatRuleView::Rewrite(rewrite)) => match rewrite.rewrite_action() {
+        RuleView::AlwaysRewrite(rewrite) => match rewrite.rewrite_action() {
             RewriteActionView::Replace(payload) => {
                 ensure_eq!(payload.materialize()?.as_slice(), b"b".as_slice())?;
             }
@@ -36,7 +36,7 @@ fn inspect_rule_views_expose_structured_public_data() -> TestResult {
                 return Err(TestFailure::message("expected replace action"));
             }
         },
-        RuleView::Always(RepeatRuleView::Return(_)) | RuleView::Once(_) => {
+        RuleView::OnceRewrite(_) | RuleView::AlwaysReturn(_) | RuleView::OnceReturn(_) => {
             return Err(TestFailure::message("expected always rewrite rule"));
         }
     }
@@ -45,7 +45,7 @@ fn inspect_rule_views_expose_structured_public_data() -> TestResult {
     ensure_eq!(second.line_number().get(), 2)?;
     ensure_eq!(second.anchor(), RuleAnchor::Start)?;
     match second {
-        RuleView::Always(RepeatRuleView::Rewrite(rewrite)) => match rewrite.rewrite_action() {
+        RuleView::AlwaysRewrite(rewrite) => match rewrite.rewrite_action() {
             RewriteActionView::MoveEnd(payload) => {
                 ensure_eq!(payload.materialize()?.as_slice(), b"d".as_slice())?;
             }
@@ -53,7 +53,7 @@ fn inspect_rule_views_expose_structured_public_data() -> TestResult {
                 return Err(TestFailure::message("expected move-end action"));
             }
         },
-        RuleView::Always(RepeatRuleView::Return(_)) | RuleView::Once(_) => {
+        RuleView::OnceRewrite(_) | RuleView::AlwaysReturn(_) | RuleView::OnceReturn(_) => {
             return Err(TestFailure::message("expected always rewrite rule"));
         }
     }
@@ -98,7 +98,7 @@ fn inspect_all_repeat_and_action_rule_shapes() -> TestResult {
         b"a=b".as_slice()
     )?;
     match always_rewrite {
-        RuleView::Always(RepeatRuleView::Rewrite(rewrite)) => match rewrite.rewrite_action() {
+        RuleView::AlwaysRewrite(rewrite) => match rewrite.rewrite_action() {
             RewriteActionView::Replace(payload) => {
                 ensure_eq!(payload.materialize()?.as_slice(), b"b".as_slice())?;
             }
@@ -106,7 +106,7 @@ fn inspect_all_repeat_and_action_rule_shapes() -> TestResult {
                 return Err(TestFailure::message("expected always rewrite"));
             }
         },
-        RuleView::Always(RepeatRuleView::Return(_)) | RuleView::Once(_) => {
+        RuleView::OnceRewrite(_) | RuleView::AlwaysReturn(_) | RuleView::OnceReturn(_) => {
             return Err(TestFailure::message("expected always rewrite"));
         }
     }
@@ -116,7 +116,7 @@ fn inspect_all_repeat_and_action_rule_shapes() -> TestResult {
         b"(once)c=d".as_slice(),
     )?;
     match once_rewrite {
-        RuleView::Once(RepeatRuleView::Rewrite(rewrite)) => match rewrite.rewrite_action() {
+        RuleView::OnceRewrite(rewrite) => match rewrite.rewrite_action() {
             RewriteActionView::Replace(payload) => {
                 ensure_eq!(payload.materialize()?.as_slice(), b"d".as_slice())?;
             }
@@ -124,7 +124,7 @@ fn inspect_all_repeat_and_action_rule_shapes() -> TestResult {
                 return Err(TestFailure::message("expected once rewrite"));
             }
         },
-        RuleView::Always(_) | RuleView::Once(RepeatRuleView::Return(_)) => {
+        RuleView::AlwaysRewrite(_) | RuleView::AlwaysReturn(_) | RuleView::OnceReturn(_) => {
             return Err(TestFailure::message("expected once rewrite"));
         }
     }
@@ -134,13 +134,13 @@ fn inspect_all_repeat_and_action_rule_shapes() -> TestResult {
         b"e=(return)ok".as_slice(),
     )?;
     match always_return {
-        RuleView::Always(RepeatRuleView::Return(return_rule)) => {
+        RuleView::AlwaysReturn(return_rule) => {
             ensure_eq!(
                 return_rule.output().materialize()?.as_slice(),
                 b"ok".as_slice()
             )?;
         }
-        RuleView::Always(RepeatRuleView::Rewrite(_)) | RuleView::Once(_) => {
+        RuleView::AlwaysRewrite(_) | RuleView::OnceRewrite(_) | RuleView::OnceReturn(_) => {
             return Err(TestFailure::message("expected always return"));
         }
     }
@@ -150,13 +150,13 @@ fn inspect_all_repeat_and_action_rule_shapes() -> TestResult {
         b"(once)f=(return)done".as_slice(),
     )?;
     match once_return {
-        RuleView::Once(RepeatRuleView::Return(return_rule)) => {
+        RuleView::OnceReturn(return_rule) => {
             ensure_eq!(
                 return_rule.output().materialize()?.as_slice(),
                 b"done".as_slice()
             )?;
         }
-        RuleView::Always(_) | RuleView::Once(RepeatRuleView::Rewrite(_)) => {
+        RuleView::AlwaysRewrite(_) | RuleView::OnceRewrite(_) | RuleView::AlwaysReturn(_) => {
             return Err(TestFailure::message("expected once return"));
         }
     }
@@ -194,7 +194,7 @@ fn inspect_canonical_source_reparses_to_same_public_rule_view() -> TestResult {
         b"a".as_slice(),
     )?;
     match reparsed_rule {
-        RuleView::Once(RepeatRuleView::Rewrite(rewrite)) => match rewrite.rewrite_action() {
+        RuleView::OnceRewrite(rewrite) => match rewrite.rewrite_action() {
             RewriteActionView::MoveEnd(payload) => {
                 ensure_eq!(payload.materialize()?.as_slice(), b"b".as_slice())?;
             }
@@ -202,7 +202,7 @@ fn inspect_canonical_source_reparses_to_same_public_rule_view() -> TestResult {
                 return Err(TestFailure::message("expected once move-end rewrite"));
             }
         },
-        RuleView::Always(_) | RuleView::Once(RepeatRuleView::Return(_)) => {
+        RuleView::AlwaysRewrite(_) | RuleView::AlwaysReturn(_) | RuleView::OnceReturn(_) => {
             return Err(TestFailure::message("expected once rewrite"));
         }
     }

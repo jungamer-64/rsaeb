@@ -12,7 +12,7 @@ use rsaeb::execution::{
     RuleMissReason,
 };
 use rsaeb::input::AdmittedRun;
-use rsaeb::inspect::{RepeatRuleView, RewriteActionView, RuleAnchor, RuleView};
+use rsaeb::inspect::{RewriteActionView, RuleAnchor, RuleView};
 use rsaeb::limits::{ReturnByteLimit, RuleAttemptLimit, RuntimeStateByteLimit};
 use rsaeb::policy::{
     DefaultParsePolicy, ExecutionPolicy, ParsePolicy, RuleAttemptPolicy, StaticRuleAttemptPolicy,
@@ -245,27 +245,23 @@ fn ensure_borrowed_rule_view(
     ensure_eq!(rule.anchor(), RuleAnchor::Anywhere)?;
     ensure_eq!(rule.lhs().materialize()?.as_slice(), expected.lhs)?;
     match (rule, expected.action) {
-        (
-            RuleView::Always(RepeatRuleView::Rewrite(rewrite)),
-            ExpectedRuleAction::Replace(expected),
-        ) => match rewrite.rewrite_action() {
-            RewriteActionView::Replace(payload) => {
-                ensure_eq!(payload.materialize()?.as_slice(), expected)
+        (RuleView::AlwaysRewrite(rewrite), ExpectedRuleAction::Replace(expected)) => {
+            match rewrite.rewrite_action() {
+                RewriteActionView::Replace(payload) => {
+                    ensure_eq!(payload.materialize()?.as_slice(), expected)
+                }
+                RewriteActionView::MoveStart(_) | RewriteActionView::MoveEnd(_) => {
+                    Err(TestFailure::message("unexpected borrowed rewrite action"))
+                }
             }
-            RewriteActionView::MoveStart(_) | RewriteActionView::MoveEnd(_) => {
-                Err(TestFailure::message("unexpected borrowed rewrite action"))
-            }
-        },
-        (
-            RuleView::Always(RepeatRuleView::Return(return_rule)),
-            ExpectedRuleAction::Return(expected),
-        ) => {
+        }
+        (RuleView::AlwaysReturn(return_rule), ExpectedRuleAction::Return(expected)) => {
             let payload = return_rule.output();
             ensure_eq!(payload.materialize()?.as_slice(), expected)
         }
-        (RuleView::Once(_), _)
-        | (RuleView::Always(RepeatRuleView::Rewrite(_)), ExpectedRuleAction::Return(_))
-        | (RuleView::Always(RepeatRuleView::Return(_)), ExpectedRuleAction::Replace(_)) => {
+        (RuleView::OnceRewrite(_) | RuleView::OnceReturn(_), _)
+        | (RuleView::AlwaysRewrite(_), ExpectedRuleAction::Return(_))
+        | (RuleView::AlwaysReturn(_), ExpectedRuleAction::Replace(_)) => {
             Err(TestFailure::message("unexpected borrowed rule view action"))
         }
     }

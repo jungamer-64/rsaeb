@@ -113,12 +113,12 @@
 //! fn main() {}
 //! ```
 //!
-//! Flat rule repeat/action inspection has been deleted. Rule repeat is the
-//! outer [`inspect::RuleView`] axis, and return output is not mixed into rewrite
-//! action inspection:
+//! Flat rule repeat/action inspection and nested repeat/action inspection have
+//! been deleted. Each [`inspect::RuleView`] variant now names the complete rule
+//! shape:
 //!
 //! ```compile_fail
-//! use rsaeb::inspect::{RuleActionView, RuleRepeat};
+//! use rsaeb::inspect::{RepeatRuleView, RuleActionView, RuleRepeat};
 //!
 //! fn main() {}
 //! ```
@@ -136,6 +136,14 @@
 //!
 //! fn main() {
 //!     let _ = |rule: RuleView<'_>| rule.action();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleView;
+//!
+//! fn main() {
+//!     let _ = |rule: RuleView<'_>| matches!(rule, RuleView::Always(_));
 //! }
 //! ```
 //!
@@ -619,7 +627,7 @@
 //! strings:
 //!
 //! ```
-//! use rsaeb::inspect::{RepeatRuleView, RewriteActionView, RuleAnchor, RuleView};
+//! use rsaeb::inspect::{RewriteActionView, RuleAnchor, RuleView};
 //! use rsaeb::policy::DefaultParsePolicy;
 //! use rsaeb::program::ExecutableProgram;
 //! use rsaeb::source::ExecutableProgramSource;
@@ -634,11 +642,8 @@
 //! if rule.lhs().materialize()?.as_slice() != b"a" {
 //!     return Err("unexpected left side".into());
 //! }
-//! let RuleView::Once(rule) = rule else {
-//!     return Err("unexpected repeat".into());
-//! };
 //! match rule {
-//!     RepeatRuleView::Rewrite(rewrite) => match rewrite.rewrite_action() {
+//!     RuleView::OnceRewrite(rewrite) => match rewrite.rewrite_action() {
 //!         RewriteActionView::MoveEnd(payload) => {
 //!             if payload.materialize()?.as_slice() != b"b" {
 //!                 return Err("unexpected moved payload".into());
@@ -648,7 +653,9 @@
 //!             return Err("expected move-end rewrite action".into());
 //!         }
 //!     },
-//!     RepeatRuleView::Return(_) => return Err("expected rewrite rule".into()),
+//!     RuleView::AlwaysRewrite(_)
+//!     | RuleView::AlwaysReturn(_)
+//!     | RuleView::OnceReturn(_) => return Err("expected once rewrite rule".into()),
 //! }
 //! # Ok(())
 //! # }

@@ -210,8 +210,8 @@ impl RuleSetBuilder {
         line_number: crate::source::SourceLineNumber,
     ) -> Result<PublicOnceRuleCount, ParseError> {
         match parsed {
-            ParsedRule::Always(_) => Ok(self.once_rule_count),
-            ParsedRule::Once(_) => {
+            ParsedRule::AlwaysRewrite(_) | ParsedRule::AlwaysReturn(_) => Ok(self.once_rule_count),
+            ParsedRule::OnceRewrite(_) | ParsedRule::OnceReturn(_) => {
                 let next_once_rule_count =
                     self.once_rule_count.checked_next().ok_or_else(|| {
                         ParseError::at_line(

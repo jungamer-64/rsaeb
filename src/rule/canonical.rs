@@ -4,33 +4,62 @@ use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
 use crate::bytes::Payload;
-use crate::inspect::{AlwaysRepeat, OnceRepeat};
 use crate::syntax::SyntaxToken;
 
-use super::model::{CanonicalRightSide, RepeatRule, RuleAnchorSyntax};
+use super::model::{CanonicalRightSide, ReturnRule, RewriteRule, RuleAnchorSyntax, RulePattern};
 
-/// Materializes a reusable rule's canonical source form.
+/// Materializes a reusable rewrite rule's canonical source form.
 ///
 /// # Errors
 ///
 /// Returns `AllocationError` if canonical source length arithmetic
 /// overflows or the output buffer cannot be allocated.
-pub(crate) fn canonical_always_source(
-    rule: &RepeatRule<AlwaysRepeat>,
+pub(crate) fn canonical_always_rewrite_source(
+    rule: &RewriteRule,
 ) -> Result<Vec<u8>, AllocationError> {
-    canonical_repeat_source(rule, RepeatPrefix::Always)
+    canonical_rule_source(
+        rule.pattern(),
+        rule.canonical_action(),
+        RepeatPrefix::Always,
+    )
 }
 
-/// Materializes a once-only rule's canonical source form.
+/// Materializes a once-only rewrite rule's canonical source form.
 ///
 /// # Errors
 ///
 /// Returns `AllocationError` if canonical source length arithmetic
 /// overflows or the output buffer cannot be allocated.
-pub(crate) fn canonical_once_source(
-    rule: &RepeatRule<OnceRepeat>,
+pub(crate) fn canonical_once_rewrite_source(
+    rule: &RewriteRule,
 ) -> Result<Vec<u8>, AllocationError> {
-    canonical_repeat_source(rule, RepeatPrefix::Once)
+    canonical_rule_source(rule.pattern(), rule.canonical_action(), RepeatPrefix::Once)
+}
+
+/// Materializes a reusable return rule's canonical source form.
+///
+/// # Errors
+///
+/// Returns `AllocationError` if canonical source length arithmetic
+/// overflows or the output buffer cannot be allocated.
+pub(crate) fn canonical_always_return_source(
+    rule: &ReturnRule,
+) -> Result<Vec<u8>, AllocationError> {
+    canonical_rule_source(
+        rule.pattern(),
+        rule.canonical_action(),
+        RepeatPrefix::Always,
+    )
+}
+
+/// Materializes a once-only return rule's canonical source form.
+///
+/// # Errors
+///
+/// Returns `AllocationError` if canonical source length arithmetic
+/// overflows or the output buffer cannot be allocated.
+pub(crate) fn canonical_once_return_source(rule: &ReturnRule) -> Result<Vec<u8>, AllocationError> {
+    canonical_rule_source(rule.pattern(), rule.canonical_action(), RepeatPrefix::Once)
 }
 
 /// Canonical repeat marker emitted before the left-side pattern.
@@ -42,20 +71,21 @@ enum RepeatPrefix {
     Once,
 }
 
-/// Materializes a typed repeat-axis rule's canonical source form.
+/// Materializes a typed rule's canonical source form.
 ///
 /// # Errors
 ///
 /// Returns `AllocationError` if canonical source length arithmetic
 /// overflows or the output buffer cannot be allocated.
-fn canonical_repeat_source<R>(
-    rule: &RepeatRule<R>,
+fn canonical_rule_source(
+    pattern: &RulePattern,
+    right: CanonicalRightSide<'_>,
     repeat: RepeatPrefix,
 ) -> Result<Vec<u8>, AllocationError> {
     let mut output = Vec::new();
     try_reserve_total_exact(
         &mut output,
-        RequestedCapacity::new(canonical_source_len(rule, repeat)?),
+        RequestedCapacity::new(canonical_source_len(pattern, right, repeat)?),
         AllocationContext::CanonicalSource,
     )?;
 
@@ -63,16 +93,16 @@ fn canonical_repeat_source<R>(
         push_token(&mut output, SyntaxToken::Once)?;
     }
 
-    match rule.anchor() {
+    match pattern.anchor() {
         RuleAnchorSyntax::Anywhere => {}
         RuleAnchorSyntax::Start => push_token(&mut output, SyntaxToken::Start)?,
         RuleAnchorSyntax::End => push_token(&mut output, SyntaxToken::End)?,
     }
 
-    push_payload(&mut output, rule.lhs())?;
+    push_payload(&mut output, pattern.lhs())?;
     try_push(&mut output, b'=', AllocationContext::CanonicalSource)?;
 
-    match rule.canonical_action() {
+    match right {
         CanonicalRightSide::Replace(payload) => {
             push_payload(&mut output, payload)?;
         }
@@ -98,16 +128,17 @@ fn canonical_repeat_source<R>(
 /// # Errors
 ///
 /// Returns `AllocationError` if canonical source length arithmetic overflows.
-fn canonical_source_len<R>(
-    rule: &RepeatRule<R>,
+fn canonical_source_len(
+    pattern: &RulePattern,
+    right: CanonicalRightSide<'_>,
     repeat: RepeatPrefix,
 ) -> Result<usize, AllocationError> {
-    let mut len = rule.lhs().byte_count().get();
+    let mut len = pattern.lhs().byte_count().get();
 
     len = checked_source_len_add(len, repeat_token_len(repeat))?;
-    len = checked_source_len_add(len, anchor_token_len(rule.anchor()))?;
+    len = checked_source_len_add(len, anchor_token_len(pattern.anchor()))?;
     len = checked_source_len_add(len, 1)?;
-    len = checked_source_len_add(len, action_source_len(rule.canonical_action())?)?;
+    len = checked_source_len_add(len, action_source_len(right)?)?;
 
     Ok(len)
 }

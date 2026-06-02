@@ -1,7 +1,7 @@
 use crate::error::{
     LeftModifierKind, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind,
 };
-use crate::inspect::{RepeatRuleView, RewriteActionView, RuleAnchor, RuleCount, RuleView};
+use crate::inspect::{RewriteActionView, RuleAnchor, RuleCount, RuleView};
 use crate::policy::DefaultParsePolicy;
 use crate::program::ExecutableProgram;
 use crate::test_support::{
@@ -249,7 +249,7 @@ fn spaced_source_and_compact_source_parse_to_the_same_rule_view() -> TestResult 
     ensure_eq!(spaced_rule.anchor(), RuleAnchor::Start)?;
     ensure_eq!(spaced_rule.lhs().materialize()?.as_slice(), b"a".as_slice())?;
     match spaced_rule {
-        RuleView::Once(RepeatRuleView::Rewrite(rewrite)) => match rewrite.rewrite_action() {
+        RuleView::OnceRewrite(rewrite) => match rewrite.rewrite_action() {
             RewriteActionView::MoveEnd(payload) => {
                 ensure_eq!(payload.materialize()?.as_slice(), b"b".as_slice())?;
             }
@@ -257,7 +257,7 @@ fn spaced_source_and_compact_source_parse_to_the_same_rule_view() -> TestResult 
                 return Err(TestFailure::message("expected move-end action"));
             }
         },
-        RuleView::Always(_) | RuleView::Once(RepeatRuleView::Return(_)) => {
+        RuleView::AlwaysRewrite(_) | RuleView::AlwaysReturn(_) | RuleView::OnceReturn(_) => {
             return Err(TestFailure::message("expected once rewrite rule"));
         }
     }

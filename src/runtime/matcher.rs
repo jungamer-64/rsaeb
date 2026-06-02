@@ -1,8 +1,8 @@
 use super::once::{AvailableRuntimeRule, MatchedRuleCommit};
 use super::state::{State, StateMatch};
 use crate::bytes::Payload;
-use crate::inspect::{AlwaysRepeat, RuleView};
-use crate::rule::{RepeatRule, RewriteAction, RuleAnchorSyntax, RulePattern};
+use crate::inspect::RuleView;
+use crate::rule::{ReturnRule, RewriteAction, RewriteRule, RuleAnchorSyntax, RulePattern};
 
 /// Outcome of evaluating one executable rule line against the current state.
 #[derive(Debug)]
@@ -175,31 +175,42 @@ pub(crate) fn attempt_available_rule<'program, 'state, 'once>(
     state: &'state State,
 ) -> AvailableRuleAttempt<'program, 'state, 'once> {
     match runtime_rule {
-        AvailableRuntimeRule::Always(rule) => attempt_always_rule(rule.rule(), state),
-        AvailableRuntimeRule::Once(rule) => {
-            let rule_view = RuleView::from_once(rule.rule());
+        AvailableRuntimeRule::AlwaysRewrite(rule) => attempt_rewrite_rule(
+            rule.rule(),
+            RuleView::from_always_rewrite(rule.rule()),
+            MatchedRuleCommit::Always,
+            state,
+        ),
+        AvailableRuntimeRule::OnceRewrite(rule) => {
             let (rule, commit) = rule.into_parts();
-            attempt_repeat_rule(rule, rule_view, MatchedRuleCommit::Once(commit), state)
+            attempt_rewrite_rule(
+                rule,
+                RuleView::from_once_rewrite(rule),
+                MatchedRuleCommit::Once(commit),
+                state,
+            )
+        }
+        AvailableRuntimeRule::AlwaysReturn(rule) => attempt_return_rule(
+            rule.rule(),
+            RuleView::from_always_return(rule.rule()),
+            MatchedRuleCommit::Always,
+            state,
+        ),
+        AvailableRuntimeRule::OnceReturn(rule) => {
+            let (rule, commit) = rule.into_parts();
+            attempt_return_rule(
+                rule,
+                RuleView::from_once_return(rule),
+                MatchedRuleCommit::Once(commit),
+                state,
+            )
         }
     }
 }
 
-/// Evaluates an always-available repeat-axis rule.
-fn attempt_always_rule<'program, 'state, 'once>(
-    rule: &'program RepeatRule<AlwaysRepeat>,
-    state: &'state State,
-) -> AvailableRuleAttempt<'program, 'state, 'once> {
-    attempt_repeat_rule(
-        rule,
-        RuleView::from_always(rule),
-        MatchedRuleCommit::Always,
-        state,
-    )
-}
-
-/// Evaluates an available repeat-axis rule against the current runtime state.
-fn attempt_repeat_rule<'program, 'state, 'once, R>(
-    rule: &'program RepeatRule<R>,
+/// Evaluates an available rewrite rule against the current runtime state.
+fn attempt_rewrite_rule<'program, 'state, 'once>(
+    rule: &'program RewriteRule,
     rule_view: RuleView<'program>,
     commit: MatchedRuleCommit<'once>,
     state: &'state State,
@@ -214,24 +225,37 @@ fn attempt_repeat_rule<'program, 'state, 'once, R>(
         }
     };
 
-    match rule {
-        RepeatRule::Rewrite(rule) => AvailableRuleAttempt::Matched(
-            MatchedRuleApplication::Rewrite(MatchedRewriteApplication {
-                rule: rule_view,
-                action: rule.rewrite_action(),
-                commit,
-                state_match,
-            }),
-        ),
-        RepeatRule::Return(rule) => AvailableRuleAttempt::Matched(MatchedRuleApplication::Return(
-            MatchedReturnApplication {
-                rule: rule_view,
-                output: rule.output(),
-                commit,
-                state_match,
-            },
-        )),
-    }
+    AvailableRuleAttempt::Matched(MatchedRuleApplication::Rewrite(MatchedRewriteApplication {
+        rule: rule_view,
+        action: rule.rewrite_action(),
+        commit,
+        state_match,
+    }))
+}
+
+/// Evaluates an available return rule against the current runtime state.
+fn attempt_return_rule<'program, 'state, 'once>(
+    rule: &'program ReturnRule,
+    rule_view: RuleView<'program>,
+    commit: MatchedRuleCommit<'once>,
+    state: &'state State,
+) -> AvailableRuleAttempt<'program, 'state, 'once> {
+    let state_match = match match_rule_state(rule.pattern(), state) {
+        RuleStateMatch::Matched(state_match) => state_match,
+        RuleStateMatch::Mismatched => {
+            return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::new(
+                rule_view,
+                RuleMissReason::StateMismatch,
+            ));
+        }
+    };
+
+    AvailableRuleAttempt::Matched(MatchedRuleApplication::Return(MatchedReturnApplication {
+        rule: rule_view,
+        output: rule.output(),
+        commit,
+        state_match,
+    }))
 }
 
 /// Compares a single parsed rule pattern with the current runtime state.
