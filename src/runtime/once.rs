@@ -22,10 +22,6 @@ pub(crate) struct RuntimeRulePass<'program> {
     current: RuntimeRuleCell<'program>,
     /// Remaining executable rules after the current target, in attempt order.
     remaining: Vec<RuntimeRuleCell<'program>>,
-    /// Targets left in the current pass before stability.
-    remaining_attempts: usize,
-    /// Total executable rules in the pass.
-    total_rules: usize,
 }
 
 /// One executable rule paired with its run-local availability state.
@@ -115,55 +111,6 @@ pub(super) enum RuntimeRuleCommitSeed<'state> {
         /// Fresh per-rule runtime state for the matched rule.
         state: &'state mut RuntimeRuleAvailabilityState,
     },
-}
-
-/// Checked rule-attempt selection produced by a cursor and runtime rule states.
-pub(crate) enum RuntimeRuleAttemptTarget<'program, 'state> {
-    /// Selected rule is not the final target in the current pass.
-    Continuing(ContinuingRuntimeRuleAttemptTarget<'program, 'state>),
-    /// Selected rule is the final target in the current pass.
-    Final(FinalRuntimeRuleAttemptTarget<'program, 'state>),
-}
-
-/// Checked non-final rule-attempt target.
-pub(crate) struct ContinuingRuntimeRuleAttemptTarget<'program, 'state> {
-    /// Parsed rule selected with its runtime state.
-    target: RuntimeRule<'program, 'state>,
-    /// Permission to advance the cursor if this target misses.
-    advance: RuntimeRuleAdvancePermit,
-}
-
-/// Checked final rule-attempt target.
-pub(crate) struct FinalRuntimeRuleAttemptTarget<'program, 'state> {
-    /// Parsed rule selected with its runtime state.
-    target: RuntimeRule<'program, 'state>,
-}
-
-/// Linear permission to advance a rule-attempt cursor after a non-final miss.
-#[derive(Debug)]
-pub(crate) struct RuntimeRuleAdvancePermit {
-    /// Non-copy marker that keeps cursor advancement linear.
-    linearity: RuntimeRuleAdvancePermitLinearity,
-}
-
-/// Non-copy marker carried by cursor-advance permits.
-#[derive(Debug)]
-struct RuntimeRuleAdvancePermitLinearity;
-
-impl RuntimeRuleAdvancePermitLinearity {
-    /// Creates the linearity marker for one cursor-advance permit.
-    const fn new() -> Self {
-        Self
-    }
-}
-
-impl RuntimeRuleAdvancePermit {
-    /// Creates a cursor-advance permit for one selected non-final target.
-    const fn new() -> Self {
-        Self {
-            linearity: RuntimeRuleAdvancePermitLinearity::new(),
-        }
-    }
 }
 
 impl OnceMatchPermitLinearity {
@@ -257,53 +204,10 @@ impl<'program> RuntimeRulePass<'program> {
                 AllocationContext::RuntimeRuleAvailability,
             )?;
         }
-        let total_rules = remaining_rules.len().saturating_add(1);
         Ok(Self {
             current: RuntimeRuleCell::from_rule(first),
             remaining,
-            remaining_attempts: total_rules,
-            total_rules,
         })
-    }
-
-    /// Selects the current rule-attempt target.
-    pub(crate) fn attempt_target(&mut self) -> RuntimeRuleAttemptTarget<'program, '_> {
-        if self.remaining_attempts == 1 {
-            RuntimeRuleAttemptTarget::Final(FinalRuntimeRuleAttemptTarget {
-                target: self.current.as_runtime_rule(),
-            })
-        } else {
-            RuntimeRuleAttemptTarget::Continuing(ContinuingRuntimeRuleAttemptTarget {
-                target: self.current.as_runtime_rule(),
-                advance: RuntimeRuleAdvancePermit::new(),
-            })
-        }
-    }
-
-    /// Commits a non-applying attempt and advances to the next target when one exists.
-    pub(crate) fn commit_miss(&mut self, permit: RuntimeRuleAdvancePermit) {
-        let RuntimeRuleAdvancePermit {
-            linearity: _linearity,
-        } = permit;
-        self.advance_current_to_back();
-        self.remaining_attempts = self.remaining_attempts.saturating_sub(1);
-    }
-
-    /// Resets the attempt pass to the first executable rule after a rewrite.
-    pub(crate) fn reset_after_rewrite(&mut self) {
-        if self.remaining_attempts != self.total_rules {
-            for _ in 0..self.remaining_attempts {
-                self.advance_current_to_back();
-            }
-            self.remaining_attempts = self.total_rules;
-        }
-    }
-
-    /// Moves the current cell to the back of the cyclic pass.
-    fn advance_current_to_back(&mut self) {
-        let next = self.remaining.remove(0);
-        let consumed = core::mem::replace(&mut self.current, next);
-        self.remaining.push(consumed);
     }
 }
 
@@ -419,19 +323,5 @@ impl OnceMatchPermit<'_> {
             linearity: _linearity,
         } = self;
         *state = RuntimeRuleAvailabilityState::CommittedOnce;
-    }
-}
-
-impl<'program, 'state> ContinuingRuntimeRuleAttemptTarget<'program, 'state> {
-    /// Splits the checked target into selected rule state and advance permit.
-    pub(crate) fn into_parts(self) -> (RuntimeRule<'program, 'state>, RuntimeRuleAdvancePermit) {
-        (self.target, self.advance)
-    }
-}
-
-impl<'program, 'state> FinalRuntimeRuleAttemptTarget<'program, 'state> {
-    /// Returns the selected final rule state.
-    pub(crate) fn into_rule(self) -> RuntimeRule<'program, 'state> {
-        self.target
     }
 }
