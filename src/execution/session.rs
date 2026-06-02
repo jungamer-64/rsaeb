@@ -1,24 +1,14 @@
-use crate::error::{RuleAttemptStepError, RunError, RunFinishError, RunStartError, TracedRunError};
+use crate::error::{RunError, RunFinishError, RunStartError, TracedRunError};
 use crate::input::AdmittedRun;
-use crate::inspect::RuleView;
-use crate::limits::{RuleAttemptCount, StepCount};
-use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
+use crate::limits::StepCount;
+use crate::policy::{ExecutionPolicy, ParsePolicy};
 use crate::program::{ExecutableProgram, ExecutableProgramRef, RunResult};
-use crate::runtime::once::{ContinuingRuntimeRulePass, FinalRuntimeRulePass};
 use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
 
-use super::advance::{
-    BorrowedRunWitness, CoreRuleAttemptStep, advance_continuing_borrowed_rule_attempt,
-    advance_final_borrowed_rule_attempt,
-};
-use super::engine::{
-    AttemptSession, AttemptSessionStart, BorrowedProgram, CoreRunTransition, Session,
-    TerminalAttemptSession, TerminalRunCore,
-};
+use super::advance::BorrowedRunWitness;
+use super::engine::{BorrowedProgram, CoreRunTransition, Session};
 use super::transition::{
-    BorrowedAppliedStep, BorrowedFailedRun, BorrowedMissedRuleAttempt, BorrowedReturnedRun,
-    BorrowedRuleAttemptAppliedStep, BorrowedRuleAttemptFailedRun, BorrowedRuleAttemptReturnedRun,
-    BorrowedRuleAttemptStableRun, BorrowedRuleAttemptTransition, BorrowedStableRun,
+    BorrowedAppliedStep, BorrowedFailedRun, BorrowedReturnedRun, BorrowedStableRun,
     BorrowedStepTransition,
 };
 
@@ -31,44 +21,6 @@ use super::transition::{
 pub struct BorrowedRunSession<'program, P: ParsePolicy, E: ExecutionPolicy> {
     /// Internal session using the public borrowed program boundary.
     pub(super) session: Session<'program, P, E>,
-}
-
-/// Stateful run session that borrows a reusable parsed program and advances by rule attempt.
-///
-/// A rule-attempt step consumes one executable rule line even when that rule
-/// does not apply. Committed non-terminal rule applications reset the rule
-/// cursor to the first executable rule.
-pub struct BorrowedRuleAttemptSession<
-    'program,
-    P: ParsePolicy,
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-> {
-    /// Internal rule-attempt cursor split by typed pass shape.
-    pub(super) cursor: RuleAttemptCursor<'program, P, E, A>,
-}
-
-/// Private rule-attempt cursor preserving the current pass type.
-pub(super) enum RuleAttemptCursor<
-    'program,
-    P: ParsePolicy,
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-> {
-    /// Current rule has at least one successor in the pass.
-    Continuing(AttemptSession<'program, P, E, A, ContinuingRuntimeRulePass<'program>>),
-    /// Current rule is the final rule in the pass.
-    Final(AttemptSession<'program, P, E, A, FinalRuntimeRulePass<'program>>),
-}
-
-/// Terminal data split out of a borrowed rule-attempt run session.
-struct BorrowedRuleAttemptTerminal<'program, P: ParsePolicy> {
-    /// Parsed program borrowed by the terminal state.
-    program: &'program ExecutableProgram<P>,
-    /// Runtime core retained for terminal state observation or materialization.
-    core: TerminalRunCore,
-    /// Rule attempts consumed before the terminal boundary was reached.
-    attempts: RuleAttemptCount,
 }
 
 /// Runs a borrowed program to completion.
@@ -179,101 +131,6 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedRunSession<'program, 
     }
 }
 
-impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
-    BorrowedRuleAttemptSession<'program, P, E, A>
-{
-    /// Starts borrowed rule-attempt execution from an executable program witness.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunStartError` if allocating per-run rule state fails.
-    pub(crate) fn new(
-        program: &'program ExecutableProgram<P>,
-        admitted: AdmittedRun<E>,
-    ) -> Result<Self, RunStartError> {
-        AttemptSessionStart::new(BorrowedProgram { program }, admitted).map(Self::from_start)
-    }
-
-    /// Builds a public active rule-attempt session from a newly started cursor.
-    fn from_start(start: AttemptSessionStart<'program, P, E, A>) -> Self {
-        match start {
-            AttemptSessionStart::Continuing(session) => Self {
-                cursor: RuleAttemptCursor::Continuing(session),
-            },
-            AttemptSessionStart::Final(session) => Self {
-                cursor: RuleAttemptCursor::Final(session),
-            },
-        }
-    }
-
-    /// Number of execution steps that have already completed in this run.
-    #[must_use]
-    pub const fn completed_steps(&self) -> StepCount {
-        match &self.cursor {
-            RuleAttemptCursor::Continuing(session) => session.completed_steps(),
-            RuleAttemptCursor::Final(session) => session.completed_steps(),
-        }
-    }
-
-    /// Number of executable rule-line attempts consumed so far.
-    #[must_use]
-    pub const fn completed_attempts(&self) -> RuleAttemptCount {
-        match &self.cursor {
-            RuleAttemptCursor::Continuing(session) => session.completed_attempts(),
-            RuleAttemptCursor::Final(session) => session.completed_attempts(),
-        }
-    }
-
-    /// Borrow the parsed program used by this session.
-    #[must_use]
-    pub fn program(&self) -> &'program ExecutableProgram<P> {
-        match &self.cursor {
-            RuleAttemptCursor::Continuing(session) => session.program.program,
-            RuleAttemptCursor::Final(session) => session.program.program,
-        }
-    }
-
-    /// Borrow the current runtime state.
-    ///
-    /// The returned view borrows only for this observation. Materializing it is
-    /// an explicit allocation boundary.
-    #[must_use]
-    pub fn state(&self) -> RuntimeStateView<'_> {
-        match &self.cursor {
-            RuleAttemptCursor::Continuing(session) => session.state(),
-            RuleAttemptCursor::Final(session) => session.state(),
-        }
-    }
-
-    /// Advances this run by exactly one executable rule line when possible.
-    ///
-    /// Non-matching rules return [`BorrowedRuleAttemptTransition::Missed`] with a
-    /// continuation session. Matching rewrites return
-    /// [`BorrowedRuleAttemptTransition::Applied`] and reset the next attempt to the
-    /// first executable rule. No match across the whole pass, `(return)`, and
-    /// runtime failure consume the session into terminal typestates.
-    #[must_use]
-    pub fn step(self) -> BorrowedRuleAttemptTransition<'program, P, E, A> {
-        step_borrowed_rule_attempt_run(self)
-    }
-}
-
-impl<'program, P: ParsePolicy> BorrowedRuleAttemptTerminal<'program, P> {
-    /// Projects terminal borrowed rule-attempt state into public terminal data.
-    fn from_terminal(terminal: TerminalAttemptSession<'program, P>) -> Self {
-        let TerminalAttemptSession {
-            program,
-            core,
-            attempts,
-        } = terminal;
-        Self {
-            program: program.program,
-            core,
-            attempts,
-        }
-    }
-}
-
 /// Advances a borrowed ordinary run and projects the private transition into the public type.
 fn step_borrowed_run<'program, P: ParsePolicy, E: ExecutionPolicy>(
     session: BorrowedRunSession<'program, P, E>,
@@ -311,90 +168,5 @@ fn step_borrowed_run<'program, P: ParsePolicy, E: ExecutionPolicy>(
         CoreRunTransition::Failed { error, terminal } => BorrowedStepTransition::Failed(
             BorrowedFailedRun::new(error, terminal.program.program, terminal.core),
         ),
-    }
-}
-
-/// Advances a borrowed rule-attempt run and projects the private transition into the public type.
-fn step_borrowed_rule_attempt_run<
-    'program,
-    P: ParsePolicy,
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
->(
-    session: BorrowedRuleAttemptSession<'program, P, E, A>,
-) -> BorrowedRuleAttemptTransition<'program, P, E, A> {
-    match session.cursor {
-        RuleAttemptCursor::Continuing(cursor) => {
-            project_rule_attempt_step(advance_continuing_borrowed_rule_attempt(cursor))
-        }
-        RuleAttemptCursor::Final(cursor) => {
-            project_rule_attempt_step(advance_final_borrowed_rule_attempt(cursor))
-        }
-    }
-}
-
-/// Projects one private rule-attempt transition into the public transition type.
-fn project_rule_attempt_step<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>(
-    step: CoreRuleAttemptStep<'program, P, E, A, RuleView<'program>, RuleAttemptStepError>,
-) -> BorrowedRuleAttemptTransition<'program, P, E, A> {
-    match step {
-        CoreRuleAttemptStep::Missed {
-            attempt,
-            miss,
-            continuation,
-        } => BorrowedRuleAttemptTransition::Missed(BorrowedMissedRuleAttempt {
-            attempt,
-            miss,
-            session: BorrowedRuleAttemptSession::from_start(continuation),
-        }),
-        CoreRuleAttemptStep::Applied {
-            attempt,
-            step,
-            rule,
-            continuation,
-        } => BorrowedRuleAttemptTransition::Applied(BorrowedRuleAttemptAppliedStep {
-            attempt,
-            step,
-            rule,
-            session: BorrowedRuleAttemptSession::from_start(continuation),
-        }),
-        CoreRuleAttemptStep::Returned {
-            attempt,
-            step,
-            rule,
-            output,
-            terminal,
-        } => {
-            let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
-            BorrowedRuleAttemptTransition::Returned(BorrowedRuleAttemptReturnedRun {
-                attempt,
-                step,
-                rule,
-                program: terminal.program,
-                output,
-            })
-        }
-        CoreRuleAttemptStep::Stable {
-            attempts,
-            final_miss,
-            terminal,
-        } => {
-            let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
-            BorrowedRuleAttemptTransition::Stable(BorrowedRuleAttemptStableRun {
-                attempts,
-                final_miss,
-                program: terminal.program,
-                core: terminal.core,
-            })
-        }
-        CoreRuleAttemptStep::Failed { error, terminal } => {
-            let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
-            BorrowedRuleAttemptTransition::Failed(BorrowedRuleAttemptFailedRun::new(
-                error,
-                terminal.attempts,
-                terminal.program,
-                terminal.core,
-            ))
-        }
     }
 }

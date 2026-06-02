@@ -3,12 +3,12 @@ use core::{fmt, marker::PhantomData};
 use crate::error::{
     EmptyProgramParseError, ExecutableProgramParseError, RunError, RunFinishError, RunStartError,
 };
-use crate::execution::{BorrowedRuleAttemptSession, BorrowedRunSession};
+use crate::execution::BorrowedRunSession;
 use crate::input::AdmittedRun;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::limits::StepCount;
 use crate::parser::parse_rules_impl;
-use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
+use crate::policy::{ExecutionPolicy, ParsePolicy};
 use crate::runtime::state::State;
 use crate::source::ProgramSource;
 use crate::trace::TraceRequest;
@@ -204,22 +204,6 @@ impl<P: ParsePolicy> ExecutableProgram<P> {
         E: ExecutionPolicy,
     {
         BorrowedRunSession::new(self, admitted)
-    }
-
-    /// Starts borrowed rule-attempt execution.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunStartError` if allocating per-run rule state fails.
-    pub fn rule_attempts<A, E>(
-        &self,
-        admitted: AdmittedRun<E>,
-    ) -> Result<BorrowedRuleAttemptSession<'_, P, E, A>, RunStartError>
-    where
-        A: RuleAttemptPolicy,
-        E: ExecutionPolicy,
-    {
-        BorrowedRuleAttemptSession::new(self, admitted)
     }
 
     /// Mints a private runtime scan over the immutable rule table.

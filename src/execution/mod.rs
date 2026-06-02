@@ -62,11 +62,9 @@ mod session;
 /// Public step and terminal transition typestates.
 mod transition;
 pub use attempt::{RuleMiss, RuleMissReason};
-pub use session::{BorrowedRuleAttemptSession, BorrowedRunSession};
+pub use session::BorrowedRunSession;
 pub use transition::{
-    BorrowedAppliedStep, BorrowedFailedRun, BorrowedMissedRuleAttempt, BorrowedReturnedRun,
-    BorrowedRuleAttemptAppliedStep, BorrowedRuleAttemptFailedRun, BorrowedRuleAttemptReturnedRun,
-    BorrowedRuleAttemptStableRun, BorrowedRuleAttemptTransition, BorrowedStableRun,
+    BorrowedAppliedStep, BorrowedFailedRun, BorrowedReturnedRun, BorrowedStableRun,
     BorrowedStepTransition,
 };
 
