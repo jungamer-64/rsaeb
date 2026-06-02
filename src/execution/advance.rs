@@ -345,7 +345,7 @@ where
             return failed_continuing_rule_attempt(
                 program,
                 core,
-                attempt_budget,
+                &attempt_budget,
                 <W::Error as From<RuleAttemptStepError>>::from(error),
             );
         }
@@ -357,7 +357,7 @@ where
                 Ok(witness) => witness,
                 Err(error) => {
                     let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
-                    return failed_continuing_rule_attempt(program, core, attempt_budget, error);
+                    return failed_continuing_rule_attempt(program, core, &attempt_budget, error);
                 }
             };
             let miss = RuleMiss::new(witness, missed.reason());
@@ -389,7 +389,7 @@ where
                 Ok(committed) => committed,
                 Err(error) => {
                     let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
-                    return failed_continuing_rule_attempt(program, core, attempt_budget, error);
+                    return failed_continuing_rule_attempt(program, core, &attempt_budget, error);
                 }
             };
             let applied = witnessed.commit(&mut state, &mut scratch);
@@ -435,7 +435,7 @@ where
             return failed_final_rule_attempt(
                 program,
                 core,
-                attempt_budget,
+                &attempt_budget,
                 <W::Error as From<RuleAttemptStepError>>::from(error),
             );
         }
@@ -447,7 +447,7 @@ where
                 Ok(witness) => witness,
                 Err(error) => {
                     let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
-                    return failed_final_rule_attempt(program, core, attempt_budget, error);
+                    return failed_final_rule_attempt(program, core, &attempt_budget, error);
                 }
             };
             let miss = RuleMiss::new(witness, missed.reason());
@@ -477,7 +477,7 @@ where
                 Ok(committed) => committed,
                 Err(error) => {
                     let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
-                    return failed_final_rule_attempt(program, core, attempt_budget, error);
+                    return failed_final_rule_attempt(program, core, &attempt_budget, error);
                 }
             };
             let applied = witnessed.commit(&mut state, &mut scratch);
@@ -497,7 +497,7 @@ where
 fn failed_continuing_rule_attempt<'program, P, E, A, Pass, RuleWitness, StepError>(
     program: BorrowedProgram<'program, P>,
     core: AttemptRunCore<'program, E, Pass>,
-    attempt_budget: RuleAttemptBudgetState<A>,
+    attempt_budget: &RuleAttemptBudgetState<A>,
     error: StepError,
 ) -> CoreContinuingRuleAttemptStep<'program, P, E, A, RuleWitness, StepError>
 where
@@ -519,7 +519,7 @@ where
 fn failed_final_rule_attempt<'program, P, E, A, Pass, RuleWitness, StepError>(
     program: BorrowedProgram<'program, P>,
     core: AttemptRunCore<'program, E, Pass>,
-    attempt_budget: RuleAttemptBudgetState<A>,
+    attempt_budget: &RuleAttemptBudgetState<A>,
     error: StepError,
 ) -> CoreFinalRuleAttemptStep<'program, P, E, A, RuleWitness, StepError>
 where

@@ -58,7 +58,7 @@ where
 ///
 /// Returns `TestFailure` if the program is executable or stabilization fails.
 fn stabilize_empty_program<E>(
-    program: &EmptyProgram<DefaultParsePolicy>,
+    program: EmptyProgram<DefaultParsePolicy>,
     admitted: rsaeb::input::AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
@@ -119,7 +119,7 @@ fn runtime_input_validates_ascii_boundary() -> TestResult {
         RuntimeInputSource::from_bytes(&input),
     )?;
     let result =
-        stabilize_empty_program(&program, runtime_input.admit::<DefaultExecutionPolicy>()?)?;
+        stabilize_empty_program(program, runtime_input.admit::<DefaultExecutionPolicy>()?)?;
     expect_stable_bytes(&result, input.as_slice())?;
     ensure_eq!(result.steps().get(), 0)?;
 

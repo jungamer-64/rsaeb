@@ -221,10 +221,8 @@ impl ParsedRule {
     /// Borrows the positionless match pattern.
     const fn pattern(&self) -> &ParsedRulePattern {
         match self {
-            Self::AlwaysRewrite(rule) => &rule.pattern,
-            Self::OnceRewrite(rule) => &rule.pattern,
-            Self::AlwaysReturn(rule) => &rule.pattern,
-            Self::OnceReturn(rule) => &rule.pattern,
+            Self::AlwaysRewrite(rule) | Self::OnceRewrite(rule) => &rule.pattern,
+            Self::AlwaysReturn(rule) | Self::OnceReturn(rule) => &rule.pattern,
         }
     }
 }

@@ -16,11 +16,19 @@ use crate::trace::TraceRequest;
 use super::{ExecutableRuleSet, RuleScan, RuleSetShape, RunResult};
 
 /// Parsed source with no executable rule lines.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct EmptyProgram<P: ParsePolicy> {
     /// Compile-time parser policy selected for this empty program.
     policy: PhantomData<P>,
 }
+
+impl<P: ParsePolicy> Clone for EmptyProgram<P> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<P: ParsePolicy> Copy for EmptyProgram<P> {}
 
 /// Parsed source with at least one executable rule line.
 #[derive(PartialEq, Eq)]
@@ -68,18 +76,18 @@ impl<P: ParsePolicy> EmptyProgram<P> {
 
     /// Returns the number of executable rules in this empty program.
     #[must_use]
-    pub const fn rule_count(&self) -> RuleCount {
+    pub const fn rule_count(self) -> RuleCount {
         RuleCount::new(0)
     }
 
     /// Returns the number of parsed `(once)` rules in this empty program.
     #[must_use]
-    pub const fn once_rule_count(&self) -> OnceRuleCount {
+    pub const fn once_rule_count(self) -> OnceRuleCount {
         OnceRuleCount::ZERO
     }
 
     /// Iterates over structured parsed-rule views.
-    pub fn rules(&self) -> core::iter::Empty<RuleView<'_>> {
+    pub fn rules<'rule>(self) -> core::iter::Empty<RuleView<'rule>> {
         core::iter::empty()
     }
 
@@ -89,7 +97,7 @@ impl<P: ParsePolicy> EmptyProgram<P> {
     ///
     /// Returns `RunFinishError` if materializing the admitted initial state as
     /// stable output fails.
-    pub fn stabilize<E>(&self, admitted: AdmittedRun<E>) -> Result<RunResult, RunFinishError>
+    pub fn stabilize<E>(self, admitted: AdmittedRun<E>) -> Result<RunResult, RunFinishError>
     where
         E: ExecutionPolicy,
     {

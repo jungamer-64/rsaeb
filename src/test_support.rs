@@ -281,7 +281,7 @@ where
 ///
 /// Returns `TestFailure` if the program is executable or stabilization fails.
 pub(crate) fn stabilize_empty_program<E>(
-    program: &EmptyProgram<DefaultParsePolicy>,
+    program: EmptyProgram<DefaultParsePolicy>,
     admitted: AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where

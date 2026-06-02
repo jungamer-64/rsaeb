@@ -81,7 +81,7 @@ where
 ///
 /// Returns `TestFailure` if the program is executable or stabilization fails.
 fn stabilize_empty_program<E>(
-    program: &EmptyProgram<DefaultParsePolicy>,
+    program: EmptyProgram<DefaultParsePolicy>,
     admitted: AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
@@ -137,7 +137,7 @@ fn program_language_surface_handles_spacing_comments_and_actions() -> TestResult
     expect_stable_bytes(&result, b"b")?;
 
     let program = EmptyProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("#a=b"))?;
-    let result = stabilize_empty_program(&program, runtime_input(b"a", limits)?)?;
+    let result = stabilize_empty_program(program, runtime_input(b"a", limits)?)?;
     expect_stable_bytes(&result, b"a")?;
 
     let program = parse_program("a=(start)x")?;
