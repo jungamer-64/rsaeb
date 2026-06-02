@@ -401,6 +401,37 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
 
 /// # Errors
 ///
+/// Returns `TestFailure` if return trace snapshots do not use the trace
+/// snapshot permit attached to the return event.
+#[test]
+fn trace_snapshot_return_event_uses_return_event_permit() -> TestResult {
+    let program = parse_program("a=(return)ok")?;
+    let limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
+    let mut events = Vec::new();
+
+    let error = program.trace(
+        runtime_input(b"a", limits)?,
+        SnapshotTrace::<StaticTraceSnapshotPolicy<1>, _>::new(|event| {
+            events.push(event);
+            Ok::<(), TestFailure>(())
+        }),
+    );
+
+    ensure_eq!(events.len(), 1)?;
+    ensure_matches(
+        matches!(
+            error,
+            Err(TraceSnapshotRunError::Snapshot(TraceSnapshotError::Limit {
+                limit,
+                attempted_len,
+            })) if limit == TraceSnapshotByteLimit::new(1) && attempted_len.get() == 2
+        ),
+        "expected return trace snapshot limit",
+    )
+}
+
+/// # Errors
+///
 /// Returns `TestFailure` if the final trace event no longer matches the run
 /// result.
 #[test]

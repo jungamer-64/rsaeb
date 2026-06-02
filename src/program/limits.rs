@@ -294,7 +294,9 @@ impl RuntimeStateByteLimit {
         attempted_len: RuntimeStateByteCount,
     ) -> Option<RuntimeStateBytePermit> {
         if attempted_len.get() <= self.value {
-            Some(RuntimeStateBytePermit)
+            Some(RuntimeStateBytePermit {
+                byte_count: attempted_len,
+            })
         } else {
             None
         }
@@ -303,7 +305,17 @@ impl RuntimeStateByteLimit {
 
 /// Permit proving a runtime-state length fits its execution budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RuntimeStateBytePermit;
+pub(crate) struct RuntimeStateBytePermit {
+    /// Runtime-state byte count admitted by the limit.
+    byte_count: RuntimeStateByteCount,
+}
+
+impl RuntimeStateBytePermit {
+    /// Runtime-state byte count admitted by the limit.
+    pub(crate) const fn byte_count(self) -> RuntimeStateByteCount {
+        self.byte_count
+    }
+}
 
 /// Maximum runtime input length accepted before owned byte classification.
 ///
@@ -335,7 +347,9 @@ impl RuntimeInputByteLimit {
         attempted_len: RuntimeInputByteCount,
     ) -> Option<RuntimeInputBytePermit> {
         if attempted_len.get() <= self.value {
-            Some(RuntimeInputBytePermit)
+            Some(RuntimeInputBytePermit {
+                byte_count: attempted_len,
+            })
         } else {
             None
         }
@@ -344,7 +358,17 @@ impl RuntimeInputByteLimit {
 
 /// Permit proving a runtime-input length fits its input budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RuntimeInputBytePermit;
+pub(crate) struct RuntimeInputBytePermit {
+    /// Runtime-input byte count admitted by the limit.
+    byte_count: RuntimeInputByteCount,
+}
+
+impl RuntimeInputBytePermit {
+    /// Runtime-input byte count admitted by the limit.
+    pub(crate) const fn byte_count(self) -> RuntimeInputByteCount {
+        self.byte_count
+    }
+}
 
 /// Maximum `(return)` output length in bytes.
 ///
@@ -375,7 +399,9 @@ impl ReturnByteLimit {
         attempted_len: ReturnOutputByteCount,
     ) -> Option<ReturnOutputBytePermit> {
         if attempted_len.get() <= self.value {
-            Some(ReturnOutputBytePermit)
+            Some(ReturnOutputBytePermit {
+                byte_count: attempted_len,
+            })
         } else {
             None
         }
@@ -384,7 +410,17 @@ impl ReturnByteLimit {
 
 /// Permit proving a return-output length fits its execution budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ReturnOutputBytePermit;
+pub(crate) struct ReturnOutputBytePermit {
+    /// Return-output byte count admitted by the limit.
+    byte_count: ReturnOutputByteCount,
+}
+
+impl ReturnOutputBytePermit {
+    /// Return-output byte count admitted by the limit.
+    pub(crate) const fn byte_count(self) -> ReturnOutputByteCount {
+        self.byte_count
+    }
+}
 
 /// Maximum state/output bytes materialized for one trace snapshot event.
 ///
@@ -415,7 +451,9 @@ impl TraceSnapshotByteLimit {
         attempted_len: TraceSnapshotByteCount,
     ) -> Option<TraceSnapshotBytePermit> {
         if attempted_len.get() <= self.value {
-            Some(TraceSnapshotBytePermit)
+            Some(TraceSnapshotBytePermit {
+                byte_count: attempted_len,
+            })
         } else {
             None
         }
@@ -424,7 +462,17 @@ impl TraceSnapshotByteLimit {
 
 /// Permit proving a trace-snapshot event fits its trace budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TraceSnapshotBytePermit;
+pub(crate) struct TraceSnapshotBytePermit {
+    /// Trace snapshot byte count admitted by the limit.
+    byte_count: TraceSnapshotByteCount,
+}
+
+impl TraceSnapshotBytePermit {
+    /// Trace snapshot byte count admitted by the limit.
+    pub(crate) const fn byte_count(self) -> TraceSnapshotByteCount {
+        self.byte_count
+    }
+}
 
 /// Number of committed execution steps.
 ///

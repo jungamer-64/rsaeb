@@ -101,6 +101,7 @@ use crate::input::AdmittedRun;
 use crate::inspect::RuleView;
 use crate::limits::{StepCount, TraceSnapshotByteLimit};
 use crate::policy::{ExecutionPolicy, ParsePolicy, TraceSnapshotPolicy};
+use crate::program::limits::TraceSnapshotBytePermit;
 use crate::program::{
     ExecutableProgramRef, ReturnOutput, ReturnOutputView, RunResult, RuntimeStateSnapshot,
 };
@@ -302,6 +303,28 @@ impl<'run> RuntimeStateView<'run> {
         Ok(output)
     }
 
+    /// Materializes this runtime-state view after its trace snapshot limit was admitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the output buffer cannot be allocated.
+    pub(crate) fn to_vec_with_trace_permit(
+        self,
+        context: AllocationContext,
+        permit: TraceSnapshotBytePermit,
+    ) -> Result<Vec<u8>, AllocationError> {
+        let mut output = Vec::new();
+        try_reserve_total_exact(
+            &mut output,
+            RequestedCapacity::new(permit.byte_count().get()),
+            context,
+        )?;
+        for byte in self.materialized_bytes() {
+            try_push(&mut output, byte, context)?;
+        }
+        Ok(output)
+    }
+
     /// Materializes this borrowed runtime state into a typed owned snapshot.
     ///
     /// # Errors
@@ -388,13 +411,13 @@ impl BorrowedTraceEffect<'_, '_> {
     fn to_snapshot<T: TraceSnapshotPolicy>(
         self,
     ) -> Result<TraceSnapshotEffect, TraceSnapshotError> {
-        ensure_trace_len(self.byte_count(), T::TRACE_SNAPSHOT_BYTE_LIMIT)?;
+        let permit = ensure_trace_len(self.byte_count(), T::TRACE_SNAPSHOT_BYTE_LIMIT)?;
         match self {
             Self::Continue { state } => Ok(TraceSnapshotEffect::Continue {
-                state: RuntimeStateSnapshot::from_trace_state_view(state)?,
+                state: RuntimeStateSnapshot::from_trace_state_view(state, permit)?,
             }),
             Self::Return { output } => Ok(TraceSnapshotEffect::Return {
-                output: ReturnOutput::from_trace_return_output_view(output)?,
+                output: ReturnOutput::from_trace_return_output_view(output, permit)?,
             }),
         }
     }
@@ -483,12 +506,12 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
     ) -> Result<TraceSnapshotEvent<'program>, TraceSnapshotError> {
         match self {
             Self::Initial { state } => {
-                ensure_trace_len(
+                let permit = ensure_trace_len(
                     TraceSnapshotByteCount::from_runtime_state_count(state.byte_count()),
                     T::TRACE_SNAPSHOT_BYTE_LIMIT,
                 )?;
                 Ok(TraceSnapshotEvent::Initial {
-                    state: RuntimeStateSnapshot::from_trace_state_view(state)?,
+                    state: RuntimeStateSnapshot::from_trace_state_view(state, permit)?,
                 })
             }
             Self::Step { step, rule, effect } => Ok(TraceSnapshotEvent::Step {
@@ -508,13 +531,9 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
 fn ensure_trace_len(
     len: TraceSnapshotByteCount,
     limit: TraceSnapshotByteLimit,
-) -> Result<(), TraceSnapshotError> {
-    if limit.admit(len).is_none() {
-        return Err(TraceSnapshotError::Limit {
-            limit,
-            attempted_len: len,
-        });
-    }
-
-    Ok(())
+) -> Result<TraceSnapshotBytePermit, TraceSnapshotError> {
+    limit.admit(len).ok_or(TraceSnapshotError::Limit {
+        limit,
+        attempted_len: len,
+    })
 }

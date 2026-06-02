@@ -23,9 +23,8 @@ pub(crate) struct State {
 impl State {
     /// Initializes runtime state with bytes admitted by `AdmittedRun`.
     pub(crate) fn from_input(input: InitialStateBytes) -> Self {
-        Self {
-            bytes: input.into_runtime_bytes(),
-        }
+        let (bytes, _permit) = input.into_runtime_bytes();
+        Self { bytes }
     }
 
     /// Returns the typed byte count.
@@ -365,9 +364,9 @@ impl<'state> StateMatch<'state> {
     ) -> Result<(), RunStepError> {
         let capacity = self.replaced_byte_count(rhs)?;
 
-        RuntimeBudgetState::<E>::ensure_rewrite_state_len(capacity)?;
+        let capacity_permit = RuntimeBudgetState::<E>::ensure_rewrite_state_len(capacity)?;
 
-        output.clear_and_reserve(capacity)?;
+        output.clear_and_reserve(capacity_permit)?;
         Ok(())
     }
 

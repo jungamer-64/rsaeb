@@ -1,11 +1,13 @@
 use alloc::vec::Vec;
 
-use crate::allocation::{AllocationContext, AllocationError};
+use crate::allocation::{
+    AllocationContext, AllocationError, RequestedCapacity, try_reserve_total_exact,
+};
 use crate::bytes::Payload;
 use crate::bytes::{ReturnOutputByteCount, RuntimeStateByteCount};
 use crate::materialized::{MaterializedBytes, ReturnOutputDomain, RuntimeStateSnapshotDomain};
 
-use super::limits::StepCount;
+use super::limits::{ReturnOutputBytePermit, StepCount, TraceSnapshotBytePermit};
 
 /// Structured result category for one completed run.
 ///
@@ -69,9 +71,10 @@ impl RuntimeStateSnapshot {
     /// allocation limit for trace snapshot materialization.
     pub(crate) fn from_trace_state_view(
         state: crate::trace::RuntimeStateView<'_>,
+        permit: TraceSnapshotBytePermit,
     ) -> Result<Self, AllocationError> {
         Ok(Self {
-            bytes: MaterializedBytes::from_trace_state_view(state)?,
+            bytes: MaterializedBytes::from_trace_state_view(state, permit)?,
         })
     }
 
@@ -136,6 +139,20 @@ impl ReturnOutput {
         })
     }
 
+    /// Materializes committed `(return)` output bytes after a runtime limit permit.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` when the committed return payload cannot be allocated.
+    pub(crate) fn from_permitted_return_output_view(
+        output: ReturnOutputView<'_>,
+        permit: ReturnOutputBytePermit,
+    ) -> Result<Self, AllocationError> {
+        Ok(Self {
+            bytes: MaterializedBytes::from_permitted_return_output_view(output, permit)?,
+        })
+    }
+
     /// Materializes committed `(return)` output bytes for a trace snapshot.
     ///
     /// # Errors
@@ -144,9 +161,10 @@ impl ReturnOutput {
     /// allocation limit for trace snapshot materialization.
     pub(crate) fn from_trace_return_output_view(
         output: ReturnOutputView<'_>,
+        permit: TraceSnapshotBytePermit,
     ) -> Result<Self, AllocationError> {
         Ok(Self {
-            bytes: MaterializedBytes::from_trace_return_output_view(output)?,
+            bytes: MaterializedBytes::from_trace_return_output_view(output, permit)?,
         })
     }
 
@@ -203,6 +221,48 @@ impl<'program> ReturnOutputView<'program> {
         context: AllocationContext,
     ) -> Result<Vec<u8>, AllocationError> {
         self.payload.to_vec_with_context(context)
+    }
+
+    /// Materializes this return-output view after its runtime output limit was admitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the output buffer cannot be allocated.
+    pub(crate) fn to_vec_with_return_permit(
+        self,
+        context: AllocationContext,
+        permit: ReturnOutputBytePermit,
+    ) -> Result<Vec<u8>, AllocationError> {
+        self.to_vec_with_capacity(context, RequestedCapacity::new(permit.byte_count().get()))
+    }
+
+    /// Materializes this return-output view after its trace snapshot limit was admitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the output buffer cannot be allocated.
+    pub(crate) fn to_vec_with_trace_permit(
+        self,
+        context: AllocationContext,
+        permit: TraceSnapshotBytePermit,
+    ) -> Result<Vec<u8>, AllocationError> {
+        self.to_vec_with_capacity(context, RequestedCapacity::new(permit.byte_count().get()))
+    }
+
+    /// Materializes this return-output view with an already selected capacity.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the output buffer cannot be allocated.
+    fn to_vec_with_capacity(
+        self,
+        context: AllocationContext,
+        capacity: RequestedCapacity,
+    ) -> Result<Vec<u8>, AllocationError> {
+        let mut output = Vec::new();
+        try_reserve_total_exact(&mut output, capacity, context)?;
+        self.payload.push_bytes_to(&mut output, context)?;
+        Ok(output)
     }
 
     /// Materializes this borrowed return output.

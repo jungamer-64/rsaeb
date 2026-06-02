@@ -265,14 +265,6 @@ impl<'program> RuntimeRulePass<'program> {
         }
         .into_pass())
     }
-
-    /// Resets this pass to the first executable rule after a rewrite.
-    pub(crate) fn reset_after_rewrite(self) -> Self {
-        match self {
-            Self::Continuing(pass) => pass.reset_after_rewrite(),
-            Self::Final(pass) => pass.reset_after_rewrite(),
-        }
-    }
 }
 
 impl<'program> RuntimeRuleCell<'program> {
@@ -406,7 +398,7 @@ impl<'program> ContinuingRuntimeRulePass<'program> {
     }
 
     /// Resets this pass to its first executable rule after a rewrite.
-    fn reset_after_rewrite(self) -> RuntimeRulePass<'program> {
+    pub(crate) fn reset_after_rewrite(self) -> RuntimeRulePass<'program> {
         let Self {
             current,
             pending,
@@ -439,7 +431,7 @@ impl<'program> FinalRuntimeRulePass<'program> {
     }
 
     /// Resets this final pass to its first executable rule after a rewrite.
-    fn reset_after_rewrite(self) -> RuntimeRulePass<'program> {
+    pub(crate) fn reset_after_rewrite(self) -> RuntimeRulePass<'program> {
         let Self {
             current,
             mut attempted,

@@ -35,7 +35,7 @@ pub(crate) fn canonical_source(rule: &Rule) -> Result<Vec<u8>, AllocationError> 
     push_payload(&mut output, rule.lhs())?;
     try_push(&mut output, b'=', AllocationContext::CanonicalSource)?;
 
-    match rule.action().canonical_right_side() {
+    match rule.canonical_right_side() {
         CanonicalRightSide::Replace(payload) => {
             push_payload(&mut output, payload)?;
         }
@@ -67,7 +67,7 @@ fn canonical_source_len(rule: &Rule) -> Result<usize, AllocationError> {
     len = checked_source_len_add(len, repeat_token_len(rule.repeat_behavior()))?;
     len = checked_source_len_add(len, anchor_token_len(rule.anchor()))?;
     len = checked_source_len_add(len, 1)?;
-    len = checked_source_len_add(len, right_side_len(rule.action().canonical_right_side())?)?;
+    len = checked_source_len_add(len, right_side_len(rule.canonical_right_side())?)?;
 
     Ok(len)
 }

@@ -53,6 +53,7 @@ use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_rese
 use crate::bytes::{RuntimeByte, RuntimeInputByte, RuntimeInputByteCount, RuntimeStateByteCount};
 use crate::error::{RunAdmissionError, RuntimeInputError};
 use crate::policy::{ExecutionPolicy, RuntimeInputPolicy};
+use crate::program::limits::RuntimeStateBytePermit;
 use crate::runtime::budget::RuntimeBudgetState;
 
 /// Borrowed runtime input source at the validation boundary.
@@ -143,14 +144,14 @@ impl<I: RuntimeInputPolicy> RuntimeInput<I> {
     pub fn validate(input: RuntimeInputSource<'_>) -> Result<Self, RuntimeInputError> {
         let byte_count = RuntimeInputByteCount::new(input.as_bytes().len());
         let limit = I::INPUT_BYTE_LIMIT;
-        if limit.admit(byte_count).is_none() {
-            return Err(RuntimeInputError::input_limit(limit, byte_count));
-        }
+        let input_permit = limit
+            .admit(byte_count)
+            .ok_or_else(|| RuntimeInputError::input_limit(limit, byte_count))?;
 
         let mut bytes = Vec::new();
         try_reserve_total_exact(
             &mut bytes,
-            RequestedCapacity::from_runtime_input_count(byte_count),
+            RequestedCapacity::from_runtime_input_count(input_permit.byte_count()),
             AllocationContext::RuntimeInputValidation,
         )?;
 
@@ -230,16 +231,14 @@ impl<E: ExecutionPolicy> AdmittedRun<E> {
     ) -> Result<Self, RunAdmissionError> {
         let initial_state_len = RuntimeStateByteCount::from_runtime_input_count(input.byte_count());
         let limit = E::STATE_BYTE_LIMIT;
-        if limit.admit(initial_state_len).is_none() {
-            return Err(RunAdmissionError::initial_state_limit(
-                limit,
-                initial_state_len,
-            ));
-        }
+        let initial_state_permit = limit
+            .admit(initial_state_len)
+            .ok_or_else(|| RunAdmissionError::initial_state_limit(limit, initial_state_len))?;
 
         Ok(Self {
             initial_state: InitialStateBytes {
                 bytes: input.into_runtime_bytes(),
+                permit: initial_state_permit,
             },
             budget: RuntimeBudgetState::new(),
         })
@@ -256,11 +255,13 @@ impl<E: ExecutionPolicy> AdmittedRun<E> {
 pub(crate) struct InitialStateBytes {
     /// Runtime-domain bytes used to initialize execution state.
     bytes: Vec<RuntimeByte>,
+    /// Runtime-state budget permit admitted for these bytes.
+    permit: RuntimeStateBytePermit,
 }
 
 impl InitialStateBytes {
     /// Moves initial state bytes into the runtime core.
-    pub(crate) fn into_runtime_bytes(self) -> Vec<RuntimeByte> {
-        self.bytes
+    pub(crate) fn into_runtime_bytes(self) -> (Vec<RuntimeByte>, RuntimeStateBytePermit) {
+        (self.bytes, self.permit)
     }
 }

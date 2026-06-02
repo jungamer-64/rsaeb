@@ -4,6 +4,7 @@ use core::marker::PhantomData;
 use crate::allocation::{AllocationContext, AllocationError};
 use crate::inspect::PayloadView;
 use crate::program::ReturnOutputView;
+use crate::program::limits::{ReturnOutputBytePermit, TraceSnapshotBytePermit};
 use crate::rule::{self, Rule};
 use crate::trace::RuntimeStateView;
 
@@ -121,10 +122,12 @@ impl MaterializedBytes<RuntimeStateSnapshotDomain> {
     /// Returns `AllocationError` if the trace snapshot cannot be materialized.
     pub(crate) fn from_trace_state_view(
         state: RuntimeStateView<'_>,
+        permit: TraceSnapshotBytePermit,
     ) -> Result<Self, AllocationError> {
-        Ok(Self::from_owned_bytes(
-            state.to_vec_with_context(AllocationContext::TraceSnapshot)?,
-        ))
+        Ok(Self::from_owned_bytes(state.to_vec_with_trace_permit(
+            AllocationContext::TraceSnapshot,
+            permit,
+        )?))
     }
 }
 
@@ -142,6 +145,21 @@ impl MaterializedBytes<ReturnOutputDomain> {
         ))
     }
 
+    /// Materializes a committed return-output view after runtime limit admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the return output cannot be materialized.
+    pub(crate) fn from_permitted_return_output_view(
+        output: ReturnOutputView<'_>,
+        permit: ReturnOutputBytePermit,
+    ) -> Result<Self, AllocationError> {
+        Ok(Self::from_owned_bytes(output.to_vec_with_return_permit(
+            AllocationContext::ReturnOutput,
+            permit,
+        )?))
+    }
+
     /// Materializes a return-output view for retained trace snapshots.
     ///
     /// # Errors
@@ -149,9 +167,11 @@ impl MaterializedBytes<ReturnOutputDomain> {
     /// Returns `AllocationError` if the trace snapshot cannot be materialized.
     pub(crate) fn from_trace_return_output_view(
         output: ReturnOutputView<'_>,
+        permit: TraceSnapshotBytePermit,
     ) -> Result<Self, AllocationError> {
-        Ok(Self::from_owned_bytes(
-            output.to_vec_with_context(AllocationContext::TraceSnapshot)?,
-        ))
+        Ok(Self::from_owned_bytes(output.to_vec_with_trace_permit(
+            AllocationContext::TraceSnapshot,
+            permit,
+        )?))
     }
 }

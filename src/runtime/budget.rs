@@ -5,6 +5,7 @@ use crate::error::{
 };
 use crate::limits::{RuleAttemptCount, RuleAttemptLimit, StepCount};
 use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
+use crate::program::limits::{ReturnOutputBytePermit, RuntimeStateBytePermit};
 use core::marker::PhantomData;
 
 /// Execution budgets plus the number of committed execution steps.
@@ -65,13 +66,11 @@ impl<E: ExecutionPolicy> RuntimeBudgetState<E> {
     /// runtime state limit.
     pub(crate) fn ensure_rewrite_state_len(
         attempted_len: RuntimeStateByteCount,
-    ) -> Result<(), RunStepError> {
+    ) -> Result<RuntimeStateBytePermit, RunStepError> {
         let limit = E::STATE_BYTE_LIMIT;
-        if limit.admit(attempted_len).is_some() {
-            return Ok(());
-        }
-
-        Err(RuntimeStateLimitError::new(limit, attempted_len).into())
+        limit
+            .admit(attempted_len)
+            .ok_or_else(|| RuntimeStateLimitError::new(limit, attempted_len).into())
     }
 
     /// Checks a `(return)` payload against return-output limits.
@@ -82,13 +81,11 @@ impl<E: ExecutionPolicy> RuntimeBudgetState<E> {
     /// output limit.
     pub(crate) fn ensure_return_len(
         attempted_len: ReturnOutputByteCount,
-    ) -> Result<(), RunStepError> {
+    ) -> Result<ReturnOutputBytePermit, RunStepError> {
         let limit = E::RETURN_BYTE_LIMIT;
-        if limit.admit(attempted_len).is_some() {
-            return Ok(());
-        }
-
-        Err(ReturnOutputLimitError::new(limit, attempted_len).into())
+        limit
+            .admit(attempted_len)
+            .ok_or_else(|| ReturnOutputLimitError::new(limit, attempted_len).into())
     }
 
     /// Reserves the next step number before a rule commits.

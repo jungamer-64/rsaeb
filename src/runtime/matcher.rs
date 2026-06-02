@@ -1,6 +1,7 @@
 use super::once::{MatchedRuleCommit, RuntimeRule, RuntimeRuleReadiness};
 use super::state::{State, StateMatch};
-use crate::rule::{Rule, RuleAnchorSyntax};
+use crate::bytes::Payload;
+use crate::rule::{RewriteAction, Rule, RuleAnchorSyntax};
 
 /// Outcome of evaluating one executable rule line against the current state.
 #[derive(Debug)]
@@ -20,12 +21,36 @@ pub enum RuleMissReason {
     OnceConsumed,
 }
 
-/// Matched rule plus the state range and commit action needed to apply it.
+/// Matched rule plus the state range and action-specific commit data.
 #[derive(Debug)]
-pub(crate) struct MatchedRuleApplication<'program, 'state, 'once> {
+pub(crate) enum MatchedRuleApplication<'program, 'state, 'once> {
+    /// Matched non-terminal rewrite rule.
+    Rewrite(MatchedRewriteApplication<'program, 'state, 'once>),
+    /// Matched terminal return rule.
+    Return(MatchedReturnApplication<'program, 'state, 'once>),
+}
+
+/// Matched non-terminal rewrite rule.
+#[derive(Debug)]
+pub(crate) struct MatchedRewriteApplication<'program, 'state, 'once> {
     /// Parsed rule selected by the matcher.
     rule: &'program Rule,
+    /// Right-side rewrite action selected by the matched rule.
+    action: &'program RewriteAction,
     /// Once-state side effect to apply only after successful rewrite.
+    commit: MatchedRuleCommit<'once>,
+    /// Runtime-state range matched by the rule left side.
+    state_match: StateMatch<'state>,
+}
+
+/// Matched terminal return rule.
+#[derive(Debug)]
+pub(crate) struct MatchedReturnApplication<'program, 'state, 'once> {
+    /// Parsed rule selected by the matcher.
+    rule: &'program Rule,
+    /// Right-side return output selected by the matched rule.
+    output: &'program Payload,
+    /// Once-state side effect to apply only after successful return materialization.
     commit: MatchedRuleCommit<'once>,
     /// Runtime-state range matched by the rule left side.
     state_match: StateMatch<'state>,
@@ -38,6 +63,24 @@ pub(crate) struct PreparedMatchedRule<'program, 'once> {
     rule: &'program Rule,
     /// Once-state side effect to apply only after successful rewrite.
     commit: MatchedRuleCommit<'once>,
+}
+
+/// Action-specific data after runtime-state match data has been split out.
+pub(crate) enum MatchedRuleAction<'program, 'once> {
+    /// Prepared rewrite rule data.
+    Rewrite {
+        /// Matched rule and deferred once-state commit.
+        matched: PreparedMatchedRule<'program, 'once>,
+        /// Right-side rewrite action.
+        action: &'program RewriteAction,
+    },
+    /// Prepared return rule data.
+    Return {
+        /// Matched rule and deferred once-state commit.
+        matched: PreparedMatchedRule<'program, 'once>,
+        /// Right-side return output.
+        output: &'program Payload,
+    },
 }
 
 /// Non-applying rule consumed by a rule-attempt step.
@@ -89,39 +132,54 @@ impl<'program, 'state> MatchedRuleCandidate<'program, 'state> {
     }
 
     /// Attaches the linear commit action to the matched candidate.
-    const fn into_application<'once>(
+    fn into_application<'once>(
         self,
         commit: MatchedRuleCommit<'once>,
     ) -> MatchedRuleApplication<'program, 'state, 'once> {
-        MatchedRuleApplication::new(self.rule, self.state_match, commit)
+        match self.rule {
+            Rule::Rewrite(rule) => MatchedRuleApplication::Rewrite(MatchedRewriteApplication {
+                rule: self.rule,
+                action: rule.action(),
+                commit,
+                state_match: self.state_match,
+            }),
+            Rule::Return(rule) => MatchedRuleApplication::Return(MatchedReturnApplication {
+                rule: self.rule,
+                output: rule.output(),
+                commit,
+                state_match: self.state_match,
+            }),
+        }
     }
 }
 
 impl<'program, 'state, 'once> MatchedRuleApplication<'program, 'state, 'once> {
-    /// Captures the complete data needed to apply a matched rule.
-    const fn new(
-        rule: &'program Rule,
-        state_match: StateMatch<'state>,
-        commit: MatchedRuleCommit<'once>,
-    ) -> Self {
-        Self {
-            rule,
-            commit,
-            state_match,
-        }
-    }
-
-    /// Splits the state-match witness from the rule commit witness.
+    /// Splits the state-match witness from action-specific commit data.
     pub(crate) fn into_prepare_parts(
         self,
-    ) -> (StateMatch<'state>, PreparedMatchedRule<'program, 'once>) {
-        (
-            self.state_match,
-            PreparedMatchedRule {
-                rule: self.rule,
-                commit: self.commit,
-            },
-        )
+    ) -> (StateMatch<'state>, MatchedRuleAction<'program, 'once>) {
+        match self {
+            Self::Rewrite(matched) => (
+                matched.state_match,
+                MatchedRuleAction::Rewrite {
+                    matched: PreparedMatchedRule {
+                        rule: matched.rule,
+                        commit: matched.commit,
+                    },
+                    action: matched.action,
+                },
+            ),
+            Self::Return(matched) => (
+                matched.state_match,
+                MatchedRuleAction::Return {
+                    matched: PreparedMatchedRule {
+                        rule: matched.rule,
+                        commit: matched.commit,
+                    },
+                    output: matched.output,
+                },
+            ),
+        }
     }
 }
 

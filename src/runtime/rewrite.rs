@@ -3,7 +3,8 @@ use alloc::vec::Vec;
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
-use crate::bytes::{Payload, RuntimeByte, RuntimeStateByteCount};
+use crate::bytes::{Payload, RuntimeByte};
+use crate::program::limits::RuntimeStateBytePermit;
 
 /// Reusable storage for building the next runtime state.
 #[derive(Debug, PartialEq, Eq)]
@@ -52,12 +53,12 @@ impl RewriteScratch {
     /// the requested capacity.
     pub(crate) fn clear_and_reserve(
         &mut self,
-        capacity: RuntimeStateByteCount,
+        permit: RuntimeStateBytePermit,
     ) -> Result<(), AllocationError> {
         self.bytes.clear();
         try_reserve_total_exact(
             &mut self.bytes,
-            RequestedCapacity::from_runtime_state_count(capacity),
+            RequestedCapacity::from_runtime_state_count(permit.byte_count()),
             AllocationContext::RuntimeRewriteState,
         )
     }

@@ -429,7 +429,7 @@ impl<'program> RuleView<'program> {
     /// Right-side action.
     #[must_use]
     pub fn action(self) -> RuleActionView<'program> {
-        self.rule.action().view()
+        self.rule.action_view()
     }
 
     /// Generates canonical executable source for diagnostics/display.
