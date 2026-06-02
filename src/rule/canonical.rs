@@ -4,26 +4,62 @@ use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
 use crate::bytes::Payload;
-use crate::inspect::RuleRepeat;
+use crate::inspect::{AlwaysRepeat, OnceRepeat};
 use crate::syntax::SyntaxToken;
 
-use super::model::{CanonicalRightSide, Rule, RuleAnchorSyntax};
+use super::model::{CanonicalRightSide, RepeatRule, RuleAnchorSyntax};
 
-/// Materializes this rule's canonical source form.
+/// Materializes a reusable rule's canonical source form.
 ///
 /// # Errors
 ///
 /// Returns `AllocationError` if canonical source length arithmetic
 /// overflows or the output buffer cannot be allocated.
-pub(crate) fn canonical_source(rule: &Rule) -> Result<Vec<u8>, AllocationError> {
+pub(crate) fn canonical_always_source(
+    rule: &RepeatRule<AlwaysRepeat>,
+) -> Result<Vec<u8>, AllocationError> {
+    canonical_repeat_source(rule, RepeatPrefix::Always)
+}
+
+/// Materializes a once-only rule's canonical source form.
+///
+/// # Errors
+///
+/// Returns `AllocationError` if canonical source length arithmetic
+/// overflows or the output buffer cannot be allocated.
+pub(crate) fn canonical_once_source(
+    rule: &RepeatRule<OnceRepeat>,
+) -> Result<Vec<u8>, AllocationError> {
+    canonical_repeat_source(rule, RepeatPrefix::Once)
+}
+
+/// Canonical repeat marker emitted before the left-side pattern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RepeatPrefix {
+    /// No repeat marker.
+    Always,
+    /// Emit the `(once)` marker.
+    Once,
+}
+
+/// Materializes a typed repeat-axis rule's canonical source form.
+///
+/// # Errors
+///
+/// Returns `AllocationError` if canonical source length arithmetic
+/// overflows or the output buffer cannot be allocated.
+fn canonical_repeat_source<R>(
+    rule: &RepeatRule<R>,
+    repeat: RepeatPrefix,
+) -> Result<Vec<u8>, AllocationError> {
     let mut output = Vec::new();
     try_reserve_total_exact(
         &mut output,
-        RequestedCapacity::new(canonical_source_len(rule)?),
+        RequestedCapacity::new(canonical_source_len(rule, repeat)?),
         AllocationContext::CanonicalSource,
     )?;
 
-    if matches!(rule.repeat(), RuleRepeat::Once) {
+    if matches!(repeat, RepeatPrefix::Once) {
         push_token(&mut output, SyntaxToken::Once)?;
     }
 
@@ -36,7 +72,7 @@ pub(crate) fn canonical_source(rule: &Rule) -> Result<Vec<u8>, AllocationError> 
     push_payload(&mut output, rule.lhs())?;
     try_push(&mut output, b'=', AllocationContext::CanonicalSource)?;
 
-    match rule.canonical_right_side() {
+    match rule.canonical_action() {
         CanonicalRightSide::Replace(payload) => {
             push_payload(&mut output, payload)?;
         }
@@ -62,22 +98,25 @@ pub(crate) fn canonical_source(rule: &Rule) -> Result<Vec<u8>, AllocationError> 
 /// # Errors
 ///
 /// Returns `AllocationError` if canonical source length arithmetic overflows.
-fn canonical_source_len(rule: &Rule) -> Result<usize, AllocationError> {
+fn canonical_source_len<R>(
+    rule: &RepeatRule<R>,
+    repeat: RepeatPrefix,
+) -> Result<usize, AllocationError> {
     let mut len = rule.lhs().byte_count().get();
 
-    len = checked_source_len_add(len, repeat_token_len(rule.repeat()))?;
+    len = checked_source_len_add(len, repeat_token_len(repeat))?;
     len = checked_source_len_add(len, anchor_token_len(rule.anchor()))?;
     len = checked_source_len_add(len, 1)?;
-    len = checked_source_len_add(len, right_side_len(rule.canonical_right_side())?)?;
+    len = checked_source_len_add(len, action_source_len(rule.canonical_action())?)?;
 
     Ok(len)
 }
 
-/// Returns the canonical `(once)` marker length for a rule availability.
-fn repeat_token_len(repeat: RuleRepeat) -> usize {
+/// Returns the canonical repeat marker length for a rule availability.
+fn repeat_token_len(repeat: RepeatPrefix) -> usize {
     match repeat {
-        RuleRepeat::Always => 0,
-        RuleRepeat::Once => SyntaxToken::Once.len(),
+        RepeatPrefix::Always => 0,
+        RepeatPrefix::Once => SyntaxToken::Once.len(),
     }
 }
 
@@ -95,18 +134,18 @@ fn anchor_token_len(anchor: RuleAnchorSyntax) -> usize {
 /// # Errors
 ///
 /// Returns `AllocationError` if token-plus-payload length arithmetic overflows.
-fn right_side_len(right_side: CanonicalRightSide<'_>) -> Result<usize, AllocationError> {
-    let payload_len = right_side_payload(right_side).byte_count().get();
+fn action_source_len(action: CanonicalRightSide<'_>) -> Result<usize, AllocationError> {
+    let payload_len = action_payload(action).byte_count().get();
 
-    match right_side_token(right_side) {
+    match action_prefix_token(action) {
         Some(token) => checked_source_len_add(token.len(), payload_len),
         None => Ok(payload_len),
     }
 }
 
 /// Returns the canonical syntax token that prefixes a right-side payload.
-fn right_side_token(right_side: CanonicalRightSide<'_>) -> Option<SyntaxToken> {
-    match right_side {
+fn action_prefix_token(action: CanonicalRightSide<'_>) -> Option<SyntaxToken> {
+    match action {
         CanonicalRightSide::Replace(_) => None,
         CanonicalRightSide::MoveStart(_) => Some(SyntaxToken::Start),
         CanonicalRightSide::MoveEnd(_) => Some(SyntaxToken::End),
@@ -115,8 +154,8 @@ fn right_side_token(right_side: CanonicalRightSide<'_>) -> Option<SyntaxToken> {
 }
 
 /// Returns the right-side payload independent of its canonical prefix token.
-fn right_side_payload(right_side: CanonicalRightSide<'_>) -> &Payload {
-    match right_side {
+fn action_payload(action: CanonicalRightSide<'_>) -> &Payload {
+    match action {
         CanonicalRightSide::Replace(payload)
         | CanonicalRightSide::MoveStart(payload)
         | CanonicalRightSide::MoveEnd(payload)

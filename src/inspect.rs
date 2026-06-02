@@ -13,7 +13,7 @@
 //! cannot allocate.
 //!
 //! ```
-//! use rsaeb::inspect::{RuleAnchor, RuleView};
+//! use rsaeb::inspect::{RepeatRuleView, RuleAnchor, RuleView};
 //! use rsaeb::policy::DefaultParsePolicy;
 //! use rsaeb::program::ExecutableProgram;
 //! use rsaeb::source::ExecutableProgramSource;
@@ -36,9 +36,13 @@
 //! let RuleView::Once(rule) = rule else {
 //!     return Err("unexpected rule repeat".into());
 //! };
-//! let return_rule = rule.as_return().ok_or("expected return action")?;
-//! if return_rule.output().materialize()?.as_slice() != b"done" {
-//!     return Err("unexpected return output".into());
+//! match rule {
+//!     RepeatRuleView::Return(return_rule) => {
+//!         if return_rule.output().materialize()?.as_slice() != b"done" {
+//!             return Err("unexpected return output".into());
+//!         }
+//!     }
+//!     RepeatRuleView::Rewrite(_) => return Err("expected return action".into()),
 //! }
 //! # Ok(())
 //! # }
@@ -51,7 +55,7 @@ use crate::allocation::{AllocationContext, AllocationError};
 use crate::bytes::{Payload, PayloadByteCount};
 use crate::limits::SourceByteCount;
 use crate::materialized::{CanonicalRuleSourceDomain, MaterializedBytes, PayloadInspectionDomain};
-use crate::rule::Rule;
+use crate::rule::{RepeatRule, ReturnRule, RewriteRule, Rule};
 use crate::source::SourceLineNumber;
 
 /// Number of parsed rules.
@@ -150,6 +154,14 @@ impl RulePosition {
         self.number
     }
 }
+
+/// Compile-time marker for rules that are reusable within one run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlwaysRepeat {}
+
+/// Compile-time marker for rules that may commit at most once within one run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnceRepeat {}
 
 /// Rule match anchor.
 ///
@@ -304,68 +316,124 @@ impl fmt::Debug for PayloadView<'_> {
     }
 }
 
+/// Structured borrowed rewrite action.
+///
+/// Return output is intentionally absent from this enum. Terminal behavior is
+/// represented by [`ReturnRuleView`] instead of being mixed into rewrite action
+/// inspection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RewriteActionView<'program> {
+    /// Replace the matched bytes with the payload.
+    Replace(PayloadView<'program>),
+    /// Remove the matched bytes and insert the payload at the start.
+    MoveStart(PayloadView<'program>),
+    /// Remove the matched bytes and append the payload at the end.
+    MoveEnd(PayloadView<'program>),
+}
+
+impl<'program> RewriteActionView<'program> {
+    /// Borrow the payload carried by this rewrite action.
+    #[must_use]
+    pub const fn payload(self) -> PayloadView<'program> {
+        match self {
+            Self::Replace(payload) | Self::MoveStart(payload) | Self::MoveEnd(payload) => payload,
+        }
+    }
+}
+
 /// Read-only structured view of a parsed rule.
 ///
-/// The view borrows the parsed rule and carries the rule's execution position.
-/// Canonical source text is generated from the structured rule when requested;
-/// it is not stored as a second source of truth beside the parsed fields.
-#[derive(Clone, Copy)]
-pub struct RuleView<'program> {
-    /// Parsed rule borrowed from the program rule table.
-    rule: &'program Rule,
+/// The outer variant carries the repeat axis, while the inner
+/// [`RepeatRuleView`] carries the action axis. Callers cannot observe return
+/// output through a rewrite action view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleView<'program> {
+    /// Reusable parsed rule.
+    Always(RepeatRuleView<'program, AlwaysRepeat>),
+    /// Once-only parsed rule.
+    Once(RepeatRuleView<'program, OnceRepeat>),
 }
 
-impl core::fmt::Debug for RuleView<'_> {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter
-            .debug_struct("RuleView")
-            .field("position", &self.position())
-            .field("line_number", &self.line_number())
-            .field("anchor", &self.anchor())
-            .field("lhs", &self.lhs())
-            .finish()
-    }
+/// Read-only structured view of one repeat-axis rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepeatRuleView<'program, R> {
+    /// Non-terminal rewrite rule.
+    Rewrite(RewriteRuleView<'program, R>),
+    /// Terminal return rule.
+    Return(ReturnRuleView<'program, R>),
 }
 
-impl PartialEq for RuleView<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.position() == other.position()
-            && self.line_number() == other.line_number()
-            && self.anchor() == other.anchor()
-            && self.lhs() == other.lhs()
-    }
+/// Read-only structured view of a non-terminal rewrite rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RewriteRuleView<'program, R> {
+    /// Repeat-axis rule that owns this rewrite rule.
+    repeat_rule: &'program RepeatRule<R>,
+    /// Parsed rewrite rule borrowed from the program rule table.
+    rule: &'program RewriteRule<R>,
 }
 
-impl Eq for RuleView<'_> {}
+/// Read-only structured view of a terminal return rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReturnRuleView<'program, R> {
+    /// Repeat-axis rule that owns this return rule.
+    repeat_rule: &'program RepeatRule<R>,
+    /// Parsed return rule borrowed from the program rule table.
+    rule: &'program ReturnRule<R>,
+}
 
 impl<'program> RuleView<'program> {
     /// Borrows a parsed rule with its stored execution-order position.
-    pub(crate) const fn new(rule: &'program Rule) -> Self {
-        Self { rule }
+    pub(crate) fn new(rule: &'program Rule) -> Self {
+        match rule {
+            Rule::Always(rule) => Self::Always(RepeatRuleView::new(rule)),
+            Rule::Once(rule) => Self::Once(RepeatRuleView::new(rule)),
+        }
+    }
+
+    /// Borrows a typed always-repeat rule.
+    pub(crate) fn from_always(rule: &'program RepeatRule<AlwaysRepeat>) -> Self {
+        Self::Always(RepeatRuleView::new(rule))
+    }
+
+    /// Borrows a typed once-repeat rule.
+    pub(crate) fn from_once(rule: &'program RepeatRule<OnceRepeat>) -> Self {
+        Self::Once(RepeatRuleView::new(rule))
     }
 
     /// Program-local parsed-rule position.
     #[must_use]
-    pub const fn position(self) -> RulePosition {
-        self.rule.position()
+    pub fn position(self) -> RulePosition {
+        match self {
+            Self::Always(rule) => rule.position(),
+            Self::Once(rule) => rule.position(),
+        }
     }
 
     /// One-based source line number.
     #[must_use]
     pub fn line_number(self) -> SourceLineNumber {
-        self.rule.line_number()
+        match self {
+            Self::Always(rule) => rule.line_number(),
+            Self::Once(rule) => rule.line_number(),
+        }
     }
 
     /// Rule match anchor.
     #[must_use]
     pub fn anchor(self) -> RuleAnchor {
-        self.rule.anchor().public_anchor()
+        match self {
+            Self::Always(rule) => rule.anchor(),
+            Self::Once(rule) => rule.anchor(),
+        }
     }
 
     /// Left-side match payload.
     #[must_use]
     pub fn lhs(self) -> PayloadView<'program> {
-        PayloadView::new(self.rule.lhs())
+        match self {
+            Self::Always(rule) => rule.lhs(),
+            Self::Once(rule) => rule.lhs(),
+        }
     }
 
     /// Generates canonical executable source for diagnostics/display.
@@ -380,7 +448,158 @@ impl<'program> RuleView<'program> {
     /// allocated or if its computed length overflows.
     pub fn canonical_source(self) -> Result<CanonicalRuleSource, AllocationError> {
         Ok(CanonicalRuleSource {
-            bytes: MaterializedBytes::from_rule(self.rule)?,
+            bytes: match self {
+                Self::Always(rule) => MaterializedBytes::from_canonical_source(
+                    crate::rule::canonical_always_source(rule.into_rule())?,
+                ),
+                Self::Once(rule) => MaterializedBytes::from_canonical_source(
+                    crate::rule::canonical_once_source(rule.into_rule())?,
+                ),
+            },
         })
+    }
+}
+
+impl<'program, R> RepeatRuleView<'program, R> {
+    /// Borrows a parsed repeat-axis rule with its action shape preserved.
+    pub(crate) fn new(rule: &'program RepeatRule<R>) -> Self {
+        match rule {
+            RepeatRule::Rewrite(rewrite) => Self::Rewrite(RewriteRuleView::new(rule, rewrite)),
+            RepeatRule::Return(return_rule) => Self::Return(ReturnRuleView::new(rule, return_rule)),
+        }
+    }
+
+    /// Returns the borrowed internal rule.
+    pub(crate) const fn into_rule(self) -> &'program RepeatRule<R> {
+        match self {
+            Self::Rewrite(rule) => rule.into_repeat_rule(),
+            Self::Return(rule) => rule.into_repeat_rule(),
+        }
+    }
+
+    /// Program-local parsed-rule position.
+    #[must_use]
+    pub fn position(self) -> RulePosition {
+        match self {
+            Self::Rewrite(rule) => rule.position(),
+            Self::Return(rule) => rule.position(),
+        }
+    }
+
+    /// One-based source line number.
+    #[must_use]
+    pub fn line_number(self) -> SourceLineNumber {
+        match self {
+            Self::Rewrite(rule) => rule.line_number(),
+            Self::Return(rule) => rule.line_number(),
+        }
+    }
+
+    /// Rule match anchor.
+    #[must_use]
+    pub fn anchor(self) -> RuleAnchor {
+        match self {
+            Self::Rewrite(rule) => rule.anchor(),
+            Self::Return(rule) => rule.anchor(),
+        }
+    }
+
+    /// Left-side match payload.
+    #[must_use]
+    pub fn lhs(self) -> PayloadView<'program> {
+        match self {
+            Self::Rewrite(rule) => rule.lhs(),
+            Self::Return(rule) => rule.lhs(),
+        }
+    }
+}
+
+impl<'program, R> RewriteRuleView<'program, R> {
+    /// Borrows a parsed rewrite rule.
+    pub(crate) const fn new(
+        repeat_rule: &'program RepeatRule<R>,
+        rule: &'program RewriteRule<R>,
+    ) -> Self {
+        Self { repeat_rule, rule }
+    }
+
+    /// Rebuilds the repeat-axis view for this rewrite rule.
+    const fn into_repeat_rule(self) -> &'program RepeatRule<R> {
+        self.repeat_rule
+    }
+
+    /// Program-local parsed-rule position.
+    #[must_use]
+    pub fn position(self) -> RulePosition {
+        self.rule.pattern().position()
+    }
+
+    /// One-based source line number.
+    #[must_use]
+    pub fn line_number(self) -> SourceLineNumber {
+        self.rule.pattern().line_number()
+    }
+
+    /// Rule match anchor.
+    #[must_use]
+    pub fn anchor(self) -> RuleAnchor {
+        self.rule.pattern().anchor().public_anchor()
+    }
+
+    /// Left-side match payload.
+    #[must_use]
+    pub fn lhs(self) -> PayloadView<'program> {
+        PayloadView::new(self.rule.pattern().lhs())
+    }
+
+    /// Right-side rewrite action.
+    #[must_use]
+    pub fn rewrite_action(self) -> RewriteActionView<'program> {
+        self.rule.rewrite_action().view()
+    }
+}
+
+impl<'program, R> ReturnRuleView<'program, R> {
+    /// Borrows a parsed return rule.
+    pub(crate) const fn new(
+        repeat_rule: &'program RepeatRule<R>,
+        rule: &'program ReturnRule<R>,
+    ) -> Self {
+        Self { repeat_rule, rule }
+    }
+
+    /// Rebuilds the repeat-axis view for this return rule.
+    const fn into_repeat_rule(self) -> &'program RepeatRule<R> {
+        self.repeat_rule
+    }
+
+    /// Program-local parsed-rule position.
+    #[must_use]
+    pub fn position(self) -> RulePosition {
+        self.rule.pattern().position()
+    }
+
+    /// One-based source line number.
+    #[must_use]
+    pub fn line_number(self) -> SourceLineNumber {
+        self.rule.pattern().line_number()
+    }
+
+    /// Rule match anchor.
+    #[must_use]
+    pub fn anchor(self) -> RuleAnchor {
+        self.rule.pattern().anchor().public_anchor()
+    }
+
+    /// Left-side match payload.
+    #[must_use]
+    pub fn lhs(self) -> PayloadView<'program> {
+        PayloadView::new(self.rule.pattern().lhs())
+    }
+
+    /// Return output payload.
+    #[must_use]
+    pub fn output(self) -> PayloadView<'program> {
+        PayloadView::new(self.rule.output())
     }
 }

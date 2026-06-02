@@ -255,7 +255,7 @@ impl<'program, 'once, 'budget, E: ExecutionPolicy, RuleWitness>
         prepared: PreparedRuleStep<'program, 'once, 'budget, E>,
         make_witness: impl FnOnce(RuleView<'program>) -> Result<RuleWitness, Error>,
     ) -> Result<Self, Error> {
-        let witness = make_witness(RuleView::new(prepared.rule()))?;
+        let witness = make_witness(prepared.rule())?;
         Ok(Self { prepared, witness })
     }
 
@@ -353,7 +353,7 @@ where
 
     match pass.attempt_current(&state) {
         RuleAttempt::Missed(missed) => {
-            let witness = match W::from_rule(RuleView::new(missed.rule())) {
+            let witness = match W::from_rule(missed.rule()) {
                 Ok(witness) => witness,
                 Err(error) => {
                     let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
@@ -443,7 +443,7 @@ where
 
     match pass.attempt_current(&state) {
         RuleAttempt::Missed(missed) => {
-            let witness = match W::from_rule(RuleView::new(missed.rule())) {
+            let witness = match W::from_rule(missed.rule()) {
                 Ok(witness) => witness,
                 Err(error) => {
                     let core = AttemptRunCore::from_parts(state, scratch, budget, pass);

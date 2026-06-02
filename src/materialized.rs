@@ -5,7 +5,6 @@ use crate::allocation::{AllocationContext, AllocationError};
 use crate::inspect::PayloadView;
 use crate::program::ReturnOutputView;
 use crate::program::limits::{ReturnOutputBytePermit, TraceSnapshotBytePermit};
-use crate::rule::{self, Rule};
 use crate::trace::RuntimeStateView;
 
 /// Marker for bytes materialized from runtime state.
@@ -77,14 +76,9 @@ impl MaterializedBytes<PayloadInspectionDomain> {
 }
 
 impl MaterializedBytes<CanonicalRuleSourceDomain> {
-    /// Materializes canonical source from one parsed rule.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AllocationError` if canonical source generation cannot
-    /// allocate or its length cannot be represented.
-    pub(crate) fn from_rule(rule: &Rule) -> Result<Self, AllocationError> {
-        Ok(Self::from_owned_bytes(rule::canonical_source(rule)?))
+    /// Tags already generated canonical source bytes.
+    pub(crate) fn from_canonical_source(bytes: Vec<u8>) -> Self {
+        Self::from_owned_bytes(bytes)
     }
 }
 

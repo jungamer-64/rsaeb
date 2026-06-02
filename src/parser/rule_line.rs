@@ -496,7 +496,7 @@ impl RightActionSyntax {
     }
 
     /// Combines this action token with its parsed payload.
-    fn into_right_side(self, payload: Payload) -> ParsedRightSide {
+    fn into_parsed_right(self, payload: Payload) -> ParsedRightSide {
         match self {
             Self::MoveStart => ParsedRightSide::Rewrite(RewriteAction::MoveStart(payload)),
             Self::MoveEnd => ParsedRightSide::Rewrite(RewriteAction::MoveEnd(payload)),
@@ -605,7 +605,7 @@ impl<'code> RightActionPayloadSyntax<'code> {
             self.action.payload_kind(),
             payload_limit,
         )?;
-        Ok(self.action.into_right_side(payload))
+        Ok(self.action.into_parsed_right(payload))
     }
 }
 

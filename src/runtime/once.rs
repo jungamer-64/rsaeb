@@ -3,9 +3,10 @@ use alloc::{collections::VecDeque, vec::Vec};
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
+use crate::inspect::{AlwaysRepeat, OnceRepeat, RuleView};
 use crate::policy::ParsePolicy;
 use crate::program::{ExecutableProgram, RuleScan};
-use crate::rule::Rule;
+use crate::rule::{RepeatRule, Rule};
 use crate::runtime::matcher::{
     AvailableRuleAttempt, MatchedRuleApplication, RuleAttempt, RuleAttemptMiss, RuleMissReason,
     attempt_available_rule,
@@ -81,14 +82,14 @@ enum RuntimeRuleCell<'program> {
 #[derive(Debug)]
 struct AlwaysRuntimeRuleCell<'program> {
     /// Parsed executable rule.
-    rule: &'program Rule,
+    rule: &'program RepeatRule<AlwaysRepeat>,
 }
 
 /// Runtime cell for a once rule.
 #[derive(Debug)]
 struct OnceRuntimeRuleCell<'program> {
     /// Parsed executable rule.
-    rule: &'program Rule,
+    rule: &'program RepeatRule<OnceRepeat>,
     /// Run-local availability for this once rule.
     state: OnceRuleRuntimeState,
 }
@@ -113,7 +114,7 @@ pub(super) enum MatchedRuleCommit<'state> {
 
 /// Private permit that consumes one fresh once-rule state on commit.
 #[derive(Debug)]
-pub(super) struct OnceMatchPermit<'state> {
+pub(crate) struct OnceMatchPermit<'state> {
     /// Fresh per-rule state reserved for the matched rule.
     state: &'state mut OnceRuleRuntimeState,
     /// Non-copy token that keeps the permit linear even though its witnesses are copyable.
@@ -130,23 +131,30 @@ enum RuntimeRuleTarget<'program, 'once> {
     /// The rule can be evaluated against the current runtime state.
     Available(AvailableRuntimeRule<'program, 'once>),
     /// The rule has already committed during this runtime invocation.
-    Consumed(&'program Rule),
+    Consumed(RuleView<'program>),
 }
 
 /// Parsed rule proven available for runtime-state matching.
 #[derive(Debug)]
 pub(crate) enum AvailableRuntimeRule<'program, 'once> {
     /// Rule that has no per-run once state.
-    Always(&'program Rule),
+    Always(AvailableAlwaysRuntimeRule<'program>),
     /// Fresh once rule paired with its linear commit permit.
     Once(AvailableOnceRuntimeRule<'program, 'once>),
+}
+
+/// Always-repeat rule proven available for runtime-state matching.
+#[derive(Debug)]
+pub(crate) struct AvailableAlwaysRuntimeRule<'program> {
+    /// Parsed executable rule.
+    rule: &'program RepeatRule<AlwaysRepeat>,
 }
 
 /// Fresh once rule paired with the permit that can consume it after a match commits.
 #[derive(Debug)]
 pub(crate) struct AvailableOnceRuntimeRule<'program, 'once> {
     /// Parsed executable rule.
-    rule: &'program Rule,
+    rule: &'program RepeatRule<OnceRepeat>,
     /// Linear once-state commit permit.
     commit: OnceMatchPermit<'once>,
 }
@@ -262,10 +270,8 @@ impl<'program> RuntimeRuleCell<'program> {
     /// Builds a runtime rule cell from typed parsed rule data.
     fn new(rule: &'program Rule) -> Self {
         match rule {
-            Rule::AlwaysRewrite(_) | Rule::AlwaysReturn(_) => {
-                Self::Always(AlwaysRuntimeRuleCell { rule })
-            }
-            Rule::OnceRewrite(_) | Rule::OnceReturn(_) => Self::Once(OnceRuntimeRuleCell {
+            Rule::Always(rule) => Self::Always(AlwaysRuntimeRuleCell { rule }),
+            Rule::Once(rule) => Self::Once(OnceRuntimeRuleCell {
                 rule,
                 state: OnceRuleRuntimeState::Fresh,
             }),
@@ -291,9 +297,9 @@ impl<'program> RuntimeRuleCell<'program> {
     /// Classifies this cell before runtime-state matching.
     fn target(&mut self) -> RuntimeRuleTarget<'program, '_> {
         match self {
-            Self::Always(cell) => {
-                RuntimeRuleTarget::Available(AvailableRuntimeRule::Always(cell.rule))
-            }
+            Self::Always(cell) => RuntimeRuleTarget::Available(AvailableRuntimeRule::Always(
+                AvailableAlwaysRuntimeRule { rule: cell.rule },
+            )),
             Self::Once(cell) => {
                 if matches!(cell.state, OnceRuleRuntimeState::Fresh) {
                     RuntimeRuleTarget::Available(AvailableRuntimeRule::Once(
@@ -303,7 +309,7 @@ impl<'program> RuntimeRuleCell<'program> {
                         },
                     ))
                 } else {
-                    RuntimeRuleTarget::Consumed(cell.rule)
+                    RuntimeRuleTarget::Consumed(RuleView::from_once(cell.rule))
                 }
             }
         }
@@ -508,21 +514,22 @@ fn try_reserve_rule_queue<T>(
         .map_err(|_| AllocationError::reservation_failed(context, total_capacity))
 }
 
-impl<'program, 'once> AvailableRuntimeRule<'program, 'once> {
-    /// Parsed rule selected with its runtime state.
-    pub(super) const fn rule(&self) -> &'program Rule {
-        match self {
-            Self::Always(rule) => rule,
-            Self::Once(rule) => rule.rule,
-        }
+impl<'program> AvailableAlwaysRuntimeRule<'program> {
+    /// Parsed repeat-axis rule selected with no once state.
+    pub(crate) const fn rule(&self) -> &'program RepeatRule<AlwaysRepeat> {
+        self.rule
+    }
+}
+
+impl<'program, 'once> AvailableOnceRuntimeRule<'program, 'once> {
+    /// Parsed repeat-axis rule selected with fresh once state.
+    pub(crate) const fn rule(&self) -> &'program RepeatRule<OnceRepeat> {
+        self.rule
     }
 
-    /// Consumes this available target into the commit action for a matched rule.
-    pub(super) fn into_matched_commit(self) -> MatchedRuleCommit<'once> {
-        match self {
-            Self::Always(_rule) => MatchedRuleCommit::Always,
-            Self::Once(rule) => MatchedRuleCommit::Once(rule.commit),
-        }
+    /// Splits this available once target into its rule and linear commit permit.
+    pub(crate) fn into_parts(self) -> (&'program RepeatRule<OnceRepeat>, OnceMatchPermit<'once>) {
+        (self.rule, self.commit)
     }
 }
 

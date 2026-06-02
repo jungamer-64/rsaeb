@@ -113,6 +113,32 @@
 //! fn main() {}
 //! ```
 //!
+//! Flat rule repeat/action inspection has been deleted. Rule repeat is the
+//! outer [`inspect::RuleView`] axis, and return output is not mixed into rewrite
+//! action inspection:
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::{RuleActionView, RuleRepeat};
+//!
+//! fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleView;
+//!
+//! fn main() {
+//!     let _ = |rule: RuleView<'_>| rule.repeat();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleView;
+//!
+//! fn main() {
+//!     let _ = |rule: RuleView<'_>| rule.action();
+//! }
+//! ```
+//!
 //! Once-state mismatch is no longer a reportable execution error:
 //!
 //! ```compile_fail
@@ -593,7 +619,7 @@
 //! strings:
 //!
 //! ```
-//! use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat};
+//! use rsaeb::inspect::{RepeatRuleView, RewriteActionView, RuleAnchor, RuleView};
 //! use rsaeb::policy::DefaultParsePolicy;
 //! use rsaeb::program::ExecutableProgram;
 //! use rsaeb::source::ExecutableProgramSource;
@@ -602,24 +628,27 @@
 //! let executable = ExecutableProgram::<DefaultParsePolicy>::parse(ExecutableProgramSource::from_text("( once ) ( start ) a = ( end ) b # comment"))?;
 //! let rule = executable.rules().next().ok_or("missing parsed rule")?;
 //!
-//! if rule.repeat() != RuleRepeat::Once {
-//!     return Err("unexpected repeat".into());
-//! }
 //! if rule.anchor() != RuleAnchor::Start {
 //!     return Err("unexpected anchor".into());
 //! }
 //! if rule.lhs().materialize()?.as_slice() != b"a" {
 //!     return Err("unexpected left side".into());
 //! }
-//! match rule.action() {
-//!     RuleActionView::MoveEnd(payload) => {
-//!         if payload.materialize()?.as_slice() != b"b" {
-//!             return Err("unexpected moved payload".into());
+//! let RuleView::Once(rule) = rule else {
+//!     return Err("unexpected repeat".into());
+//! };
+//! match rule {
+//!     RepeatRuleView::Rewrite(rewrite) => match rewrite.rewrite_action() {
+//!         RewriteActionView::MoveEnd(payload) => {
+//!             if payload.materialize()?.as_slice() != b"b" {
+//!                 return Err("unexpected moved payload".into());
+//!             }
 //!         }
-//!     }
-//!     RuleActionView::Replace(_) | RuleActionView::MoveStart(_) | RuleActionView::Return(_) => {
-//!         return Err("expected move-end action".into());
-//!     }
+//!         RewriteActionView::Replace(_) | RewriteActionView::MoveStart(_) => {
+//!             return Err("expected move-end rewrite action".into());
+//!         }
+//!     },
+//!     RepeatRuleView::Return(_) => return Err("expected rewrite rule".into()),
 //! }
 //! # Ok(())
 //! # }

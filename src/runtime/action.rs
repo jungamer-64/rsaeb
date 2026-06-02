@@ -1,10 +1,10 @@
 use crate::bytes::ReturnOutputByteCount;
 use crate::error::RunStepError;
+use crate::inspect::RuleView;
 use crate::limits::StepCount;
 use crate::policy::ExecutionPolicy;
 use crate::program::limits::ReturnOutputBytePermit;
 use crate::program::{ReturnOutput, ReturnOutputView};
-use crate::rule::Rule;
 
 use super::budget::{RuntimeBudgetState, StepReservation};
 use super::matcher::{MatchedRuleAction, MatchedRuleApplication, PreparedMatchedRule};
@@ -99,7 +99,7 @@ impl<'program> CommittedReturnRule<'program> {
 
 impl<'program, E: ExecutionPolicy> PreparedRuleStep<'program, '_, '_, E> {
     /// Parsed rule selected by this prepared step.
-    pub(crate) const fn rule(&self) -> &'program Rule {
+    pub(crate) const fn rule(&self) -> RuleView<'program> {
         match self {
             Self::Rewrite(prepared) => prepared.matched.rule(),
             Self::Return(prepared) => prepared.matched.rule(),
