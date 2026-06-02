@@ -1,80 +1,151 @@
 //! Program-source boundary and source-position value types.
 //!
-//! A [`ProgramSource`] only labels bytes as source input; it does not validate
-//! A=B syntax. Validation belongs to typed program constructors such as
-//! [`program::ExecutableProgram::parse`](crate::program::ExecutableProgram::parse)
-//! and [`program::EmptyProgram::parse`](crate::program::EmptyProgram::parse),
-//! which can report parse failures with [`SourceLineNumber`],
-//! [`SourceColumn`], and [`SourcePosition`].
+//! Source values label host bytes by the program shape the caller expects to
+//! parse. [`ExecutableProgramSource`] can only enter
+//! [`program::ExecutableProgram::parse`](crate::program::ExecutableProgram::parse),
+//! while [`EmptyProgramSource`] can only enter
+//! [`program::EmptyProgram::parse`](crate::program::EmptyProgram::parse).
+//! Syntax validation still belongs to the parser, which reports failures with
+//! [`SourceLineNumber`], [`SourceColumn`], and [`SourcePosition`].
 //!
 //! Source is intentionally separate from [`crate::input::RuntimeInput`].
 //! Comments may contain arbitrary bytes, while executable source code is
 //! validated by the parser and runtime input is validated by the runtime-input
 //! boundary.
-//!
-//! ```
-//! use rsaeb::policy::DefaultParsePolicy;
-//! use rsaeb::program::ExecutableProgram;
-//! use rsaeb::source::ProgramSource;
-//!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let source = ProgramSource::from_bytes(b"a=b # arbitrary comment bytes: \xff");
-//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse(source)?;
-//!
-//! if executable.rule_count().get() != 1 {
-//!     return Err("unexpected rule count".into());
-//! }
-//! # Ok(())
-//! # }
-//! ```
 
-/// Borrowed A=B program source at the parser boundary.
+/// Borrowed source expected to parse into an executable program.
 ///
-/// Program source remains a byte format because comments may contain arbitrary
-/// non-UTF-8 bytes. Constructing this value labels a byte slice as source
-/// input; syntax validation still happens in
-/// typed program constructors such as
+/// Constructing this value labels host bytes for the executable-program parser.
+/// It does not validate syntax or prove that the bytes contain executable
+/// rules; that content check remains part of
 /// [`program::ExecutableProgram::parse`](crate::program::ExecutableProgram::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProgramSource<'source> {
+pub struct ExecutableProgramSource<'source> {
+    /// Shape-specific wrapper around raw source bytes.
+    raw: RawProgramSource<'source>,
+}
+
+/// Borrowed source expected to parse into an empty program.
+///
+/// Constructing this value labels host bytes for the empty-program parser. It
+/// does not validate syntax or prove that the bytes contain no executable
+/// rules; that content check remains part of
+/// [`program::EmptyProgram::parse`](crate::program::EmptyProgram::parse).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmptyProgramSource<'source> {
+    /// Shape-specific wrapper around raw source bytes.
+    raw: RawProgramSource<'source>,
+}
+
+/// Private raw source carrier shared by both public source shapes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RawProgramSource<'source> {
     /// Raw source bytes owned by the caller.
     bytes: &'source [u8],
 }
 
-impl<'source> ProgramSource<'source> {
-    /// Labels raw bytes as parser input.
+impl<'source> ExecutableProgramSource<'source> {
+    /// Labels raw bytes as executable-program parser input.
     ///
     /// This constructor accepts any byte slice. Executable code bytes are
     /// checked later by
-    /// typed program constructors such as
     /// [`program::ExecutableProgram::parse`](crate::program::ExecutableProgram::parse);
     /// bytes after a line-comment marker remain part of the source byte stream
     /// but are not executable code.
     #[must_use]
     pub const fn from_bytes(bytes: &'source [u8]) -> Self {
-        Self { bytes }
+        Self {
+            raw: RawProgramSource::from_bytes(bytes),
+        }
     }
 
-    /// Labels a UTF-8 string as parser input.
-    ///
-    /// This is the ergonomic constructor for ordinary source literals. It is
-    /// equivalent to [`ProgramSource::from_bytes`] on `source.as_bytes()`.
+    /// Labels a UTF-8 string as executable-program parser input.
     #[must_use]
     pub const fn from_text(source: &'source str) -> Self {
         Self {
-            bytes: source.as_bytes(),
+            raw: RawProgramSource::from_text(source),
         }
     }
 
     /// Borrows the original source bytes.
     #[must_use]
     pub const fn as_bytes(self) -> &'source [u8] {
-        self.bytes
+        self.raw.as_bytes()
     }
 
     /// Returns whether the source contains no bytes.
     #[must_use]
     pub const fn is_empty(self) -> bool {
+        self.raw.is_empty()
+    }
+
+    /// Moves this typed public source into the parser's raw carrier.
+    pub(crate) const fn into_raw(self) -> RawProgramSource<'source> {
+        self.raw
+    }
+}
+
+impl<'source> EmptyProgramSource<'source> {
+    /// Labels raw bytes as empty-program parser input.
+    ///
+    /// This constructor accepts any byte slice. Executable code bytes are
+    /// checked later by
+    /// [`program::EmptyProgram::parse`](crate::program::EmptyProgram::parse);
+    /// bytes after a line-comment marker remain part of the source byte stream
+    /// but are not executable code.
+    #[must_use]
+    pub const fn from_bytes(bytes: &'source [u8]) -> Self {
+        Self {
+            raw: RawProgramSource::from_bytes(bytes),
+        }
+    }
+
+    /// Labels a UTF-8 string as empty-program parser input.
+    #[must_use]
+    pub const fn from_text(source: &'source str) -> Self {
+        Self {
+            raw: RawProgramSource::from_text(source),
+        }
+    }
+
+    /// Borrows the original source bytes.
+    #[must_use]
+    pub const fn as_bytes(self) -> &'source [u8] {
+        self.raw.as_bytes()
+    }
+
+    /// Returns whether the source contains no bytes.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.raw.is_empty()
+    }
+
+    /// Moves this typed public source into the parser's raw carrier.
+    pub(crate) const fn into_raw(self) -> RawProgramSource<'source> {
+        self.raw
+    }
+}
+
+impl<'source> RawProgramSource<'source> {
+    /// Labels raw bytes as parser input.
+    const fn from_bytes(bytes: &'source [u8]) -> Self {
+        Self { bytes }
+    }
+
+    /// Labels a UTF-8 string as parser input.
+    const fn from_text(source: &'source str) -> Self {
+        Self {
+            bytes: source.as_bytes(),
+        }
+    }
+
+    /// Borrows the original source bytes.
+    pub(crate) const fn as_bytes(self) -> &'source [u8] {
+        self.bytes
+    }
+
+    /// Returns whether the source contains no bytes.
+    const fn is_empty(self) -> bool {
         self.bytes.is_empty()
     }
 }

@@ -12,7 +12,7 @@ use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
 use crate::limits::SourceByteCount;
 use crate::policy::ParsePolicy;
 use crate::program::{RuleSet, RuleSetBuilder};
-use crate::source::{ProgramSource, SourceLineNumber};
+use crate::source::{RawProgramSource, SourceLineNumber};
 
 use line::{CompactCodeLineKind, RawSourceLine};
 use location::source_line_number;
@@ -24,7 +24,7 @@ use location::source_line_number;
 /// Returns `ParseError` if source location conversion, line compaction, rule
 /// parsing, or parsed-rule storage fails.
 pub(crate) fn parse_rules_impl<P: ParsePolicy>(
-    source: ProgramSource<'_>,
+    source: RawProgramSource<'_>,
 ) -> Result<RuleSet, ParseError> {
     ensure_source_within_limit::<P>(source)?;
 
@@ -56,7 +56,9 @@ pub(crate) fn parse_rules_impl<P: ParsePolicy>(
 /// # Errors
 ///
 /// Returns `ParseError` if the source length exceeds parser limits.
-fn ensure_source_within_limit<P: ParsePolicy>(source: ProgramSource<'_>) -> Result<(), ParseError> {
+fn ensure_source_within_limit<P: ParsePolicy>(
+    source: RawProgramSource<'_>,
+) -> Result<(), ParseError> {
     let attempted_len = SourceByteCount::new(source.as_bytes().len());
     let limit = P::SOURCE_BYTE_LIMIT;
     if limit.admit(attempted_len).is_some() {
