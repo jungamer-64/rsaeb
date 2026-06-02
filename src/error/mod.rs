@@ -70,8 +70,9 @@ pub use crate::bytes::{
     NonAsciiCodeByte, NonAsciiInputByte, NonPrintableCodeByte, ReservedSyntaxByte,
 };
 pub use parse::{
-    LeftModifierKind, ParseError, ParseErrorKind, ParseErrorLocation, ParseLimitError,
-    ParseRepresentationError, PayloadKind, RightActionKind,
+    EmptyProgramParseError, ExecutableProgramParseError, LeftModifierKind, ParseError,
+    ParseErrorKind, ParseErrorLocation, ParseLimitError, ParseRepresentationError, PayloadKind,
+    RightActionKind,
 };
 pub use run::{
     InputColumn, ReturnOutputLimitError, RewriteSizeError, RuleAttemptLimitError,

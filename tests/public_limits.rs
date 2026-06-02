@@ -5,8 +5,8 @@ mod runtime_support;
 mod support;
 
 use rsaeb::error::{
-    ParseErrorKind, ParseLimitError, RunAdmissionError, RunError, RunFinishError, RunStepError,
-    RuntimeStateLimitError, StepLimitError,
+    ExecutableProgramParseError, ParseErrorKind, ParseLimitError, RunAdmissionError, RunError,
+    RunFinishError, RunStepError, RuntimeStateLimitError, StepLimitError,
 };
 use rsaeb::input::AdmittedRun;
 use rsaeb::limits::{
@@ -14,7 +14,7 @@ use rsaeb::limits::{
     SourceByteLimit, StepLimit,
 };
 use rsaeb::policy::{DefaultParsePolicy, ExecutionPolicy, ParsePolicy, StaticParsePolicy};
-use rsaeb::program::{ParsedProgram, RunResult};
+use rsaeb::program::{ExecutableProgram, RunResult};
 use rsaeb::source::ProgramSource;
 use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
@@ -143,7 +143,9 @@ fn ensure_step_limit_run<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolic
 ///
 /// Returns `TestFailure` if parsing succeeds or reports another error domain.
 fn ensure_parse_limit_error<P: ParsePolicy>(case: ParseLimitCase) -> TestResult {
-    let Err(error) = ParsedProgram::<P>::parse(ProgramSource::from_text(case.source)) else {
+    let Err(ExecutableProgramParseError::Parse(error)) =
+        ExecutableProgram::<P>::parse(ProgramSource::from_text(case.source))
+    else {
         return Err(TestFailure::message(case.message));
     };
     let matches_expected = match (error.kind(), case.expected) {
@@ -261,16 +263,13 @@ fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolicy>(
 ///
 /// Returns `TestFailure` if the program is empty before execution can start.
 fn run_executable_program<E>(
-    program: &ParsedProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram<DefaultParsePolicy>,
     admitted: AdmittedRun<E>,
 ) -> Result<Result<RunResult, RunError>, TestFailure>
 where
     E: ExecutionPolicy,
 {
-    match program {
-        ParsedProgram::Executable(program) => Ok(program.execute(admitted)),
-        ParsedProgram::Empty(_) => Err(TestFailure::message("expected executable program")),
-    }
+    Ok(program.execute(admitted))
 }
 
 /// # Errors

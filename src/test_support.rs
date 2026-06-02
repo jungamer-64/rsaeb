@@ -7,16 +7,16 @@
 use alloc::string::{FromUtf8Error, String};
 
 use crate::error::{
-    AllocationError, ParseError, ParseErrorLocation, RuleAttemptStepError, RunAdmissionError,
-    RunError, RunFinishError, RunStartError, RunStepError, RuntimeInputError,
-    TraceSnapshotRunError,
+    AllocationError, EmptyProgramParseError, ExecutableProgramParseError, ParseError,
+    ParseErrorLocation, RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError,
+    RunStartError, RunStepError, RuntimeInputError, TraceSnapshotRunError,
 };
 use crate::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
 use crate::policy::{
     DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy, ExecutionPolicy,
-    ParsePolicy, RuntimeInputPolicy, StaticExecutionPolicy, StaticRuntimeInputPolicy,
+    RuntimeInputPolicy, StaticExecutionPolicy, StaticRuntimeInputPolicy,
 };
-use crate::program::{ExecutableProgram, ParsedProgram, RunResult};
+use crate::program::{EmptyProgram, ExecutableProgram, RunResult};
 use crate::source::{ProgramSource, SourceColumn, SourceLineNumber, SourcePosition};
 use core::marker::PhantomData;
 
@@ -49,6 +49,8 @@ pub(crate) type DefaultRunPolicy = TestRunPolicy<DefaultRuntimeInputPolicy, Defa
 pub(crate) enum TestFailure {
     Message(String),
     Parse(ParseError),
+    ExecutableParse(ExecutableProgramParseError),
+    EmptyParse(EmptyProgramParseError),
     Input(RuntimeInputError),
     Admission(RunAdmissionError),
     Run(RunError),
@@ -72,6 +74,11 @@ impl core::fmt::Debug for TestFailure {
         match self {
             Self::Message(message) => formatter.debug_tuple("Message").field(message).finish(),
             Self::Parse(error) => formatter.debug_tuple("Parse").field(error).finish(),
+            Self::ExecutableParse(error) => formatter
+                .debug_tuple("ExecutableParse")
+                .field(error)
+                .finish(),
+            Self::EmptyParse(error) => formatter.debug_tuple("EmptyParse").field(error).finish(),
             Self::Input(error) => formatter.debug_tuple("Input").field(error).finish(),
             Self::Admission(error) => formatter.debug_tuple("Admission").field(error).finish(),
             Self::Run(error) => formatter.debug_tuple("Run").field(error).finish(),
@@ -94,6 +101,18 @@ impl core::fmt::Debug for TestFailure {
 impl From<ParseError> for TestFailure {
     fn from(value: ParseError) -> Self {
         Self::Parse(value)
+    }
+}
+
+impl From<ExecutableProgramParseError> for TestFailure {
+    fn from(value: ExecutableProgramParseError) -> Self {
+        Self::ExecutableParse(value)
+    }
+}
+
+impl From<EmptyProgramParseError> for TestFailure {
+    fn from(value: EmptyProgramParseError) -> Self {
+        Self::EmptyParse(value)
     }
 }
 
@@ -216,28 +235,29 @@ pub(crate) fn admitted_run<I: RuntimeInputPolicy, E: ExecutionPolicy>(
     Ok(runtime_input(bytes, policy)?.admit::<E>()?)
 }
 
-/// Parses source text with the default parser limits.
+/// Parses executable source text with the default parser limits.
 ///
 /// # Errors
 ///
-/// Returns `ParseError` if the source violates parser syntax, resource, or
-/// allocation constraints.
-pub(crate) fn parse_program(source: &str) -> Result<ParsedProgram<DefaultParsePolicy>, ParseError> {
-    ParsedProgram::parse(ProgramSource::from_text(source))
+/// Returns `ExecutableProgramParseError` if the source violates parser syntax,
+/// resource constraints, allocation constraints, or contains no executable
+/// rules.
+pub(crate) fn parse_program(
+    source: &str,
+) -> Result<ExecutableProgram<DefaultParsePolicy>, ExecutableProgramParseError> {
+    ExecutableProgram::parse(ProgramSource::from_text(source))
 }
 
-/// Borrows the expected executable parsed program.
+/// Parses empty source text with the default parser limits.
 ///
 /// # Errors
 ///
-/// Returns `TestFailure` if the parsed program has no executable rules.
-pub(crate) fn executable_program<P: ParsePolicy>(
-    program: &ParsedProgram<P>,
-) -> Result<&ExecutableProgram<P>, TestFailure> {
-    match program {
-        ParsedProgram::Executable(program) => Ok(program),
-        ParsedProgram::Empty(_) => Err(TestFailure::message("expected executable program")),
-    }
+/// Returns `EmptyProgramParseError` if the source violates parser syntax,
+/// resource constraints, allocation constraints, or contains executable rules.
+pub(crate) fn parse_empty_program(
+    source: &str,
+) -> Result<EmptyProgram<DefaultParsePolicy>, EmptyProgramParseError> {
+    EmptyProgram::parse(ProgramSource::from_text(source))
 }
 
 /// Executes a parsed program that is expected to contain executable rules.
@@ -246,13 +266,13 @@ pub(crate) fn executable_program<P: ParsePolicy>(
 ///
 /// Returns `TestFailure` if the program is empty or execution fails.
 pub(crate) fn execute_program<E>(
-    program: &ParsedProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram<DefaultParsePolicy>,
     admitted: AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
     E: ExecutionPolicy,
 {
-    Ok(executable_program(program)?.execute(admitted)?)
+    Ok(program.execute(admitted)?)
 }
 
 /// Stabilizes a parsed program that is expected to contain no executable rules.
@@ -261,28 +281,26 @@ where
 ///
 /// Returns `TestFailure` if the program is executable or stabilization fails.
 pub(crate) fn stabilize_empty_program<E>(
-    program: &ParsedProgram<DefaultParsePolicy>,
+    program: &EmptyProgram<DefaultParsePolicy>,
     admitted: AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
     E: ExecutionPolicy,
 {
-    match program {
-        ParsedProgram::Empty(program) => Ok(program.stabilize(admitted)?),
-        ParsedProgram::Executable(_) => Err(TestFailure::message("expected empty program")),
-    }
+    Ok(program.stabilize(admitted)?)
 }
 
-/// Parses source bytes with the default parser limits.
+/// Parses executable source bytes with the default parser limits.
 ///
 /// # Errors
 ///
-/// Returns `ParseError` if the source violates parser syntax, resource, or
-/// allocation constraints.
+/// Returns `ExecutableProgramParseError` if the source violates parser syntax,
+/// resource constraints, allocation constraints, or contains no executable
+/// rules.
 pub(crate) fn parse_program_bytes(
     source: &[u8],
-) -> Result<ParsedProgram<DefaultParsePolicy>, ParseError> {
-    ParsedProgram::parse(ProgramSource::from_bytes(source))
+) -> Result<ExecutableProgram<DefaultParsePolicy>, ExecutableProgramParseError> {
+    ExecutableProgram::parse(ProgramSource::from_bytes(source))
 }
 
 /// Converts a boolean assertion into the shared test result type.
@@ -333,7 +351,10 @@ pub(crate) use ensure_eq;
 pub(crate) fn expect_parse_error(source: &str) -> Result<ParseError, TestFailure> {
     match parse_program(source) {
         Ok(_) => Err(TestFailure::message("expected parse error")),
-        Err(error) => Ok(error),
+        Err(ExecutableProgramParseError::Parse(error)) => Ok(error),
+        Err(ExecutableProgramParseError::NoExecutableRules) => Err(TestFailure::message(
+            "expected parse error, got empty program",
+        )),
     }
 }
 

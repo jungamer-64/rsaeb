@@ -28,22 +28,22 @@
 //!
 //! ```compile_fail
 //! use rsaeb::policy::DefaultExecutionPolicy;
-//! use rsaeb::program::ParsedProgram;
+//! use rsaeb::program::ExecutableProgram;
 //! use rsaeb::source::ProgramSource;
 //!
 //! type ExecutionOnly = DefaultExecutionPolicy;
 //!
-//! let _program = ParsedProgram::<ExecutionOnly>::parse(ProgramSource::from_text("a=b"));
+//! let _program = ExecutableProgram::<ExecutionOnly>::parse(ProgramSource::from_text("a=b"));
 //! ```
 //!
 //! Public boundary types no longer infer default policy domains. The policy
 //! type must be named at construction:
 //!
 //! ```compile_fail
-//! use rsaeb::program::ParsedProgram;
+//! use rsaeb::program::ExecutableProgram;
 //! use rsaeb::source::ProgramSource;
 //!
-//! let _program: ParsedProgram = ParsedProgram::parse(ProgramSource::from_text("a=b")).unwrap();
+//! let _program: ExecutableProgram = ExecutableProgram::parse(ProgramSource::from_text("a=b")).unwrap();
 //! ```
 //!
 //! ```compile_fail
@@ -61,19 +61,18 @@
 //! let _witness = TraceSnapshotPolicyWitness::<DefaultTraceSnapshotPolicy>::new();
 //! ```
 //!
-//! Parsed programs cannot be executed through a policy fallback before matching
-//! the executable branch:
+//! Executable programs cannot use the empty-program stabilization boundary:
 //!
 //! ```compile_fail
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
-//! use rsaeb::program::ParsedProgram;
+//! use rsaeb::program::ExecutableProgram;
 //! use rsaeb::source::ProgramSource;
 //!
-//! let program = ParsedProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b")).unwrap();
+//! let program = ExecutableProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b")).unwrap();
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a")).unwrap();
 //! let admitted = input.admit::<DefaultExecutionPolicy>().unwrap();
-//! let _result = program.execute(admitted).unwrap();
+//! let _result = program.stabilize(admitted).unwrap();
 //! ```
 
 use crate::limits::{

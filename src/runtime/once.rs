@@ -5,7 +5,7 @@ use crate::allocation::{
 };
 use crate::policy::ParsePolicy;
 use crate::program::{ExecutableProgram, RuleScan};
-use crate::rule::{Rule, RuleAvailability};
+use crate::rule::{Rule, RuleRepeatBehavior};
 use crate::runtime::matcher::{MatchedRuleApplication, RuleAttempt, attempt_rule};
 use crate::runtime::state::State;
 
@@ -65,24 +65,38 @@ struct PendingRuntimeRules<'program> {
     remaining: VecDeque<RuntimeRuleCell<'program>>,
 }
 
-/// One executable rule paired with its run-local availability state.
+/// One executable rule classified by its run-local availability shape.
 #[derive(Debug)]
-struct RuntimeRuleCell<'program> {
-    /// Parsed executable rule.
-    rule: &'program Rule,
-    /// Run-local availability for the parsed rule.
-    state: RuntimeRuleAvailabilityState,
+enum RuntimeRuleCell<'program> {
+    /// Rule that has no per-run once state.
+    Always(AlwaysRuntimeRuleCell<'program>),
+    /// Rule that owns per-run once state.
+    Once(OnceRuntimeRuleCell<'program>),
 }
 
-/// Runtime availability state for one parsed executable rule.
+/// Runtime cell for a rule without per-run once state.
+#[derive(Debug)]
+struct AlwaysRuntimeRuleCell<'program> {
+    /// Parsed executable rule.
+    rule: &'program Rule,
+}
+
+/// Runtime cell for a once rule.
+#[derive(Debug)]
+struct OnceRuntimeRuleCell<'program> {
+    /// Parsed executable rule.
+    rule: &'program Rule,
+    /// Run-local availability for this once rule.
+    state: OnceRuleRuntimeState,
+}
+
+/// Runtime availability state for one parsed `(once)` executable rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RuntimeRuleAvailabilityState {
-    /// Rule has no per-run once-state side effect.
-    Always,
+pub(super) enum OnceRuleRuntimeState {
     /// Rule has not committed during this run.
-    FreshOnce,
+    Fresh,
     /// Rule has already committed during this run.
-    CommittedOnce,
+    Committed,
 }
 
 /// Linear commit action for a matched rule.
@@ -98,7 +112,7 @@ pub(super) enum MatchedRuleCommit<'state> {
 #[derive(Debug)]
 pub(super) struct OnceMatchPermit<'state> {
     /// Fresh per-rule state reserved for the matched rule.
-    state: &'state mut RuntimeRuleAvailabilityState,
+    state: &'state mut OnceRuleRuntimeState,
     /// Non-copy token that keeps the permit linear even though its witnesses are copyable.
     linearity: OnceMatchPermitLinearity,
 }
@@ -107,22 +121,22 @@ pub(super) struct OnceMatchPermit<'state> {
 #[derive(Debug)]
 struct OnceMatchPermitLinearity;
 
-/// Parsed rule paired with its runtime availability state.
+/// Parsed rule paired with its runtime availability shape.
 #[derive(Debug)]
-pub(crate) struct RuntimeRule<'program, 'state> {
-    /// Parsed executable rule.
-    rule: &'program Rule,
-    /// Runtime availability selected by this rule's parsed shape.
-    availability: RuntimeRuleAvailability<'state>,
+pub(crate) enum RuntimeRule<'program, 'state> {
+    /// Rule that has no per-run once state.
+    Always(&'program Rule),
+    /// Rule that owns one per-run once-state cell.
+    Once(OnceRuntimeRule<'program, 'state>),
 }
 
-/// Runtime availability paired with one parsed rule.
+/// Runtime view of a once rule and its per-run state cell.
 #[derive(Debug)]
-enum RuntimeRuleAvailability<'state> {
-    /// Rule has no per-run state.
-    Always,
-    /// Rule owns this per-run state cell.
-    Once(&'state mut RuntimeRuleAvailabilityState),
+pub(crate) struct OnceRuntimeRule<'program, 'state> {
+    /// Parsed executable rule.
+    rule: &'program Rule,
+    /// Run-local once availability.
+    state: &'state mut OnceRuleRuntimeState,
 }
 
 /// Availability of a parsed rule together with the only valid commit path.
@@ -142,7 +156,7 @@ pub(super) enum RuntimeRuleCommitSeed<'state> {
     /// Rule owns this fresh per-rule runtime state.
     Once {
         /// Fresh per-rule runtime state for the matched rule.
-        state: &'state mut RuntimeRuleAvailabilityState,
+        state: &'state mut OnceRuleRuntimeState,
     },
 }
 
@@ -178,13 +192,13 @@ impl<'program> RuntimeRuleTable<'program> {
         try_reserve_total_exact(
             &mut cells,
             RequestedCapacity::new(rule_count),
-            AllocationContext::RuntimeRuleAvailability,
+            AllocationContext::RuntimeRuleCell,
         )?;
         for rule in rules.iter() {
             try_push(
                 &mut cells,
                 RuntimeRuleCell::from_rule(rule),
-                AllocationContext::RuntimeRuleAvailability,
+                AllocationContext::RuntimeRuleCell,
             )?;
         }
 
@@ -233,7 +247,7 @@ impl<'program> RuntimeRulePass<'program> {
         try_reserve_rule_queue(
             &mut remaining,
             remaining_capacity,
-            AllocationContext::RuntimeRuleAvailability,
+            AllocationContext::RuntimeRuleCell,
         )?;
         for rule in remaining_rules {
             remaining.push_back(RuntimeRuleCell::from_rule(rule));
@@ -242,7 +256,7 @@ impl<'program> RuntimeRulePass<'program> {
         try_reserve_rule_queue(
             &mut attempted,
             remaining_capacity,
-            AllocationContext::RuntimeRuleAvailability,
+            AllocationContext::RuntimeRuleCell,
         )?;
         Ok(RuntimeRulePassParts {
             current: RuntimeRuleCell::from_rule(first),
@@ -264,15 +278,24 @@ impl<'program> RuntimeRulePass<'program> {
 impl<'program> RuntimeRuleCell<'program> {
     /// Builds a runtime rule cell from parsed rule data.
     fn from_rule(rule: &'program Rule) -> Self {
-        Self {
-            rule,
-            state: RuntimeRuleAvailabilityState::from_rule(rule),
+        match rule.repeat_behavior() {
+            RuleRepeatBehavior::Always => Self::Always(AlwaysRuntimeRuleCell { rule }),
+            RuleRepeatBehavior::Once => Self::Once(OnceRuntimeRuleCell {
+                rule,
+                state: OnceRuleRuntimeState::Fresh,
+            }),
         }
     }
 
     /// Borrows this cell as a rule target with availability state.
     fn as_runtime_rule(&mut self) -> RuntimeRule<'program, '_> {
-        RuntimeRule::new(self.rule, RuntimeRuleAvailability::new(&mut self.state))
+        match self {
+            Self::Always(cell) => RuntimeRule::Always(cell.rule),
+            Self::Once(cell) => RuntimeRule::Once(OnceRuntimeRule {
+                rule: cell.rule,
+                state: &mut cell.state,
+            }),
+        }
     }
 }
 
@@ -466,50 +489,26 @@ fn try_reserve_rule_queue<T>(
         .map_err(|_| AllocationError::reservation_failed(context, total_capacity))
 }
 
-impl RuntimeRuleAvailabilityState {
-    /// Builds runtime availability state for one parsed rule.
-    const fn from_rule(rule: &Rule) -> Self {
-        match rule.availability() {
-            RuleAvailability::Always => Self::Always,
-            RuleAvailability::Once => Self::FreshOnce,
-        }
-    }
-}
-
-impl<'state> RuntimeRuleAvailability<'state> {
-    /// Builds runtime availability from a per-rule state cell.
-    fn new(state: &'state mut RuntimeRuleAvailabilityState) -> Self {
-        match state {
-            RuntimeRuleAvailabilityState::Always => Self::Always,
-            RuntimeRuleAvailabilityState::FreshOnce
-            | RuntimeRuleAvailabilityState::CommittedOnce => Self::Once(state),
-        }
-    }
-}
-
 impl<'program, 'state> RuntimeRule<'program, 'state> {
-    /// Pairs a parsed rule with its runtime availability state.
-    fn new(rule: &'program Rule, availability: RuntimeRuleAvailability<'state>) -> Self {
-        Self { rule, availability }
-    }
-
     /// Parsed rule selected with its runtime state.
     pub(super) const fn rule(&self) -> &'program Rule {
-        self.rule
+        match self {
+            Self::Always(rule) => rule,
+            Self::Once(rule) => rule.rule,
+        }
     }
 
     /// Returns this rule's current per-run readiness and commit action.
     pub(super) fn readiness(self) -> RuntimeRuleReadiness<'state> {
-        match self.availability {
-            RuntimeRuleAvailability::Always => {
-                RuntimeRuleReadiness::Available(RuntimeRuleCommitSeed::Always)
-            }
-            RuntimeRuleAvailability::Once(state) => match *state {
-                RuntimeRuleAvailabilityState::FreshOnce => {
-                    RuntimeRuleReadiness::Available(RuntimeRuleCommitSeed::Once { state })
+        match self {
+            Self::Always(_rule) => RuntimeRuleReadiness::Available(RuntimeRuleCommitSeed::Always),
+            Self::Once(rule) => match *rule.state {
+                OnceRuleRuntimeState::Fresh => {
+                    RuntimeRuleReadiness::Available(RuntimeRuleCommitSeed::Once {
+                        state: rule.state,
+                    })
                 }
-                RuntimeRuleAvailabilityState::CommittedOnce
-                | RuntimeRuleAvailabilityState::Always => RuntimeRuleReadiness::Consumed,
+                OnceRuleRuntimeState::Committed => RuntimeRuleReadiness::Consumed,
             },
         }
     }
@@ -517,7 +516,7 @@ impl<'program, 'state> RuntimeRule<'program, 'state> {
 
 impl<'state> OnceMatchPermit<'state> {
     /// Creates the commit permit after availability has been checked.
-    fn new(state: &'state mut RuntimeRuleAvailabilityState) -> Self {
+    fn new(state: &'state mut OnceRuleRuntimeState) -> Self {
         Self {
             state,
             linearity: OnceMatchPermitLinearity::new(),
@@ -552,6 +551,6 @@ impl OnceMatchPermit<'_> {
             state,
             linearity: _linearity,
         } = self;
-        *state = RuntimeRuleAvailabilityState::CommittedOnce;
+        *state = OnceRuleRuntimeState::Committed;
     }
 }

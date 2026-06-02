@@ -4,10 +4,11 @@
 mod runtime_support;
 mod support;
 
+use rsaeb::error::{EmptyProgramParseError, ExecutableProgramParseError};
 use rsaeb::input::AdmittedRun;
 use rsaeb::inspect::OnceRuleCount;
 use rsaeb::policy::{DefaultParsePolicy, ExecutionPolicy};
-use rsaeb::program::{ParsedProgram, RunOutcome, RunResult};
+use rsaeb::program::{EmptyProgram, ExecutableProgram, RunOutcome, RunResult};
 use rsaeb::source::ProgramSource;
 use runtime_support::{
     DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, DefaultRunPolicy, TestRunPolicy,
@@ -65,16 +66,13 @@ fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: rsaeb::policy::Executi
 ///
 /// Returns `TestFailure` if the program is empty or execution fails.
 fn execute_program<E>(
-    program: &ParsedProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram<DefaultParsePolicy>,
     admitted: AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
     E: ExecutionPolicy,
 {
-    match program {
-        ParsedProgram::Executable(program) => Ok(program.execute(admitted)?),
-        ParsedProgram::Empty(_) => Err(TestFailure::message("expected executable program")),
-    }
+    Ok(program.execute(admitted)?)
 }
 
 /// Stabilizes a parsed program that is expected to contain no executable rules.
@@ -83,16 +81,13 @@ where
 ///
 /// Returns `TestFailure` if the program is executable or stabilization fails.
 fn stabilize_empty_program<E>(
-    program: &ParsedProgram<DefaultParsePolicy>,
+    program: &EmptyProgram<DefaultParsePolicy>,
     admitted: AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
     E: ExecutionPolicy,
 {
-    match program {
-        ParsedProgram::Empty(program) => Ok(program.stabilize(admitted)?),
-        ParsedProgram::Executable(_) => Err(TestFailure::message("expected empty program")),
-    }
+    Ok(program.stabilize(admitted)?)
 }
 
 /// # Errors
@@ -110,7 +105,7 @@ fn program_parse_accepts_text_and_byte_sources() -> TestResult {
     ensure_matches(result.steps().get() == 1, "expected one execution step")?;
 
     let program =
-        ParsedProgram::<DefaultParsePolicy>::parse(ProgramSource::from_bytes(b"a=b#\xff"))?;
+        ExecutableProgram::<DefaultParsePolicy>::parse(ProgramSource::from_bytes(b"a=b#\xff"))?;
     let input = runtime_input(b"a", limits)?;
     let result = execute_program(&program, input)?;
     expect_stable_bytes(&result, b"b")?;
@@ -141,7 +136,7 @@ fn program_language_surface_handles_spacing_comments_and_actions() -> TestResult
     let result = execute_program(&program, runtime_input(b"a", limits)?)?;
     expect_stable_bytes(&result, b"b")?;
 
-    let program = parse_program("#a=b")?;
+    let program = EmptyProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("#a=b"))?;
     let result = stabilize_empty_program(&program, runtime_input(b"a", limits)?)?;
     expect_stable_bytes(&result, b"a")?;
 
@@ -171,10 +166,33 @@ fn program_values_are_reusable_across_runs() -> TestResult {
 
     expect_stable_bytes(&first, b"bc")?;
     expect_stable_bytes(&second, b"bc")?;
-    let ParsedProgram::Executable(program) = &program else {
-        return Err(TestFailure::message("expected executable program"));
-    };
     ensure_eq!(program.rule_count().get(), 2)?;
     let once_rules: OnceRuleCount = program.once_rule_count();
     ensure_eq!(once_rules.get(), 1)
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if typed parse shape errors lose their public variants.
+#[test]
+fn typed_program_parse_reports_shape_mismatches() -> TestResult {
+    let executable_error =
+        ExecutableProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("# empty"));
+    ensure_matches(
+        matches!(
+            executable_error,
+            Err(ExecutableProgramParseError::NoExecutableRules)
+        ),
+        "expected executable parse to reject empty source",
+    )?;
+
+    let empty_error = EmptyProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"));
+    ensure_matches(
+        matches!(
+            empty_error,
+            Err(EmptyProgramParseError::ExecutableRules { rule_count })
+                if rule_count.get() == 1
+        ),
+        "expected empty parse to reject executable source",
+    )
 }

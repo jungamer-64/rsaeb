@@ -6,7 +6,7 @@ use crate::error::{LeftModifierKind, ParseError, ParseErrorKind, PayloadKind, Ri
 use crate::limits::PayloadByteLimit;
 use crate::rule::{
     ParsedRule, ParsedRuleAction, RewriteAction, RuleAnchorSyntax, RuleBody, RuleHead,
-    RuleRepeatSyntax,
+    RuleRepeatBehavior,
 };
 use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
 use crate::syntax::SyntaxToken;
@@ -286,13 +286,13 @@ impl<'code> LeftSyntax<'code> {
             LeftAfterRepeat {
                 line_number: self.line_number,
                 bytes: matched.rest,
-                repeat: RuleRepeatSyntax::Once,
+                repeat: RuleRepeatBehavior::Once,
             }
         } else {
             LeftAfterRepeat {
                 line_number: self.line_number,
                 bytes: self.bytes,
-                repeat: RuleRepeatSyntax::Always,
+                repeat: RuleRepeatBehavior::Always,
             }
         }
     }
@@ -306,7 +306,7 @@ struct LeftAfterRepeat<'code> {
     /// Remaining compact syntax after optional repeat.
     bytes: CompactSyntax<'code>,
     /// Parsed repeat modifier.
-    repeat: RuleRepeatSyntax,
+    repeat: RuleRepeatBehavior,
 }
 
 impl<'code> LeftAfterRepeat<'code> {
@@ -361,7 +361,7 @@ struct LeftPayloadSyntax<'code> {
     /// Payload bytes after repeat and anchor modifiers.
     bytes: CompactSyntax<'code>,
     /// Parsed repeat modifier.
-    repeat: RuleRepeatSyntax,
+    repeat: RuleRepeatBehavior,
     /// Parsed match anchor.
     anchor: RuleAnchorSyntax,
 }

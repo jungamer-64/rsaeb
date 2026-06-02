@@ -5,7 +5,7 @@ use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_rese
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError, ParseRepresentationError};
 use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePosition};
 use crate::limits::RuleLimit;
-use crate::rule::{ParsedRule, Rule, RuleAvailability, RuleRepeatSyntax};
+use crate::rule::{ParsedRule, Rule, RuleRepeatBehavior};
 
 /// Parser-built rule table before executable shape classification.
 #[derive(Debug, PartialEq, Eq)]
@@ -64,7 +64,7 @@ pub(crate) struct RuleSetBuilder {
     once_rule_count: PublicOnceRuleCount,
 }
 
-/// Parsed rule after repeat-state assignment but before table insertion.
+/// Parsed rule after execution position assignment but before table insertion.
 struct PendingRuleInsertion {
     /// Rule ready for storage in execution order.
     rule: Rule,
@@ -130,14 +130,10 @@ impl RuleInsertionPermit {
 }
 
 impl PendingRuleInsertion {
-    /// Assigns runtime availability to one parsed rule before storage.
-    fn from_parsed(
-        position: RulePosition,
-        parsed: ParsedRule,
-        availability: RuleAvailability,
-    ) -> Self {
+    /// Assigns execution position to one parsed rule before storage.
+    fn from_parsed(position: RulePosition, parsed: ParsedRule) -> Self {
         Self {
-            rule: Rule::from_parsed(position, parsed, availability),
+            rule: Rule::from_parsed(position, parsed),
         }
     }
 
@@ -169,10 +165,9 @@ impl RuleSetBuilder {
     ) -> Result<(), ParseError> {
         let line_number = parsed.line_number();
         let insertion = RuleInsertionPermit::new(self.rules.len(), limit, line_number)?;
-        let (availability, next_once_rule_count) =
-            self.assign_rule_availability(&parsed, line_number)?;
+        let next_once_rule_count = self.count_parsed_once_rule(&parsed, line_number)?;
 
-        let pending = PendingRuleInsertion::from_parsed(insertion.position(), parsed, availability);
+        let pending = PendingRuleInsertion::from_parsed(insertion.position(), parsed);
 
         let pending_line_number = pending.line_number();
         try_reserve_total_exact(
@@ -203,20 +198,20 @@ impl RuleSetBuilder {
         }
     }
 
-    /// Assigns parsed repeat syntax to runtime availability.
+    /// Computes the next parsed `(once)` count from this rule's repeat behavior.
     ///
     /// # Errors
     ///
     /// Returns `ParseError` if the next parsed `(once)` count cannot be
     /// represented.
-    fn assign_rule_availability(
+    fn count_parsed_once_rule(
         &self,
         parsed: &ParsedRule,
         line_number: crate::source::SourceLineNumber,
-    ) -> Result<(RuleAvailability, PublicOnceRuleCount), ParseError> {
-        match parsed.repeat_syntax() {
-            RuleRepeatSyntax::Always => Ok((RuleAvailability::Always, self.once_rule_count)),
-            RuleRepeatSyntax::Once => {
+    ) -> Result<PublicOnceRuleCount, ParseError> {
+        match parsed.repeat_behavior() {
+            RuleRepeatBehavior::Always => Ok(self.once_rule_count),
+            RuleRepeatBehavior::Once => {
                 let next_once_rule_count =
                     self.once_rule_count.checked_next().ok_or_else(|| {
                         ParseError::at_line(
@@ -224,7 +219,7 @@ impl RuleSetBuilder {
                             ParseErrorKind::Representation(ParseRepresentationError::RuleCount),
                         )
                     })?;
-                Ok((RuleAvailability::Once, next_once_rule_count))
+                Ok(next_once_rule_count)
             }
         }
     }

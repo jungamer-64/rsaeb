@@ -11,9 +11,9 @@ use rsaeb::error::{
 use rsaeb::execution::BorrowedStepTransition;
 use rsaeb::input::AdmittedRun;
 use rsaeb::limits::TraceSnapshotByteLimit;
-use rsaeb::policy::{DefaultParsePolicy, ParsePolicy};
+use rsaeb::policy::DefaultParsePolicy;
 use rsaeb::policy::{DefaultTraceSnapshotPolicy, StaticTraceSnapshotPolicy};
-use rsaeb::program::{ExecutableProgram, ParsedProgram, RunOutcome, RunResult};
+use rsaeb::program::{ExecutableProgram, RunOutcome, RunResult};
 use rsaeb::trace::{
     BorrowedTrace, BorrowedTraceEffect, BorrowedTraceEvent, SnapshotTrace, TraceSnapshotEffect,
     TraceSnapshotEvent,
@@ -42,11 +42,11 @@ fn expect_trace_snapshot_error<T>(
 /// Returns `TestFailure` if parsing, input validation, runtime execution, or
 /// trace snapshot materialization fails.
 fn trace_snapshot_example(
-    program: &ParsedProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram<DefaultParsePolicy>,
 ) -> Result<(RunResult, Vec<TraceSnapshotEvent<'_>>), TestFailure> {
     let mut events = Vec::new();
     let limits = DefaultInputRunPolicy::<10_000, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
-    let result = executable_program(program)?.trace(
+    let result = program.trace(
         runtime_input(b"a", limits)?,
         SnapshotTrace::<DefaultTraceSnapshotPolicy, _>::new(|event| {
             events.push(event);
@@ -100,31 +100,17 @@ fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: rsaeb::policy::Executi
     runtime_support::admitted_run(bytes, limits)
 }
 
-/// Borrows an executable program witness for trace tests.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if the parsed program has no executable rules.
-fn executable_program<P: ParsePolicy>(
-    program: &ParsedProgram<P>,
-) -> Result<&ExecutableProgram<P>, TestFailure> {
-    match program {
-        ParsedProgram::Executable(program) => Ok(program),
-        ParsedProgram::Empty(_) => Err(TestFailure::message("expected executable program")),
-    }
-}
-
 /// Collects committed step signatures from borrowed tracing.
 ///
 /// # Errors
 ///
 /// Returns `TestFailure` if tracing or materialization fails.
 fn borrowed_trace_step_signatures(
-    program: &ParsedProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram<DefaultParsePolicy>,
     admitted: AdmittedRun<impl rsaeb::policy::ExecutionPolicy>,
 ) -> Result<Vec<CommittedStepSignature>, TestFailure> {
     let mut signatures = Vec::new();
-    executable_program(program)?
+    program
         .trace(
             admitted,
             BorrowedTrace::new(|event| {
@@ -159,11 +145,11 @@ fn borrowed_trace_step_signatures(
 ///
 /// Returns `TestFailure` if stepping or materialization fails.
 fn borrowed_step_signatures(
-    program: &ParsedProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram<DefaultParsePolicy>,
     admitted: AdmittedRun<impl rsaeb::policy::ExecutionPolicy>,
 ) -> Result<Vec<CommittedStepSignature>, TestFailure> {
     let mut signatures = Vec::new();
-    let mut session = executable_program(program)?.steps(admitted)?;
+    let mut session = program.steps(admitted)?;
     loop {
         match session.step() {
             BorrowedStepTransition::Applied(applied) => {
@@ -200,7 +186,7 @@ fn trace_events_are_emitted_without_snapshots() -> TestResult {
     let mut seen = Vec::new();
     let limits = DefaultInputRunPolicy::<10_000, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
 
-    let result = executable_program(&program)?
+    let result = program
         .trace(
             runtime_input(b"a", limits)?,
             BorrowedTrace::new(|event| {
@@ -335,7 +321,7 @@ fn borrowed_trace_to_snapshot_uses_only_snapshot_limit() -> TestResult {
     let mut materialization = None;
     let limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
 
-    executable_program(&program)?
+    program
         .trace(
             runtime_input(b"a", limits)?,
             BorrowedTrace::new(|event| {
@@ -368,7 +354,7 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
     let program = parse_program("a=b")?;
     let runtime_limits =
         DefaultInputRunPolicy::<0, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
-    let runtime_error = executable_program(&program)?.trace(
+    let runtime_error = program.trace(
         runtime_input(b"a", runtime_limits)?,
         SnapshotTrace::<StaticTraceSnapshotPolicy<10>, _>::new(|_event| Ok::<(), TestFailure>(())),
     );
@@ -385,7 +371,7 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
 
     let snapshot_limits =
         DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
-    let snapshot_error = executable_program(&program)?.trace(
+    let snapshot_error = program.trace(
         runtime_input(b"a", snapshot_limits)?,
         SnapshotTrace::<StaticTraceSnapshotPolicy<0>, _>::new(|_event| Ok::<(), TestFailure>(())),
     );
@@ -401,7 +387,7 @@ fn trace_snapshot_api_splits_runtime_snapshot_and_sink_failures() -> TestResult 
     )?;
 
     let sink_limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
-    let sink_error = executable_program(&program)?.trace(
+    let sink_error = program.trace(
         runtime_input(b"a", sink_limits)?,
         SnapshotTrace::<StaticTraceSnapshotPolicy<10>, _>::new(|_event| {
             Err::<(), _>("trace sink full")
@@ -423,7 +409,7 @@ fn trace_final_event_matches_run_result() -> TestResult {
     let mut events = Vec::new();
     let limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
 
-    let result = executable_program(&program)?.trace(
+    let result = program.trace(
         runtime_input(b"a", limits)?,
         SnapshotTrace::<DefaultTraceSnapshotPolicy, _>::new(|event| {
             events.push(event);

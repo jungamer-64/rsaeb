@@ -5,12 +5,12 @@ mod runtime_support;
 mod support;
 
 use rsaeb::error::{
-    ParseErrorKind, ParseErrorLocation, ParseRepresentationError, PayloadKind, RunError,
-    RunFinishError, RunStepError,
+    ExecutableProgramParseError, ParseError, ParseErrorKind, ParseErrorLocation,
+    ParseRepresentationError, PayloadKind, RunError, RunFinishError, RunStepError,
 };
 use rsaeb::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
 use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy, ExecutionPolicy};
-use rsaeb::program::{ParsedProgram, RunResult};
+use rsaeb::program::{ExecutableProgram, RunResult};
 use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
@@ -44,15 +44,28 @@ fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: rsaeb::policy::Executi
 ///
 /// Returns `TestFailure` if the program is empty before execution can start.
 fn run_executable_program<E>(
-    program: &ParsedProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram<DefaultParsePolicy>,
     admitted: AdmittedRun<E>,
 ) -> Result<Result<RunResult, RunError>, TestFailure>
 where
     E: ExecutionPolicy,
 {
-    match program {
-        ParsedProgram::Executable(program) => Ok(program.execute(admitted)),
-        ParsedProgram::Empty(_) => Err(TestFailure::message("expected executable program")),
+    Ok(program.execute(admitted))
+}
+
+/// Returns the expected source parse error from executable parsing.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if parsing succeeds or only fails because the source
+/// has no executable rules.
+fn expect_parse_error(source: &str) -> Result<ParseError, TestFailure> {
+    match parse_program(source) {
+        Ok(_) => Err(TestFailure::message("expected parse error")),
+        Err(ExecutableProgramParseError::Parse(error)) => Ok(error),
+        Err(ExecutableProgramParseError::NoExecutableRules) => Err(TestFailure::message(
+            "expected parse error, got empty program",
+        )),
     }
 }
 
@@ -62,9 +75,7 @@ where
 /// information.
 #[test]
 fn errors_parse_location_and_kind_are_structured() -> TestResult {
-    let Err(error) = parse_program("a=b=c") else {
-        return Err(TestFailure::message("expected parse error"));
-    };
+    let error = expect_parse_error("a=b=c")?;
 
     ensure_eq!(error.line().get(), 1)?;
     match error.location() {
@@ -88,9 +99,7 @@ fn errors_parse_location_and_kind_are_structured() -> TestResult {
 /// information.
 #[test]
 fn errors_payload_and_modifier_kinds_keep_domain_information() -> TestResult {
-    let Err(error) = parse_program("a = b (") else {
-        return Err(TestFailure::message("expected reserved syntax error"));
-    };
+    let error = expect_parse_error("a = b (")?;
     ensure_matches(
         matches!(
             error.kind(),
@@ -102,9 +111,7 @@ fn errors_payload_and_modifier_kinds_keep_domain_information() -> TestResult {
         "expected right payload syntax error",
     )?;
 
-    let Err(error) = parse_program("(start)(once)a=b") else {
-        return Err(TestFailure::message("expected modifier order error"));
-    };
+    let error = expect_parse_error("(start)(once)a=b")?;
     ensure_matches(
         matches!(
             error.kind(),
@@ -120,9 +127,7 @@ fn errors_payload_and_modifier_kinds_keep_domain_information() -> TestResult {
 /// contexts.
 #[test]
 fn errors_display_output_names_domain_contexts() -> TestResult {
-    let Err(parse_error) = parse_program("a=b=c") else {
-        return Err(TestFailure::message("expected parse error"));
-    };
+    let parse_error = expect_parse_error("a=b=c")?;
     ensure_eq!(
         parse_error.to_string(),
         "parse error at line 1, column 4: multiple '=' characters are not allowed",

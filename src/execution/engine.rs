@@ -3,7 +3,7 @@ use crate::input::AdmittedRun;
 use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
-use crate::program::{ExecutableProgram, RunResult};
+use crate::program::{ExecutableProgram, ReturnOutput, ReturnOutputView, RunResult};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
 use crate::runtime::once::{RuntimeRulePass, RuntimeRuleSearch, RuntimeRuleTable};
 use crate::runtime::rewrite::RewriteScratch;
@@ -11,7 +11,7 @@ use crate::runtime::state::State;
 use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
 
 use super::advance::{
-    BorrowedRunWitness, CoreAppliedRule, CoreStep, DiscardedRunWitness, RunRuleWitness,
+    BorrowedRunWitness, CoreAppliedRule, DiscardedRunWitness, RunRuleWitness,
     prepare_witnessed_run_application,
 };
 
@@ -58,6 +58,14 @@ pub(super) struct Session<'program, P: ParsePolicy, E: ExecutionPolicy> {
     pub(super) core: ActiveRunCore<'program, E>,
 }
 
+/// Terminal ordinary run session that cannot resume execution.
+pub(super) struct TerminalSession<'program, P: ParsePolicy> {
+    /// Borrowed parsed program.
+    pub(super) program: BorrowedProgram<'program, P>,
+    /// Terminal runtime state retained for observation.
+    pub(super) core: TerminalRunCore,
+}
+
 /// Runtime rule-attempt session parameterized by program ownership.
 pub(super) struct AttemptSession<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
 {
@@ -84,6 +92,48 @@ pub(super) struct TerminalAttemptSession<'program, P: ParsePolicy> {
 pub(super) struct BorrowedProgram<'program, P: ParsePolicy> {
     /// Parsed program borrowed by this run.
     pub(super) program: &'program ExecutableProgram<P>,
+}
+
+/// Result of consuming one active ordinary run session.
+pub(super) enum CoreRunTransition<'program, P, E, RuleWitness, StepError>
+where
+    P: ParsePolicy,
+    E: ExecutionPolicy,
+{
+    /// One rewrite rule committed and execution can continue.
+    Applied {
+        /// Committed step count.
+        step: StepCount,
+        /// Rule witness paired with the committed rewrite.
+        rule: RuleWitness,
+        /// Continuation session after the committed rewrite.
+        continuation: Session<'program, P, E>,
+    },
+    /// One return rule committed and the run is terminal.
+    Returned {
+        /// Committed return step count.
+        step: StepCount,
+        /// Rule witness paired with the committed return.
+        rule: RuleWitness,
+        /// Borrowed return-output view for trace callbacks.
+        output_view: ReturnOutputView<'program>,
+        /// Materialized return output.
+        output: ReturnOutput,
+        /// Terminal run session.
+        terminal: TerminalSession<'program, P>,
+    },
+    /// No rule matched the current runtime state.
+    Stable {
+        /// Terminal run session.
+        terminal: TerminalSession<'program, P>,
+    },
+    /// A candidate step failed before committing runtime state.
+    Failed {
+        /// Error that prevented commit.
+        error: StepError,
+        /// Terminal run session preserving uncommitted state.
+        terminal: TerminalSession<'program, P>,
+    },
 }
 
 impl<'program, E: ExecutionPolicy> ActiveRunCore<'program, E> {
@@ -115,23 +165,6 @@ impl<'program, E: ExecutionPolicy> ActiveRunCore<'program, E> {
     /// Borrows the current runtime state.
     pub(super) fn state(&self) -> RuntimeStateView<'_> {
         self.state.view()
-    }
-
-    /// Converts active runtime state into terminal runtime state.
-    pub(super) fn into_terminal(self) -> TerminalRunCore {
-        let steps = self.completed_steps();
-        TerminalRunCore {
-            state: self.state,
-            steps,
-        }
-    }
-
-    /// Converts active runtime state into terminal runtime state with an explicit step count.
-    pub(super) fn into_terminal_at(self, steps: StepCount) -> TerminalRunCore {
-        TerminalRunCore {
-            state: self.state,
-            steps,
-        }
     }
 }
 
@@ -169,14 +202,6 @@ impl<'program, E: ExecutionPolicy> AttemptRunCore<'program, E> {
     /// Converts active runtime state into terminal runtime state.
     pub(super) fn into_terminal(self) -> TerminalRunCore {
         let steps = self.completed_steps();
-        TerminalRunCore {
-            state: self.state,
-            steps,
-        }
-    }
-
-    /// Converts active runtime state into terminal runtime state with an explicit step count.
-    pub(super) fn into_terminal_at(self, steps: StepCount) -> TerminalRunCore {
         TerminalRunCore {
             state: self.state,
             steps,
@@ -238,34 +263,98 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<'program, P, E> {
         self.core.state()
     }
 
-    /// Advances this session by one ordinary execution step.
+    /// Consumes this session and advances it by one ordinary execution step.
     ///
     /// This is the only ordinary execution path that combines the parsed
     /// program scan with the run-local rule availability state.
     ///
     /// # Errors
     ///
-    /// Returns the selected witness policy's error if preparation or witness
-    /// construction fails.
-    pub(super) fn advance_run_step<W>(&mut self) -> Result<CoreStep<'program, W::Witness>, W::Error>
+    /// Failed preparation returns a terminal transition that preserves
+    /// uncommitted runtime state.
+    pub(super) fn advance_run_step<W>(
+        self,
+    ) -> CoreRunTransition<'program, P, E, W::Witness, W::Error>
     where
         W: RunRuleWitness<'program>,
     {
-        let matched = match self.core.runtime_rules.find_next_match(&self.core.state) {
+        let Session { program, core } = self;
+        let ActiveRunCore {
+            mut state,
+            mut scratch,
+            mut budget,
+            mut runtime_rules,
+        } = core;
+
+        let matched = match runtime_rules.find_next_match(&state) {
             RuntimeRuleSearch::Matched(matched) => matched,
             RuntimeRuleSearch::Stable => {
-                return Ok(CoreStep::Stable(self.core.budget.completed_steps()));
+                return CoreRunTransition::Stable {
+                    terminal: TerminalSession {
+                        program,
+                        core: TerminalRunCore {
+                            state,
+                            steps: budget.completed_steps(),
+                        },
+                    },
+                };
             }
         };
-        let state_len = self.core.state.byte_count();
-        let witnessed = prepare_witnessed_run_application::<_, W>(
-            &mut self.core.scratch,
-            &mut self.core.budget,
+        let state_len = state.byte_count();
+        let witnessed = match prepare_witnessed_run_application::<_, W>(
+            &mut scratch,
+            &mut budget,
             state_len,
             matched,
-        )?;
-        let applied = witnessed.commit(&mut self.core.state, &mut self.core.scratch);
-        Ok(CoreStep::Applied(applied))
+        ) {
+            Ok(witnessed) => witnessed,
+            Err(error) => {
+                return CoreRunTransition::Failed {
+                    error,
+                    terminal: TerminalSession {
+                        program,
+                        core: TerminalRunCore {
+                            state,
+                            steps: budget.completed_steps(),
+                        },
+                    },
+                };
+            }
+        };
+        let applied = witnessed.commit(&mut state, &mut scratch);
+        match applied {
+            CoreAppliedRule::Rewrite { step, rule } => CoreRunTransition::Applied {
+                step,
+                rule,
+                continuation: Session {
+                    program,
+                    core: ActiveRunCore {
+                        state,
+                        scratch,
+                        budget,
+                        runtime_rules,
+                    },
+                },
+            },
+            CoreAppliedRule::Return {
+                step,
+                rule,
+                output_view,
+                output,
+            } => CoreRunTransition::Returned {
+                step,
+                rule,
+                output_view,
+                output,
+                terminal: TerminalSession {
+                    program,
+                    core: TerminalRunCore {
+                        state,
+                        steps: budget.completed_steps(),
+                    },
+                },
+            },
+        }
     }
 
     /// Runs this session to completion.
@@ -274,23 +363,26 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<'program, P, E> {
     ///
     /// Returns `RunFinishError` when a later matching rule would exceed configured
     /// limits.
-    pub(super) fn finish(mut self) -> Result<RunResult, RunFinishError> {
+    pub(super) fn finish(self) -> Result<RunResult, RunFinishError> {
+        let mut session = self;
         loop {
-            match self
-                .advance_run_step::<DiscardedRunWitness>()
-                .map_err(RunFinishError::from)?
-            {
-                CoreStep::Applied(CoreAppliedRule::Rewrite { .. }) => {}
-                CoreStep::Applied(CoreAppliedRule::Return {
+            match session.advance_run_step::<DiscardedRunWitness>() {
+                CoreRunTransition::Applied { continuation, .. } => {
+                    session = continuation;
+                }
+                CoreRunTransition::Returned {
                     step,
                     output_view: _,
                     output,
                     ..
-                }) => {
+                } => {
                     return Ok(RunResult::from_return(output, step));
                 }
-                CoreStep::Stable(steps) => {
-                    return self.core.into_terminal_at(steps).into_stable_result();
+                CoreRunTransition::Stable { terminal } => {
+                    return terminal.core.into_stable_result();
+                }
+                CoreRunTransition::Failed { error, .. } => {
+                    return Err(RunFinishError::from(error));
                 }
             }
         }
@@ -341,7 +433,7 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<'program, P, E> {
     /// Returns `TracedRunError::Trace` if the trace sink fails. Returns
     /// `TracedRunError::Run` if runtime execution fails.
     pub(super) fn trace_events<F, TraceError>(
-        mut self,
+        self,
         mut trace: F,
     ) -> Result<RunResult, TracedRunError<TraceError>>
     where
@@ -352,29 +444,31 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<'program, P, E> {
         })
         .map_err(TracedRunError::Trace)?;
 
+        let mut session = self;
         loop {
-            match self
-                .advance_run_step::<BorrowedRunWitness>()
-                .map_err(RunFinishError::from)
-                .map_err(RunError::from)
-                .map_err(TracedRunError::Run)?
-            {
-                CoreStep::Applied(CoreAppliedRule::Rewrite { step, rule }) => {
+            match session.advance_run_step::<BorrowedRunWitness>() {
+                CoreRunTransition::Applied {
+                    step,
+                    rule,
+                    continuation,
+                } => {
                     Self::emit_step_trace(
                         &mut trace,
                         step,
                         rule,
                         BorrowedTraceEffect::Continue {
-                            state: self.state(),
+                            state: continuation.state(),
                         },
                     )?;
+                    session = continuation;
                 }
-                CoreStep::Applied(CoreAppliedRule::Return {
+                CoreRunTransition::Returned {
                     step,
                     rule,
                     output_view,
                     output,
-                }) => {
+                    ..
+                } => {
                     Self::emit_step_trace(
                         &mut trace,
                         step,
@@ -385,13 +479,17 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<'program, P, E> {
                     )?;
                     return Ok(RunResult::from_return(output, step));
                 }
-                CoreStep::Stable(steps) => {
-                    return self
+                CoreRunTransition::Stable { terminal } => {
+                    return terminal
                         .core
-                        .into_terminal_at(steps)
                         .into_stable_result()
                         .map_err(RunError::from)
                         .map_err(TracedRunError::Run);
+                }
+                CoreRunTransition::Failed { error, .. } => {
+                    return Err(TracedRunError::Run(RunError::from(RunFinishError::from(
+                        error,
+                    ))));
                 }
             }
         }

@@ -83,8 +83,8 @@ pub(crate) enum CanonicalRightSide<'rule> {
 /// Internal rule head.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RuleHead {
-    /// Parsed repeat modifier.
-    repeat: RuleRepeatSyntax,
+    /// Parsed repeat behavior.
+    repeat: RuleRepeatBehavior,
     /// Parsed match anchor modifier.
     anchor: RuleAnchorSyntax,
     /// Left-side executable match payload.
@@ -93,7 +93,7 @@ pub(crate) struct RuleHead {
 
 impl RuleHead {
     /// Groups parsed left-side rule fields before program-level rule insertion.
-    pub(crate) fn new(repeat: RuleRepeatSyntax, anchor: RuleAnchorSyntax, lhs: Payload) -> Self {
+    pub(crate) fn new(repeat: RuleRepeatBehavior, anchor: RuleAnchorSyntax, lhs: Payload) -> Self {
         Self {
             repeat,
             anchor,
@@ -146,15 +146,15 @@ impl ParsedRule {
         self.line_number
     }
 
-    /// Repeat syntax before run-local availability is derived.
-    pub(crate) const fn repeat_syntax(&self) -> RuleRepeatSyntax {
+    /// Parsed repeat behavior for this rule.
+    pub(crate) const fn repeat_behavior(&self) -> RuleRepeatBehavior {
         self.head.repeat
     }
 }
 
-/// Repeat modifier as it appears in parsed syntax.
+/// Repeat behavior parsed for one rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuleRepeatSyntax {
+pub(crate) enum RuleRepeatBehavior {
     /// Rule has no `(once)` modifier.
     Always,
     /// Rule has a `(once)` modifier and needs run-local availability state.
@@ -183,16 +183,7 @@ impl RuleAnchorSyntax {
     }
 }
 
-/// Runtime availability assigned after program-level rule construction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuleAvailability {
-    /// Rule can apply on every match.
-    Always,
-    /// Rule can apply once per run.
-    Once,
-}
-
-impl RuleAvailability {
+impl RuleRepeatBehavior {
     /// Converts internal repeat state into the public inspection repeat.
     pub(crate) const fn public_repeat(self) -> RuleRepeat {
         match self {
@@ -209,8 +200,8 @@ pub(crate) struct Rule {
     position: RulePosition,
     /// Original source line for diagnostics and inspection.
     line_number: SourceLineNumber,
-    /// Runtime availability for this rule.
-    availability: RuleAvailability,
+    /// Runtime repeat behavior for this rule.
+    repeat: RuleRepeatBehavior,
     /// Match anchor used by the runtime matcher.
     anchor: RuleAnchorSyntax,
     /// Left-side executable match payload.
@@ -220,16 +211,12 @@ pub(crate) struct Rule {
 }
 
 impl Rule {
-    /// Assigns execution position and runtime availability to a parsed rule.
-    pub(crate) fn from_parsed(
-        position: RulePosition,
-        parsed: ParsedRule,
-        availability: RuleAvailability,
-    ) -> Self {
+    /// Assigns execution position to a parsed rule.
+    pub(crate) fn from_parsed(position: RulePosition, parsed: ParsedRule) -> Self {
         Self {
             position,
             line_number: parsed.line_number,
-            availability,
+            repeat: parsed.head.repeat,
             anchor: parsed.head.anchor,
             lhs: parsed.head.lhs,
             action: parsed.body.action,
@@ -248,12 +235,12 @@ impl Rule {
 
     /// Public repeat policy for inspection.
     pub(crate) const fn repeat(&self) -> RuleRepeat {
-        self.availability.public_repeat()
+        self.repeat.public_repeat()
     }
 
-    /// Runtime availability used by the matcher.
-    pub(crate) const fn availability(&self) -> RuleAvailability {
-        self.availability
+    /// Runtime repeat behavior used by the matcher.
+    pub(crate) const fn repeat_behavior(&self) -> RuleRepeatBehavior {
+        self.repeat
     }
 
     /// Match anchor used by the matcher.

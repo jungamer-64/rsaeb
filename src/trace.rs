@@ -18,17 +18,14 @@
 //!     DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
 //!     StaticTraceSnapshotPolicy,
 //! };
-//! use rsaeb::program::ParsedProgram;
+//! use rsaeb::program::ExecutableProgram;
 //! use rsaeb::source::ProgramSource;
 //!
 //! type TenSteps = StaticExecutionPolicy<10, 16_777_216, 16_777_216>;
 //! type SnapshotBytes = StaticTraceSnapshotPolicy<16_777_216>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let parsed = ParsedProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b\nb=(return)ok"))?;
-//! let ParsedProgram::Executable(executable) = parsed else {
-//!     return Err("expected executable program".into());
-//! };
+//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b\nb=(return)ok"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<TenSteps>()?;
 //! let mut retained = Vec::new();
@@ -63,7 +60,7 @@
 //!     DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
 //!     StaticTraceSnapshotPolicy,
 //! };
-//! use rsaeb::program::ParsedProgram;
+//! use rsaeb::program::ExecutableProgram;
 //! use rsaeb::source::ProgramSource;
 //! use rsaeb::trace::SnapshotTrace;
 //!
@@ -71,10 +68,7 @@
 //! type EmptySnapshot = StaticTraceSnapshotPolicy<0>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let parsed = ParsedProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
-//! let ParsedProgram::Executable(executable) = parsed else {
-//!     return Err("expected executable program".into());
-//! };
+//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<TenSteps>()?;
 //!

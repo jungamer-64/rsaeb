@@ -61,7 +61,8 @@ impl fmt::Display for CodeLineByteCount {
 }
 
 /// Maximum source length accepted by
-/// [`program::ParsedProgram::parse`](crate::program::ParsedProgram::parse).
+/// [`program::ExecutableProgram::parse`](crate::program::ExecutableProgram::parse)
+/// and [`program::EmptyProgram::parse`](crate::program::EmptyProgram::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceByteLimit {
     /// Maximum accepted source byte length.
@@ -96,7 +97,8 @@ impl SourceByteLimit {
 pub(crate) struct SourceBytePermit;
 
 /// Maximum executable code-line length accepted by
-/// [`program::ParsedProgram::parse`](crate::program::ParsedProgram::parse).
+/// [`program::ExecutableProgram::parse`](crate::program::ExecutableProgram::parse)
+/// and [`program::EmptyProgram::parse`](crate::program::EmptyProgram::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CodeLineByteLimit {
     /// Maximum accepted executable code-line byte length.
@@ -134,7 +136,8 @@ impl CodeLineByteLimit {
 pub(crate) struct CodeLineBytePermit;
 
 /// Maximum parsed payload length accepted by
-/// [`program::ParsedProgram::parse`](crate::program::ParsedProgram::parse).
+/// [`program::ExecutableProgram::parse`](crate::program::ExecutableProgram::parse)
+/// and [`program::EmptyProgram::parse`](crate::program::EmptyProgram::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PayloadByteLimit {
     /// Maximum accepted executable payload byte length.
@@ -169,7 +172,8 @@ impl PayloadByteLimit {
 pub(crate) struct PayloadBytePermit;
 
 /// Maximum executable rule count accepted by
-/// [`program::ParsedProgram::parse`](crate::program::ParsedProgram::parse).
+/// [`program::ExecutableProgram::parse`](crate::program::ExecutableProgram::parse)
+/// and [`program::EmptyProgram::parse`](crate::program::EmptyProgram::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleLimit {
     /// Maximum accepted executable rule count.

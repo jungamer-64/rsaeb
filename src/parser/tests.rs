@@ -3,10 +3,11 @@ use crate::error::{
 };
 use crate::inspect::{RuleActionView, RuleAnchor, RuleCount, RuleRepeat};
 use crate::policy::DefaultParsePolicy;
-use crate::program::ParsedProgram;
+use crate::program::ExecutableProgram;
 use crate::test_support::{
     TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_error_position,
-    expect_parse_error, parse_program, parse_program_bytes, source_line_number,
+    expect_parse_error, parse_empty_program, parse_program, parse_program_bytes,
+    source_line_number,
 };
 
 /// Returns the parsed rule at `index`.
@@ -15,24 +16,18 @@ use crate::test_support::{
 ///
 /// Returns `TestFailure` if the program has no rule at `index`.
 fn expect_rule(
-    program: &ParsedProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram<DefaultParsePolicy>,
     index: usize,
 ) -> Result<crate::inspect::RuleView<'_>, TestFailure> {
-    match program {
-        ParsedProgram::Executable(program) => program
-            .rules()
-            .nth(index)
-            .ok_or(TestFailure::message("expected parsed rule")),
-        ParsedProgram::Empty(_) => Err(TestFailure::message("expected executable program")),
-    }
+    program
+        .rules()
+        .nth(index)
+        .ok_or(TestFailure::message("expected parsed rule"))
 }
 
 /// Returns the parsed executable rule count.
-fn rule_count(program: &ParsedProgram<DefaultParsePolicy>) -> RuleCount {
-    match program {
-        ParsedProgram::Executable(program) => program.rule_count(),
-        ParsedProgram::Empty(program) => program.rule_count(),
-    }
+fn rule_count(program: &ExecutableProgram<DefaultParsePolicy>) -> RuleCount {
+    program.rule_count()
 }
 
 /// # Errors
@@ -68,8 +63,8 @@ fn compacting_source_whitespace_and_comments_preserves_rule_domain() -> TestResu
 /// Returns `TestFailure` if empty code lines or comments become parsed rules.
 #[test]
 fn empty_code_lines_and_comments_do_not_become_rules() -> TestResult {
-    let program = parse_program(" \t\r\n# comment\n")?;
-    ensure_eq!(rule_count(&program), RuleCount::new(0))
+    let program = parse_empty_program(" \t\r\n# comment\n")?;
+    ensure_eq!(program.rule_count(), RuleCount::new(0))
 }
 
 /// # Errors

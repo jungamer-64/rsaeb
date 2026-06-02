@@ -1,9 +1,10 @@
 //! Program-source boundary and source-position value types.
 //!
 //! A [`ProgramSource`] only labels bytes as source input; it does not validate
-//! A=B syntax. Validation belongs to
-//! [`program::ParsedProgram::parse`](crate::program::ParsedProgram::parse),
-//! which can then report parse failures with [`SourceLineNumber`],
+//! A=B syntax. Validation belongs to typed program constructors such as
+//! [`program::ExecutableProgram::parse`](crate::program::ExecutableProgram::parse)
+//! and [`program::EmptyProgram::parse`](crate::program::EmptyProgram::parse),
+//! which can report parse failures with [`SourceLineNumber`],
 //! [`SourceColumn`], and [`SourcePosition`].
 //!
 //! Source is intentionally separate from [`crate::input::RuntimeInput`].
@@ -13,15 +14,12 @@
 //!
 //! ```
 //! use rsaeb::policy::DefaultParsePolicy;
-//! use rsaeb::program::ParsedProgram;
+//! use rsaeb::program::ExecutableProgram;
 //! use rsaeb::source::ProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let source = ProgramSource::from_bytes(b"a=b # arbitrary comment bytes: \xff");
-//! let program = ParsedProgram::<DefaultParsePolicy>::parse(source)?;
-//! let ParsedProgram::Executable(executable) = program else {
-//!     return Err("expected executable program".into());
-//! };
+//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse(source)?;
 //!
 //! if executable.rule_count().get() != 1 {
 //!     return Err("unexpected rule count".into());
@@ -35,7 +33,8 @@
 /// Program source remains a byte format because comments may contain arbitrary
 /// non-UTF-8 bytes. Constructing this value labels a byte slice as source
 /// input; syntax validation still happens in
-/// [`program::ParsedProgram::parse`](crate::program::ParsedProgram::parse).
+/// typed program constructors such as
+/// [`program::ExecutableProgram::parse`](crate::program::ExecutableProgram::parse).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgramSource<'source> {
     /// Raw source bytes owned by the caller.
@@ -47,7 +46,8 @@ impl<'source> ProgramSource<'source> {
     ///
     /// This constructor accepts any byte slice. Executable code bytes are
     /// checked later by
-    /// [`program::ParsedProgram::parse`](crate::program::ParsedProgram::parse);
+    /// typed program constructors such as
+    /// [`program::ExecutableProgram::parse`](crate::program::ExecutableProgram::parse);
     /// bytes after a line-comment marker remain part of the source byte stream
     /// but are not executable code.
     #[must_use]

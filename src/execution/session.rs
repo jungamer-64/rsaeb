@@ -5,12 +5,10 @@ use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, ExecutableProgramRef, RunResult};
 use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
 
-use super::advance::{
-    BorrowedRunWitness, CoreAppliedRule, CoreRuleAttemptStep, CoreStep,
-    advance_borrowed_rule_attempt,
-};
+use super::advance::{BorrowedRunWitness, CoreRuleAttemptStep, advance_borrowed_rule_attempt};
 use super::engine::{
-    AttemptSession, BorrowedProgram, Session, TerminalAttemptSession, TerminalRunCore,
+    AttemptSession, BorrowedProgram, CoreRunTransition, Session, TerminalAttemptSession,
+    TerminalRunCore,
 };
 use super::transition::{
     BorrowedAppliedStep, BorrowedFailedRun, BorrowedMissedRuleAttempt, BorrowedReturnedRun,
@@ -43,14 +41,6 @@ pub struct BorrowedRuleAttemptSession<
 > {
     /// Internal rule-attempt session using the public borrowed program boundary.
     pub(super) session: AttemptSession<'program, P, E, A>,
-}
-
-/// Terminal data split out of a borrowed ordinary run session.
-struct BorrowedRunTerminal<'program, P: ParsePolicy> {
-    /// Parsed program borrowed by the terminal state.
-    program: &'program ExecutableProgram<P>,
-    /// Runtime core retained for terminal state observation or materialization.
-    core: TerminalRunCore,
 }
 
 /// Terminal data split out of a borrowed rule-attempt run session.
@@ -233,17 +223,6 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
     }
 }
 
-impl<'program, P: ParsePolicy> BorrowedRunTerminal<'program, P> {
-    /// Splits a borrowed run session into terminal data.
-    fn from_session<E: ExecutionPolicy>(session: BorrowedRunSession<'program, P, E>) -> Self {
-        let Session { program, core } = session.session;
-        Self {
-            program: program.program,
-            core: core.into_terminal(),
-        }
-    }
-}
-
 impl<'program, P: ParsePolicy> BorrowedRuleAttemptTerminal<'program, P> {
     /// Projects terminal borrowed rule-attempt state into public terminal data.
     fn from_terminal(terminal: TerminalAttemptSession<'program, P>) -> Self {
@@ -262,45 +241,41 @@ impl<'program, P: ParsePolicy> BorrowedRuleAttemptTerminal<'program, P> {
 
 /// Advances a borrowed ordinary run and projects the private transition into the public type.
 fn step_borrowed_run<'program, P: ParsePolicy, E: ExecutionPolicy>(
-    mut session: BorrowedRunSession<'program, P, E>,
+    session: BorrowedRunSession<'program, P, E>,
 ) -> BorrowedStepTransition<'program, P, E> {
     match session.session.advance_run_step::<BorrowedRunWitness>() {
-        Ok(CoreStep::Applied(CoreAppliedRule::Rewrite { step, rule })) => {
-            BorrowedStepTransition::Applied(BorrowedAppliedStep {
-                step,
-                rule,
-                session,
-            })
-        }
-        Ok(CoreStep::Applied(CoreAppliedRule::Return {
+        CoreRunTransition::Applied {
+            step,
+            rule,
+            continuation,
+        } => BorrowedStepTransition::Applied(BorrowedAppliedStep {
+            step,
+            rule,
+            session: BorrowedRunSession {
+                session: continuation,
+            },
+        }),
+        CoreRunTransition::Returned {
             step,
             rule,
             output_view: _,
             output,
-        })) => {
-            let terminal = BorrowedRunTerminal::from_session(session);
-            BorrowedStepTransition::Returned(BorrowedReturnedRun {
-                step,
-                rule,
-                program: terminal.program,
-                output,
-            })
-        }
-        Ok(CoreStep::Stable(_steps)) => {
-            let terminal = BorrowedRunTerminal::from_session(session);
+            terminal,
+        } => BorrowedStepTransition::Returned(BorrowedReturnedRun {
+            step,
+            rule,
+            program: terminal.program.program,
+            output,
+        }),
+        CoreRunTransition::Stable { terminal } => {
             BorrowedStepTransition::Stable(BorrowedStableRun {
-                program: terminal.program,
+                program: terminal.program.program,
                 core: terminal.core,
             })
         }
-        Err(error) => {
-            let terminal = BorrowedRunTerminal::from_session(session);
-            BorrowedStepTransition::Failed(BorrowedFailedRun::new(
-                error,
-                terminal.program,
-                terminal.core,
-            ))
-        }
+        CoreRunTransition::Failed { error, terminal } => BorrowedStepTransition::Failed(
+            BorrowedFailedRun::new(error, terminal.program.program, terminal.core),
+        ),
     }
 }
 

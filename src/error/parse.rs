@@ -78,6 +78,65 @@ impl Error for ParseError {
     }
 }
 
+/// Error while parsing source that must contain executable rules.
+///
+/// This error keeps syntax/resource failures separate from shape mismatches:
+/// source may be syntactically valid A=B input and still be rejected because the
+/// caller asked for an executable program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecutableProgramParseError {
+    /// Source failed the ordinary parser contract.
+    Parse(ParseError),
+    /// Source parsed successfully but contained no executable rules.
+    NoExecutableRules,
+}
+
+impl Error for ExecutableProgramParseError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Parse(error) => Some(error),
+            Self::NoExecutableRules => None,
+        }
+    }
+}
+
+impl From<ParseError> for ExecutableProgramParseError {
+    fn from(value: ParseError) -> Self {
+        Self::Parse(value)
+    }
+}
+
+/// Error while parsing source that must contain no executable rules.
+///
+/// This error keeps syntax/resource failures separate from shape mismatches:
+/// source may be syntactically valid A=B input and still be rejected because the
+/// caller asked for an empty program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmptyProgramParseError {
+    /// Source failed the ordinary parser contract.
+    Parse(ParseError),
+    /// Source parsed successfully but contained executable rules.
+    ExecutableRules {
+        /// Number of executable rules in the rejected source.
+        rule_count: RuleCount,
+    },
+}
+
+impl Error for EmptyProgramParseError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Parse(error) => Some(error),
+            Self::ExecutableRules { .. } => None,
+        }
+    }
+}
+
+impl From<ParseError> for EmptyProgramParseError {
+    fn from(value: ParseError) -> Self {
+        Self::Parse(value)
+    }
+}
+
 /// Source location carried by a parse error.
 ///
 /// Some failures apply to the whole executable line, while byte-specific

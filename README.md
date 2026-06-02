@@ -31,20 +31,17 @@ types live under their domain modules, such as `source`, `input`, `program`,
 
 ## Quick Start
 
-Parse source into `ParsedProgram`, validate runtime input, admit it into one
-execution under an execution policy, then run the executable branch:
+Parse source through the executable-program boundary, validate runtime input,
+admit it into one execution under an execution policy, then run:
 
 ```rust
 use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
-use rsaeb::program::{ParsedProgram, RunOutcome};
+use rsaeb::program::{ExecutableProgram, RunOutcome};
 use rsaeb::source::ProgramSource;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let parsed = ParsedProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
-    let ParsedProgram::Executable(executable) = parsed else {
-        return Err("expected executable program".into());
-    };
+    let executable = ExecutableProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
     let admitted = input.admit::<DefaultExecutionPolicy>()?;
     let result = executable.execute(admitted)?;
@@ -61,8 +58,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 `ProgramSource::from_text` and `ProgramSource::from_bytes` only label source
-input; `ParsedProgram::parse` performs source validation and immediately
-classifies the parsed shape as `EmptyProgram` or `ExecutableProgram`.
+input; `ExecutableProgram::parse` and `EmptyProgram::parse` perform source
+validation and reject the wrong shape at the parse boundary.
 `RuntimeInputSource` and `RuntimeInput::validate` do the same for runtime input
 bytes. Reuse parsed executable programs freely: an `ExecutableProgram` is
 immutable, and `(once)` consumption is local to each execution. Runtime state
@@ -75,12 +72,11 @@ The normal host flow is:
 
 1. Load source bytes or text outside the interpreter.
 2. Construct `ProgramSource`.
-3. Parse with `ParsedProgram::parse`.
+3. Parse with `ExecutableProgram::parse` or `EmptyProgram::parse`.
 4. Label host input bytes with `RuntimeInputSource::from_bytes`.
 5. Validate with `RuntimeInput::validate`.
 6. Admit with `RuntimeInput::admit::<E>()` under an `ExecutionPolicy`.
-7. Pattern-match `ParsedProgram::{Empty, Executable}`.
-8. Execute, step, trace, or rule-attempt step from `ExecutableProgram`, or call
+7. Execute, step, trace, or rule-attempt step from `ExecutableProgram`, or call
    `EmptyProgram::stabilize` for empty source.
 
 The crate intentionally contains no filesystem, process, argument parsing,

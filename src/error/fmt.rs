@@ -3,11 +3,12 @@ use core::fmt;
 use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind};
 
 use super::{
-    InputColumn, LeftModifierKind, ParseError, ParseErrorKind, ParseErrorLocation,
-    ParseRepresentationError, PayloadKind, ReturnOutputLimitError, RewriteSizeError,
-    RightActionKind, RuleAttemptLimitError, RuleAttemptStepError, RunAdmissionError, RunError,
-    RunFinishError, RunStartError, RunStepError, RuntimeInputError, RuntimeStateLimitError,
-    StepLimitError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
+    EmptyProgramParseError, ExecutableProgramParseError, InputColumn, LeftModifierKind, ParseError,
+    ParseErrorKind, ParseErrorLocation, ParseRepresentationError, PayloadKind,
+    ReturnOutputLimitError, RewriteSizeError, RightActionKind, RuleAttemptLimitError,
+    RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError, RunStartError, RunStepError,
+    RuntimeInputError, RuntimeStateLimitError, StepLimitError, TraceSnapshotError,
+    TraceSnapshotRunError, TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -18,7 +19,7 @@ impl fmt::Display for AllocationContext {
             Self::ProgramRuleTable => f.write_str("program rule table"),
             Self::CanonicalSource => f.write_str("canonical source bytes"),
             Self::RuntimeInputValidation => f.write_str("runtime input validation"),
-            Self::RuntimeRuleAvailability => f.write_str("runtime rule availability"),
+            Self::RuntimeRuleCell => f.write_str("runtime rule cell"),
             Self::RuntimeRewriteState => f.write_str("runtime rewrite state"),
             Self::PayloadView => f.write_str("payload view"),
             Self::RuntimeStateView => f.write_str("runtime state view"),
@@ -64,6 +65,28 @@ impl fmt::Display for ParseError {
         }
 
         write!(f, ": {}", self.kind())
+    }
+}
+
+impl fmt::Display for ExecutableProgramParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Parse(error) => error.fmt(f),
+            Self::NoExecutableRules => f.write_str("expected executable program rules"),
+        }
+    }
+}
+
+impl fmt::Display for EmptyProgramParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Parse(error) => error.fmt(f),
+            Self::ExecutableRules { rule_count } => write!(
+                f,
+                "expected empty program source; parsed {} executable rules",
+                rule_count.get(),
+            ),
+        }
     }
 }
 

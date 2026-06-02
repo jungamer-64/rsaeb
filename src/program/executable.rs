@@ -1,15 +1,19 @@
 use core::{fmt, marker::PhantomData};
 
-use crate::error::{RunError, RunFinishError, RunStartError};
+use crate::error::{
+    EmptyProgramParseError, ExecutableProgramParseError, RunError, RunFinishError, RunStartError,
+};
 use crate::execution::{BorrowedRuleAttemptSession, BorrowedRunSession};
 use crate::input::AdmittedRun;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::limits::StepCount;
+use crate::parser::parse_rules_impl;
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::runtime::state::State;
+use crate::source::ProgramSource;
 use crate::trace::TraceRequest;
 
-use super::{ExecutableRuleSet, RuleScan, RunResult};
+use super::{ExecutableRuleSet, RuleScan, RuleSetShape, RunResult};
 
 /// Parsed source with no executable rule lines.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -35,6 +39,26 @@ pub struct ExecutableProgramRef<'program, P: ParsePolicy> {
 }
 
 impl<P: ParsePolicy> EmptyProgram<P> {
+    /// Parses source that is expected to contain no executable rules.
+    ///
+    /// [`ProgramSource`] marks the source boundary, while this program's
+    /// [`ParsePolicy`] carries the parser resource policy. Empty source is
+    /// accepted only through this empty-program boundary, so executable methods
+    /// are unavailable by construction.
+    ///
+    /// # Errors
+    ///
+    /// Returns `EmptyProgramParseError` when parsing fails or when the parsed
+    /// source contains executable rules.
+    pub fn parse(source: ProgramSource<'_>) -> Result<Self, EmptyProgramParseError> {
+        match parse_rules_impl::<P>(source)?.into_shape() {
+            RuleSetShape::Empty => Ok(Self::new()),
+            RuleSetShape::Executable(rule_set) => Err(EmptyProgramParseError::ExecutableRules {
+                rule_count: rule_set.rule_count(),
+            }),
+        }
+    }
+
     /// Builds a typed empty-program value.
     const fn new() -> Self {
         Self {
@@ -84,6 +108,24 @@ impl<P: ParsePolicy> fmt::Debug for EmptyProgram<P> {
 }
 
 impl<P: ParsePolicy> ExecutableProgram<P> {
+    /// Parses source that is expected to contain at least one executable rule.
+    ///
+    /// [`ProgramSource`] marks the source boundary, while this program's
+    /// [`ParsePolicy`] carries the parser resource policy. Execution, tracing,
+    /// stepwise execution, and rule-attempt execution start only from this
+    /// executable-program boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ExecutableProgramParseError` when parsing fails or when the
+    /// parsed source contains no executable rules.
+    pub fn parse(source: ProgramSource<'_>) -> Result<Self, ExecutableProgramParseError> {
+        match parse_rules_impl::<P>(source)?.into_shape() {
+            RuleSetShape::Empty => Err(ExecutableProgramParseError::NoExecutableRules),
+            RuleSetShape::Executable(rule_set) => Ok(Self::from_rule_set(rule_set)),
+        }
+    }
+
     /// Wraps a parser-built non-empty rule set as an executable program.
     fn from_rule_set(rule_set: ExecutableRuleSet) -> Self {
         Self {

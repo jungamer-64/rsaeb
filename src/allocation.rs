@@ -21,8 +21,8 @@ pub enum AllocationContext {
     CanonicalSource,
     /// Classifying raw runtime input into owned typed input bytes.
     RuntimeInputValidation,
-    /// Storing per-run executable rule availability state.
-    RuntimeRuleAvailability,
+    /// Storing per-run executable rule cells.
+    RuntimeRuleCell,
     /// Building the next runtime state after a rewrite.
     RuntimeRewriteState,
     /// Materializing a payload view outside parser/runtime execution.

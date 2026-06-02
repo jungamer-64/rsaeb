@@ -4,16 +4,19 @@ use alloc::format;
 use alloc::string::{FromUtf8Error, String};
 
 use rsaeb::error::{
-    AllocationError, ParseError, RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError,
-    RunStartError, RunStepError, RuntimeInputError, TraceSnapshotRunError,
+    AllocationError, EmptyProgramParseError, ExecutableProgramParseError, ParseError,
+    RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError, RunStartError, RunStepError,
+    RuntimeInputError, TraceSnapshotRunError,
 };
 use rsaeb::policy::DefaultParsePolicy;
-use rsaeb::program::ParsedProgram;
+use rsaeb::program::ExecutableProgram;
 use rsaeb::source::ProgramSource;
 
 pub enum TestFailure {
     Message(String),
     Parse(ParseError),
+    ExecutableParse(ExecutableProgramParseError),
+    EmptyParse(EmptyProgramParseError),
     Input(RuntimeInputError),
     Admission(RunAdmissionError),
     Run(RunError),
@@ -37,6 +40,11 @@ impl core::fmt::Debug for TestFailure {
         match self {
             Self::Message(message) => formatter.debug_tuple("Message").field(message).finish(),
             Self::Parse(error) => formatter.debug_tuple("Parse").field(error).finish(),
+            Self::ExecutableParse(error) => formatter
+                .debug_tuple("ExecutableParse")
+                .field(error)
+                .finish(),
+            Self::EmptyParse(error) => formatter.debug_tuple("EmptyParse").field(error).finish(),
             Self::Input(error) => formatter.debug_tuple("Input").field(error).finish(),
             Self::Admission(error) => formatter.debug_tuple("Admission").field(error).finish(),
             Self::Run(error) => formatter.debug_tuple("Run").field(error).finish(),
@@ -59,6 +67,18 @@ impl core::fmt::Debug for TestFailure {
 impl From<ParseError> for TestFailure {
     fn from(value: ParseError) -> Self {
         Self::Parse(value)
+    }
+}
+
+impl From<ExecutableProgramParseError> for TestFailure {
+    fn from(value: ExecutableProgramParseError) -> Self {
+        Self::ExecutableParse(value)
+    }
+}
+
+impl From<EmptyProgramParseError> for TestFailure {
+    fn from(value: EmptyProgramParseError) -> Self {
+        Self::EmptyParse(value)
     }
 }
 
@@ -127,14 +147,17 @@ impl From<AllocationError> for TestFailure {
 
 pub type TestResult = Result<(), TestFailure>;
 
-/// Parses source text with the default parser limits.
+/// Parses executable source text with the default parser limits.
 ///
 /// # Errors
 ///
-/// Returns `ParseError` if the source violates parser syntax, resource, or
-/// allocation constraints.
-pub fn parse_program(source: &str) -> Result<ParsedProgram<DefaultParsePolicy>, ParseError> {
-    ParsedProgram::parse(ProgramSource::from_text(source))
+/// Returns `ExecutableProgramParseError` if the source violates parser syntax,
+/// resource constraints, allocation constraints, or contains no executable
+/// rules.
+pub fn parse_program(
+    source: &str,
+) -> Result<ExecutableProgram<DefaultParsePolicy>, ExecutableProgramParseError> {
+    ExecutableProgram::parse(ProgramSource::from_text(source))
 }
 
 /// Converts a pattern-match assertion into the shared test result type.

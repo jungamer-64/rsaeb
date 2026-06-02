@@ -16,7 +16,8 @@ use rsaeb::limits::{ReturnByteLimit, RuleAttemptLimit, RuntimeStateByteLimit};
 use rsaeb::policy::{
     DefaultParsePolicy, ExecutionPolicy, ParsePolicy, RuleAttemptPolicy, StaticRuleAttemptPolicy,
 };
-use rsaeb::program::{ExecutableProgram, ParsedProgram, RunOutcome, RunResult};
+use rsaeb::program::{EmptyProgram, ExecutableProgram, RunOutcome, RunResult};
+use rsaeb::source::ProgramSource;
 use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
@@ -289,13 +290,12 @@ fn default_test_run_policy() -> DefaultInputRunPolicy<10, DEFAULT_BYTE_BUDGET, D
 /// Returns `TestFailure` if the program cannot be parsed, input is rejected, or
 /// rule-attempt execution fails.
 fn borrowed_rule_attempt_signatures<const ATTEMPTS: usize>(
-    program: &ParsedProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram<DefaultParsePolicy>,
     input: &'static [u8],
 ) -> Result<Vec<BorrowedRuleAttemptSignature>, TestFailure> {
-    let execution =
-        executable_program(program)?.rule_attempts::<StaticRuleAttemptPolicy<ATTEMPTS>, _>(
-            runtime_input(input, default_test_run_policy())?,
-        )?;
+    let execution = program.rule_attempts::<StaticRuleAttemptPolicy<ATTEMPTS>, _>(
+        runtime_input(input, default_test_run_policy())?,
+    )?;
     finish_borrowed_rule_attempt_signatures(execution)
 }
 
@@ -384,33 +384,19 @@ fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolicy>(
     runtime_support::admitted_run(bytes, limits)
 }
 
-/// Borrows an executable program witness for tests that require stepwise starts.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if the parsed program has no executable rules.
-fn executable_program<P: ParsePolicy>(
-    program: &ParsedProgram<P>,
-) -> Result<&ExecutableProgram<P>, TestFailure> {
-    match program {
-        ParsedProgram::Executable(program) => Ok(program),
-        ParsedProgram::Empty(_) => Err(TestFailure::message("expected executable program")),
-    }
-}
-
 /// Executes a parsed program that is expected to contain executable rules.
 ///
 /// # Errors
 ///
-/// Returns `TestFailure` if the program is empty or execution fails.
+/// Returns `TestFailure` if execution fails.
 fn execute_program<E>(
-    program: &ParsedProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram<DefaultParsePolicy>,
     admitted: AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
     E: ExecutionPolicy,
 {
-    Ok(executable_program(program)?.execute(admitted)?)
+    Ok(program.execute(admitted)?)
 }
 
 /// Returns the expected successful rule-attempt transition.
@@ -495,7 +481,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
     let limits = default_test_run_policy();
     let program = parse_program("a=b\nb=c")?;
     let input = runtime_input(b"a", limits)?;
-    let execution = executable_program(&program)?.steps(input)?;
+    let execution = program.steps(input)?;
     ensure_eq!(execution.completed_steps().get(), 0)?;
 
     let execution = match expect_step_transition(execution.step())? {
@@ -633,8 +619,7 @@ fn execution_rule_attempt_start_and_final_miss_are_typed() -> TestResult {
     let limits = default_test_run_policy();
     let program = parse_program("a=b")?;
     let input = runtime_input(b"z", limits)?;
-    let execution =
-        executable_program(&program)?.rule_attempts::<StaticRuleAttemptPolicy<10>, _>(input)?;
+    let execution = program.rule_attempts::<StaticRuleAttemptPolicy<10>, _>(input)?;
 
     match expect_rule_attempt_transition(execution.step())? {
         BorrowedRuleAttemptTransition::Stable(stable) => {
@@ -655,25 +640,24 @@ fn execution_rule_attempt_start_and_final_miss_are_typed() -> TestResult {
             return Err(TestFailure::message("expected immediate stable terminal"));
         }
     }
-    let empty_program = parse_program("# no executable rules")?;
-    let ParsedProgram::Empty(empty_program) = empty_program else {
-        return Err(TestFailure::message("expected empty program"));
-    };
+    let empty_program = EmptyProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text(
+        "# no executable rules",
+    ))?;
     ensure_eq!(empty_program.rule_count().get(), 0)?;
     let borrowed_empty_result = empty_program.stabilize(runtime_input(b"empty", limits)?)?;
     expect_stable_bytes(&borrowed_empty_result, b"empty")?;
     ensure_eq!(borrowed_empty_result.steps().get(), 0)?;
 
-    let ParsedProgram::Empty(owned_empty) = parse_program("# no executable rules")? else {
-        return Err(TestFailure::message("expected empty program"));
-    };
+    let owned_empty = EmptyProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text(
+        "# no executable rules",
+    ))?;
     let owned_empty_result = owned_empty.stabilize(runtime_input(b"owned", limits)?)?;
     expect_stable_bytes(&owned_empty_result, b"owned")?;
     ensure_eq!(owned_empty_result.steps().get(), 0)?;
 
-    let ParsedProgram::Empty(owned_empty) = parse_program("# no executable rules")? else {
-        return Err(TestFailure::message("expected empty program"));
-    };
+    let owned_empty = EmptyProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text(
+        "# no executable rules",
+    ))?;
     ensure_eq!(owned_empty.rule_count().get(), 0)
 }
 
@@ -684,10 +668,7 @@ fn execution_rule_attempt_start_and_final_miss_are_typed() -> TestResult {
 #[test]
 fn execution_rule_attempt_preserves_interleaved_once_state() -> TestResult {
     let program = parse_program("(once)a=b\nz=z\n(once)b=c")?;
-    let ParsedProgram::Executable(executable) = &program else {
-        return Err(TestFailure::message("expected executable program"));
-    };
-    ensure_eq!(executable.once_rule_count().get(), 2)?;
+    ensure_eq!(program.once_rule_count().get(), 2)?;
     ensure_eq!(
         borrowed_rule_attempt_signatures::<10>(&program, b"a")?,
         vec![
@@ -752,8 +733,7 @@ fn execution_rule_attempt_limit_is_independent_from_step_limit() -> TestResult {
     let limits = DefaultInputRunPolicy::<0, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     let program = parse_program("x=y\na=b")?;
     let input = runtime_input(b"a", limits)?;
-    let execution =
-        executable_program(&program)?.rule_attempts::<StaticRuleAttemptPolicy<1>, _>(input)?;
+    let execution = program.rule_attempts::<StaticRuleAttemptPolicy<1>, _>(input)?;
 
     let execution = match expect_rule_attempt_transition(execution.step())? {
         BorrowedRuleAttemptTransition::Missed(missed) => {
@@ -796,8 +776,7 @@ fn execution_rule_attempt_preparation_failure_drops_attempt_reservation() -> Tes
     let limits = DefaultInputRunPolicy::<10, 1, DEFAULT_BYTE_BUDGET>::new();
     let program = parse_program("a=aa")?;
     let input = runtime_input(b"a", limits)?;
-    let execution =
-        executable_program(&program)?.rule_attempts::<StaticRuleAttemptPolicy<10>, _>(input)?;
+    let execution = program.rule_attempts::<StaticRuleAttemptPolicy<10>, _>(input)?;
 
     let failed = expect_failed_rule_attempt(execution.step())?;
     ensure_eq!(failed.completed_attempts().get(), 0)?;
@@ -826,7 +805,7 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
     let limits = default_test_run_policy();
     let program = parse_program("a=b")?;
     let input = runtime_input(b"a", limits)?;
-    let execution = executable_program(&program)?.steps(input)?;
+    let execution = program.steps(input)?;
 
     ensure_eq!(
         runtime_view_bytes(execution.state())?.as_slice(),
@@ -863,9 +842,9 @@ fn execution_consumes_runtime_input_without_session_leakage() -> TestResult {
     let limits = default_test_run_policy();
     let source = "(once)a=b\na=c";
     let program = parse_program(source)?;
-    let first = executable_program(&program)?.steps(runtime_input(b"aa", limits)?)?;
-    let second = executable_program(&program)?.steps(runtime_input(b"aa", limits)?)?;
-    let third = executable_program(&program)?.steps(runtime_input(b"aa", limits)?)?;
+    let first = program.steps(runtime_input(b"aa", limits)?)?;
+    let second = program.steps(runtime_input(b"aa", limits)?)?;
+    let third = program.steps(runtime_input(b"aa", limits)?)?;
 
     ensure_eq!(
         finish_step_signatures(first)?,
@@ -903,9 +882,7 @@ fn execution_full_run_and_borrowed_session_share_contract() -> TestResult {
     let program = parse_program(source)?;
 
     let completed = execute_program(&program, runtime_input(b"a", limits)?)?;
-    let stepped = executable_program(&program)?
-        .steps(runtime_input(b"a", limits)?)?
-        .finish()?;
+    let stepped = program.steps(runtime_input(b"a", limits)?)?.finish()?;
 
     ensure_eq!(completed, stepped)
 }
@@ -919,8 +896,7 @@ fn execution_borrowed_terminals_keep_program_witness() -> TestResult {
     let limits = default_test_run_policy();
 
     let stable_program = parse_program("a=b")?;
-    let stable_session =
-        executable_program(&stable_program)?.steps(runtime_input(b"a", limits)?)?;
+    let stable_session = stable_program.steps(runtime_input(b"a", limits)?)?;
     let stable_session = match stable_session.step() {
         BorrowedStepTransition::Applied(applied) => applied.into_session(),
         BorrowedStepTransition::Stable(_)
@@ -941,10 +917,7 @@ fn execution_borrowed_terminals_keep_program_witness() -> TestResult {
     };
 
     let returned_program = parse_program("a=(return)ok")?;
-    match executable_program(&returned_program)?
-        .steps(runtime_input(b"a", limits)?)?
-        .step()
-    {
+    match returned_program.steps(runtime_input(b"a", limits)?)?.step() {
         BorrowedStepTransition::Returned(returned) => {
             ensure_eq!(returned.program().rule_count().get(), 1)?;
         }
@@ -957,7 +930,7 @@ fn execution_borrowed_terminals_keep_program_witness() -> TestResult {
 
     let failed_limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, 1>::new();
     let failed_program = parse_program("a=(return)ok")?;
-    let failed = match executable_program(&failed_program)?
+    let failed = match failed_program
         .steps(runtime_input(b"a", failed_limits)?)?
         .step()
     {
@@ -984,7 +957,7 @@ fn execution_borrowed_transitions_retain_rule_views() -> TestResult {
     let limits = default_test_run_policy();
 
     let program = parse_program("a=b\nb=(return)ok")?;
-    let execution = executable_program(&program)?.steps(runtime_input(b"a", limits)?)?;
+    let execution = program.steps(runtime_input(b"a", limits)?)?;
     let execution = match execution.step() {
         BorrowedStepTransition::Applied(applied) => {
             ensure_eq!(applied.step().get(), 1)?;
@@ -1032,7 +1005,7 @@ fn execution_borrowed_transitions_retain_rule_views() -> TestResult {
 fn execution_step_failure_is_terminal_transition() -> TestResult {
     let program = parse_program("a=(return)ok")?;
     let limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, 1>::new();
-    let execution = executable_program(&program)?.steps(runtime_input(b"a", limits)?)?;
+    let execution = program.steps(runtime_input(b"a", limits)?)?;
 
     let failed = expect_failed_transition(execution.step())?;
     ensure_eq!(failed.completed_steps().get(), 0)?;
@@ -1059,7 +1032,7 @@ fn execution_step_failure_is_terminal_transition() -> TestResult {
 fn execution_step_failure_preserves_current_progress() -> TestResult {
     let program = parse_program("a=b\nb=c")?;
     let limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
-    let execution = executable_program(&program)?.steps(runtime_input(b"a", limits)?)?;
+    let execution = program.steps(runtime_input(b"a", limits)?)?;
 
     let running = match expect_step_transition(execution.step())? {
         BorrowedStepTransition::Applied(applied) => applied.into_session(),
