@@ -4,10 +4,7 @@ use crate::allocation::{AllocationContext, try_push};
 use crate::bytes::{CompactByte, Payload, PayloadSyntax};
 use crate::error::{LeftModifierKind, ParseError, ParseErrorKind, PayloadKind, RightActionKind};
 use crate::limits::PayloadByteLimit;
-use crate::rule::{
-    ParsedRule, ParsedRuleAction, RewriteAction, RuleAnchorSyntax, RuleBody, RuleHead,
-    RuleRepeatBehavior,
-};
+use crate::rule::{ParsedRule, ParsedRulePattern, RewriteAction, RuleAnchorSyntax};
 use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
 use crate::syntax::SyntaxToken;
 
@@ -49,10 +46,10 @@ impl RuleSyntaxLine {
     /// action, or payload syntax.
     pub(super) fn parse(&self, payload_limit: PayloadByteLimit) -> Result<ParsedRule, ParseError> {
         let (left, right) = self.syntax_parts();
-        let head = left.parse(payload_limit)?;
-        let body = right.parse(payload_limit)?;
+        let left = left.parse(payload_limit)?;
+        let right = right.parse(payload_limit)?;
 
-        Ok(ParsedRule::from_parts(self.line_number, head, body))
+        Ok(left.into_parsed_rule(right))
     }
 
     /// Borrows the compact line as left and right syntax slices.
@@ -276,7 +273,7 @@ impl<'code> LeftSyntax<'code> {
     ///
     /// Returns `ParseError` if left-side modifier order or payload syntax is
     /// invalid.
-    fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleHead, ParseError> {
+    fn parse(self, payload_limit: PayloadByteLimit) -> Result<ParsedLeftSide, ParseError> {
         self.into_after_repeat().parse(payload_limit)
     }
 
@@ -286,16 +283,25 @@ impl<'code> LeftSyntax<'code> {
             LeftAfterRepeat {
                 line_number: self.line_number,
                 bytes: matched.rest,
-                repeat: RuleRepeatBehavior::Once,
+                repeat: LeftRepeatSyntax::Once,
             }
         } else {
             LeftAfterRepeat {
                 line_number: self.line_number,
                 bytes: self.bytes,
-                repeat: RuleRepeatBehavior::Always,
+                repeat: LeftRepeatSyntax::Always,
             }
         }
     }
+}
+
+/// Parser-local repeat classification for the current left side.
+#[derive(Clone, Copy)]
+enum LeftRepeatSyntax {
+    /// No `(once)` prefix was parsed.
+    Always,
+    /// A `(once)` prefix was parsed.
+    Once,
 }
 
 /// Left-side syntax after repeat classification.
@@ -306,7 +312,7 @@ struct LeftAfterRepeat<'code> {
     /// Remaining compact syntax after optional repeat.
     bytes: CompactSyntax<'code>,
     /// Parsed repeat modifier.
-    repeat: RuleRepeatBehavior,
+    repeat: LeftRepeatSyntax,
 }
 
 impl<'code> LeftAfterRepeat<'code> {
@@ -316,7 +322,7 @@ impl<'code> LeftAfterRepeat<'code> {
     ///
     /// Returns `ParseError` if the remaining left-side syntax cannot become a
     /// valid payload with its anchor.
-    fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleHead, ParseError> {
+    fn parse(self, payload_limit: PayloadByteLimit) -> Result<ParsedLeftSide, ParseError> {
         self.into_payload_syntax()?.parse(payload_limit)
     }
 
@@ -361,7 +367,7 @@ struct LeftPayloadSyntax<'code> {
     /// Payload bytes after repeat and anchor modifiers.
     bytes: CompactSyntax<'code>,
     /// Parsed repeat modifier.
-    repeat: RuleRepeatBehavior,
+    repeat: LeftRepeatSyntax,
     /// Parsed match anchor.
     anchor: RuleAnchorSyntax,
 }
@@ -373,14 +379,45 @@ impl LeftPayloadSyntax<'_> {
     ///
     /// Returns `ParseError` if the left-side payload contains invalid
     /// executable payload bytes or allocation fails.
-    fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleHead, ParseError> {
+    fn parse(self, payload_limit: PayloadByteLimit) -> Result<ParsedLeftSide, ParseError> {
         let payload = parse_payload(
             self.bytes.as_slice(),
             self.line_number,
             PayloadKind::LeftSideData,
             payload_limit,
         )?;
-        Ok(RuleHead::new(self.repeat, self.anchor, payload))
+        Ok(ParsedLeftSide {
+            repeat: self.repeat,
+            pattern: ParsedRulePattern::new(self.line_number, self.anchor, payload),
+        })
+    }
+}
+
+/// Parsed left side paired with its repeat variant.
+struct ParsedLeftSide {
+    /// Parser-local repeat classification.
+    repeat: LeftRepeatSyntax,
+    /// Parsed match pattern before position assignment.
+    pattern: ParsedRulePattern,
+}
+
+impl ParsedLeftSide {
+    /// Combines the parsed left side with a parsed right side without rejoining rule shape.
+    fn into_parsed_rule(self, right: ParsedRightSide) -> ParsedRule {
+        match (self.repeat, right) {
+            (LeftRepeatSyntax::Always, ParsedRightSide::Rewrite(action)) => {
+                ParsedRule::always_rewrite(self.pattern, action)
+            }
+            (LeftRepeatSyntax::Once, ParsedRightSide::Rewrite(action)) => {
+                ParsedRule::once_rewrite(self.pattern, action)
+            }
+            (LeftRepeatSyntax::Always, ParsedRightSide::Return(output)) => {
+                ParsedRule::always_return(self.pattern, output)
+            }
+            (LeftRepeatSyntax::Once, ParsedRightSide::Return(output)) => {
+                ParsedRule::once_return(self.pattern, output)
+            }
+        }
     }
 }
 
@@ -399,7 +436,7 @@ impl<'code> RightSyntax<'code> {
     /// # Errors
     ///
     /// Returns `ParseError` if right-side action or payload syntax is invalid.
-    fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleBody, ParseError> {
+    fn parse(self, payload_limit: PayloadByteLimit) -> Result<ParsedRightSide, ParseError> {
         self.into_payload_syntax()?.parse(payload_limit)
     }
 
@@ -459,15 +496,21 @@ impl RightActionSyntax {
     }
 
     /// Combines this action token with its parsed payload.
-    fn into_body(self, payload: Payload) -> RuleBody {
-        let action = match self {
-            Self::MoveStart => ParsedRuleAction::Rewrite(RewriteAction::MoveStart(payload)),
-            Self::MoveEnd => ParsedRuleAction::Rewrite(RewriteAction::MoveEnd(payload)),
-            Self::Return => ParsedRuleAction::Return(payload),
-        };
-
-        RuleBody::new(action)
+    fn into_right_side(self, payload: Payload) -> ParsedRightSide {
+        match self {
+            Self::MoveStart => ParsedRightSide::Rewrite(RewriteAction::MoveStart(payload)),
+            Self::MoveEnd => ParsedRightSide::Rewrite(RewriteAction::MoveEnd(payload)),
+            Self::Return => ParsedRightSide::Return(payload),
+        }
     }
+}
+
+/// Parsed right side with terminal behavior preserved in the variant.
+enum ParsedRightSide {
+    /// Non-terminal rewrite action.
+    Rewrite(RewriteAction),
+    /// Terminal return output.
+    Return(Payload),
 }
 
 /// Right-side payload domain after action-token classification.
@@ -485,7 +528,7 @@ impl RightPayloadSyntax<'_> {
     /// # Errors
     ///
     /// Returns `ParseError` if payload bytes are invalid or allocation fails.
-    fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleBody, ParseError> {
+    fn parse(self, payload_limit: PayloadByteLimit) -> Result<ParsedRightSide, ParseError> {
         match self {
             Self::Replace(payload) => payload.parse(payload_limit),
             Self::Action(payload) => payload.parse(payload_limit),
@@ -508,16 +551,14 @@ impl RightReplacePayloadSyntax<'_> {
     /// # Errors
     ///
     /// Returns `ParseError` if payload bytes are invalid or allocation fails.
-    fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleBody, ParseError> {
+    fn parse(self, payload_limit: PayloadByteLimit) -> Result<ParsedRightSide, ParseError> {
         let payload = parse_payload(
             self.bytes.as_slice(),
             self.line_number,
             PayloadKind::RightSideData,
             payload_limit,
         )?;
-        Ok(RuleBody::new(ParsedRuleAction::Rewrite(
-            RewriteAction::Replace(payload),
-        )))
+        Ok(ParsedRightSide::Rewrite(RewriteAction::Replace(payload)))
     }
 }
 
@@ -557,14 +598,14 @@ impl<'code> RightActionPayloadSyntax<'code> {
     /// # Errors
     ///
     /// Returns `ParseError` if payload bytes are invalid or allocation fails.
-    fn parse(self, payload_limit: PayloadByteLimit) -> Result<RuleBody, ParseError> {
+    fn parse(self, payload_limit: PayloadByteLimit) -> Result<ParsedRightSide, ParseError> {
         let payload = parse_payload(
             self.bytes.as_slice(),
             self.line_number,
             self.action.payload_kind(),
             payload_limit,
         )?;
-        Ok(self.action.into_body(payload))
+        Ok(self.action.into_right_side(payload))
     }
 }
 

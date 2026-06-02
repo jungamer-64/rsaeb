@@ -21,9 +21,10 @@
 //!   only when it contains at least one executable rule. Execution, tracing,
 //!   stepwise execution, and rule-attempt execution exist only on this type.
 //!
-//! `(once)` repeat intent is parsed as rule data. Every run builds its own
-//! per-rule runtime availability cells, so once-state mismatch is not a public
-//! runtime error class.
+//! `(once)` repeat intent and right-side action shape are parsed into the rule
+//! variant itself. Every run builds its own per-rule runtime availability cells,
+//! so consumed once rules are filtered before matching and once-state mismatch
+//! is not a public runtime error class.
 //!
 //! # API map
 //!

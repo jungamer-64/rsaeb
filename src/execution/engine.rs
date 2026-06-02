@@ -355,7 +355,7 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<'program, P, E> {
         };
         let applied = witnessed.commit(&mut state, &mut scratch);
         match applied {
-            CoreAppliedRule::Rewrite { step, rule } => CoreRunTransition::Applied {
+            CoreAppliedRule::Continued { step, rule } => CoreRunTransition::Applied {
                 step,
                 rule,
                 continuation: Session {
@@ -368,7 +368,7 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<'program, P, E> {
                     },
                 },
             },
-            CoreAppliedRule::Return {
+            CoreAppliedRule::Terminal {
                 step,
                 rule,
                 output_view,

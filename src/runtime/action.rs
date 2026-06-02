@@ -15,9 +15,9 @@ use super::state::State;
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum AppliedRule<'program> {
     /// One rewrite rule committed and execution may continue.
-    Rewrite(CommittedRewriteRule),
+    Continued(CommittedRewriteRule),
     /// One return rule committed and execution is terminal.
-    Return(CommittedReturnRule<'program>),
+    Terminal(CommittedReturnRule<'program>),
 }
 
 /// Prepared rule step after action-specific runtime preparation succeeds.
@@ -117,12 +117,12 @@ impl<'program, E: ExecutionPolicy> PreparedRuleStep<'program, '_, '_, E> {
                 prepared.matched.commit();
                 let step = prepared.step.commit();
                 state.commit_rewrite(prepared.rewrite, scratch);
-                AppliedRule::Rewrite(CommittedRewriteRule { step })
+                AppliedRule::Continued(CommittedRewriteRule { step })
             }
             Self::Return(prepared) => {
                 prepared.matched.commit();
                 let step = prepared.step.commit();
-                AppliedRule::Return(CommittedReturnRule {
+                AppliedRule::Terminal(CommittedReturnRule {
                     step,
                     output_view: prepared.output_view,
                     output: prepared.output,

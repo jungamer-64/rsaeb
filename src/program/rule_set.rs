@@ -5,7 +5,7 @@ use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_rese
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError, ParseRepresentationError};
 use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePosition};
 use crate::limits::RuleLimit;
-use crate::rule::{ParsedRule, Rule, RuleRepeatBehavior};
+use crate::rule::{ParsedRule, Rule};
 
 /// Parser-built rule table before executable shape classification.
 #[derive(Debug, PartialEq, Eq)]
@@ -209,9 +209,9 @@ impl RuleSetBuilder {
         parsed: &ParsedRule,
         line_number: crate::source::SourceLineNumber,
     ) -> Result<PublicOnceRuleCount, ParseError> {
-        match parsed.repeat_behavior() {
-            RuleRepeatBehavior::Always => Ok(self.once_rule_count),
-            RuleRepeatBehavior::Once => {
+        match parsed {
+            ParsedRule::AlwaysRewrite(_) | ParsedRule::AlwaysReturn(_) => Ok(self.once_rule_count),
+            ParsedRule::OnceRewrite(_) | ParsedRule::OnceReturn(_) => {
                 let next_once_rule_count =
                     self.once_rule_count.checked_next().ok_or_else(|| {
                         ParseError::at_line(

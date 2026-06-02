@@ -6,7 +6,7 @@ use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::program::{ReturnOutput, ReturnOutputView};
 use crate::runtime::action::{AppliedRule, PreparedRuleStep, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuleAttemptReservation, RuntimeBudgetState};
-use crate::runtime::matcher::{MatchedRuleApplication, RuleAttempt, attempt_rule};
+use crate::runtime::matcher::{MatchedRuleApplication, RuleAttempt};
 use crate::runtime::once::{
     ContinuingRuntimeRulePass, FinalRuntimeRulePass, RuntimeRulePassCursor,
 };
@@ -63,14 +63,14 @@ pub(super) enum BorrowedAttemptWitness {}
 /// Internal committed application paired with its public rule witness.
 pub(super) enum CoreAppliedRule<'program, RuleWitness> {
     /// One rewrite rule committed and execution may continue.
-    Rewrite {
+    Continued {
         /// Committed step count.
         step: StepCount,
         /// Rule witness selected before runtime side effects committed.
         rule: RuleWitness,
     },
     /// One return rule committed and execution is terminal.
-    Return {
+    Terminal {
         /// Committed step count.
         step: StepCount,
         /// Rule witness selected before runtime side effects committed.
@@ -229,11 +229,11 @@ impl<'program, RuleWitness> CoreAppliedRule<'program, RuleWitness> {
     /// Combines a committed runtime application with its pre-commit rule witness.
     fn from_applied_rule(applied: AppliedRule<'program>, rule: RuleWitness) -> Self {
         match applied {
-            AppliedRule::Rewrite(committed) => Self::Rewrite {
+            AppliedRule::Continued(committed) => Self::Continued {
                 step: committed.step(),
                 rule,
             },
-            AppliedRule::Return(committed) => Self::Return {
+            AppliedRule::Terminal(committed) => Self::Terminal {
                 step: committed.step(),
                 rule,
                 output_view: committed.output_view(),
@@ -351,7 +351,7 @@ where
         }
     };
 
-    match attempt_rule(pass.current_rule(), &state) {
+    match pass.attempt_current(&state) {
         RuleAttempt::Missed(missed) => {
             let witness = match W::from_rule(RuleView::new(missed.rule())) {
                 Ok(witness) => witness,
@@ -441,7 +441,7 @@ where
         }
     };
 
-    match attempt_rule(pass.current_rule(), &state) {
+    match pass.attempt_current(&state) {
         RuleAttempt::Missed(missed) => {
             let witness = match W::from_rule(RuleView::new(missed.rule())) {
                 Ok(witness) => witness,
@@ -551,7 +551,7 @@ where
     A: RuleAttemptPolicy,
 {
     match applied {
-        CoreAppliedRule::Rewrite { step, rule } => {
+        CoreAppliedRule::Continued { step, rule } => {
             let AttemptRunCore {
                 state,
                 scratch,
@@ -574,7 +574,7 @@ where
                 continuation,
             }
         }
-        CoreAppliedRule::Return {
+        CoreAppliedRule::Terminal {
             step,
             rule,
             output_view: _,
@@ -607,7 +607,7 @@ where
     A: RuleAttemptPolicy,
 {
     match applied {
-        CoreAppliedRule::Rewrite { step, rule } => {
+        CoreAppliedRule::Continued { step, rule } => {
             let AttemptRunCore {
                 state,
                 scratch,
@@ -630,7 +630,7 @@ where
                 continuation,
             }
         }
-        CoreAppliedRule::Return {
+        CoreAppliedRule::Terminal {
             step,
             rule,
             output_view: _,

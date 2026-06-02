@@ -56,6 +56,95 @@ fn inspect_rule_views_expose_structured_public_data() -> TestResult {
 
 /// # Errors
 ///
+/// Returns `TestFailure` if all parser-to-runtime rule variants do not keep
+/// repeat, action, and canonical-source shape distinct.
+#[test]
+fn inspect_all_repeat_and_action_rule_shapes() -> TestResult {
+    let inspected = parse_program("a=b\n(once)c=d\ne=(return)ok\n(once)f=(return)done")?;
+    let rules = inspected.rules().collect::<Vec<_>>();
+
+    ensure_eq!(inspected.rule_count().get(), 4)?;
+    ensure_eq!(inspected.once_rule_count().get(), 2)?;
+    ensure_eq!(rules.len(), 4)?;
+
+    let always_rewrite = rules
+        .first()
+        .copied()
+        .ok_or(TestFailure::message("expected always rewrite"))?;
+    let once_rewrite = rules
+        .get(1)
+        .copied()
+        .ok_or(TestFailure::message("expected once rewrite"))?;
+    let always_return = rules
+        .get(2)
+        .copied()
+        .ok_or(TestFailure::message("expected always return"))?;
+    let once_return = rules
+        .get(3)
+        .copied()
+        .ok_or(TestFailure::message("expected once return"))?;
+
+    ensure_eq!(always_rewrite.repeat(), RuleRepeat::Always)?;
+    ensure_eq!(
+        always_rewrite.canonical_source()?.as_slice(),
+        b"a=b".as_slice()
+    )?;
+    match always_rewrite.action() {
+        RuleActionView::Replace(payload) => {
+            ensure_eq!(payload.materialize()?.as_slice(), b"b".as_slice())?;
+        }
+        RuleActionView::MoveStart(_) | RuleActionView::MoveEnd(_) | RuleActionView::Return(_) => {
+            return Err(TestFailure::message("expected always rewrite"));
+        }
+    }
+
+    ensure_eq!(once_rewrite.repeat(), RuleRepeat::Once)?;
+    ensure_eq!(
+        once_rewrite.canonical_source()?.as_slice(),
+        b"(once)c=d".as_slice(),
+    )?;
+    match once_rewrite.action() {
+        RuleActionView::Replace(payload) => {
+            ensure_eq!(payload.materialize()?.as_slice(), b"d".as_slice())?;
+        }
+        RuleActionView::MoveStart(_) | RuleActionView::MoveEnd(_) | RuleActionView::Return(_) => {
+            return Err(TestFailure::message("expected once rewrite"));
+        }
+    }
+
+    ensure_eq!(always_return.repeat(), RuleRepeat::Always)?;
+    ensure_eq!(
+        always_return.canonical_source()?.as_slice(),
+        b"e=(return)ok".as_slice(),
+    )?;
+    match always_return.action() {
+        RuleActionView::Return(payload) => {
+            ensure_eq!(payload.materialize()?.as_slice(), b"ok".as_slice())?;
+        }
+        RuleActionView::Replace(_) | RuleActionView::MoveStart(_) | RuleActionView::MoveEnd(_) => {
+            return Err(TestFailure::message("expected always return"));
+        }
+    }
+
+    ensure_eq!(once_return.repeat(), RuleRepeat::Once)?;
+    ensure_eq!(
+        once_return.canonical_source()?.as_slice(),
+        b"(once)f=(return)done".as_slice(),
+    )?;
+    match once_return.action() {
+        RuleActionView::Return(payload) => {
+            ensure_eq!(payload.materialize()?.as_slice(), b"done".as_slice())?;
+        }
+        RuleActionView::Replace(_) | RuleActionView::MoveStart(_) | RuleActionView::MoveEnd(_) => {
+            return Err(TestFailure::message("expected once return"));
+        }
+    }
+
+    Ok(())
+}
+
+/// # Errors
+///
 /// Returns `TestFailure` if canonical source does not reparse to the same
 /// public rule view.
 #[test]

@@ -1,7 +1,7 @@
-use super::once::{MatchedRuleCommit, RuntimeRule, RuntimeRuleReadiness};
+use super::once::{AvailableRuntimeRule, MatchedRuleCommit};
 use super::state::{State, StateMatch};
 use crate::bytes::Payload;
-use crate::rule::{RewriteAction, Rule, RuleAnchorSyntax};
+use crate::rule::{RewriteAction, Rule, RuleAnchorSyntax, RuleRightSide};
 
 /// Outcome of evaluating one executable rule line against the current state.
 #[derive(Debug)]
@@ -10,6 +10,15 @@ pub(crate) enum RuleAttempt<'program, 'state, 'once> {
     Matched(MatchedRuleApplication<'program, 'state, 'once>),
     /// The rule was consumed by the attempt but did not apply.
     Missed(RuleAttemptMiss<'program>),
+}
+
+/// Outcome of evaluating a rule that is already proven available.
+#[derive(Debug)]
+pub(crate) enum AvailableRuleAttempt<'program, 'state, 'once> {
+    /// The available rule matched and carries the commit permit needed after success.
+    Matched(MatchedRuleApplication<'program, 'state, 'once>),
+    /// The available rule did not match the current runtime state.
+    StateMismatch(RuleAttemptMiss<'program>),
 }
 
 /// Reason a consumed executable rule line did not apply.
@@ -110,7 +119,7 @@ enum RuleStateMatch<'program, 'state> {
 
 impl<'program> RuleAttemptMiss<'program> {
     /// Captures a consumed non-applying rule line.
-    const fn new(rule: &'program Rule, reason: RuleMissReason) -> Self {
+    pub(crate) const fn new(rule: &'program Rule, reason: RuleMissReason) -> Self {
         Self { rule, reason }
     }
 
@@ -136,19 +145,23 @@ impl<'program, 'state> MatchedRuleCandidate<'program, 'state> {
         self,
         commit: MatchedRuleCommit<'once>,
     ) -> MatchedRuleApplication<'program, 'state, 'once> {
-        match self.rule {
-            Rule::Rewrite(rule) => MatchedRuleApplication::Rewrite(MatchedRewriteApplication {
-                rule: self.rule,
-                action: rule.action(),
-                commit,
-                state_match: self.state_match,
-            }),
-            Rule::Return(rule) => MatchedRuleApplication::Return(MatchedReturnApplication {
-                rule: self.rule,
-                output: rule.output(),
-                commit,
-                state_match: self.state_match,
-            }),
+        match self.rule.right_side() {
+            RuleRightSide::Rewrite(action) => {
+                MatchedRuleApplication::Rewrite(MatchedRewriteApplication {
+                    rule: self.rule,
+                    action,
+                    commit,
+                    state_match: self.state_match,
+                })
+            }
+            RuleRightSide::Return(output) => {
+                MatchedRuleApplication::Return(MatchedReturnApplication {
+                    rule: self.rule,
+                    output,
+                    commit,
+                    state_match: self.state_match,
+                })
+            }
         }
     }
 }
@@ -195,28 +208,25 @@ impl<'program> PreparedMatchedRule<'program, '_> {
     }
 }
 
-/// Evaluates exactly one parsed rule line against the current runtime state.
-pub(crate) fn attempt_rule<'program, 'state, 'once>(
-    runtime_rule: RuntimeRule<'program, 'once>,
+/// Evaluates one already-available parsed rule line against the current runtime state.
+pub(crate) fn attempt_available_rule<'program, 'state, 'once>(
+    runtime_rule: AvailableRuntimeRule<'program, 'once>,
     state: &'state State,
-) -> RuleAttempt<'program, 'state, 'once> {
+) -> AvailableRuleAttempt<'program, 'state, 'once> {
     let rule = runtime_rule.rule();
-    let commit_seed = match runtime_rule.readiness() {
-        RuntimeRuleReadiness::Available(commit_seed) => commit_seed,
-        RuntimeRuleReadiness::Consumed => {
-            return RuleAttempt::Missed(RuleAttemptMiss::new(rule, RuleMissReason::OnceConsumed));
-        }
-    };
 
     let candidate = match match_rule_state(rule, state) {
         RuleStateMatch::Matched(candidate) => candidate,
         RuleStateMatch::Mismatched => {
-            return RuleAttempt::Missed(RuleAttemptMiss::new(rule, RuleMissReason::StateMismatch));
+            return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::new(
+                rule,
+                RuleMissReason::StateMismatch,
+            ));
         }
     };
-    let commit = commit_seed.into_matched_commit();
+    let commit = runtime_rule.into_matched_commit();
 
-    RuleAttempt::Matched(candidate.into_application(commit))
+    AvailableRuleAttempt::Matched(candidate.into_application(commit))
 }
 
 /// Compares a single parsed rule with the current runtime state.

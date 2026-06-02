@@ -4,9 +4,10 @@ use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
 use crate::bytes::Payload;
+use crate::inspect::RuleRepeat;
 use crate::syntax::SyntaxToken;
 
-use super::model::{CanonicalRightSide, Rule, RuleAnchorSyntax, RuleRepeatBehavior};
+use super::model::{CanonicalRightSide, Rule, RuleAnchorSyntax};
 
 /// Materializes this rule's canonical source form.
 ///
@@ -22,7 +23,7 @@ pub(crate) fn canonical_source(rule: &Rule) -> Result<Vec<u8>, AllocationError> 
         AllocationContext::CanonicalSource,
     )?;
 
-    if matches!(rule.repeat_behavior(), RuleRepeatBehavior::Once) {
+    if matches!(rule.repeat(), RuleRepeat::Once) {
         push_token(&mut output, SyntaxToken::Once)?;
     }
 
@@ -64,7 +65,7 @@ pub(crate) fn canonical_source(rule: &Rule) -> Result<Vec<u8>, AllocationError> 
 fn canonical_source_len(rule: &Rule) -> Result<usize, AllocationError> {
     let mut len = rule.lhs().byte_count().get();
 
-    len = checked_source_len_add(len, repeat_token_len(rule.repeat_behavior()))?;
+    len = checked_source_len_add(len, repeat_token_len(rule.repeat()))?;
     len = checked_source_len_add(len, anchor_token_len(rule.anchor()))?;
     len = checked_source_len_add(len, 1)?;
     len = checked_source_len_add(len, right_side_len(rule.canonical_right_side())?)?;
@@ -73,10 +74,10 @@ fn canonical_source_len(rule: &Rule) -> Result<usize, AllocationError> {
 }
 
 /// Returns the canonical `(once)` marker length for a rule availability.
-fn repeat_token_len(repeat: RuleRepeatBehavior) -> usize {
+fn repeat_token_len(repeat: RuleRepeat) -> usize {
     match repeat {
-        RuleRepeatBehavior::Always => 0,
-        RuleRepeatBehavior::Once => SyntaxToken::Once.len(),
+        RuleRepeat::Always => 0,
+        RuleRepeat::Once => SyntaxToken::Once.len(),
     }
 }
 

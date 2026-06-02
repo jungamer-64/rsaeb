@@ -13,6 +13,143 @@ pub(crate) enum RewriteAction {
     MoveEnd(Payload),
 }
 
+/// Parser-built match pattern before program-local position assignment.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ParsedRulePattern {
+    /// Original source line containing this rule.
+    line_number: SourceLineNumber,
+    /// Parsed match anchor modifier.
+    anchor: RuleAnchorSyntax,
+    /// Left-side executable match payload.
+    lhs: Payload,
+}
+
+/// Parsed rewrite rule before program-local position assignment.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ParsedRewriteRule {
+    /// Positionless parsed match pattern.
+    pattern: ParsedRulePattern,
+    /// Right-side rewrite action.
+    action: RewriteAction,
+}
+
+/// Parsed return rule before program-local position assignment.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ParsedReturnRule {
+    /// Positionless parsed match pattern.
+    pattern: ParsedRulePattern,
+    /// Right-side return output.
+    output: Payload,
+}
+
+/// Internal parsed rule with repeat and terminal behavior preserved in the variant.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ParsedRule {
+    /// Reusable non-terminal rewrite rule.
+    AlwaysRewrite(ParsedRewriteRule),
+    /// Once-only non-terminal rewrite rule.
+    OnceRewrite(ParsedRewriteRule),
+    /// Reusable terminal return rule.
+    AlwaysReturn(ParsedReturnRule),
+    /// Once-only terminal return rule.
+    OnceReturn(ParsedReturnRule),
+}
+
+/// Match anchor as it appears in parsed syntax.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuleAnchorSyntax {
+    /// No anchor modifier; search every possible match position.
+    Anywhere,
+    /// `(start)` modifier; match only at the beginning.
+    Start,
+    /// `(end)` modifier; match only at the end.
+    End,
+}
+
+/// Right-side syntax shape used by canonical source generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CanonicalRightSide<'rule> {
+    /// Plain replacement payload.
+    Replace(&'rule Payload),
+    /// `(start)` action payload.
+    MoveStart(&'rule Payload),
+    /// `(end)` action payload.
+    MoveEnd(&'rule Payload),
+    /// `(return)` action payload.
+    Return(&'rule Payload),
+}
+
+/// Stored match fields shared by all executable rule variants.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct RulePattern {
+    /// Execution-order position assigned by the parsed program.
+    position: RulePosition,
+    /// Original source line for diagnostics and inspection.
+    line_number: SourceLineNumber,
+    /// Match anchor used by the runtime matcher.
+    anchor: RuleAnchorSyntax,
+    /// Left-side executable match payload.
+    lhs: Payload,
+}
+
+/// Stored always-available rewrite rule.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct AlwaysRewriteRule {
+    /// Shared executable match fields.
+    pattern: RulePattern,
+    /// Right-side rewrite action applied after a match.
+    action: RewriteAction,
+}
+
+/// Stored once-only rewrite rule.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct OnceRewriteRule {
+    /// Shared executable match fields.
+    pattern: RulePattern,
+    /// Right-side rewrite action applied after a match.
+    action: RewriteAction,
+}
+
+/// Stored always-available return rule.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct AlwaysReturnRule {
+    /// Shared executable match fields.
+    pattern: RulePattern,
+    /// Right-side output returned after a match.
+    output: Payload,
+}
+
+/// Stored once-only return rule.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct OnceReturnRule {
+    /// Shared executable match fields.
+    pattern: RulePattern,
+    /// Right-side output returned after a match.
+    output: Payload,
+}
+
+/// Internal rule split by repeat and terminal behavior.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Rule {
+    /// Reusable non-terminal rewrite rule.
+    AlwaysRewrite(AlwaysRewriteRule),
+    /// Once-only non-terminal rewrite rule.
+    OnceRewrite(OnceRewriteRule),
+    /// Reusable terminal return rule.
+    AlwaysReturn(AlwaysReturnRule),
+    /// Once-only terminal return rule.
+    OnceReturn(OnceReturnRule),
+}
+
+/// Borrowed right-side action for inspection and canonical rendering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuleRightSide<'rule> {
+    /// Non-terminal rewrite action.
+    Rewrite(&'rule RewriteAction),
+    /// Terminal return output.
+    Return(&'rule Payload),
+}
+
 impl RewriteAction {
     /// Borrows the runtime state as a public byte view.
     pub(crate) fn view(&self) -> RuleActionView<'_> {
@@ -40,64 +177,56 @@ impl RewriteAction {
     }
 }
 
-/// Right-side syntax shape used by canonical source generation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CanonicalRightSide<'rule> {
-    /// Plain replacement payload.
-    Replace(&'rule Payload),
-    /// `(start)` action payload.
-    MoveStart(&'rule Payload),
-    /// `(end)` action payload.
-    MoveEnd(&'rule Payload),
-    /// `(return)` action payload.
-    Return(&'rule Payload),
-}
-
-/// Internal parsed rule.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ParsedRule {
-    /// Original source line containing this rule.
-    line_number: SourceLineNumber,
-    /// Parsed left-side rule fields.
-    head: RuleHead,
-    /// Parsed right-side rule action.
-    body: RuleBody,
-}
-
-impl ParsedRule {
-    /// Combines parsed rule parts before program-level repeat-state assignment.
-    pub(crate) const fn from_parts(
+impl ParsedRulePattern {
+    /// Groups parsed left-side rule fields before program-level position assignment.
+    pub(crate) const fn new(
         line_number: SourceLineNumber,
-        head: RuleHead,
-        body: RuleBody,
+        anchor: RuleAnchorSyntax,
+        lhs: Payload,
     ) -> Self {
         Self {
             line_number,
-            head,
-            body,
+            anchor,
+            lhs,
         }
+    }
+}
+
+impl ParsedRule {
+    /// Builds a reusable rewrite rule.
+    pub(crate) const fn always_rewrite(pattern: ParsedRulePattern, action: RewriteAction) -> Self {
+        Self::AlwaysRewrite(ParsedRewriteRule { pattern, action })
+    }
+
+    /// Builds a once-only rewrite rule.
+    pub(crate) const fn once_rewrite(pattern: ParsedRulePattern, action: RewriteAction) -> Self {
+        Self::OnceRewrite(ParsedRewriteRule { pattern, action })
+    }
+
+    /// Builds a reusable return rule.
+    pub(crate) const fn always_return(pattern: ParsedRulePattern, output: Payload) -> Self {
+        Self::AlwaysReturn(ParsedReturnRule { pattern, output })
+    }
+
+    /// Builds a once-only return rule.
+    pub(crate) const fn once_return(pattern: ParsedRulePattern, output: Payload) -> Self {
+        Self::OnceReturn(ParsedReturnRule { pattern, output })
     }
 
     /// Source line used for diagnostics and public inspection.
     pub(crate) const fn line_number(&self) -> SourceLineNumber {
-        self.line_number
+        self.pattern().line_number
     }
 
-    /// Parsed repeat behavior for this rule.
-    pub(crate) const fn repeat_behavior(&self) -> RuleRepeatBehavior {
-        self.head.repeat
+    /// Borrows the positionless match pattern.
+    const fn pattern(&self) -> &ParsedRulePattern {
+        match self {
+            Self::AlwaysRewrite(rule) => &rule.pattern,
+            Self::OnceRewrite(rule) => &rule.pattern,
+            Self::AlwaysReturn(rule) => &rule.pattern,
+            Self::OnceReturn(rule) => &rule.pattern,
+        }
     }
-}
-
-/// Match anchor as it appears in parsed syntax.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuleAnchorSyntax {
-    /// No anchor modifier; search every possible match position.
-    Anywhere,
-    /// `(start)` modifier; match only at the beginning.
-    Start,
-    /// `(end)` modifier; match only at the end.
-    End,
 }
 
 impl RuleAnchorSyntax {
@@ -111,41 +240,83 @@ impl RuleAnchorSyntax {
     }
 }
 
-/// Match fields shared by rewrite and return rules.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct RuleMatch {
-    /// Execution-order position assigned by the parsed program.
-    position: RulePosition,
-    /// Original source line for diagnostics and inspection.
-    line_number: SourceLineNumber,
-    /// Match anchor used by the runtime matcher.
-    anchor: RuleAnchorSyntax,
-    /// Left-side executable match payload.
-    lhs: Payload,
-}
-
-/// Internal rule split by terminal behavior.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Rule {}
-
-/// Borrowed right-side action for inspection and canonical rendering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuleRightSide<'rule> {
-    /// Non-terminal rewrite action.
-    Rewrite(&'rule RewriteAction),
-    /// Terminal return output.
-    Return(&'rule Payload),
-}
-
-impl RuleMatch {
-    /// Assigns execution position to parsed match fields.
-    fn from_head(position: RulePosition, line_number: SourceLineNumber, head: RuleHead) -> Self {
+impl RulePattern {
+    /// Assigns program-local position to parsed match fields.
+    fn from_parsed(position: RulePosition, pattern: ParsedRulePattern) -> Self {
         Self {
             position,
-            line_number,
-            anchor: head.anchor,
-            lhs: head.lhs,
+            line_number: pattern.line_number,
+            anchor: pattern.anchor,
+            lhs: pattern.lhs,
         }
+    }
+}
+
+impl AlwaysRewriteRule {
+    /// Combines shared match fields with a rewrite action.
+    const fn from_parts(pattern: RulePattern, action: RewriteAction) -> Self {
+        Self { pattern, action }
+    }
+
+    /// Shared executable match fields.
+    pub(crate) const fn pattern(&self) -> &RulePattern {
+        &self.pattern
+    }
+
+    /// Right-side rewrite action.
+    pub(crate) const fn action(&self) -> &RewriteAction {
+        &self.action
+    }
+}
+
+impl OnceRewriteRule {
+    /// Combines shared match fields with a rewrite action.
+    const fn from_parts(pattern: RulePattern, action: RewriteAction) -> Self {
+        Self { pattern, action }
+    }
+
+    /// Shared executable match fields.
+    pub(crate) const fn pattern(&self) -> &RulePattern {
+        &self.pattern
+    }
+
+    /// Right-side rewrite action.
+    pub(crate) const fn action(&self) -> &RewriteAction {
+        &self.action
+    }
+}
+
+impl AlwaysReturnRule {
+    /// Combines shared match fields with a return output.
+    const fn from_parts(pattern: RulePattern, output: Payload) -> Self {
+        Self { pattern, output }
+    }
+
+    /// Shared executable match fields.
+    pub(crate) const fn pattern(&self) -> &RulePattern {
+        &self.pattern
+    }
+
+    /// Right-side return output.
+    pub(crate) const fn output(&self) -> &Payload {
+        &self.output
+    }
+}
+
+impl OnceReturnRule {
+    /// Combines shared match fields with a return output.
+    const fn from_parts(pattern: RulePattern, output: Payload) -> Self {
+        Self { pattern, output }
+    }
+
+    /// Shared executable match fields.
+    pub(crate) const fn pattern(&self) -> &RulePattern {
+        &self.pattern
+    }
+
+    /// Right-side return output.
+    pub(crate) const fn output(&self) -> &Payload {
+        &self.output
     }
 }
 
@@ -170,65 +341,71 @@ impl<'rule> RuleRightSide<'rule> {
 impl Rule {
     /// Assigns execution position to a parsed rule.
     pub(crate) fn from_parsed(position: RulePosition, parsed: ParsedRule) -> Self {
-        let ParsedRule {
-            line_number,
-            head,
-            body,
-        } = parsed;
-        let matcher = RuleMatch::from_head(position, line_number, head);
-        match body.action {
-            ParsedRuleAction::Rewrite(action) => {
-                Self::Rewrite(RewriteRule::from_parts(matcher, action))
+        match parsed {
+            ParsedRule::AlwaysRewrite(rule) => {
+                let pattern = RulePattern::from_parsed(position, rule.pattern);
+                Self::AlwaysRewrite(AlwaysRewriteRule::from_parts(pattern, rule.action))
             }
-            ParsedRuleAction::Return(output) => {
-                Self::Return(ReturnRule::from_parts(matcher, output))
+            ParsedRule::OnceRewrite(rule) => {
+                let pattern = RulePattern::from_parsed(position, rule.pattern);
+                Self::OnceRewrite(OnceRewriteRule::from_parts(pattern, rule.action))
+            }
+            ParsedRule::AlwaysReturn(rule) => {
+                let pattern = RulePattern::from_parsed(position, rule.pattern);
+                Self::AlwaysReturn(AlwaysReturnRule::from_parts(pattern, rule.output))
+            }
+            ParsedRule::OnceReturn(rule) => {
+                let pattern = RulePattern::from_parsed(position, rule.pattern);
+                Self::OnceReturn(OnceReturnRule::from_parts(pattern, rule.output))
             }
         }
     }
 
     /// Shared executable match fields.
-    const fn matcher(&self) -> &RuleMatch {
+    pub(crate) const fn pattern(&self) -> &RulePattern {
         match self {
-            Self::Rewrite(rule) => rule.matcher(),
-            Self::Return(rule) => rule.matcher(),
+            Self::AlwaysRewrite(rule) => rule.pattern(),
+            Self::OnceRewrite(rule) => rule.pattern(),
+            Self::AlwaysReturn(rule) => rule.pattern(),
+            Self::OnceReturn(rule) => rule.pattern(),
         }
     }
 
     /// Execution-order position assigned by the parsed program.
     pub(crate) const fn position(&self) -> RulePosition {
-        self.matcher().position
+        self.pattern().position
     }
 
     /// Source line used for diagnostics and public inspection.
     pub(crate) const fn line_number(&self) -> SourceLineNumber {
-        self.matcher().line_number
+        self.pattern().line_number
     }
 
     /// Public repeat policy for inspection.
     pub(crate) const fn repeat(&self) -> RuleRepeat {
-        self.repeat_behavior().public_repeat()
-    }
-
-    /// Runtime repeat behavior used by the matcher.
-    pub(crate) const fn repeat_behavior(&self) -> RuleRepeatBehavior {
-        self.matcher().repeat
+        match self {
+            Self::AlwaysRewrite(_) | Self::AlwaysReturn(_) => RuleRepeat::Always,
+            Self::OnceRewrite(_) | Self::OnceReturn(_) => RuleRepeat::Once,
+        }
     }
 
     /// Match anchor used by the matcher.
     pub(crate) const fn anchor(&self) -> RuleAnchorSyntax {
-        self.matcher().anchor
+        self.pattern().anchor
     }
 
     /// Left-side executable match payload.
     pub(crate) const fn lhs(&self) -> &Payload {
-        &self.matcher().lhs
+        &self.pattern().lhs
     }
 
     /// Right-side action as a borrowed split view.
     pub(crate) const fn right_side(&self) -> RuleRightSide<'_> {
         match self {
-            Self::Rewrite(rule) => RuleRightSide::Rewrite(rule.action()),
-            Self::Return(rule) => RuleRightSide::Return(rule.output()),
+            Self::AlwaysRewrite(rule) => RuleRightSide::Rewrite(rule.action()),
+            Self::OnceRewrite(rule) => RuleRightSide::Rewrite(rule.action()),
+            Self::AlwaysReturn(rule) => RuleRightSide::Return(rule.output()),
+            Self::OnceReturn(rule) => RuleRightSide::Return(rule.output()),
         }
     }
 
