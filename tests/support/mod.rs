@@ -4,9 +4,8 @@ use alloc::format;
 use alloc::string::{FromUtf8Error, String};
 
 use rsaeb::error::{
-    AllocationError, OwnedRunStepError, ParseError, RuleAttemptStepError, RunAdmissionError,
-    RunError, RunFinishError, RunStartError, RunStepError, RuntimeInputError,
-    TraceSnapshotRunError,
+    AllocationError, ParseError, RuleAttemptStepError, RunAdmissionError, RunError, RunFinishError,
+    RunStartError, RunStepError, RuntimeInputError, TraceSnapshotRunError,
 };
 use rsaeb::policy::DefaultParsePolicy;
 use rsaeb::program::ParsedProgram;
@@ -21,7 +20,6 @@ pub enum TestFailure {
     RunStart(RunStartError),
     RunFinish(RunFinishError),
     RunStep(RunStepError),
-    OwnedRunStep(OwnedRunStepError),
     RuleAttemptStep(RuleAttemptStepError),
     TraceSnapshot(String),
     Utf8(FromUtf8Error),
@@ -45,9 +43,6 @@ impl core::fmt::Debug for TestFailure {
             Self::RunStart(error) => formatter.debug_tuple("RunStart").field(error).finish(),
             Self::RunFinish(error) => formatter.debug_tuple("RunFinish").field(error).finish(),
             Self::RunStep(error) => formatter.debug_tuple("RunStep").field(error).finish(),
-            Self::OwnedRunStep(error) => {
-                formatter.debug_tuple("OwnedRunStep").field(error).finish()
-            }
             Self::RuleAttemptStep(error) => formatter
                 .debug_tuple("RuleAttemptStep")
                 .field(error)
@@ -100,12 +95,6 @@ impl From<RunFinishError> for TestFailure {
 impl From<RunStepError> for TestFailure {
     fn from(value: RunStepError) -> Self {
         Self::RunStep(value)
-    }
-}
-
-impl From<OwnedRunStepError> for TestFailure {
-    fn from(value: OwnedRunStepError) -> Self {
-        Self::OwnedRunStep(value)
     }
 }
 

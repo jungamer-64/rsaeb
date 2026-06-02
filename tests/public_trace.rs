@@ -8,7 +8,7 @@ use rsaeb::error::{
     RunError, RunFinishError, RunStepError, TraceSnapshotError, TraceSnapshotRunError,
     TracedRunError,
 };
-use rsaeb::execution::OwnedStepTransition;
+use rsaeb::execution::BorrowedStepTransition;
 use rsaeb::input::AdmittedRun;
 use rsaeb::limits::TraceSnapshotByteLimit;
 use rsaeb::policy::{DefaultParsePolicy, ParsePolicy};
@@ -114,20 +114,6 @@ fn executable_program<P: ParsePolicy>(
     }
 }
 
-/// Moves an executable program witness for owned stepwise trace comparisons.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if the parsed program has no executable rules.
-fn owned_executable_program<P: ParsePolicy>(
-    program: ParsedProgram<P>,
-) -> Result<ExecutableProgram<P>, TestFailure> {
-    match program {
-        ParsedProgram::Executable(program) => Ok(program),
-        ParsedProgram::Empty(_) => Err(TestFailure::message("expected executable program")),
-    }
-}
-
 /// Collects committed step signatures from borrowed tracing.
 ///
 /// # Errors
@@ -167,20 +153,20 @@ fn borrowed_trace_step_signatures(
     Ok(signatures)
 }
 
-/// Collects committed step signatures from owned stepwise execution.
+/// Collects committed step signatures from borrowed stepwise execution.
 ///
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping or materialization fails.
-fn owned_step_signatures(
-    program: ParsedProgram<DefaultParsePolicy>,
+fn borrowed_step_signatures(
+    program: &ParsedProgram<DefaultParsePolicy>,
     admitted: AdmittedRun<impl rsaeb::policy::ExecutionPolicy>,
 ) -> Result<Vec<CommittedStepSignature>, TestFailure> {
     let mut signatures = Vec::new();
-    let mut session = owned_executable_program(program)?.into_steps(admitted)?;
+    let mut session = executable_program(program)?.steps(admitted)?;
     loop {
         match session.step() {
-            OwnedStepTransition::Applied(applied) => {
+            BorrowedStepTransition::Applied(applied) => {
                 signatures.push(CommittedStepSignature::Continue {
                     step: applied.step().get(),
                     rule_position: applied.rule().position().number().get(),
@@ -188,7 +174,7 @@ fn owned_step_signatures(
                 });
                 session = applied.into_session();
             }
-            OwnedStepTransition::Returned(returned) => {
+            BorrowedStepTransition::Returned(returned) => {
                 signatures.push(CommittedStepSignature::Return {
                     step: returned.step().get(),
                     rule_position: returned.rule().position().number().get(),
@@ -196,8 +182,8 @@ fn owned_step_signatures(
                 });
                 return Ok(signatures);
             }
-            OwnedStepTransition::Stable(_) => return Ok(signatures),
-            OwnedStepTransition::Failed(failed) => {
+            BorrowedStepTransition::Stable(_) => return Ok(signatures),
+            BorrowedStepTransition::Failed(failed) => {
                 return Err(TestFailure::from(failed.into_error()));
             }
         }
@@ -247,18 +233,18 @@ fn trace_events_are_emitted_without_snapshots() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if borrowed trace and owned stepwise execution report
+/// Returns `TestFailure` if borrowed trace and borrowed stepwise execution report
 /// different committed rule effects.
 #[test]
-fn borrowed_trace_steps_match_owned_stepwise_commits() -> TestResult {
+fn borrowed_trace_steps_match_borrowed_stepwise_commits() -> TestResult {
     let source = "(once)a=b\nb=(return)ok";
     let limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
 
-    let borrowed = parse_program(source)?;
-    let borrowed_steps = borrowed_trace_step_signatures(&borrowed, runtime_input(b"a", limits)?)?;
-    let owned_steps = owned_step_signatures(parse_program(source)?, runtime_input(b"a", limits)?)?;
+    let program = parse_program(source)?;
+    let trace_steps = borrowed_trace_step_signatures(&program, runtime_input(b"a", limits)?)?;
+    let stepwise_steps = borrowed_step_signatures(&program, runtime_input(b"a", limits)?)?;
 
-    ensure_eq!(borrowed_steps, owned_steps)
+    ensure_eq!(trace_steps, stepwise_steps)
 }
 
 /// # Errors

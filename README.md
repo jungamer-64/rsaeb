@@ -88,14 +88,14 @@ environment access, stdout/stderr, or lossy display boundary. Hosts perform I/O
 outside the interpreter and pass already-loaded bytes into typed boundaries.
 
 `ExecutableProgram` starts reusable runs with `.execute(admitted)`,
-`.trace(admitted, request)`, `.steps(admitted)`, `.into_steps(admitted)`, or
+`.trace(admitted, request)`, `.steps(admitted)`, or
 `.rule_attempts::<A, _>(admitted)`. Rule-attempt execution is borrowed because
 its resumable cursor is tied to the executable rule table. `EmptyProgram`
 exposes only inspection and `.stabilize(admitted)`, which materializes the
 admitted input as a zero-step stable result.
 
-The exact typestate names, transition variants, owned recovery methods, tracing
-events, and error variants are documented in rustdoc.
+The exact typestate names, transition variants, tracing events, and error
+variants are documented in rustdoc.
 
 ## A=B Language Reference
 

@@ -4,14 +4,14 @@
 mod runtime_support;
 mod support;
 
-use rsaeb::error::{OwnedRunStepError, RuleAttemptStepError, RunStepError};
+use rsaeb::error::{RuleAttemptStepError, RunStepError};
 use rsaeb::execution::{
     BorrowedAppliedStep, BorrowedFailedRun, BorrowedReturnedRun, BorrowedRuleAttemptSession,
     BorrowedRuleAttemptTransition, BorrowedRunSession, BorrowedStableRun, BorrowedStepTransition,
-    OwnedRuleAction, OwnedRuleWitness, OwnedStepTransition, RuleMissReason,
+    RuleMissReason,
 };
 use rsaeb::input::AdmittedRun;
-use rsaeb::inspect::{RuleAnchor, RuleRepeat};
+use rsaeb::inspect::{RuleActionView, RuleAnchor, RuleRepeat, RuleView};
 use rsaeb::limits::{ReturnByteLimit, RuleAttemptLimit, RuntimeStateByteLimit};
 use rsaeb::policy::{
     DefaultParsePolicy, ExecutionPolicy, ParsePolicy, RuleAttemptPolicy, StaticRuleAttemptPolicy,
@@ -193,39 +193,39 @@ enum ExpectedRuleAction<'expected> {
     Return(&'expected [u8]),
 }
 
-struct ExpectedOwnedRuleWitness<'expected> {
+struct ExpectedBorrowedRuleView<'expected> {
     position: usize,
     line_number: usize,
     lhs: &'expected [u8],
     action: ExpectedRuleAction<'expected>,
 }
 
-/// Ensures an owned public rule witness retained the expected parsed-rule metadata.
+/// Ensures a borrowed public rule view retained the expected parsed-rule metadata.
 ///
 /// # Errors
 ///
-/// Returns `TestFailure` if the witness metadata or materialized payloads differ.
-fn ensure_owned_rule_witness(
-    rule: &OwnedRuleWitness,
-    expected: ExpectedOwnedRuleWitness<'_>,
+/// Returns `TestFailure` if the rule metadata or materialized payloads differ.
+fn ensure_borrowed_rule_view(
+    rule: RuleView<'_>,
+    expected: ExpectedBorrowedRuleView<'_>,
 ) -> TestResult {
     ensure_eq!(rule.position().number().get(), expected.position)?;
     ensure_eq!(rule.line_number().get(), expected.line_number)?;
     ensure_eq!(rule.repeat(), RuleRepeat::Always)?;
     ensure_eq!(rule.anchor(), RuleAnchor::Anywhere)?;
-    ensure_eq!(rule.lhs().as_slice(), expected.lhs)?;
+    ensure_eq!(rule.lhs().materialize()?.as_slice(), expected.lhs)?;
     match (rule.action(), expected.action) {
-        (OwnedRuleAction::Replace(payload), ExpectedRuleAction::Replace(expected))
-        | (OwnedRuleAction::Return(payload), ExpectedRuleAction::Return(expected)) => {
-            ensure_eq!(payload.as_slice(), expected)
+        (RuleActionView::Replace(payload), ExpectedRuleAction::Replace(expected))
+        | (RuleActionView::Return(payload), ExpectedRuleAction::Return(expected)) => {
+            ensure_eq!(payload.materialize()?.as_slice(), expected)
         }
         (
-            OwnedRuleAction::MoveStart(_)
-            | OwnedRuleAction::MoveEnd(_)
-            | OwnedRuleAction::Replace(_)
-            | OwnedRuleAction::Return(_),
+            RuleActionView::MoveStart(_)
+            | RuleActionView::MoveEnd(_)
+            | RuleActionView::Replace(_)
+            | RuleActionView::Return(_),
             _,
-        ) => Err(TestFailure::message("unexpected owned rule witness action")),
+        ) => Err(TestFailure::message("unexpected borrowed rule view action")),
     }
 }
 
@@ -411,20 +411,6 @@ where
     E: ExecutionPolicy,
 {
     Ok(executable_program(program)?.execute(admitted)?)
-}
-
-/// Moves an executable program witness for tests that require owned sessions.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if the parsed program has no executable rules.
-fn owned_executable_program<P: ParsePolicy>(
-    program: ParsedProgram<P>,
-) -> Result<ExecutableProgram<P>, TestFailure> {
-    match program {
-        ParsedProgram::Executable(program) => Ok(program),
-        ParsedProgram::Empty(_) => Err(TestFailure::message("expected executable program")),
-    }
 }
 
 /// Returns the expected successful rule-attempt transition.
@@ -908,141 +894,132 @@ fn execution_consumes_runtime_input_without_session_leakage() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if borrowed and owned run sessions diverge for the
-/// same source, input, and limits.
+/// Returns `TestFailure` if run-to-completion and borrowed stepwise execution
+/// diverge for the same source, input, and limits.
 #[test]
-fn execution_borrowed_run_and_owned_session_share_contract() -> TestResult {
+fn execution_full_run_and_borrowed_session_share_contract() -> TestResult {
     let source = "a=b\nb=(return)ok";
     let limits = default_test_run_policy();
+    let program = parse_program(source)?;
 
-    let borrowed = execute_program(&parse_program(source)?, runtime_input(b"a", limits)?)?;
-    let owned = owned_executable_program(parse_program(source)?)?
-        .into_steps(runtime_input(b"a", limits)?)?
+    let completed = execute_program(&program, runtime_input(b"a", limits)?)?;
+    let stepped = executable_program(&program)?
+        .steps(runtime_input(b"a", limits)?)?
         .finish()?;
 
-    ensure_eq!(borrowed, owned)
+    ensure_eq!(completed, stepped)
 }
 
 /// # Errors
 ///
-/// Returns `TestFailure` if owned stepwise terminal states cannot return the
-/// parsed program to the caller.
+/// Returns `TestFailure` if borrowed stepwise terminal states lose their
+/// executable program witness.
 #[test]
-fn execution_owned_terminals_can_return_program() -> TestResult {
+fn execution_borrowed_terminals_keep_program_witness() -> TestResult {
     let limits = default_test_run_policy();
 
-    let stable_session = owned_executable_program(parse_program("a=b")?)?
-        .into_steps(runtime_input(b"a", limits)?)?;
+    let stable_program = parse_program("a=b")?;
+    let stable_session =
+        executable_program(&stable_program)?.steps(runtime_input(b"a", limits)?)?;
     let stable_session = match stable_session.step() {
-        OwnedStepTransition::Applied(applied) => applied.into_session(),
-        OwnedStepTransition::Stable(_)
-        | OwnedStepTransition::Returned(_)
-        | OwnedStepTransition::Failed(_) => {
-            return Err(TestFailure::message("expected applied owned step"));
+        BorrowedStepTransition::Applied(applied) => applied.into_session(),
+        BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::Failed(_) => {
+            return Err(TestFailure::message("expected applied borrowed step"));
         }
     };
-    let stable_program = match stable_session.step() {
-        OwnedStepTransition::Stable(stable) => stable.into_program(),
-        OwnedStepTransition::Applied(_)
-        | OwnedStepTransition::Returned(_)
-        | OwnedStepTransition::Failed(_) => {
-            return Err(TestFailure::message("expected owned stable terminal"));
+    match stable_session.step() {
+        BorrowedStepTransition::Stable(stable) => {
+            ensure_eq!(stable.program().rule_count().get(), 1)?;
+        }
+        BorrowedStepTransition::Applied(_)
+        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::Failed(_) => {
+            return Err(TestFailure::message("expected borrowed stable terminal"));
         }
     };
-    ensure_eq!(stable_program.rule_count().get(), 1)?;
 
-    let returned_program = match owned_executable_program(parse_program("a=(return)ok")?)?
-        .into_steps(runtime_input(b"a", limits)?)?
+    let returned_program = parse_program("a=(return)ok")?;
+    match executable_program(&returned_program)?
+        .steps(runtime_input(b"a", limits)?)?
         .step()
     {
-        OwnedStepTransition::Returned(returned) => returned.into_program(),
-        OwnedStepTransition::Applied(_)
-        | OwnedStepTransition::Stable(_)
-        | OwnedStepTransition::Failed(_) => {
-            return Err(TestFailure::message("expected owned return terminal"));
+        BorrowedStepTransition::Returned(returned) => {
+            ensure_eq!(returned.program().rule_count().get(), 1)?;
+        }
+        BorrowedStepTransition::Applied(_)
+        | BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::Failed(_) => {
+            return Err(TestFailure::message("expected borrowed return terminal"));
         }
     };
-    ensure_eq!(returned_program.rule_count().get(), 1)?;
 
     let failed_limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, 1>::new();
-    let (error, failed_program) = match owned_executable_program(parse_program("a=(return)ok")?)?
-        .into_steps(runtime_input(b"a", failed_limits)?)?
+    let failed_program = parse_program("a=(return)ok")?;
+    let failed = match executable_program(&failed_program)?
+        .steps(runtime_input(b"a", failed_limits)?)?
         .step()
     {
-        OwnedStepTransition::Failed(failed) => failed.into_parts(),
-        OwnedStepTransition::Applied(_)
-        | OwnedStepTransition::Stable(_)
-        | OwnedStepTransition::Returned(_) => {
-            return Err(TestFailure::message("expected owned failed terminal"));
+        BorrowedStepTransition::Failed(failed) => failed,
+        BorrowedStepTransition::Applied(_)
+        | BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::Returned(_) => {
+            return Err(TestFailure::message("expected borrowed failed terminal"));
         }
     };
     ensure_matches(
-        matches!(
-            error,
-            OwnedRunStepError::Step(RunStepError::ReturnOutputLimit(_))
-        ),
-        "expected owned return limit failure",
+        matches!(failed.error(), RunStepError::ReturnOutputLimit(_)),
+        "expected borrowed return limit failure",
     )?;
-    ensure_eq!(failed_program.rule_count().get(), 1)
+    ensure_eq!(failed.program().rule_count().get(), 1)
 }
 
 /// # Errors
 ///
-/// Returns `TestFailure` if owned execution transitions do not retain owned
-/// rule witnesses at every public rule-witness boundary.
+/// Returns `TestFailure` if borrowed execution transitions do not retain
+/// structured rule views at every public rule-witness boundary.
 #[test]
-fn execution_owned_transitions_retain_rule_witnesses() -> TestResult {
+fn execution_borrowed_transitions_retain_rule_views() -> TestResult {
     let limits = default_test_run_policy();
 
-    ensure_owned_run_witnesses(limits)
-}
-
-/// Ensures owned stepwise run transitions retain owned rule witnesses.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if owned stepwise run witness metadata differs.
-fn ensure_owned_run_witnesses<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolicy>(
-    limits: TestRunPolicy<I, E>,
-) -> TestResult {
-    let execution = owned_executable_program(parse_program("a=b\nb=(return)ok")?)?
-        .into_steps(runtime_input(b"a", limits)?)?;
+    let program = parse_program("a=b\nb=(return)ok")?;
+    let execution = executable_program(&program)?.steps(runtime_input(b"a", limits)?)?;
     let execution = match execution.step() {
-        OwnedStepTransition::Applied(applied) => {
-            let (step, rule, next_execution) = applied.into_parts();
-            ensure_eq!(step.get(), 1)?;
-            ensure_owned_rule_witness(
-                &rule,
-                ExpectedOwnedRuleWitness {
+        BorrowedStepTransition::Applied(applied) => {
+            ensure_eq!(applied.step().get(), 1)?;
+            ensure_borrowed_rule_view(
+                applied.rule(),
+                ExpectedBorrowedRuleView {
                     position: 1,
                     line_number: 1,
                     lhs: b"a",
                     action: ExpectedRuleAction::Replace(b"b"),
                 },
             )?;
-            next_execution
+            applied.into_session()
         }
-        OwnedStepTransition::Stable(_)
-        | OwnedStepTransition::Returned(_)
-        | OwnedStepTransition::Failed(_) => {
-            return Err(TestFailure::message("expected owned applied witness"));
+        BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::Failed(_) => {
+            return Err(TestFailure::message("expected borrowed applied rule view"));
         }
     };
 
     match execution.step() {
-        OwnedStepTransition::Returned(returned) => ensure_owned_rule_witness(
+        BorrowedStepTransition::Returned(returned) => ensure_borrowed_rule_view(
             returned.rule(),
-            ExpectedOwnedRuleWitness {
+            ExpectedBorrowedRuleView {
                 position: 2,
                 line_number: 2,
                 lhs: b"b",
                 action: ExpectedRuleAction::Return(b"ok"),
             },
         ),
-        OwnedStepTransition::Applied(_)
-        | OwnedStepTransition::Stable(_)
-        | OwnedStepTransition::Failed(_) => {
-            Err(TestFailure::message("expected owned returned rule witness"))
+        BorrowedStepTransition::Applied(_)
+        | BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::Failed(_) => {
+            Err(TestFailure::message("expected borrowed returned rule view"))
         }
     }
 }

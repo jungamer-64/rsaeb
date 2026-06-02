@@ -23,10 +23,6 @@ pub(crate) enum PayloadInspectionDomain {}
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CanonicalRuleSourceDomain {}
 
-/// Marker for parsed rule bytes materialized for owned execution witnesses.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum OwnedRuleWitnessPayloadDomain {}
-
 /// Owned bytes tagged with the domain that produced them.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct MaterializedBytes<Domain> {
@@ -88,21 +84,6 @@ impl MaterializedBytes<CanonicalRuleSourceDomain> {
     /// allocate or its length cannot be represented.
     pub(crate) fn from_rule(rule: &Rule) -> Result<Self, AllocationError> {
         Ok(Self::from_owned_bytes(rule::canonical_source(rule)?))
-    }
-}
-
-impl MaterializedBytes<OwnedRuleWitnessPayloadDomain> {
-    /// Materializes parsed payload bytes for an owned execution witness.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AllocationError` if the payload cannot be retained.
-    pub(crate) fn from_owned_rule_payload(
-        payload: PayloadView<'_>,
-    ) -> Result<Self, AllocationError> {
-        Ok(Self::from_owned_bytes(payload.to_vec_with_context(
-            AllocationContext::OwnedRuleWitness,
-        )?))
     }
 }
 

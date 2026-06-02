@@ -22,7 +22,7 @@ mod result;
 mod rule_set;
 
 pub(crate) use rule_set::RuleSetShape;
-pub(crate) use rule_set::{ExecutableRuleSet, RuleScan, RuleScanIter};
+pub(crate) use rule_set::{ExecutableRuleSet, RuleScan};
 pub(crate) use rule_set::{RuleSet, RuleSetBuilder};
 
 pub use executable::{EmptyProgram, ExecutableProgram, ExecutableProgramRef, ParsedProgram};

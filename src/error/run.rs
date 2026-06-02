@@ -123,30 +123,6 @@ impl From<StepLimitError> for RunStepError {
     }
 }
 
-/// Error while advancing an owned ordinary step.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OwnedRunStepError {
-    /// Ordinary runtime step preparation failed.
-    Step(RunStepError),
-    /// Retaining the owned rule witness failed.
-    RuleWitnessAllocation(AllocationError),
-}
-
-impl Error for OwnedRunStepError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Step(error) => Some(error),
-            Self::RuleWitnessAllocation(error) => Some(error),
-        }
-    }
-}
-
-impl From<RunStepError> for OwnedRunStepError {
-    fn from(value: RunStepError) -> Self {
-        Self::Step(value)
-    }
-}
-
 /// Error while advancing one rule-attempt step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuleAttemptStepError {

@@ -1,4 +1,4 @@
-use crate::error::{OwnedRunStepError, RuleAttemptStepError, RunFinishError, RunStepError};
+use crate::error::{RuleAttemptStepError, RunFinishError, RunStepError};
 use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
@@ -7,8 +7,7 @@ use crate::trace::RuntimeStateView;
 
 use super::attempt::RuleMiss;
 use super::engine::TerminalRunCore;
-use super::session::{BorrowedRuleAttemptSession, BorrowedRunSession, OwnedRunSession};
-use super::witness::OwnedRuleWitness;
+use super::session::{BorrowedRuleAttemptSession, BorrowedRunSession};
 
 /// Result of advancing a borrowed run session once.
 ///
@@ -158,61 +157,6 @@ pub struct BorrowedRuleAttemptFailedRun<'program, P: ParsePolicy> {
     pub(super) core: TerminalRunCore,
 }
 
-/// Result of advancing an owned run session once.
-///
-/// This mirrors [`BorrowedStepTransition`] while preserving ownership of the parsed
-/// program through owned terminal and failed states.
-pub enum OwnedStepTransition<P: ParsePolicy, E: ExecutionPolicy> {
-    /// One ordinary rewrite rule was applied and execution can continue.
-    Applied(OwnedAppliedStep<P, E>),
-    /// No rule matched the final runtime state.
-    Stable(OwnedStableRun<P>),
-    /// A matched rule executed `(return)`.
-    Returned(OwnedReturnedRun<P>),
-    /// A matching rule failed before committing.
-    Failed(OwnedFailedRun<P>),
-}
-
-/// One committed non-terminal rule application.
-pub struct OwnedAppliedStep<P: ParsePolicy, E: ExecutionPolicy> {
-    /// Step number committed by this transition.
-    pub(super) step: StepCount,
-    /// Owned rewrite rule witness committed by this transition.
-    pub(super) rule: OwnedRuleWitness,
-    /// Continuation session after the committed rule application.
-    pub(super) session: OwnedRunSession<P, E>,
-}
-
-/// Terminal run state reached by no matching rule.
-pub struct OwnedStableRun<P: ParsePolicy> {
-    /// Parsed program retained by the owned terminal state.
-    pub(super) program: ExecutableProgram<P>,
-    /// Terminal runtime core containing the stable state.
-    pub(super) core: TerminalRunCore,
-}
-
-/// Terminal run state reached by `(return)`.
-pub struct OwnedReturnedRun<P: ParsePolicy> {
-    /// Step number that executed the return action.
-    pub(super) step: StepCount,
-    /// Owned return rule witness committed by this transition.
-    pub(super) rule: OwnedRuleWitness,
-    /// Parsed program retained by the terminal state.
-    pub(super) program: ExecutableProgram<P>,
-    /// Materialized return output produced by the committed return rule.
-    pub(super) output: ReturnOutput,
-}
-
-/// Runtime failure that preserves uncommitted state for inspection.
-pub struct OwnedFailedRun<P: ParsePolicy> {
-    /// Runtime error that stopped the candidate step before commit.
-    pub(super) error: OwnedRunStepError,
-    /// Parsed program retained by the failed terminal state.
-    pub(super) program: ExecutableProgram<P>,
-    /// Uncommitted runtime core retained for diagnostic inspection.
-    pub(super) core: TerminalRunCore,
-}
-
 impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedAppliedStep<'program, P, E> {
     /// One-based applied step count.
     #[must_use]
@@ -238,41 +182,6 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedAppliedStep<'program,
     #[must_use]
     pub fn into_session(self) -> BorrowedRunSession<'program, P, E> {
         self.session
-    }
-}
-
-impl<P: ParsePolicy, E: ExecutionPolicy> OwnedAppliedStep<P, E> {
-    /// One-based applied step count.
-    #[must_use]
-    pub const fn step(&self) -> StepCount {
-        self.step
-    }
-
-    /// Owned rule witness committed by this transition.
-    #[must_use]
-    pub const fn rule(&self) -> &OwnedRuleWitness {
-        &self.rule
-    }
-
-    /// Runtime state after the applied step.
-    #[must_use]
-    pub fn state(&self) -> RuntimeStateView<'_> {
-        self.session.state()
-    }
-
-    /// Continue running after observing this applied step.
-    ///
-    /// This is the only owned transition that can resume execution.
-    #[must_use]
-    pub fn into_session(self) -> OwnedRunSession<P, E> {
-        self.session
-    }
-
-    /// Splits the applied step into its committed count, owned rule witness, and
-    /// continuation session.
-    #[must_use]
-    pub fn into_parts(self) -> (StepCount, OwnedRuleWitness, OwnedRunSession<P, E>) {
-        (self.step, self.rule, self.session)
     }
 }
 
@@ -367,44 +276,6 @@ impl<'program, P: ParsePolicy> BorrowedStableRun<'program, P> {
     }
 }
 
-impl<P: ParsePolicy> OwnedStableRun<P> {
-    /// Number of execution steps committed before reaching the stable state.
-    #[must_use]
-    pub const fn steps(&self) -> StepCount {
-        self.core.completed_steps()
-    }
-
-    /// Borrow the parsed program owned by this terminal state.
-    #[must_use]
-    pub const fn program(&self) -> &ExecutableProgram<P> {
-        &self.program
-    }
-
-    /// Discards the terminal state and recovers the owned parsed program.
-    ///
-    /// This drops the stable runtime state. Use [`OwnedStableRun::into_result`]
-    /// when the final state bytes are the desired output.
-    #[must_use]
-    pub fn into_program(self) -> ExecutableProgram<P> {
-        self.program
-    }
-
-    /// Borrowed final runtime state.
-    #[must_use]
-    pub fn state(&self) -> RuntimeStateView<'_> {
-        self.core.state()
-    }
-
-    /// Materializes this stable run as a run result.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunFinishError` if final state materialization cannot allocate.
-    pub fn into_result(self) -> Result<RunResult, RunFinishError> {
-        self.core.into_stable_result()
-    }
-}
-
 impl<'program, P: ParsePolicy> BorrowedRuleAttemptStableRun<'program, P> {
     /// Number of rule attempts consumed before reaching the stable state.
     #[must_use]
@@ -463,48 +334,6 @@ impl<'program, P: ParsePolicy> BorrowedReturnedRun<'program, P> {
     #[must_use]
     pub const fn rule(&self) -> RuleView<'program> {
         self.rule
-    }
-
-    /// Materialized return output from runtime execution.
-    #[must_use]
-    pub const fn output(&self) -> &ReturnOutput {
-        &self.output
-    }
-
-    /// Materializes this returned run as a run result.
-    #[must_use]
-    pub fn into_result(self) -> RunResult {
-        RunResult::from_return(self.output, self.step)
-    }
-}
-
-impl<P: ParsePolicy> OwnedReturnedRun<P> {
-    /// One-based applied step count for the return rule.
-    #[must_use]
-    pub const fn step(&self) -> StepCount {
-        self.step
-    }
-
-    /// Borrow the parsed program owned by this terminal state.
-    #[must_use]
-    pub const fn program(&self) -> &ExecutableProgram<P> {
-        &self.program
-    }
-
-    /// Owned return rule witness committed by this terminal state.
-    #[must_use]
-    pub const fn rule(&self) -> &OwnedRuleWitness {
-        &self.rule
-    }
-
-    /// Discards the return output and recovers the owned parsed program.
-    ///
-    /// This drops the terminal `(return)` output. Use
-    /// [`OwnedReturnedRun::into_result`] when the output bytes are the desired
-    /// result.
-    #[must_use]
-    pub fn into_program(self) -> ExecutableProgram<P> {
-        self.program
     }
 
     /// Materialized return output from runtime execution.
@@ -678,78 +507,6 @@ impl<P: ParsePolicy> core::fmt::Display for BorrowedRuleAttemptFailedRun<'_, P> 
 }
 
 impl<P: ParsePolicy> core::error::Error for BorrowedRuleAttemptFailedRun<'_, P> {
-    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
-        Some(&self.error)
-    }
-}
-
-impl<P: ParsePolicy> OwnedFailedRun<P> {
-    /// Captures a failed owned session without committing the attempted step.
-    pub(super) fn new(
-        error: OwnedRunStepError,
-        program: ExecutableProgram<P>,
-        core: TerminalRunCore,
-    ) -> Self {
-        Self {
-            error,
-            program,
-            core,
-        }
-    }
-
-    /// Runtime error that prevented the step from committing.
-    #[must_use]
-    pub const fn error(&self) -> &OwnedRunStepError {
-        &self.error
-    }
-
-    /// Number of execution steps that completed before the failed step attempt.
-    #[must_use]
-    pub const fn completed_steps(&self) -> StepCount {
-        self.core.completed_steps()
-    }
-
-    /// Borrow the parsed program owned by this failed session.
-    #[must_use]
-    pub fn program(&self) -> &ExecutableProgram<P> {
-        &self.program
-    }
-
-    /// Borrow the uncommitted runtime state preserved by this error.
-    #[must_use]
-    pub fn state(&self) -> RuntimeStateView<'_> {
-        self.core.state()
-    }
-
-    /// Discard the uncommitted run session and return the runtime error.
-    #[must_use]
-    pub fn into_error(self) -> OwnedRunStepError {
-        self.error
-    }
-
-    /// Discards the runtime error and recovers the owned parsed program.
-    ///
-    /// This drops the failed runtime state. Failed transitions are terminal;
-    /// callers cannot resume the failed step by recovering a session.
-    #[must_use]
-    pub fn into_program(self) -> ExecutableProgram<P> {
-        self.program
-    }
-
-    /// Splits this failed transition into its runtime error and parsed program.
-    #[must_use]
-    pub fn into_parts(self) -> (OwnedRunStepError, ExecutableProgram<P>) {
-        (self.error, self.program)
-    }
-}
-
-impl<P: ParsePolicy> core::fmt::Display for OwnedFailedRun<P> {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        self.error.fmt(formatter)
-    }
-}
-
-impl<P: ParsePolicy> core::error::Error for OwnedFailedRun<P> {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         Some(&self.error)
     }

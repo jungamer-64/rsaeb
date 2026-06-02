@@ -7,8 +7,8 @@
 use alloc::string::{FromUtf8Error, String};
 
 use crate::error::{
-    AllocationError, OwnedRunStepError, ParseError, ParseErrorLocation, RuleAttemptStepError,
-    RunAdmissionError, RunError, RunFinishError, RunStartError, RunStepError, RuntimeInputError,
+    AllocationError, ParseError, ParseErrorLocation, RuleAttemptStepError, RunAdmissionError,
+    RunError, RunFinishError, RunStartError, RunStepError, RuntimeInputError,
     TraceSnapshotRunError,
 };
 use crate::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
@@ -55,7 +55,6 @@ pub(crate) enum TestFailure {
     RunStart(RunStartError),
     RunFinish(RunFinishError),
     RunStep(RunStepError),
-    OwnedRunStep(OwnedRunStepError),
     RuleAttemptStep(RuleAttemptStepError),
     TraceSnapshot(String),
     Utf8(FromUtf8Error),
@@ -79,9 +78,6 @@ impl core::fmt::Debug for TestFailure {
             Self::RunStart(error) => formatter.debug_tuple("RunStart").field(error).finish(),
             Self::RunFinish(error) => formatter.debug_tuple("RunFinish").field(error).finish(),
             Self::RunStep(error) => formatter.debug_tuple("RunStep").field(error).finish(),
-            Self::OwnedRunStep(error) => {
-                formatter.debug_tuple("OwnedRunStep").field(error).finish()
-            }
             Self::RuleAttemptStep(error) => formatter
                 .debug_tuple("RuleAttemptStep")
                 .field(error)
@@ -122,12 +118,6 @@ impl From<RunFinishError> for TestFailure {
 impl From<RunStepError> for TestFailure {
     fn from(value: RunStepError) -> Self {
         Self::RunStep(value)
-    }
-}
-
-impl From<OwnedRunStepError> for TestFailure {
-    fn from(value: OwnedRunStepError) -> Self {
-        Self::OwnedRunStep(value)
     }
 }
 
@@ -280,20 +270,6 @@ where
     match program {
         ParsedProgram::Empty(program) => Ok(program.stabilize(admitted)?),
         ParsedProgram::Executable(_) => Err(TestFailure::message("expected empty program")),
-    }
-}
-
-/// Moves the expected executable parsed program.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if the parsed program has no executable rules.
-pub(crate) fn owned_executable_program<P: ParsePolicy>(
-    program: ParsedProgram<P>,
-) -> Result<ExecutableProgram<P>, TestFailure> {
-    match program {
-        ParsedProgram::Executable(program) => Ok(program),
-        ParsedProgram::Empty(_) => Err(TestFailure::message("expected executable program")),
     }
 }
 

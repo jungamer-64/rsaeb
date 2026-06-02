@@ -5,8 +5,7 @@ use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, RunResult};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
-use crate::runtime::matcher::{RuleSearch, find_next_match};
-use crate::runtime::once::{RuntimeRulePass, RuntimeRuleStates};
+use crate::runtime::once::{RuntimeRulePass, RuntimeRuleSearch, RuntimeRuleTable};
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
 use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
@@ -16,17 +15,17 @@ use super::advance::{
     prepare_witnessed_run_application,
 };
 
-/// Active mutable runtime state independent of program ownership mode.
+/// Active mutable runtime state tied to one borrowed executable program.
 #[derive(Debug)]
-pub(super) struct ActiveRunCore<E: ExecutionPolicy> {
+pub(super) struct ActiveRunCore<'program, E: ExecutionPolicy> {
     /// Current runtime byte state.
     pub(super) state: State,
     /// Reusable buffer for candidate rewrites.
     pub(super) scratch: RewriteScratch,
     /// Runtime limits and completed-step count.
     pub(super) budget: RuntimeBudgetState<E>,
-    /// Per-run executable rule availability states.
-    runtime_rules: RuntimeRuleStates,
+    /// Per-run executable rules paired with their runtime availability states.
+    runtime_rules: RuntimeRuleTable<'program>,
 }
 
 /// Active mutable rule-attempt runtime state.
@@ -51,12 +50,12 @@ pub(super) struct TerminalRunCore {
     steps: StepCount,
 }
 
-/// Runtime session parameterized by program ownership.
-pub(super) struct Session<P, E: ExecutionPolicy> {
-    /// Borrowed or owned parsed program.
-    pub(super) program: P,
+/// Runtime session that borrows one executable program.
+pub(super) struct Session<'program, P: ParsePolicy, E: ExecutionPolicy> {
+    /// Borrowed parsed program.
+    pub(super) program: BorrowedProgram<'program, P>,
     /// Mutable execution state.
-    pub(super) core: ActiveRunCore<E>,
+    pub(super) core: ActiveRunCore<'program, E>,
 }
 
 /// Runtime rule-attempt session parameterized by program ownership.
@@ -80,14 +79,6 @@ pub(super) struct TerminalAttemptSession<'program, P: ParsePolicy> {
     pub(super) attempts: RuleAttemptCount,
 }
 
-/// Program ownership shape used by the internal runtime session.
-pub(super) trait ProgramOwner {
-    /// Parser policy selected for this owner.
-    type Policy: ParsePolicy;
-    /// Borrows the parsed program.
-    fn program(&self) -> &ExecutableProgram<Self::Policy>;
-}
-
 /// Borrowed program owner for run-to-completion and tracing.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct BorrowedProgram<'program, P: ParsePolicy> {
@@ -95,42 +86,19 @@ pub(super) struct BorrowedProgram<'program, P: ParsePolicy> {
     pub(super) program: &'program ExecutableProgram<P>,
 }
 
-/// Owned program owner for public stepwise execution.
-#[derive(Debug)]
-pub(super) struct OwnedProgram<P: ParsePolicy> {
-    /// Parsed program owned by the public run session.
-    pub(super) program: ExecutableProgram<P>,
-}
-
-impl<P: ParsePolicy> ProgramOwner for BorrowedProgram<'_, P> {
-    type Policy = P;
-
-    fn program(&self) -> &ExecutableProgram<P> {
-        self.program
-    }
-}
-
-impl<P: ParsePolicy> ProgramOwner for OwnedProgram<P> {
-    type Policy = P;
-
-    fn program(&self) -> &ExecutableProgram<P> {
-        &self.program
-    }
-}
-
-impl<E: ExecutionPolicy> ActiveRunCore<E> {
+impl<'program, E: ExecutionPolicy> ActiveRunCore<'program, E> {
     /// Builds the mutable runtime core for one execution.
     ///
     /// # Errors
     ///
     /// Returns `RunStartError` if per-run rule state allocation fails.
     fn new<P: ParsePolicy>(
-        program: &ExecutableProgram<P>,
+        program: &'program ExecutableProgram<P>,
         admitted: AdmittedRun<E>,
     ) -> Result<Self, RunStartError> {
         let (input, budget) = admitted.into_runtime_parts();
         let state = State::from_input(input);
-        let runtime_rules = RuntimeRuleStates::from_program(program)?;
+        let runtime_rules = RuntimeRuleTable::from_program(program)?;
         Ok(Self {
             state,
             scratch: RewriteScratch::new(),
@@ -241,20 +209,23 @@ impl TerminalRunCore {
     }
 }
 
-impl<P: ProgramOwner, E: ExecutionPolicy> Session<P, E> {
+impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<'program, P, E> {
     /// Starts a new run session for a parsed program and admitted run witness.
     ///
     /// # Errors
     ///
     /// Returns `RunStartError` if allocating per-run rule state fails.
-    pub(super) fn new(program: P, admitted: AdmittedRun<E>) -> Result<Self, RunStartError> {
-        let core = ActiveRunCore::new(program.program(), admitted)?;
+    pub(super) fn new(
+        program: BorrowedProgram<'program, P>,
+        admitted: AdmittedRun<E>,
+    ) -> Result<Self, RunStartError> {
+        let core = ActiveRunCore::new(program.program, admitted)?;
         Ok(Self { program, core })
     }
 
     /// Borrows the parsed program.
-    pub(super) fn program(&self) -> &ExecutableProgram<P::Policy> {
-        self.program.program()
+    pub(super) const fn program(&self) -> &'program ExecutableProgram<P> {
+        self.program.program
     }
 
     /// Number of execution steps that have already completed in this run.
@@ -276,19 +247,15 @@ impl<P: ProgramOwner, E: ExecutionPolicy> Session<P, E> {
     ///
     /// Returns the selected witness policy's error if preparation or witness
     /// construction fails.
-    pub(super) fn advance_run_step<'run, W>(
-        &'run mut self,
-    ) -> Result<CoreStep<'run, W::Witness>, W::Error>
+    pub(super) fn advance_run_step<W>(&mut self) -> Result<CoreStep<'program, W::Witness>, W::Error>
     where
-        W: RunRuleWitness<'run>,
+        W: RunRuleWitness<'program>,
     {
-        let matched = match find_next_match(
-            self.program.program().rule_scan(),
-            &mut self.core.runtime_rules,
-            &self.core.state,
-        ) {
-            RuleSearch::Matched(matched) => matched,
-            RuleSearch::Stable => return Ok(CoreStep::Stable(self.core.budget.completed_steps())),
+        let matched = match self.core.runtime_rules.find_next_match(&self.core.state) {
+            RuntimeRuleSearch::Matched(matched) => matched,
+            RuntimeRuleSearch::Stable => {
+                return Ok(CoreStep::Stable(self.core.budget.completed_steps()));
+            }
         };
         let state_len = self.core.state.byte_count();
         let witnessed = prepare_witnessed_run_application::<_, W>(
@@ -366,41 +333,7 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
     }
 }
 
-impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<BorrowedProgram<'program, P>, E> {
-    /// Advances this borrowed session by one ordinary execution step.
-    ///
-    /// The rule witness borrows from the parsed program, not from this session
-    /// borrow, so public transitions can carry the continuation session.
-    ///
-    /// # Errors
-    ///
-    /// Returns the selected witness policy's error if preparation or witness
-    /// construction fails.
-    pub(super) fn advance_borrowed_run_step<W>(
-        &mut self,
-    ) -> Result<CoreStep<'program, W::Witness>, W::Error>
-    where
-        W: RunRuleWitness<'program>,
-    {
-        let matched = match find_next_match(
-            self.program.program.rule_scan(),
-            &mut self.core.runtime_rules,
-            &self.core.state,
-        ) {
-            RuleSearch::Matched(matched) => matched,
-            RuleSearch::Stable => return Ok(CoreStep::Stable(self.core.budget.completed_steps())),
-        };
-        let state_len = self.core.state.byte_count();
-        let witnessed = prepare_witnessed_run_application::<_, W>(
-            &mut self.core.scratch,
-            &mut self.core.budget,
-            state_len,
-            matched,
-        )?;
-        let applied = witnessed.commit(&mut self.core.state, &mut self.core.scratch);
-        Ok(CoreStep::Applied(applied))
-    }
-
+impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<'program, P, E> {
     /// Runs to completion while emitting borrowed trace events.
     ///
     /// # Errors
@@ -421,7 +354,7 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<BorrowedProgram<'prog
 
         loop {
             match self
-                .advance_borrowed_run_step::<BorrowedRunWitness>()
+                .advance_run_step::<BorrowedRunWitness>()
                 .map_err(RunFinishError::from)
                 .map_err(RunError::from)
                 .map_err(TracedRunError::Run)?
@@ -479,12 +412,5 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<BorrowedProgram<'prog
         F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), TraceError>,
     {
         trace(BorrowedTraceEvent::Step { step, rule, effect }).map_err(TracedRunError::Trace)
-    }
-}
-
-impl<P: ParsePolicy, E: ExecutionPolicy> Session<OwnedProgram<P>, E> {
-    /// Splits an owned session into its program and mutable core.
-    pub(super) fn into_program_core(self) -> (ExecutableProgram<P>, ActiveRunCore<E>) {
-        (self.program.program, self.core)
     }
 }

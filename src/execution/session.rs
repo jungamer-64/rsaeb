@@ -6,18 +6,17 @@ use crate::program::{ExecutableProgram, ExecutableProgramRef, RunResult};
 use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
 
 use super::advance::{
-    BorrowedRunWitness, CoreAppliedRule, CoreRuleAttemptStep, CoreStep, OwnedRunWitness,
+    BorrowedRunWitness, CoreAppliedRule, CoreRuleAttemptStep, CoreStep,
     advance_borrowed_rule_attempt,
 };
 use super::engine::{
-    AttemptSession, BorrowedProgram, OwnedProgram, Session, TerminalAttemptSession, TerminalRunCore,
+    AttemptSession, BorrowedProgram, Session, TerminalAttemptSession, TerminalRunCore,
 };
 use super::transition::{
     BorrowedAppliedStep, BorrowedFailedRun, BorrowedMissedRuleAttempt, BorrowedReturnedRun,
     BorrowedRuleAttemptAppliedStep, BorrowedRuleAttemptFailedRun, BorrowedRuleAttemptReturnedRun,
     BorrowedRuleAttemptStableRun, BorrowedRuleAttemptTransition, BorrowedStableRun,
-    BorrowedStepTransition, OwnedAppliedStep, OwnedFailedRun, OwnedReturnedRun, OwnedStableRun,
-    OwnedStepTransition,
+    BorrowedStepTransition,
 };
 
 /// Stateful run session that borrows a reusable parsed program.
@@ -28,19 +27,7 @@ use super::transition::{
 /// [`BorrowedStepTransition`] before they can continue.
 pub struct BorrowedRunSession<'program, P: ParsePolicy, E: ExecutionPolicy> {
     /// Internal session using the public borrowed program boundary.
-    pub(super) session: Session<BorrowedProgram<'program, P>, E>,
-}
-
-/// Stateful run session that owns its parsed program.
-///
-/// This is the stepwise form returned by
-/// [`ExecutableProgram::into_steps`](crate::program::ExecutableProgram::into_steps).
-/// It is useful when the session must move independently of a borrowed
-/// [`ExecutableProgram`]. Owned terminal and failed states retain a way to recover the
-/// parsed program instead of leaking ownership through a parallel API.
-pub struct OwnedRunSession<P: ParsePolicy, E: ExecutionPolicy> {
-    /// Internal session using the public owned program boundary.
-    pub(super) session: Session<OwnedProgram<P>, E>,
+    pub(super) session: Session<'program, P, E>,
 }
 
 /// Stateful run session that borrows a reusable parsed program and advances by rule attempt.
@@ -62,14 +49,6 @@ pub struct BorrowedRuleAttemptSession<
 struct BorrowedRunTerminal<'program, P: ParsePolicy> {
     /// Parsed program borrowed by the terminal state.
     program: &'program ExecutableProgram<P>,
-    /// Runtime core retained for terminal state observation or materialization.
-    core: TerminalRunCore,
-}
-
-/// Terminal data split out of an owned ordinary run session.
-struct OwnedRunTerminal<P: ParsePolicy> {
-    /// Parsed program retained by the terminal state.
-    program: ExecutableProgram<P>,
     /// Runtime core retained for terminal state observation or materialization.
     core: TerminalRunCore,
 }
@@ -159,7 +138,7 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedRunSession<'program, 
     /// Borrow the parsed program used by this session.
     #[must_use]
     pub fn program(&self) -> &'program ExecutableProgram<P> {
-        self.session.program.program
+        self.session.program()
     }
 
     /// Borrow the current runtime state.
@@ -254,90 +233,12 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
     }
 }
 
-impl<P: ParsePolicy, E: ExecutionPolicy> OwnedRunSession<P, E> {
-    /// Starts a new owned run session for a parsed program and admitted run witness.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunStartError` if allocating per-run rule state fails.
-    pub(crate) fn new(
-        program: ExecutableProgram<P>,
-        admitted: AdmittedRun<E>,
-    ) -> Result<Self, RunStartError> {
-        Ok(Self {
-            session: Session::new(OwnedProgram { program }, admitted)?,
-        })
-    }
-
-    /// Number of execution steps that have already completed in this run.
-    #[must_use]
-    pub const fn completed_steps(&self) -> StepCount {
-        self.session.completed_steps()
-    }
-
-    /// Borrow the parsed program owned by this session.
-    #[must_use]
-    pub fn program(&self) -> &ExecutableProgram<P> {
-        self.session.program()
-    }
-
-    /// Discards the current run state and recovers the owned parsed program.
-    ///
-    /// This intentionally drops the in-progress runtime state; it is for
-    /// ownership recovery, not for retrying the same admitted run.
-    #[must_use]
-    pub fn into_program(self) -> ExecutableProgram<P> {
-        let (program, _core) = self.session.into_program_core();
-        program
-    }
-
-    /// Borrow the current runtime state.
-    ///
-    /// The returned view borrows only for this observation. Materializing it is
-    /// an explicit allocation boundary.
-    #[must_use]
-    pub fn state(&self) -> RuntimeStateView<'_> {
-        self.session.state()
-    }
-
-    /// Advances this run by exactly one matching rule when possible.
-    ///
-    /// Applying an ordinary rewrite returns [`OwnedStepTransition::Applied`]
-    /// with a continuation session. Owned terminal and failed states keep the
-    /// parsed program recoverable.
-    #[must_use]
-    pub fn step(self) -> OwnedStepTransition<P, E> {
-        step_owned_run(self)
-    }
-
-    /// Runs this session to completion.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunFinishError` when applying a later matching rule would exceed the
-    /// configured limits, allocation fails, or state-size arithmetic overflows.
-    pub fn finish(self) -> Result<RunResult, RunFinishError> {
-        self.session.finish()
-    }
-}
-
 impl<'program, P: ParsePolicy> BorrowedRunTerminal<'program, P> {
     /// Splits a borrowed run session into terminal data.
     fn from_session<E: ExecutionPolicy>(session: BorrowedRunSession<'program, P, E>) -> Self {
         let Session { program, core } = session.session;
         Self {
             program: program.program,
-            core: core.into_terminal(),
-        }
-    }
-}
-
-impl<P: ParsePolicy> OwnedRunTerminal<P> {
-    /// Splits an owned run session into terminal data.
-    fn from_session<E: ExecutionPolicy>(session: OwnedRunSession<P, E>) -> Self {
-        let (program, core) = session.session.into_program_core();
-        Self {
-            program,
             core: core.into_terminal(),
         }
     }
@@ -363,10 +264,7 @@ impl<'program, P: ParsePolicy> BorrowedRuleAttemptTerminal<'program, P> {
 fn step_borrowed_run<'program, P: ParsePolicy, E: ExecutionPolicy>(
     mut session: BorrowedRunSession<'program, P, E>,
 ) -> BorrowedStepTransition<'program, P, E> {
-    match session
-        .session
-        .advance_borrowed_run_step::<BorrowedRunWitness>()
-    {
+    match session.session.advance_run_step::<BorrowedRunWitness>() {
         Ok(CoreStep::Applied(CoreAppliedRule::Rewrite { step, rule })) => {
             BorrowedStepTransition::Applied(BorrowedAppliedStep {
                 step,
@@ -402,46 +300,6 @@ fn step_borrowed_run<'program, P: ParsePolicy, E: ExecutionPolicy>(
                 terminal.program,
                 terminal.core,
             ))
-        }
-    }
-}
-
-/// Advances an owned ordinary run and projects the private transition into the public type.
-fn step_owned_run<P: ParsePolicy, E: ExecutionPolicy>(
-    mut session: OwnedRunSession<P, E>,
-) -> OwnedStepTransition<P, E> {
-    match session.session.advance_run_step::<OwnedRunWitness>() {
-        Ok(CoreStep::Applied(CoreAppliedRule::Rewrite { step, rule })) => {
-            OwnedStepTransition::Applied(OwnedAppliedStep {
-                step,
-                rule,
-                session,
-            })
-        }
-        Ok(CoreStep::Applied(CoreAppliedRule::Return {
-            step,
-            rule,
-            output_view: _,
-            output,
-        })) => {
-            let terminal = OwnedRunTerminal::from_session(session);
-            OwnedStepTransition::Returned(OwnedReturnedRun {
-                step,
-                rule,
-                program: terminal.program,
-                output,
-            })
-        }
-        Ok(CoreStep::Stable(_steps)) => {
-            let terminal = OwnedRunTerminal::from_session(session);
-            OwnedStepTransition::Stable(OwnedStableRun {
-                program: terminal.program,
-                core: terminal.core,
-            })
-        }
-        Err(error) => {
-            let terminal = OwnedRunTerminal::from_session(session);
-            OwnedStepTransition::Failed(OwnedFailedRun::new(error, terminal.program, terminal.core))
         }
     }
 }

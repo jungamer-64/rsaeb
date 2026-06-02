@@ -41,8 +41,7 @@
 //! - [`input::AdmittedRun`] admits validated input under a
 //!   [`policy::ExecutionPolicy`].
 //! - [`program::ExecutableProgram::execute`], [`program::ExecutableProgram::trace`],
-//!   [`program::ExecutableProgram::steps`],
-//!   [`program::ExecutableProgram::into_steps`], and
+//!   [`program::ExecutableProgram::steps`], and
 //!   [`program::ExecutableProgram::rule_attempts`] start executable runs.
 //! - [`program::EmptyProgram::stabilize`] materializes admitted input as a
 //!   zero-step stable result for empty source.
@@ -124,6 +123,49 @@
 //! };
 //!
 //! fn main() {}
+//! ```
+//!
+//! Owned stepwise execution and its owned rule-witness/error surface have been
+//! deleted. Stepwise execution borrows an executable program so the runtime rule
+//! table can stay tied to the parsed rule table:
+//!
+//! ```compile_fail
+//! use rsaeb::execution::{
+//!     OwnedAppliedStep, OwnedFailedRun, OwnedReturnedRun, OwnedRunSession,
+//!     OwnedStableRun, OwnedStepTransition,
+//! };
+//!
+//! fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::execution::{OwnedRuleAction, OwnedRulePayload, OwnedRuleWitness};
+//!
+//! fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::error::OwnedRunStepError;
+//!
+//! fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
+//! use rsaeb::program::ParsedProgram;
+//! use rsaeb::source::ProgramSource;
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let parsed = ParsedProgram::<DefaultParsePolicy>::parse(ProgramSource::from_text("a=b"))?;
+//!     let ParsedProgram::Executable(executable) = parsed else {
+//!         return Err("expected executable program".into());
+//!     };
+//!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
+//!     let _ = executable.into_steps(admitted)?;
+//!     Ok(())
+//! }
 //! ```
 //!
 //! Empty-program witnesses expose stabilization only; they cannot start

@@ -3,12 +3,11 @@ use core::fmt;
 use crate::allocation::{AllocationContext, AllocationError, AllocationErrorKind};
 
 use super::{
-    InputColumn, LeftModifierKind, OwnedRunStepError, ParseError, ParseErrorKind,
-    ParseErrorLocation, ParseRepresentationError, PayloadKind, ReturnOutputLimitError,
-    RewriteSizeError, RightActionKind, RuleAttemptLimitError, RuleAttemptStepError,
-    RunAdmissionError, RunError, RunFinishError, RunStartError, RunStepError, RuntimeInputError,
-    RuntimeStateLimitError, StepLimitError, TraceSnapshotError, TraceSnapshotRunError,
-    TracedRunError,
+    InputColumn, LeftModifierKind, ParseError, ParseErrorKind, ParseErrorLocation,
+    ParseRepresentationError, PayloadKind, ReturnOutputLimitError, RewriteSizeError,
+    RightActionKind, RuleAttemptLimitError, RuleAttemptStepError, RunAdmissionError, RunError,
+    RunFinishError, RunStartError, RunStepError, RuntimeInputError, RuntimeStateLimitError,
+    StepLimitError, TraceSnapshotError, TraceSnapshotRunError, TracedRunError,
 };
 
 impl fmt::Display for AllocationContext {
@@ -22,7 +21,6 @@ impl fmt::Display for AllocationContext {
             Self::RuntimeRuleAvailability => f.write_str("runtime rule availability"),
             Self::RuntimeRewriteState => f.write_str("runtime rewrite state"),
             Self::PayloadView => f.write_str("payload view"),
-            Self::OwnedRuleWitness => f.write_str("owned execution rule witness"),
             Self::RuntimeStateView => f.write_str("runtime state view"),
             Self::FinalOutput => f.write_str("final output"),
             Self::ReturnOutput => f.write_str("return output"),
@@ -216,17 +214,6 @@ impl fmt::Display for RunStepError {
             Self::RuntimeStateLimit(error) => error.fmt(f),
             Self::ReturnOutputLimit(error) => error.fmt(f),
             Self::StepLimit(error) => error.fmt(f),
-        }
-    }
-}
-
-impl fmt::Display for OwnedRunStepError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Step(error) => error.fmt(f),
-            Self::RuleWitnessAllocation(error) => {
-                write!(f, "owned rule witness materialization failed: {error}")
-            }
         }
     }
 }

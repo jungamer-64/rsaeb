@@ -1,11 +1,29 @@
-use alloc::collections::VecDeque;
+use alloc::{collections::VecDeque, vec::Vec};
 
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
 use crate::policy::ParsePolicy;
-use crate::program::{ExecutableProgram, RuleScan, RuleScanIter};
+use crate::program::{ExecutableProgram, RuleScan};
 use crate::rule::{Rule, RuleAvailability};
+use crate::runtime::matcher::{MatchedRuleApplication, RuleAttempt, attempt_rule};
+use crate::runtime::state::State;
+
+/// Per-run ordinary execution table with parsed rules and runtime availability paired.
+#[derive(Debug)]
+pub(crate) struct RuntimeRuleTable<'program> {
+    /// Runtime rule cells in parser execution order.
+    cells: Vec<RuntimeRuleCell<'program>>,
+}
+
+/// Outcome of scanning the ordinary runtime rule table.
+#[derive(Debug)]
+pub(crate) enum RuntimeRuleSearch<'program, 'state, 'once> {
+    /// A rule matched and carries the commit permit needed after success.
+    Matched(MatchedRuleApplication<'program, 'state, 'once>),
+    /// No currently available rule matched the runtime state.
+    Stable,
+}
 
 /// Per-run rule-attempt pass over executable rules and their availability cells.
 #[derive(Debug)]
@@ -132,6 +150,60 @@ impl OnceMatchPermitLinearity {
     /// Creates the linearity marker for one permit.
     const fn new() -> Self {
         Self
+    }
+}
+
+impl<'program> RuntimeRuleTable<'program> {
+    /// Builds a run-local ordinary execution table from an executable program.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the per-execution rule table cannot be
+    /// allocated.
+    pub(crate) fn from_program<P: ParsePolicy>(
+        program: &'program ExecutableProgram<P>,
+    ) -> Result<Self, AllocationError> {
+        Self::from_rule_scan(program.rule_scan())
+    }
+
+    /// Builds a run-local ordinary execution table from the executable rule table.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the per-execution rule table cannot be
+    /// allocated.
+    fn from_rule_scan(rules: RuleScan<'program>) -> Result<Self, AllocationError> {
+        let rule_count = rules.iter().count();
+        let mut cells = Vec::new();
+        try_reserve_total_exact(
+            &mut cells,
+            RequestedCapacity::new(rule_count),
+            AllocationContext::RuntimeRuleAvailability,
+        )?;
+        for rule in rules.iter() {
+            try_push(
+                &mut cells,
+                RuntimeRuleCell::from_rule(rule),
+                AllocationContext::RuntimeRuleAvailability,
+            )?;
+        }
+
+        Ok(Self { cells })
+    }
+
+    /// Finds the first currently available rule that matches `state`.
+    pub(crate) fn find_next_match<'state, 'once>(
+        &'once mut self,
+        state: &'state State,
+    ) -> RuntimeRuleSearch<'program, 'state, 'once> {
+        for cell in &mut self.cells {
+            match attempt_rule(cell.as_runtime_rule(), state) {
+                RuleAttempt::Matched(matched) => return RuntimeRuleSearch::Matched(matched),
+                RuleAttempt::Missed(_missed) => {}
+            }
+        }
+
+        RuntimeRuleSearch::Stable
     }
 }
 
