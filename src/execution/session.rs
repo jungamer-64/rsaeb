@@ -7,7 +7,7 @@ use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
 
 use super::advance::{
     BorrowedRunWitness, CoreAppliedRule, CoreRuleAttemptStep, CoreStep, OwnedRunWitness,
-    advance_borrowed_rule_attempt, advance_run,
+    advance_borrowed_rule_attempt,
 };
 use super::engine::{
     AttemptSession, BorrowedProgram, OwnedProgram, Session, TerminalAttemptSession, TerminalRunCore,
@@ -363,10 +363,10 @@ impl<'program, P: ParsePolicy> BorrowedRuleAttemptTerminal<'program, P> {
 fn step_borrowed_run<'program, P: ParsePolicy, E: ExecutionPolicy>(
     mut session: BorrowedRunSession<'program, P, E>,
 ) -> BorrowedStepTransition<'program, P, E> {
-    match advance_run::<_, _, BorrowedRunWitness>(
-        session.session.program.program,
-        &mut session.session.core,
-    ) {
+    match session
+        .session
+        .advance_borrowed_run_step::<BorrowedRunWitness>()
+    {
         Ok(CoreStep::Applied(CoreAppliedRule::Rewrite { step, rule })) => {
             BorrowedStepTransition::Applied(BorrowedAppliedStep {
                 step,
@@ -410,10 +410,7 @@ fn step_borrowed_run<'program, P: ParsePolicy, E: ExecutionPolicy>(
 fn step_owned_run<P: ParsePolicy, E: ExecutionPolicy>(
     mut session: OwnedRunSession<P, E>,
 ) -> OwnedStepTransition<P, E> {
-    match advance_run::<_, _, OwnedRunWitness>(
-        &session.session.program.program,
-        &mut session.session.core,
-    ) {
+    match session.session.advance_run_step::<OwnedRunWitness>() {
         Ok(CoreStep::Applied(CoreAppliedRule::Rewrite { step, rule })) => {
             OwnedStepTransition::Applied(OwnedAppliedStep {
                 step,

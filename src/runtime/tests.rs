@@ -9,12 +9,11 @@ use crate::limits::{
     ReturnByteLimit, ReturnOutputByteCount, RuntimeInputByteCount, RuntimeInputByteLimit,
     RuntimeStateByteCount, RuntimeStateByteLimit, StepCount, StepLimit,
 };
-use crate::policy::{DefaultRuntimeInputPolicy, ExecutionPolicy, RuntimeInputPolicy};
+use crate::policy::{DefaultRuntimeInputPolicy, ExecutionPolicy};
 use crate::program::RunOutcome;
 use crate::test_support::{
     DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestFailure, TestInputPolicy, TestResult,
-    TestRunPolicy, admitted_run, ensure_eq, ensure_matches, executable_program, execute_program,
-    parse_program,
+    admitted_run, ensure_eq, ensure_matches, executable_program, execute_program, parse_program,
 };
 use crate::trace::RuntimeStateView;
 use alloc::vec::Vec;
@@ -93,20 +92,6 @@ fn expect_step_transition<'program, P: crate::policy::ParsePolicy, E: ExecutionP
         BorrowedStepTransition::Failed(failed) => Err(TestFailure::from(failed.into_error())),
         transition => Ok(transition),
     }
-}
-
-/// Creates runtime state through the same checked input path as public runs.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if input validation fails or the input exceeds runtime
-/// state limits.
-fn state_from_input_bytes<I: RuntimeInputPolicy, E: ExecutionPolicy>(
-    input: &[u8],
-    limits: TestRunPolicy<I, E>,
-) -> Result<State, TestFailure> {
-    let (input, _) = admitted_run(input, limits)?.into_runtime_parts();
-    Ok(State::from_input(input))
 }
 
 /// # Errors

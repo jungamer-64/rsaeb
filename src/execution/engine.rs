@@ -5,13 +5,15 @@ use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, RunResult};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
+use crate::runtime::matcher::{RuleSearch, find_next_match};
 use crate::runtime::once::{RuntimeRulePass, RuntimeRuleStates};
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
 use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
 
 use super::advance::{
-    BorrowedRunWitness, CoreAppliedRule, CoreStep, DiscardedRunWitness, advance_run,
+    BorrowedRunWitness, CoreAppliedRule, CoreStep, DiscardedRunWitness, RunRuleWitness,
+    prepare_witnessed_run_application,
 };
 
 /// Active mutable runtime state independent of program ownership mode.
@@ -24,7 +26,7 @@ pub(super) struct ActiveRunCore<E: ExecutionPolicy> {
     /// Runtime limits and completed-step count.
     pub(super) budget: RuntimeBudgetState<E>,
     /// Per-run executable rule availability states.
-    pub(super) runtime_rules: RuntimeRuleStates,
+    runtime_rules: RuntimeRuleStates,
 }
 
 /// Active mutable rule-attempt runtime state.
@@ -128,7 +130,7 @@ impl<E: ExecutionPolicy> ActiveRunCore<E> {
     ) -> Result<Self, RunStartError> {
         let (input, budget) = admitted.into_runtime_parts();
         let state = State::from_input(input);
-        let runtime_rules = RuntimeRuleStates::new(program.rule_scan())?;
+        let runtime_rules = RuntimeRuleStates::from_program(program)?;
         Ok(Self {
             state,
             scratch: RewriteScratch::new(),
@@ -177,7 +179,7 @@ impl<'program, E: ExecutionPolicy> AttemptRunCore<'program, E> {
     ) -> Result<Self, RunStartError> {
         let (input, budget) = admitted.into_runtime_parts();
         let state = State::from_input(input);
-        let runtime_rules = RuntimeRulePass::new(program.rule_scan())?;
+        let runtime_rules = RuntimeRulePass::from_program(program)?;
         Ok(Self {
             state,
             scratch: RewriteScratch::new(),
@@ -265,6 +267,40 @@ impl<P: ProgramOwner, E: ExecutionPolicy> Session<P, E> {
         self.core.state()
     }
 
+    /// Advances this session by one ordinary execution step.
+    ///
+    /// This is the only ordinary execution path that combines the parsed
+    /// program scan with the run-local rule availability state.
+    ///
+    /// # Errors
+    ///
+    /// Returns the selected witness policy's error if preparation or witness
+    /// construction fails.
+    pub(super) fn advance_run_step<'run, W>(
+        &'run mut self,
+    ) -> Result<CoreStep<'run, W::Witness>, W::Error>
+    where
+        W: RunRuleWitness<'run>,
+    {
+        let matched = match find_next_match(
+            self.program.program().rule_scan(),
+            &mut self.core.runtime_rules,
+            &self.core.state,
+        ) {
+            RuleSearch::Matched(matched) => matched,
+            RuleSearch::Stable => return Ok(CoreStep::Stable(self.core.budget.completed_steps())),
+        };
+        let state_len = self.core.state.byte_count();
+        let witnessed = prepare_witnessed_run_application::<_, W>(
+            &mut self.core.scratch,
+            &mut self.core.budget,
+            state_len,
+            matched,
+        )?;
+        let applied = witnessed.commit(&mut self.core.state, &mut self.core.scratch);
+        Ok(CoreStep::Applied(applied))
+    }
+
     /// Runs this session to completion.
     ///
     /// # Errors
@@ -273,7 +309,8 @@ impl<P: ProgramOwner, E: ExecutionPolicy> Session<P, E> {
     /// limits.
     pub(super) fn finish(mut self) -> Result<RunResult, RunFinishError> {
         loop {
-            match advance_run::<_, _, DiscardedRunWitness>(self.program.program(), &mut self.core)
+            match self
+                .advance_run_step::<DiscardedRunWitness>()
                 .map_err(RunFinishError::from)?
             {
                 CoreStep::Applied(CoreAppliedRule::Rewrite { .. }) => {}
@@ -330,6 +367,40 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
 }
 
 impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<BorrowedProgram<'program, P>, E> {
+    /// Advances this borrowed session by one ordinary execution step.
+    ///
+    /// The rule witness borrows from the parsed program, not from this session
+    /// borrow, so public transitions can carry the continuation session.
+    ///
+    /// # Errors
+    ///
+    /// Returns the selected witness policy's error if preparation or witness
+    /// construction fails.
+    pub(super) fn advance_borrowed_run_step<W>(
+        &mut self,
+    ) -> Result<CoreStep<'program, W::Witness>, W::Error>
+    where
+        W: RunRuleWitness<'program>,
+    {
+        let matched = match find_next_match(
+            self.program.program.rule_scan(),
+            &mut self.core.runtime_rules,
+            &self.core.state,
+        ) {
+            RuleSearch::Matched(matched) => matched,
+            RuleSearch::Stable => return Ok(CoreStep::Stable(self.core.budget.completed_steps())),
+        };
+        let state_len = self.core.state.byte_count();
+        let witnessed = prepare_witnessed_run_application::<_, W>(
+            &mut self.core.scratch,
+            &mut self.core.budget,
+            state_len,
+            matched,
+        )?;
+        let applied = witnessed.commit(&mut self.core.state, &mut self.core.scratch);
+        Ok(CoreStep::Applied(applied))
+    }
+
     /// Runs to completion while emitting borrowed trace events.
     ///
     /// # Errors
@@ -349,7 +420,8 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<BorrowedProgram<'prog
         .map_err(TracedRunError::Trace)?;
 
         loop {
-            match advance_run::<_, _, BorrowedRunWitness>(self.program.program, &mut self.core)
+            match self
+                .advance_borrowed_run_step::<BorrowedRunWitness>()
                 .map_err(RunFinishError::from)
                 .map_err(RunError::from)
                 .map_err(TracedRunError::Run)?

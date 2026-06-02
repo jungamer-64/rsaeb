@@ -6,16 +6,13 @@ use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::program::{ReturnOutput, ReturnOutputView};
 use crate::runtime::action::{AppliedRule, PreparedRuleApplication, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuleAttemptReservation, RuntimeBudgetState};
-use crate::runtime::matcher::{
-    MatchedRuleApplication, RuleAttempt, attempt_rule,
-};
+use crate::runtime::matcher::{MatchedRuleApplication, RuleAttempt, attempt_rule};
+use crate::runtime::once::{RuntimeRuleAdvancePermit, RuntimeRuleAttemptTarget};
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
 
 use super::attempt::RuleMiss;
-use super::engine::{
-    ActiveRunCore, AttemptRunCore, AttemptSession, BorrowedProgram, TerminalAttemptSession,
-};
+use super::engine::{AttemptRunCore, AttemptSession, BorrowedProgram, TerminalAttemptSession};
 use super::witness::OwnedRuleWitness;
 
 /// Compile-time rule witness policy for ordinary execution steps.
@@ -219,7 +216,7 @@ enum RuleAttemptAdvance<'program, E: ExecutionPolicy, A: RuleAttemptPolicy, Rule
 }
 
 /// Rule application after the public witness has been created but before runtime side effects commit.
-struct WitnessedApplication<'program, 'once, 'budget, E: ExecutionPolicy, RuleWitness> {
+pub(super) struct WitnessedApplication<'program, 'once, 'budget, E: ExecutionPolicy, RuleWitness> {
     /// Failure-prone runtime preparation that must still be committed linearly.
     prepared: PreparedRuleApplication<'program, 'once, 'budget, E>,
     /// Public rule witness created before mutation commits.
@@ -303,7 +300,7 @@ impl<'program, 'once, 'budget, E: ExecutionPolicy, RuleWitness>
     }
 
     /// Commits prepared runtime side effects and publishes the paired witness.
-    fn commit(
+    pub(super) fn commit(
         self,
         state: &mut State,
         scratch: &mut RewriteScratch,
@@ -311,6 +308,27 @@ impl<'program, 'once, 'budget, E: ExecutionPolicy, RuleWitness>
         let applied = self.prepared.commit(state, scratch);
         CoreAppliedRule::from_applied_rule(applied, self.witness)
     }
+}
+
+/// Prepares one matched ordinary execution step under a compile-time witness policy.
+///
+/// # Errors
+///
+/// Returns the selected witness policy's error if runtime preparation or witness
+/// construction fails.
+pub(super) fn prepare_witnessed_run_application<'program, 'once, 'budget, E, W>(
+    scratch: &mut RewriteScratch,
+    budget: &'budget mut RuntimeBudgetState<E>,
+    state_len: RuntimeStateByteCount,
+    matched: MatchedRuleApplication<'program, '_, 'once>,
+) -> Result<WitnessedApplication<'program, 'once, 'budget, E, W::Witness>, W::Error>
+where
+    E: ExecutionPolicy,
+    W: RunRuleWitness<'program>,
+{
+    let prepared =
+        prepare_matched_rule(scratch, budget, state_len, matched).map_err(W::Error::from)?;
+    WitnessedApplication::new(prepared, W::from_rule)
 }
 
 impl<'program, E, A, RuleWitness, StepError>
@@ -431,9 +449,6 @@ where
     A: RuleAttemptPolicy,
     W: AttemptRuleWitness<'program>,
 {
-    let target = core.runtime_rules.attempt_target();
-    let (_after_miss, runtime_rule) = target.into_parts();
-
     let reservation = match attempt_budget.reserve_next_attempt(core.state.byte_count()) {
         Ok(reservation) => reservation,
         Err(error) => {
@@ -444,32 +459,65 @@ where
             );
         }
     };
-    let attempted = attempt_rule(runtime_rule, &core.state);
 
-    match attempted {
-        RuleAttempt::Missed(missed) => {
-            let witness = match W::from_rule(RuleView::new(missed.rule())) {
-                Ok(witness) => witness,
-                Err(error) => return failed_rule_attempt(core, attempt_budget, error),
-            };
-            let miss = RuleMiss::new(witness, missed.reason());
-            let attempt = reservation.commit();
-            committed_rule_miss(core, attempt_budget, attempt, miss)
+    match core.runtime_rules.attempt_target() {
+        RuntimeRuleAttemptTarget::Continuing(target) => {
+            let (runtime_rule, advance) = target.into_parts();
+            match attempt_rule(runtime_rule, &core.state) {
+                RuleAttempt::Missed(missed) => {
+                    let witness = match W::from_rule(RuleView::new(missed.rule())) {
+                        Ok(witness) => witness,
+                        Err(error) => return failed_rule_attempt(core, attempt_budget, error),
+                    };
+                    let miss = RuleMiss::new(witness, missed.reason());
+                    let attempt = reservation.commit();
+                    committed_rule_miss(core, attempt_budget, attempt, advance, miss)
+                }
+                RuleAttempt::Matched(matched) => {
+                    let state_len = core.state.byte_count();
+                    let (attempt, witnessed) = match prepare_attempt_application::<_, _, W>(
+                        &mut core.scratch,
+                        &mut core.budget,
+                        state_len,
+                        reservation,
+                        matched,
+                    ) {
+                        Ok(committed) => committed,
+                        Err(error) => return failed_rule_attempt(core, attempt_budget, error),
+                    };
+                    let applied = witnessed.commit(&mut core.state, &mut core.scratch);
+                    committed_rule_attempt_application(core, attempt_budget, attempt, applied)
+                }
+            }
         }
-        RuleAttempt::Matched(matched) => {
-            let state_len = core.state.byte_count();
-            let (attempt, witnessed) = match prepare_attempt_application::<_, _, W>(
-                &mut core.scratch,
-                &mut core.budget,
-                state_len,
-                reservation,
-                matched,
-            ) {
-                Ok(committed) => committed,
-                Err(error) => return failed_rule_attempt(core, attempt_budget, error),
-            };
-            let applied = witnessed.commit(&mut core.state, &mut core.scratch);
-            committed_rule_attempt_application(core, attempt_budget, attempt, applied)
+        RuntimeRuleAttemptTarget::Final(target) => {
+            let runtime_rule = target.into_rule();
+            match attempt_rule(runtime_rule, &core.state) {
+                RuleAttempt::Missed(missed) => {
+                    let witness = match W::from_rule(RuleView::new(missed.rule())) {
+                        Ok(witness) => witness,
+                        Err(error) => return failed_rule_attempt(core, attempt_budget, error),
+                    };
+                    let miss = RuleMiss::new(witness, missed.reason());
+                    let attempt = reservation.commit();
+                    committed_final_rule_miss(core, attempt_budget, attempt, miss)
+                }
+                RuleAttempt::Matched(matched) => {
+                    let state_len = core.state.byte_count();
+                    let (attempt, witnessed) = match prepare_attempt_application::<_, _, W>(
+                        &mut core.scratch,
+                        &mut core.budget,
+                        state_len,
+                        reservation,
+                        matched,
+                    ) {
+                        Ok(committed) => committed,
+                        Err(error) => return failed_rule_attempt(core, attempt_budget, error),
+                    };
+                    let applied = witnessed.commit(&mut core.state, &mut core.scratch);
+                    committed_rule_attempt_application(core, attempt_budget, attempt, applied)
+                }
+            }
         }
     }
 }
@@ -496,18 +544,40 @@ fn committed_rule_miss<'program, E, A, RuleWitness, StepError>(
     mut core: AttemptRunCore<'program, E>,
     attempt_budget: RuleAttemptBudgetState<A>,
     attempt: RuleAttemptCount,
+    advance: RuntimeRuleAdvancePermit,
     miss: RuleMiss<RuleWitness>,
 ) -> RuleAttemptAdvance<'program, E, A, RuleWitness, StepError>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
-    core.runtime_rules.commit_miss();
+    core.runtime_rules.commit_miss(advance);
     RuleAttemptAdvance::Missed {
         attempt,
         miss,
         core,
         attempt_budget,
+    }
+}
+
+/// Commits the final non-applying rule attempt and returns terminal stability.
+fn committed_final_rule_miss<'program, E, A, RuleWitness, StepError>(
+    core: AttemptRunCore<'program, E>,
+    attempt_budget: RuleAttemptBudgetState<A>,
+    _attempt: RuleAttemptCount,
+    miss: RuleMiss<RuleWitness>,
+) -> RuleAttemptAdvance<'program, E, A, RuleWitness, StepError>
+where
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+{
+    let attempts = attempt_budget.completed_attempts();
+    let steps = core.completed_steps();
+    RuleAttemptAdvance::Stable {
+        attempts,
+        steps,
+        final_miss: miss,
+        core,
     }
 }
 

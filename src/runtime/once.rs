@@ -4,7 +4,8 @@ use core::slice;
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
-use crate::program::{RuleScan, RuleScanIter};
+use crate::policy::ParsePolicy;
+use crate::program::{ExecutableProgram, RuleScan, RuleScanIter};
 use crate::rule::{Rule, RuleAvailability};
 
 /// Per-run execution state for executable rule availability.
@@ -117,9 +118,52 @@ pub(super) enum RuntimeRuleCommitSeed<'state> {
 }
 
 /// Checked rule-attempt selection produced by a cursor and runtime rule states.
-pub(crate) struct RuntimeRuleAttemptTarget<'program, 'state> {
+pub(crate) enum RuntimeRuleAttemptTarget<'program, 'state> {
+    /// Selected rule is not the final target in the current pass.
+    Continuing(ContinuingRuntimeRuleAttemptTarget<'program, 'state>),
+    /// Selected rule is the final target in the current pass.
+    Final(FinalRuntimeRuleAttemptTarget<'program, 'state>),
+}
+
+/// Checked non-final rule-attempt target.
+pub(crate) struct ContinuingRuntimeRuleAttemptTarget<'program, 'state> {
     /// Parsed rule selected with its runtime state.
     target: RuntimeRule<'program, 'state>,
+    /// Permission to advance the cursor if this target misses.
+    advance: RuntimeRuleAdvancePermit,
+}
+
+/// Checked final rule-attempt target.
+pub(crate) struct FinalRuntimeRuleAttemptTarget<'program, 'state> {
+    /// Parsed rule selected with its runtime state.
+    target: RuntimeRule<'program, 'state>,
+}
+
+/// Linear permission to advance a rule-attempt cursor after a non-final miss.
+#[derive(Debug)]
+pub(crate) struct RuntimeRuleAdvancePermit {
+    /// Non-copy marker that keeps cursor advancement linear.
+    linearity: RuntimeRuleAdvancePermitLinearity,
+}
+
+/// Non-copy marker carried by cursor-advance permits.
+#[derive(Debug)]
+struct RuntimeRuleAdvancePermitLinearity;
+
+impl RuntimeRuleAdvancePermitLinearity {
+    /// Creates the linearity marker for one cursor-advance permit.
+    const fn new() -> Self {
+        Self
+    }
+}
+
+impl RuntimeRuleAdvancePermit {
+    /// Creates a cursor-advance permit for one selected non-final target.
+    const fn new() -> Self {
+        Self {
+            linearity: RuntimeRuleAdvancePermitLinearity::new(),
+        }
+    }
 }
 
 impl OnceMatchPermitLinearity {
@@ -130,13 +174,25 @@ impl OnceMatchPermitLinearity {
 }
 
 impl RuntimeRuleStates {
+    /// Builds per-execution rule state from an executable program.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the per-execution rule-state table cannot be
+    /// allocated.
+    pub(crate) fn from_program<P: ParsePolicy>(
+        program: &ExecutableProgram<P>,
+    ) -> Result<Self, AllocationError> {
+        Self::from_rule_scan(program.rule_scan())
+    }
+
     /// Builds per-execution rule state from the executable rule table.
     ///
     /// # Errors
     ///
     /// Returns `AllocationError` if the per-execution rule-state table cannot be
     /// allocated.
-    pub(crate) fn new(rules: RuleScan<'_>) -> Result<Self, AllocationError> {
+    fn from_rule_scan(rules: RuleScan<'_>) -> Result<Self, AllocationError> {
         let rule_count = rules.iter().count();
         let mut states = Vec::new();
         try_reserve_total_exact(
@@ -168,13 +224,25 @@ impl RuntimeRuleStates {
 }
 
 impl<'program> RuntimeRulePass<'program> {
+    /// Builds a rule-attempt pass from an executable program.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the per-execution rule-attempt table cannot
+    /// be allocated.
+    pub(crate) fn from_program<P: ParsePolicy>(
+        program: &'program ExecutableProgram<P>,
+    ) -> Result<Self, AllocationError> {
+        Self::from_rule_scan(program.rule_scan())
+    }
+
     /// Builds a rule-attempt pass from the executable rule table.
     ///
     /// # Errors
     ///
     /// Returns `AllocationError` if the per-execution rule-attempt table cannot
     /// be allocated.
-    pub(crate) fn new(rules: RuleScan<'program>) -> Result<Self, AllocationError> {
+    fn from_rule_scan(rules: RuleScan<'program>) -> Result<Self, AllocationError> {
         let (first, remaining_rules) = rules.split_first();
         let mut remaining = Vec::new();
         try_reserve_total_exact(
@@ -200,13 +268,23 @@ impl<'program> RuntimeRulePass<'program> {
 
     /// Selects the current rule-attempt target.
     pub(crate) fn attempt_target(&mut self) -> RuntimeRuleAttemptTarget<'program, '_> {
-        RuntimeRuleAttemptTarget {
-            target: self.current.as_runtime_rule(),
+        if self.remaining_attempts == 1 {
+            RuntimeRuleAttemptTarget::Final(FinalRuntimeRuleAttemptTarget {
+                target: self.current.as_runtime_rule(),
+            })
+        } else {
+            RuntimeRuleAttemptTarget::Continuing(ContinuingRuntimeRuleAttemptTarget {
+                target: self.current.as_runtime_rule(),
+                advance: RuntimeRuleAdvancePermit::new(),
+            })
         }
     }
 
     /// Commits a non-applying attempt and advances to the next target when one exists.
-    pub(crate) fn commit_miss(&mut self) {
+    pub(crate) fn commit_miss(&mut self, permit: RuntimeRuleAdvancePermit) {
+        let RuntimeRuleAdvancePermit {
+            linearity: _linearity,
+        } = permit;
         self.advance_current_to_back();
         self.remaining_attempts = self.remaining_attempts.saturating_sub(1);
     }
@@ -344,9 +422,16 @@ impl OnceMatchPermit<'_> {
     }
 }
 
-impl<'program, 'state> RuntimeRuleAttemptTarget<'program, 'state> {
-    /// Splits the checked target into cursor progress and selected rule state.
-    pub(crate) fn into_parts(self) -> RuntimeRule<'program, 'state> {
+impl<'program, 'state> ContinuingRuntimeRuleAttemptTarget<'program, 'state> {
+    /// Splits the checked target into selected rule state and advance permit.
+    pub(crate) fn into_parts(self) -> (RuntimeRule<'program, 'state>, RuntimeRuleAdvancePermit) {
+        (self.target, self.advance)
+    }
+}
+
+impl<'program, 'state> FinalRuntimeRuleAttemptTarget<'program, 'state> {
+    /// Returns the selected final rule state.
+    pub(crate) fn into_rule(self) -> RuntimeRule<'program, 'state> {
         self.target
     }
 }
