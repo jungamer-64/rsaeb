@@ -19,15 +19,6 @@ pub(crate) enum AppliedRule<'program> {
     Return(CommittedReturnRule<'program>),
 }
 
-/// Rule application after all failure-prone runtime preparation has succeeded.
-#[derive(Debug)]
-pub(crate) enum PreparedRuleApplication<'program, 'once, 'budget, E: ExecutionPolicy> {
-    /// Prepared non-terminal rewrite.
-    Rewrite(PreparedRewriteRule<'program, 'once, 'budget, E>),
-    /// Prepared terminal return.
-    Return(PreparedReturnRule<'program, 'once, 'budget, E>),
-}
-
 /// Committed non-terminal rewrite rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CommittedRewriteRule {
@@ -93,42 +84,6 @@ impl<'program> CommittedReturnRule<'program> {
     /// Consumes this committed return rule into its materialized output.
     pub(crate) fn into_output(self) -> ReturnOutput {
         self.output
-    }
-}
-
-impl<'program, E: ExecutionPolicy> PreparedRuleApplication<'program, '_, '_, E> {
-    /// Parsed rule selected by this prepared application.
-    pub(crate) const fn rule(&self) -> &'program Rule {
-        match self {
-            Self::Rewrite(prepared) => prepared.matched.rule(),
-            Self::Return(prepared) => prepared.matched.rule(),
-        }
-    }
-
-    /// Commits the prepared runtime side effects.
-    ///
-    pub(crate) fn commit(
-        self,
-        state: &mut State,
-        scratch: &mut RewriteScratch,
-    ) -> AppliedRule<'program> {
-        match self {
-            Self::Rewrite(prepared) => {
-                prepared.matched.commit();
-                let step = prepared.step.commit();
-                state.commit_rewrite(prepared.rewrite, scratch);
-                AppliedRule::Rewrite(CommittedRewriteRule { step })
-            }
-            Self::Return(prepared) => {
-                prepared.matched.commit();
-                let step = prepared.step.commit();
-                AppliedRule::Return(CommittedReturnRule {
-                    step,
-                    output_view: prepared.output_view,
-                    output: prepared.output,
-                })
-            }
-        }
     }
 }
 
