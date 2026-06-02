@@ -1,30 +1,15 @@
 use core::{fmt, marker::PhantomData};
 
-use crate::error::{ParseError, RunError, RunFinishError, RunStartError};
+use crate::error::{RunError, RunFinishError, RunStartError};
 use crate::execution::{BorrowedRuleAttemptSession, BorrowedRunSession};
 use crate::input::AdmittedRun;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::limits::StepCount;
-use crate::parser::parse_rules_impl;
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::runtime::state::State;
-use crate::source::ProgramSource;
 use crate::trace::TraceRequest;
 
-use super::{ExecutableRuleSet, RuleScan, RuleSet, RuleSetShape, RunResult};
-
-/// Parsed A=B source classified by executable shape.
-///
-/// Parsing immediately decides whether the source contains executable rules.
-/// Execution APIs exist only on [`ExecutableProgram`], while empty programs are
-/// represented by [`EmptyProgram`] and can only stabilize admitted input.
-#[derive(Debug, PartialEq, Eq)]
-pub enum ParsedProgram<P: ParsePolicy> {
-    /// Parsed source with no executable rule lines.
-    Empty(EmptyProgram<P>),
-    /// Parsed source with at least one executable rule line.
-    Executable(ExecutableProgram<P>),
-}
+use super::{ExecutableRuleSet, RuleScan, RunResult};
 
 /// Parsed source with no executable rule lines.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -47,35 +32,6 @@ pub struct ExecutableProgram<P: ParsePolicy> {
 pub struct ExecutableProgramRef<'program, P: ParsePolicy> {
     /// Parsed program proven to contain at least one executable rule.
     program: &'program ExecutableProgram<P>,
-}
-
-impl<P: ParsePolicy> ParsedProgram<P> {
-    /// Parses typed program source and classifies the parsed rule shape.
-    ///
-    /// [`ProgramSource`] marks the source boundary, while this program's
-    /// [`ParsePolicy`] carries the parser resource policy. Empty and executable
-    /// source are separated in the return type, so execution cannot start from
-    /// an unclassified parsed value.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError` when source exceeds parser limits, executable code
-    /// is not ASCII printable syntax, a non-empty code line does not contain
-    /// exactly one `=`, reserved syntax appears as payload data, or allocation
-    /// fails while building the parsed program.
-    pub fn parse(source: ProgramSource<'_>) -> Result<Self, ParseError> {
-        Ok(Self::from_rule_set(parse_rules_impl::<P>(source)?))
-    }
-
-    /// Classifies a parser-built rule set by executable shape.
-    pub(crate) fn from_rule_set(rule_set: RuleSet) -> Self {
-        match rule_set.into_shape() {
-            RuleSetShape::Empty => Self::Empty(EmptyProgram::new()),
-            RuleSetShape::Executable(rule_set) => {
-                Self::Executable(ExecutableProgram::from_rule_set(rule_set))
-            }
-        }
-    }
 }
 
 impl<P: ParsePolicy> EmptyProgram<P> {

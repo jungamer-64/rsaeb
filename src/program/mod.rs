@@ -1,10 +1,9 @@
 //! Parsed program and run-to-completion result types.
 //!
-//! [`ParsedProgram`] is the parse boundary for A=B source. Hosts parse typed
+//! A=B source parsing is split by expected program shape. Hosts parse typed
 //! [`ProgramSource`](crate::source::ProgramSource) under a
-//! [`ParsePolicy`](crate::policy::ParsePolicy), then pattern-match
-//! [`ParsedProgram::Empty`] or [`ParsedProgram::Executable`] before runtime
-//! execution can start.
+//! [`ParsePolicy`](crate::policy::ParsePolicy) directly into either
+//! [`EmptyProgram`] or [`ExecutableProgram`].
 //!
 //! [`ExecutableProgram`] owns immutable syntax and rule metadata only. Per-run
 //! `(once)` availability, runtime bytes, completed-step counts, and execution
@@ -25,5 +24,5 @@ pub(crate) use rule_set::RuleSetShape;
 pub(crate) use rule_set::{ExecutableRuleSet, RuleScan};
 pub(crate) use rule_set::{RuleSet, RuleSetBuilder};
 
-pub use executable::{EmptyProgram, ExecutableProgram, ExecutableProgramRef, ParsedProgram};
+pub use executable::{EmptyProgram, ExecutableProgram, ExecutableProgramRef};
 pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeStateSnapshot};
