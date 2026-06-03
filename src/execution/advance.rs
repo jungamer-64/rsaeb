@@ -6,7 +6,7 @@ use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::program::{ReturnOutput, ReturnOutputView};
 use crate::runtime::action::{AppliedRule, PreparedRuleStep, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuleAttemptReservation, RuntimeBudgetState};
-use crate::runtime::matcher::{MatchedRuleApplication, RuleAttempt};
+use crate::runtime::matcher::{MatchedRuleApplication, RuleAttempt, RuleAttemptMiss};
 use crate::runtime::once::{
     ContinuingRuntimeRulePass, FinalRuntimeRulePass, RuntimeRulePassCursor,
 };
@@ -96,7 +96,7 @@ pub(super) enum CoreContinuingRuleAttemptStep<
         /// Rule-attempt count committed by this transition.
         attempt: RuleAttemptCount,
         /// Non-applying rule information.
-        miss: RuleMiss<RuleWitness>,
+        miss: RuleMiss<'program>,
         /// Continuation session with the returned next cursor.
         continuation: AttemptSessionCursor<'program, P, E, A>,
     },
@@ -171,7 +171,7 @@ pub(super) enum CoreFinalRuleAttemptStep<
         /// Rule attempts consumed before stability.
         attempts: RuleAttemptCount,
         /// Final non-applying rule that exhausted the current pass.
-        final_miss: RuleMiss<RuleWitness>,
+        final_miss: RuleMiss<'program>,
         /// Terminal session with no resumable cursor.
         terminal: TerminalAttemptSession<'program, P>,
     },
@@ -353,14 +353,7 @@ where
 
     match pass.attempt_current(&state) {
         RuleAttempt::Missed(missed) => {
-            let witness = match W::from_rule(missed.rule()) {
-                Ok(witness) => witness,
-                Err(error) => {
-                    let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
-                    return failed_continuing_rule_attempt(program, core, &attempt_budget, error);
-                }
-            };
-            let miss = RuleMiss::new(witness, missed.reason());
+            let miss = public_rule_miss(missed);
             let attempt = reservation.commit();
             let runtime_rules = pass.commit_miss();
             let continuation = session_start_from_pass(
@@ -443,14 +436,7 @@ where
 
     match pass.attempt_current(&state) {
         RuleAttempt::Missed(missed) => {
-            let witness = match W::from_rule(missed.rule()) {
-                Ok(witness) => witness,
-                Err(error) => {
-                    let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
-                    return failed_final_rule_attempt(program, core, &attempt_budget, error);
-                }
-            };
-            let miss = RuleMiss::new(witness, missed.reason());
+            let miss = public_rule_miss(missed);
             let attempt = reservation.commit();
             let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
             let attempts = attempt;
@@ -676,6 +662,15 @@ where
             core: AttemptRunCore::from_parts(state, scratch, budget, pass),
             attempt_budget,
         }),
+    }
+}
+
+/// Projects runtime miss shapes into the public typed miss API.
+fn public_rule_miss<'program>(miss: RuleAttemptMiss<'program>) -> RuleMiss<'program> {
+    match miss {
+        RuleAttemptMiss::StateMismatch(rule) => RuleMiss::state_mismatch(rule),
+        RuleAttemptMiss::OnceRewriteConsumed(rule) => RuleMiss::once_rewrite_consumed(rule),
+        RuleAttemptMiss::OnceReturnConsumed(rule) => RuleMiss::once_return_consumed(rule),
     }
 }
 

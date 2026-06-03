@@ -115,7 +115,7 @@ pub struct BorrowedMissedRuleAttempt<
     /// Rule-attempt count committed by this transition.
     pub(super) attempt: RuleAttemptCount,
     /// Non-applying rule information.
-    pub(super) miss: RuleMiss<RuleView<'program>>,
+    pub(super) miss: RuleMiss<'program>,
     /// Cursor after consuming the rule line.
     pub(super) cursor: BorrowedRuleAttemptCursor<'program, P, E, A>,
 }
@@ -142,7 +142,7 @@ pub struct BorrowedRuleAttemptStableRun<'program, P: ParsePolicy> {
     /// Number of consumed rule attempts before stability.
     pub(super) attempts: RuleAttemptCount,
     /// Final non-applying rule that exhausted the current pass.
-    pub(super) final_miss: RuleMiss<RuleView<'program>>,
+    pub(super) final_miss: RuleMiss<'program>,
     /// Parsed program borrowed by the terminal state.
     pub(super) program: &'program ExecutableProgram<P>,
     /// Terminal runtime core containing the stable state.
@@ -214,7 +214,7 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
 
     /// Non-applying rule information.
     #[must_use]
-    pub const fn miss(&self) -> &RuleMiss<RuleView<'program>> {
+    pub const fn miss(&self) -> &RuleMiss<'program> {
         &self.miss
     }
 
@@ -309,7 +309,7 @@ impl<'program, P: ParsePolicy> BorrowedRuleAttemptStableRun<'program, P> {
 
     /// Final non-applying rule that exhausted this rule-attempt pass.
     #[must_use]
-    pub const fn final_miss(&self) -> &RuleMiss<RuleView<'program>> {
+    pub const fn final_miss(&self) -> &RuleMiss<'program> {
         &self.final_miss
     }
 

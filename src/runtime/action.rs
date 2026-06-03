@@ -1,13 +1,16 @@
 use crate::bytes::ReturnOutputByteCount;
 use crate::error::RunStepError;
-use crate::inspect::RuleView;
+use crate::inspect::{
+    AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView, RuleView,
+};
 use crate::limits::StepCount;
 use crate::policy::ExecutionPolicy;
 use crate::program::limits::ReturnOutputBytePermit;
 use crate::program::{ReturnOutput, ReturnOutputView};
 
 use super::budget::{RuntimeBudgetState, StepReservation};
-use super::matcher::{MatchedRuleAction, MatchedRuleApplication, PreparedMatchedRule};
+use super::matcher::MatchedRuleApplication;
+use super::once::OnceMatchPermit;
 use super::rewrite::{PreparedRewrite, RewriteScratch};
 use super::state::State;
 
@@ -23,10 +26,14 @@ pub(crate) enum AppliedRule<'program> {
 /// Prepared rule step after action-specific runtime preparation succeeds.
 #[derive(Debug)]
 pub(crate) enum PreparedRuleStep<'program, 'once, 'budget, E: ExecutionPolicy> {
-    /// Prepared non-terminal rewrite.
-    Rewrite(PreparedRewriteRule<'program, 'once, 'budget, E>),
-    /// Prepared terminal return.
-    Return(PreparedReturnRule<'program, 'once, 'budget, E>),
+    /// Prepared reusable non-terminal rewrite.
+    AlwaysRewrite(PreparedAlwaysRewriteRule<'program, 'budget, E>),
+    /// Prepared once-only non-terminal rewrite.
+    OnceRewrite(PreparedOnceRewriteRule<'program, 'once, 'budget, E>),
+    /// Prepared reusable terminal return.
+    AlwaysReturn(PreparedAlwaysReturnRule<'program, 'budget, E>),
+    /// Prepared once-only terminal return.
+    OnceReturn(PreparedOnceReturnRule<'program, 'once, 'budget, E>),
 }
 
 /// Committed non-terminal rewrite rule.
@@ -47,22 +54,50 @@ pub(crate) struct CommittedReturnRule<'program> {
     output: ReturnOutput,
 }
 
-/// Prepared non-terminal rewrite before its step and once-state side effects commit.
+/// Prepared reusable rewrite before its step side effects commit.
 #[derive(Debug)]
-pub(crate) struct PreparedRewriteRule<'program, 'once, 'budget, E: ExecutionPolicy> {
-    /// Matched rule and once-state commit permit.
-    matched: PreparedMatchedRule<'program, 'once>,
+pub(crate) struct PreparedAlwaysRewriteRule<'program, 'budget, E: ExecutionPolicy> {
+    /// Matched reusable rewrite rule.
+    rule: AlwaysRewriteRuleView<'program>,
     /// Step reservation required before this rewrite can commit.
     step: StepReservation<'budget, E>,
     /// Runtime bytes ready to become the next state.
     rewrite: PreparedRewrite,
 }
 
-/// Prepared terminal return before its step and once-state side effects commit.
+/// Prepared once-only rewrite before its step and once-state side effects commit.
 #[derive(Debug)]
-pub(crate) struct PreparedReturnRule<'program, 'once, 'budget, E: ExecutionPolicy> {
-    /// Matched rule and once-state commit permit.
-    matched: PreparedMatchedRule<'program, 'once>,
+pub(crate) struct PreparedOnceRewriteRule<'program, 'once, 'budget, E: ExecutionPolicy> {
+    /// Matched once-only rewrite rule.
+    rule: OnceRewriteRuleView<'program>,
+    /// Once-state commit permit owned only by this matched once rule.
+    once_commit: OnceMatchPermit<'once>,
+    /// Step reservation required before this rewrite can commit.
+    step: StepReservation<'budget, E>,
+    /// Runtime bytes ready to become the next state.
+    rewrite: PreparedRewrite,
+}
+
+/// Prepared reusable return before its step side effects commit.
+#[derive(Debug)]
+pub(crate) struct PreparedAlwaysReturnRule<'program, 'budget, E: ExecutionPolicy> {
+    /// Matched reusable return rule.
+    rule: AlwaysReturnRuleView<'program>,
+    /// Step reservation required before this return can commit.
+    step: StepReservation<'budget, E>,
+    /// Borrowed return output payload from the matched parsed rule.
+    output_view: ReturnOutputView<'program>,
+    /// Materialized return output.
+    output: ReturnOutput,
+}
+
+/// Prepared once-only return before its step and once-state side effects commit.
+#[derive(Debug)]
+pub(crate) struct PreparedOnceReturnRule<'program, 'once, 'budget, E: ExecutionPolicy> {
+    /// Matched once-only return rule.
+    rule: OnceReturnRuleView<'program>,
+    /// Once-state commit permit owned only by this matched once rule.
+    once_commit: OnceMatchPermit<'once>,
     /// Step reservation required before this return can commit.
     step: StepReservation<'budget, E>,
     /// Borrowed return output payload from the matched parsed rule.
@@ -101,8 +136,10 @@ impl<'program, E: ExecutionPolicy> PreparedRuleStep<'program, '_, '_, E> {
     /// Parsed rule selected by this prepared step.
     pub(crate) const fn rule(&self) -> RuleView<'program> {
         match self {
-            Self::Rewrite(prepared) => prepared.matched.rule(),
-            Self::Return(prepared) => prepared.matched.rule(),
+            Self::AlwaysRewrite(prepared) => RuleView::AlwaysRewrite(prepared.rule),
+            Self::OnceRewrite(prepared) => RuleView::OnceRewrite(prepared.rule),
+            Self::AlwaysReturn(prepared) => RuleView::AlwaysReturn(prepared.rule),
+            Self::OnceReturn(prepared) => RuleView::OnceReturn(prepared.rule),
         }
     }
 
@@ -113,14 +150,27 @@ impl<'program, E: ExecutionPolicy> PreparedRuleStep<'program, '_, '_, E> {
         scratch: &mut RewriteScratch,
     ) -> AppliedRule<'program> {
         match self {
-            Self::Rewrite(prepared) => {
-                prepared.matched.commit();
+            Self::AlwaysRewrite(prepared) => {
                 let step = prepared.step.commit();
                 state.commit_rewrite(prepared.rewrite, scratch);
                 AppliedRule::Continued(CommittedRewriteRule { step })
             }
-            Self::Return(prepared) => {
-                prepared.matched.commit();
+            Self::OnceRewrite(prepared) => {
+                prepared.once_commit.commit();
+                let step = prepared.step.commit();
+                state.commit_rewrite(prepared.rewrite, scratch);
+                AppliedRule::Continued(CommittedRewriteRule { step })
+            }
+            Self::AlwaysReturn(prepared) => {
+                let step = prepared.step.commit();
+                AppliedRule::Terminal(CommittedReturnRule {
+                    step,
+                    output_view: prepared.output_view,
+                    output: prepared.output,
+                })
+            }
+            Self::OnceReturn(prepared) => {
+                prepared.once_commit.commit();
                 let step = prepared.step.commit();
                 AppliedRule::Terminal(CommittedReturnRule {
                     step,
@@ -158,25 +208,54 @@ pub(crate) fn prepare_matched_rule<'program, 'once, 'budget, E: ExecutionPolicy>
     state_len: crate::bytes::RuntimeStateByteCount,
     matched: MatchedRuleApplication<'program, '_, 'once>,
 ) -> Result<PreparedRuleStep<'program, 'once, 'budget, E>, RunStepError> {
-    let (state_match, matched) = matched.into_prepare_parts();
-    let step = budget.reserve_next_step(state_len)?;
     match matched {
-        MatchedRuleAction::Rewrite { matched, action } => {
+        MatchedRuleApplication::AlwaysRewrite(matched) => {
+            let (rule, state_match, action) = matched.into_parts();
+            let step = budget.reserve_next_step(state_len)?;
             let rewrite = state_match.rewrite_into(action, scratch, &step)?;
-            Ok(PreparedRuleStep::Rewrite(PreparedRewriteRule {
-                matched,
+            Ok(PreparedRuleStep::AlwaysRewrite(PreparedAlwaysRewriteRule {
+                rule,
                 step,
                 rewrite,
             }))
         }
-        MatchedRuleAction::Return { matched, output } => {
+        MatchedRuleApplication::OnceRewrite(matched) => {
+            let (rule, state_match, action, once_commit) = matched.into_parts();
+            let step = budget.reserve_next_step(state_len)?;
+            let rewrite = state_match.rewrite_into(action, scratch, &step)?;
+            Ok(PreparedRuleStep::OnceRewrite(PreparedOnceRewriteRule {
+                rule,
+                once_commit,
+                step,
+                rewrite,
+            }))
+        }
+        MatchedRuleApplication::AlwaysReturn(matched) => {
+            let (rule, _state_match, output) = matched.into_parts();
+            let step = budget.reserve_next_step(state_len)?;
             let output_view = ReturnOutputView::new(output);
             let output_len = ReturnOutputByteCount::from_payload_count(output.byte_count());
             let output_permit = RuntimeBudgetState::<E>::ensure_return_len(output_len)?;
             let materialized_output = materialize_return_output(output_view, output_permit)?;
 
-            Ok(PreparedRuleStep::Return(PreparedReturnRule {
-                matched,
+            Ok(PreparedRuleStep::AlwaysReturn(PreparedAlwaysReturnRule {
+                rule,
+                step,
+                output_view,
+                output: materialized_output,
+            }))
+        }
+        MatchedRuleApplication::OnceReturn(matched) => {
+            let (rule, _state_match, output, once_commit) = matched.into_parts();
+            let step = budget.reserve_next_step(state_len)?;
+            let output_view = ReturnOutputView::new(output);
+            let output_len = ReturnOutputByteCount::from_payload_count(output.byte_count());
+            let output_permit = RuntimeBudgetState::<E>::ensure_return_len(output_len)?;
+            let materialized_output = materialize_return_output(output_view, output_permit)?;
+
+            Ok(PreparedRuleStep::OnceReturn(PreparedOnceReturnRule {
+                rule,
+                once_commit,
                 step,
                 output_view,
                 output: materialized_output,

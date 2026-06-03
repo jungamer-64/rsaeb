@@ -147,6 +147,22 @@
 //! }
 //! ```
 //!
+//! Rule-attempt misses no longer expose a loosely paired reason enum:
+//!
+//! ```compile_fail
+//! use rsaeb::execution::RuleMissReason;
+//!
+//! fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::execution::RuleMiss;
+//!
+//! fn main() {
+//!     let _ = |miss: RuleMiss<'_>| miss.reason();
+//! }
+//! ```
+//!
 //! Once-state mismatch is no longer a reportable execution error:
 //!
 //! ```compile_fail
@@ -570,7 +586,7 @@
 //! ```
 //! use rsaeb::execution::{
 //!     BorrowedContinuingRuleAttemptTransition, BorrowedFinalRuleAttemptTransition,
-//!     BorrowedRuleAttemptCursor, RuleMissReason,
+//!     BorrowedRuleAttemptCursor, RuleMiss,
 //! };
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
@@ -594,8 +610,8 @@
 //! };
 //! let execution = match execution.step() {
 //!     BorrowedContinuingRuleAttemptTransition::Missed(missed) => {
-//!         if missed.miss().reason() != RuleMissReason::StateMismatch {
-//!             return Err("unexpected miss reason".into());
+//!         if !matches!(missed.miss(), RuleMiss::StateMismatch(_)) {
+//!             return Err("unexpected miss shape".into());
 //!         }
 //!         missed.into_cursor()
 //!     }

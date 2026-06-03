@@ -3,7 +3,7 @@ use alloc::{collections::VecDeque, vec::Vec};
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
-use crate::inspect::RuleView;
+use crate::inspect::{OnceReturnRuleView, OnceRewriteRuleView};
 use crate::policy::ParsePolicy;
 use crate::program::{ExecutableProgram, RuleScan};
 use crate::rule::{ReturnRule, RewriteRule, Rule};
@@ -142,7 +142,16 @@ enum RuntimeRuleTarget<'program, 'once> {
     /// The rule can be evaluated against the current runtime state.
     Available(AvailableRuntimeRule<'program, 'once>),
     /// The rule has already committed during this runtime invocation.
-    Consumed(RuleView<'program>),
+    Consumed(ConsumedRuntimeRule<'program>),
+}
+
+/// Parsed once-only rule that is already consumed in the current run.
+#[derive(Debug)]
+enum ConsumedRuntimeRule<'program> {
+    /// Consumed once-only rewrite rule.
+    OnceRewrite(OnceRewriteRuleView<'program>),
+    /// Consumed once-only return rule.
+    OnceReturn(OnceReturnRuleView<'program>),
 }
 
 /// Parsed rule proven available for runtime-state matching.
@@ -324,9 +333,7 @@ impl<'program> RuntimeRuleCell<'program> {
                 AvailableRuleAttempt::Matched(matched) => RuleAttempt::Matched(matched),
                 AvailableRuleAttempt::StateMismatch(miss) => RuleAttempt::Missed(miss),
             },
-            RuntimeRuleTarget::Consumed(rule) => {
-                RuleAttempt::Missed(RuleAttemptMiss::new(rule))
-            }
+            RuntimeRuleTarget::Consumed(rule) => RuleAttempt::Missed(rule.into_miss()),
         }
     }
 
@@ -347,7 +354,9 @@ impl<'program> RuntimeRuleCell<'program> {
                         },
                     ))
                 } else {
-                    RuntimeRuleTarget::Consumed(RuleView::from_once_rewrite(cell.rule))
+                    RuntimeRuleTarget::Consumed(ConsumedRuntimeRule::OnceRewrite(
+                        OnceRewriteRuleView::new(cell.rule),
+                    ))
                 }
             }
             Self::AlwaysReturn(cell) => {
@@ -364,9 +373,21 @@ impl<'program> RuntimeRuleCell<'program> {
                         },
                     ))
                 } else {
-                    RuntimeRuleTarget::Consumed(RuleView::from_once_return(cell.rule))
+                    RuntimeRuleTarget::Consumed(ConsumedRuntimeRule::OnceReturn(
+                        OnceReturnRuleView::new(cell.rule),
+                    ))
                 }
             }
+        }
+    }
+}
+
+impl<'program> ConsumedRuntimeRule<'program> {
+    /// Projects this consumed once-only rule into a non-applying attempt.
+    const fn into_miss(self) -> RuleAttemptMiss<'program> {
+        match self {
+            Self::OnceRewrite(rule) => RuleAttemptMiss::once_rewrite_consumed(rule),
+            Self::OnceReturn(rule) => RuleAttemptMiss::once_return_consumed(rule),
         }
     }
 }
@@ -609,7 +630,7 @@ impl<'state> OnceMatchPermit<'state> {
 
 impl OnceMatchPermit<'_> {
     /// Consumes this permit and marks the owning once-rule state as consumed.
-    fn commit(self) {
+    pub(crate) fn commit(self) {
         let Self {
             state,
             linearity: _linearity,

@@ -13,7 +13,7 @@
 //! continuing or final session before stepping. Continuing transitions can miss
 //! and keep running; final transitions can stabilize. The two impossible
 //! outcomes are absent from their transition types. Rule-attempt transitions
-//! additionally expose typed miss reasons through [`RuleMissReason`]. Stable
+//! additionally expose typed miss variants through [`RuleMiss`]. Stable
 //! rule-attempt terminals carry the final non-applying rule directly.
 //!
 //! ```
@@ -64,7 +64,7 @@ mod engine;
 mod session;
 /// Public step and terminal transition typestates.
 mod transition;
-pub use attempt::{RuleMiss, RuleMissReason};
+pub use attempt::{OnceConsumedRuleMiss, RuleMiss, StateMismatchRuleMiss};
 pub use session::{
     BorrowedContinuingRuleAttemptSession, BorrowedFinalRuleAttemptSession,
     BorrowedRuleAttemptCursor, BorrowedRunSession,

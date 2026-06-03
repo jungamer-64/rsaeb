@@ -1,8 +1,10 @@
-use super::once::AvailableRuntimeRule;
+use super::once::{AvailableRuntimeRule, OnceMatchPermit};
 use super::state::{State, StateMatch};
 use crate::bytes::Payload;
-use crate::inspect::RuleView;
-use crate::rule::{ReturnRule, RewriteAction, RewriteRule, RuleAnchorSyntax, RulePattern};
+use crate::inspect::{
+    AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView, RuleView,
+};
+use crate::rule::{RewriteAction, RuleAnchorSyntax, RulePattern};
 
 /// Outcome of evaluating one executable rule line against the current state.
 #[derive(Debug)]
@@ -25,39 +27,65 @@ pub(crate) enum AvailableRuleAttempt<'program, 'state, 'once> {
 /// Matched rule plus the state range and action-specific commit data.
 #[derive(Debug)]
 pub(crate) enum MatchedRuleApplication<'program, 'state, 'once> {
-    /// Matched non-terminal rewrite rule.
-    Rewrite(MatchedRewriteApplication<'program, 'state, 'once>),
-    /// Matched terminal return rule.
-    Return(MatchedReturnApplication<'program, 'state, 'once>),
+    /// Matched reusable non-terminal rewrite rule.
+    AlwaysRewrite(MatchedAlwaysRewriteApplication<'program, 'state>),
+    /// Matched once-only non-terminal rewrite rule.
+    OnceRewrite(MatchedOnceRewriteApplication<'program, 'state, 'once>),
+    /// Matched reusable terminal return rule.
+    AlwaysReturn(MatchedAlwaysReturnApplication<'program, 'state>),
+    /// Matched once-only terminal return rule.
+    OnceReturn(MatchedOnceReturnApplication<'program, 'state, 'once>),
 }
 
-/// Matched non-terminal rewrite rule.
+/// Matched reusable non-terminal rewrite rule.
 #[derive(Debug)]
-pub(crate) struct MatchedRewriteApplication<'program, 'state, 'once> {
+pub(crate) struct MatchedAlwaysRewriteApplication<'program, 'state> {
     /// Parsed rule selected by the matcher.
-    rule: RuleView<'program>,
-    /// Right-side rewrite action selected by the matched rule.
-    action: &'program RewriteAction,
+    rule: AlwaysRewriteRuleView<'program>,
     /// Runtime-state range matched by the rule left side.
     state_match: StateMatch<'state>,
 }
 
-/// Matched terminal return rule.
+/// Matched once-only non-terminal rewrite rule.
 #[derive(Debug)]
-pub(crate) struct MatchedReturnApplication<'program, 'state, 'once> {
+pub(crate) struct MatchedOnceRewriteApplication<'program, 'state, 'once> {
     /// Parsed rule selected by the matcher.
-    rule: RuleView<'program>,
-    /// Right-side return output selected by the matched rule.
-    output: &'program Payload,
+    rule: OnceRewriteRuleView<'program>,
     /// Runtime-state range matched by the rule left side.
     state_match: StateMatch<'state>,
+    /// Once-state side effect to apply only after successful rewrite.
+    commit: OnceMatchPermit<'once>,
+}
+
+/// Matched reusable terminal return rule.
+#[derive(Debug)]
+pub(crate) struct MatchedAlwaysReturnApplication<'program, 'state> {
+    /// Parsed rule selected by the matcher.
+    rule: AlwaysReturnRuleView<'program>,
+    /// Runtime-state range matched by the rule left side.
+    state_match: StateMatch<'state>,
+}
+
+/// Matched once-only terminal return rule.
+#[derive(Debug)]
+pub(crate) struct MatchedOnceReturnApplication<'program, 'state, 'once> {
+    /// Parsed rule selected by the matcher.
+    rule: OnceReturnRuleView<'program>,
+    /// Runtime-state range matched by the rule left side.
+    state_match: StateMatch<'state>,
+    /// Once-state side effect to apply only after successful return materialization.
+    commit: OnceMatchPermit<'once>,
 }
 
 /// Non-applying rule consumed by a rule-attempt step.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct RuleAttemptMiss<'program> {
-    /// Parsed rule selected as the attempted rule line.
-    rule: RuleView<'program>,
+pub(crate) enum RuleAttemptMiss<'program> {
+    /// Available rule did not match the current runtime state.
+    StateMismatch(RuleView<'program>),
+    /// Once-only rewrite rule had already committed in this run.
+    OnceRewriteConsumed(OnceRewriteRuleView<'program>),
+    /// Once-only return rule had already committed in this run.
+    OnceReturnConsumed(OnceReturnRuleView<'program>),
 }
 
 /// Domain result of comparing one rule's left side with the runtime state.
@@ -69,14 +97,77 @@ enum RuleStateMatch<'state> {
 }
 
 impl<'program> RuleAttemptMiss<'program> {
-    /// Captures a consumed non-applying rule line.
-    pub(crate) const fn new(rule: RuleView<'program>) -> Self {
-        Self { rule }
+    /// Captures an available rule that failed runtime-state matching.
+    pub(crate) const fn state_mismatch(rule: RuleView<'program>) -> Self {
+        Self::StateMismatch(rule)
     }
 
-    /// Parsed rule selected as the attempted rule line.
-    pub(crate) const fn rule(self) -> RuleView<'program> {
-        self.rule
+    /// Captures a consumed once-only rewrite rule.
+    pub(crate) const fn once_rewrite_consumed(rule: OnceRewriteRuleView<'program>) -> Self {
+        Self::OnceRewriteConsumed(rule)
+    }
+
+    /// Captures a consumed once-only return rule.
+    pub(crate) const fn once_return_consumed(rule: OnceReturnRuleView<'program>) -> Self {
+        Self::OnceReturnConsumed(rule)
+    }
+}
+
+impl<'program, 'state> MatchedAlwaysRewriteApplication<'program, 'state> {
+    /// Splits matched reusable rewrite data into preparation parts.
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        AlwaysRewriteRuleView<'program>,
+        StateMatch<'state>,
+        &'program RewriteAction,
+    ) {
+        let action = self.rule.into_rule().rewrite_action();
+        (self.rule, self.state_match, action)
+    }
+}
+
+impl<'program, 'state, 'once> MatchedOnceRewriteApplication<'program, 'state, 'once> {
+    /// Splits matched once-only rewrite data into preparation parts.
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        OnceRewriteRuleView<'program>,
+        StateMatch<'state>,
+        &'program RewriteAction,
+        OnceMatchPermit<'once>,
+    ) {
+        let action = self.rule.into_rule().rewrite_action();
+        (self.rule, self.state_match, action, self.commit)
+    }
+}
+
+impl<'program, 'state> MatchedAlwaysReturnApplication<'program, 'state> {
+    /// Splits matched reusable return data into preparation parts.
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        AlwaysReturnRuleView<'program>,
+        StateMatch<'state>,
+        &'program Payload,
+    ) {
+        let output = self.rule.into_rule().output();
+        (self.rule, self.state_match, output)
+    }
+}
+
+impl<'program, 'state, 'once> MatchedOnceReturnApplication<'program, 'state, 'once> {
+    /// Splits matched once-only return data into preparation parts.
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        OnceReturnRuleView<'program>,
+        StateMatch<'state>,
+        &'program Payload,
+        OnceMatchPermit<'once>,
+    ) {
+        let output = self.rule.into_rule().output();
+        (self.rule, self.state_match, output, self.commit)
     }
 }
 
@@ -86,73 +177,107 @@ pub(crate) fn attempt_available_rule<'program, 'state, 'once>(
     state: &'state State,
 ) -> AvailableRuleAttempt<'program, 'state, 'once> {
     match runtime_rule {
-        AvailableRuntimeRule::AlwaysRewrite(rule) => attempt_rewrite_rule(
-            rule.rule(),
-            RuleView::from_always_rewrite(rule.rule()),
-            state,
-        ),
-        AvailableRuntimeRule::OnceRewrite(rule) => {
-            let (rule, _commit) = rule.into_parts();
-            attempt_rewrite_rule(
-                rule,
-                RuleView::from_once_rewrite(rule),
-                state,
-            )
+        AvailableRuntimeRule::AlwaysRewrite(rule) => {
+            attempt_always_rewrite_rule(AlwaysRewriteRuleView::new(rule.rule()), state)
         }
-        AvailableRuntimeRule::AlwaysReturn(rule) => attempt_return_rule(
-            rule.rule(),
-            RuleView::from_always_return(rule.rule()),
-            state,
-        ),
+        AvailableRuntimeRule::OnceRewrite(rule) => {
+            let (rule, commit) = rule.into_parts();
+            attempt_once_rewrite_rule(OnceRewriteRuleView::new(rule), commit, state)
+        }
+        AvailableRuntimeRule::AlwaysReturn(rule) => {
+            attempt_always_return_rule(AlwaysReturnRuleView::new(rule.rule()), state)
+        }
         AvailableRuntimeRule::OnceReturn(rule) => {
-            let (rule, _commit) = rule.into_parts();
-            attempt_return_rule(
-                rule,
-                RuleView::from_once_return(rule),
-                state,
-            )
+            let (rule, commit) = rule.into_parts();
+            attempt_once_return_rule(OnceReturnRuleView::new(rule), commit, state)
         }
     }
 }
 
-/// Evaluates an available rewrite rule against the current runtime state.
-fn attempt_rewrite_rule<'program, 'state, 'once>(
-    rule: &'program RewriteRule,
-    rule_view: RuleView<'program>,
+/// Evaluates an available reusable rewrite rule against the current runtime state.
+fn attempt_always_rewrite_rule<'program, 'state, 'once>(
+    rule: AlwaysRewriteRuleView<'program>,
     state: &'state State,
 ) -> AvailableRuleAttempt<'program, 'state, 'once> {
-    let state_match = match match_rule_state(rule.pattern(), state) {
+    let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
         RuleStateMatch::Matched(state_match) => state_match,
         RuleStateMatch::Mismatched => {
-            return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::new(rule_view));
+            return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::state_mismatch(
+                RuleView::AlwaysRewrite(rule),
+            ));
         }
     };
 
-    AvailableRuleAttempt::Matched(MatchedRuleApplication::Rewrite(MatchedRewriteApplication {
-        rule: rule_view,
-        action: rule.rewrite_action(),
-        state_match,
-    }))
+    AvailableRuleAttempt::Matched(MatchedRuleApplication::AlwaysRewrite(
+        MatchedAlwaysRewriteApplication { rule, state_match },
+    ))
 }
 
-/// Evaluates an available return rule against the current runtime state.
-fn attempt_return_rule<'program, 'state, 'once>(
-    rule: &'program ReturnRule,
-    rule_view: RuleView<'program>,
+/// Evaluates an available once-only rewrite rule against the current runtime state.
+fn attempt_once_rewrite_rule<'program, 'state, 'once>(
+    rule: OnceRewriteRuleView<'program>,
+    commit: OnceMatchPermit<'once>,
     state: &'state State,
 ) -> AvailableRuleAttempt<'program, 'state, 'once> {
-    let state_match = match match_rule_state(rule.pattern(), state) {
+    let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
         RuleStateMatch::Matched(state_match) => state_match,
         RuleStateMatch::Mismatched => {
-            return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::new(rule_view));
+            return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::state_mismatch(
+                RuleView::OnceRewrite(rule),
+            ));
         }
     };
 
-    AvailableRuleAttempt::Matched(MatchedRuleApplication::Return(MatchedReturnApplication {
-        rule: rule_view,
-        output: rule.output(),
-        state_match,
-    }))
+    AvailableRuleAttempt::Matched(MatchedRuleApplication::OnceRewrite(
+        MatchedOnceRewriteApplication {
+            rule,
+            state_match,
+            commit,
+        },
+    ))
+}
+
+/// Evaluates an available reusable return rule against the current runtime state.
+fn attempt_always_return_rule<'program, 'state, 'once>(
+    rule: AlwaysReturnRuleView<'program>,
+    state: &'state State,
+) -> AvailableRuleAttempt<'program, 'state, 'once> {
+    let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
+        RuleStateMatch::Matched(state_match) => state_match,
+        RuleStateMatch::Mismatched => {
+            return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::state_mismatch(
+                RuleView::AlwaysReturn(rule),
+            ));
+        }
+    };
+
+    AvailableRuleAttempt::Matched(MatchedRuleApplication::AlwaysReturn(
+        MatchedAlwaysReturnApplication { rule, state_match },
+    ))
+}
+
+/// Evaluates an available once-only return rule against the current runtime state.
+fn attempt_once_return_rule<'program, 'state, 'once>(
+    rule: OnceReturnRuleView<'program>,
+    commit: OnceMatchPermit<'once>,
+    state: &'state State,
+) -> AvailableRuleAttempt<'program, 'state, 'once> {
+    let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
+        RuleStateMatch::Matched(state_match) => state_match,
+        RuleStateMatch::Mismatched => {
+            return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::state_mismatch(
+                RuleView::OnceReturn(rule),
+            ));
+        }
+    };
+
+    AvailableRuleAttempt::Matched(MatchedRuleApplication::OnceReturn(
+        MatchedOnceReturnApplication {
+            rule,
+            state_match,
+            commit,
+        },
+    ))
 }
 
 /// Compares a single parsed rule pattern with the current runtime state.
