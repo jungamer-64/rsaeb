@@ -8,7 +8,7 @@ use crate::policy::ParsePolicy;
 use crate::program::{ExecutableProgram, RuleScan};
 use crate::rule::{ReturnRule, RewriteRule, Rule};
 use crate::runtime::matcher::{
-    AvailableRuleAttempt, MatchedRuleApplication, RuleAttempt, RuleAttemptMiss, RuleMissReason,
+    AvailableRuleAttempt, MatchedRuleApplication, RuleAttempt, RuleAttemptMiss,
     attempt_available_rule,
 };
 use crate::runtime::state::State;
@@ -121,15 +121,6 @@ pub(super) enum OnceRuleRuntimeState {
     Fresh,
     /// Rule has already committed during this run.
     Committed,
-}
-
-/// Linear commit action for a matched rule.
-#[derive(Debug)]
-pub(super) enum MatchedRuleCommit<'state> {
-    /// Rule has no once-state side effect.
-    Always,
-    /// Rule owns the unique permit to consume its once state.
-    Once(OnceMatchPermit<'state>),
 }
 
 /// Private permit that consumes one fresh once-rule state on commit.
@@ -334,7 +325,7 @@ impl<'program> RuntimeRuleCell<'program> {
                 AvailableRuleAttempt::StateMismatch(miss) => RuleAttempt::Missed(miss),
             },
             RuntimeRuleTarget::Consumed(rule) => {
-                RuleAttempt::Missed(RuleAttemptMiss::new(rule, RuleMissReason::OnceConsumed))
+                RuleAttempt::Missed(RuleAttemptMiss::new(rule))
             }
         }
     }
@@ -612,16 +603,6 @@ impl<'state> OnceMatchPermit<'state> {
         Self {
             state,
             linearity: OnceMatchPermitLinearity::new(),
-        }
-    }
-}
-
-impl MatchedRuleCommit<'_> {
-    /// Applies the rule's once-state side effect after rewrite success.
-    pub(super) fn commit(self) {
-        match self {
-            Self::Always => {}
-            Self::Once(commit) => commit.commit(),
         }
     }
 }

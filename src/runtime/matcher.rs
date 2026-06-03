@@ -1,4 +1,4 @@
-use super::once::{AvailableRuntimeRule, MatchedRuleCommit};
+use super::once::AvailableRuntimeRule;
 use super::state::{State, StateMatch};
 use crate::bytes::Payload;
 use crate::inspect::RuleView;
@@ -22,15 +22,6 @@ pub(crate) enum AvailableRuleAttempt<'program, 'state, 'once> {
     StateMismatch(RuleAttemptMiss<'program>),
 }
 
-/// Reason a consumed executable rule line did not apply.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuleMissReason {
-    /// The rule is available, but its left side does not match the current state.
-    StateMismatch,
-    /// The rule is a `(once)` rule that has already committed in this run.
-    OnceConsumed,
-}
-
 /// Matched rule plus the state range and action-specific commit data.
 #[derive(Debug)]
 pub(crate) enum MatchedRuleApplication<'program, 'state, 'once> {
@@ -47,8 +38,6 @@ pub(crate) struct MatchedRewriteApplication<'program, 'state, 'once> {
     rule: RuleView<'program>,
     /// Right-side rewrite action selected by the matched rule.
     action: &'program RewriteAction,
-    /// Once-state side effect to apply only after successful rewrite.
-    commit: MatchedRuleCommit<'once>,
     /// Runtime-state range matched by the rule left side.
     state_match: StateMatch<'state>,
 }
@@ -60,37 +49,8 @@ pub(crate) struct MatchedReturnApplication<'program, 'state, 'once> {
     rule: RuleView<'program>,
     /// Right-side return output selected by the matched rule.
     output: &'program Payload,
-    /// Once-state side effect to apply only after successful return materialization.
-    commit: MatchedRuleCommit<'once>,
     /// Runtime-state range matched by the rule left side.
     state_match: StateMatch<'state>,
-}
-
-/// Matched rule after runtime-state match data has been consumed for preparation.
-#[derive(Debug)]
-pub(crate) struct PreparedMatchedRule<'program, 'once> {
-    /// Parsed rule selected by the matcher.
-    rule: RuleView<'program>,
-    /// Once-state side effect to apply only after successful rewrite.
-    commit: MatchedRuleCommit<'once>,
-}
-
-/// Action-specific data after runtime-state match data has been split out.
-pub(crate) enum MatchedRuleAction<'program, 'once> {
-    /// Prepared rewrite rule data.
-    Rewrite {
-        /// Matched rule and deferred once-state commit.
-        matched: PreparedMatchedRule<'program, 'once>,
-        /// Right-side rewrite action.
-        action: &'program RewriteAction,
-    },
-    /// Prepared return rule data.
-    Return {
-        /// Matched rule and deferred once-state commit.
-        matched: PreparedMatchedRule<'program, 'once>,
-        /// Right-side return output.
-        output: &'program Payload,
-    },
 }
 
 /// Non-applying rule consumed by a rule-attempt step.
@@ -98,8 +58,6 @@ pub(crate) enum MatchedRuleAction<'program, 'once> {
 pub(crate) struct RuleAttemptMiss<'program> {
     /// Parsed rule selected as the attempted rule line.
     rule: RuleView<'program>,
-    /// Reason the attempted rule did not apply.
-    reason: RuleMissReason,
 }
 
 /// Domain result of comparing one rule's left side with the runtime state.
@@ -112,60 +70,13 @@ enum RuleStateMatch<'state> {
 
 impl<'program> RuleAttemptMiss<'program> {
     /// Captures a consumed non-applying rule line.
-    pub(crate) const fn new(rule: RuleView<'program>, reason: RuleMissReason) -> Self {
-        Self { rule, reason }
+    pub(crate) const fn new(rule: RuleView<'program>) -> Self {
+        Self { rule }
     }
 
     /// Parsed rule selected as the attempted rule line.
     pub(crate) const fn rule(self) -> RuleView<'program> {
         self.rule
-    }
-
-    /// Reason the attempted rule did not apply.
-    pub(crate) const fn reason(self) -> RuleMissReason {
-        self.reason
-    }
-}
-
-impl<'program, 'state, 'once> MatchedRuleApplication<'program, 'state, 'once> {
-    /// Splits the state-match witness from action-specific commit data.
-    pub(crate) fn into_prepare_parts(
-        self,
-    ) -> (StateMatch<'state>, MatchedRuleAction<'program, 'once>) {
-        match self {
-            Self::Rewrite(matched) => (
-                matched.state_match,
-                MatchedRuleAction::Rewrite {
-                    matched: PreparedMatchedRule {
-                        rule: matched.rule,
-                        commit: matched.commit,
-                    },
-                    action: matched.action,
-                },
-            ),
-            Self::Return(matched) => (
-                matched.state_match,
-                MatchedRuleAction::Return {
-                    matched: PreparedMatchedRule {
-                        rule: matched.rule,
-                        commit: matched.commit,
-                    },
-                    output: matched.output,
-                },
-            ),
-        }
-    }
-}
-
-impl<'program> PreparedMatchedRule<'program, '_> {
-    /// Parsed rule selected by the matcher.
-    pub(crate) const fn rule(&self) -> RuleView<'program> {
-        self.rule
-    }
-
-    /// Commits the matched rule's deferred side effects.
-    pub(crate) fn commit(self) {
-        self.commit.commit();
     }
 }
 
@@ -178,30 +89,26 @@ pub(crate) fn attempt_available_rule<'program, 'state, 'once>(
         AvailableRuntimeRule::AlwaysRewrite(rule) => attempt_rewrite_rule(
             rule.rule(),
             RuleView::from_always_rewrite(rule.rule()),
-            MatchedRuleCommit::Always,
             state,
         ),
         AvailableRuntimeRule::OnceRewrite(rule) => {
-            let (rule, commit) = rule.into_parts();
+            let (rule, _commit) = rule.into_parts();
             attempt_rewrite_rule(
                 rule,
                 RuleView::from_once_rewrite(rule),
-                MatchedRuleCommit::Once(commit),
                 state,
             )
         }
         AvailableRuntimeRule::AlwaysReturn(rule) => attempt_return_rule(
             rule.rule(),
             RuleView::from_always_return(rule.rule()),
-            MatchedRuleCommit::Always,
             state,
         ),
         AvailableRuntimeRule::OnceReturn(rule) => {
-            let (rule, commit) = rule.into_parts();
+            let (rule, _commit) = rule.into_parts();
             attempt_return_rule(
                 rule,
                 RuleView::from_once_return(rule),
-                MatchedRuleCommit::Once(commit),
                 state,
             )
         }
@@ -212,23 +119,18 @@ pub(crate) fn attempt_available_rule<'program, 'state, 'once>(
 fn attempt_rewrite_rule<'program, 'state, 'once>(
     rule: &'program RewriteRule,
     rule_view: RuleView<'program>,
-    commit: MatchedRuleCommit<'once>,
     state: &'state State,
 ) -> AvailableRuleAttempt<'program, 'state, 'once> {
     let state_match = match match_rule_state(rule.pattern(), state) {
         RuleStateMatch::Matched(state_match) => state_match,
         RuleStateMatch::Mismatched => {
-            return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::new(
-                rule_view,
-                RuleMissReason::StateMismatch,
-            ));
+            return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::new(rule_view));
         }
     };
 
     AvailableRuleAttempt::Matched(MatchedRuleApplication::Rewrite(MatchedRewriteApplication {
         rule: rule_view,
         action: rule.rewrite_action(),
-        commit,
         state_match,
     }))
 }
@@ -237,23 +139,18 @@ fn attempt_rewrite_rule<'program, 'state, 'once>(
 fn attempt_return_rule<'program, 'state, 'once>(
     rule: &'program ReturnRule,
     rule_view: RuleView<'program>,
-    commit: MatchedRuleCommit<'once>,
     state: &'state State,
 ) -> AvailableRuleAttempt<'program, 'state, 'once> {
     let state_match = match match_rule_state(rule.pattern(), state) {
         RuleStateMatch::Matched(state_match) => state_match,
         RuleStateMatch::Mismatched => {
-            return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::new(
-                rule_view,
-                RuleMissReason::StateMismatch,
-            ));
+            return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::new(rule_view));
         }
     };
 
     AvailableRuleAttempt::Matched(MatchedRuleApplication::Return(MatchedReturnApplication {
         rule: rule_view,
         output: rule.output(),
-        commit,
         state_match,
     }))
 }
