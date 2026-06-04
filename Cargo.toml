@@ -65,6 +65,7 @@ let_underscore_must_use = "deny"
 let_underscore_untyped = "deny"
 large_stack_frames = "deny"
 large_stack_arrays = "deny"
+bool_to_int_with_if = "deny"
 
 [package.metadata.docs.rs]
 all-features = true
