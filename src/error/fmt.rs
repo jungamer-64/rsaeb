@@ -81,10 +81,10 @@ impl fmt::Display for EmptyProgramParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Parse(error) => error.fmt(f),
-            Self::ExecutableRules { rule_count } => write!(
+            Self::ExecutableRule { line_number } => write!(
                 f,
-                "expected empty program source; parsed {} executable rules",
-                rule_count.get(),
+                "expected empty program source; found executable rule at line {}",
+                line_number.get(),
             ),
         }
     }
@@ -132,8 +132,6 @@ impl fmt::Display for ParseRepresentationError {
                 "source column could not be represented at line {}",
                 line.get(),
             ),
-            Self::RulePosition => f.write_str("rule position could not be represented"),
-            Self::RuleCount => f.write_str("rule count could not be represented"),
         }
     }
 }

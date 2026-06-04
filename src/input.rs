@@ -47,7 +47,7 @@
 //! ```
 
 use alloc::vec::Vec;
-use core::{fmt, marker::PhantomData};
+use core::fmt;
 
 use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
 use crate::bytes::{RuntimeByte, RuntimeInputByte, RuntimeInputByteCount, RuntimeStateByteCount};
@@ -98,11 +98,9 @@ impl<'input> RuntimeInputSource<'input> {
 /// another run means validating another [`RuntimeInputSource`], not cloning a
 /// previously admitted execution state.
 #[derive(PartialEq, Eq)]
-pub struct RuntimeInput<I: RuntimeInputPolicy> {
+pub struct RuntimeInput {
     /// Owned bytes classified for mutable runtime state.
     bytes: Vec<RuntimeByte>,
-    /// Compile-time runtime-input policy selected for this value.
-    policy: PhantomData<I>,
 }
 
 impl<I: RuntimeInputPolicy> fmt::Debug for RuntimeInput<I> {
@@ -163,10 +161,7 @@ impl<I: RuntimeInputPolicy> RuntimeInput<I> {
             )?;
         }
 
-        Ok(Self {
-            bytes,
-            policy: PhantomData,
-        })
+        Ok(Self { bytes })
     }
 
     /// Returns materialized runtime bytes.

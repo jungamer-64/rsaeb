@@ -115,10 +115,10 @@ impl From<ParseError> for ExecutableProgramParseError {
 pub enum EmptyProgramParseError {
     /// Source failed the ordinary parser contract.
     Parse(ParseError),
-    /// Source parsed successfully but contained executable rules.
-    ExecutableRules {
-        /// Number of executable rules in the rejected source.
-        rule_count: RuleCount,
+    /// Source contained an executable rule where an empty program was required.
+    ExecutableRule {
+        /// Source line of the first rejected executable rule.
+        line_number: SourceLineNumber,
     },
 }
 
@@ -126,7 +126,7 @@ impl Error for EmptyProgramParseError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Parse(error) => Some(error),
-            Self::ExecutableRules { .. } => None,
+            Self::ExecutableRule { .. } => None,
         }
     }
 }
@@ -196,10 +196,9 @@ pub enum ParseErrorKind {
 
 /// Parser-domain representation failure.
 ///
-/// These errors describe parser metadata that cannot be represented, such as
-/// source positions or rule positions. They are separate from allocation
-/// failures so capacity errors do not hide non-allocation representation
-/// problems.
+/// These errors describe source metadata that cannot be represented. They are
+/// separate from allocation failures so capacity errors do not hide
+/// non-allocation representation problems.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseRepresentationError {
     /// A one-based source line number could not be represented.
@@ -209,10 +208,6 @@ pub enum ParseRepresentationError {
         /// Source line where column conversion failed.
         line: SourceLineNumber,
     },
-    /// A rule-table position could not be represented.
-    RulePosition,
-    /// A parsed rule count could not be represented.
-    RuleCount,
 }
 
 impl Error for ParseRepresentationError {}

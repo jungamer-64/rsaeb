@@ -1,4 +1,4 @@
-use core::{fmt, marker::PhantomData};
+use core::fmt;
 
 use crate::error::{
     EmptyProgramParseError, ExecutableProgramParseError, RunError, RunFinishError, RunStartError,
@@ -19,10 +19,7 @@ use super::{
 
 /// Parsed source with no executable rule lines.
 #[derive(PartialEq, Eq)]
-pub struct EmptyProgram<P: ParsePolicy> {
-    /// Compile-time parser policy selected for this empty program.
-    policy: PhantomData<P>,
-}
+pub struct EmptyProgram;
 
 impl<P: ParsePolicy> Clone for EmptyProgram<P> {
     fn clone(&self) -> Self {
@@ -34,18 +31,9 @@ impl<P: ParsePolicy> Copy for EmptyProgram<P> {}
 
 /// Parsed source with at least one executable rule line.
 #[derive(PartialEq, Eq)]
-pub struct ExecutableProgram<P: ParsePolicy> {
+pub struct ExecutableProgram {
     /// Immutable non-empty rule table plus parsed `(once)` metadata.
     rule_set: ExecutableRuleSet,
-    /// Compile-time parser policy selected for this program.
-    policy: PhantomData<P>,
-}
-
-/// Borrowed executable-program reference used by trace request implementations.
-#[derive(Debug, Clone, Copy)]
-pub struct ExecutableProgramRef<'program, P: ParsePolicy> {
-    /// Parsed program proven to contain at least one executable rule.
-    program: &'program ExecutableProgram<P>,
 }
 
 impl<P: ParsePolicy> EmptyProgram<P> {
@@ -86,9 +74,7 @@ impl<P: ParsePolicy> EmptyProgram<P> {
 
     /// Builds a typed empty-program value.
     const fn new() -> Self {
-        Self {
-            policy: PhantomData,
-        }
+        Self
     }
 
     /// Returns the number of executable rules in this empty program.
@@ -171,10 +157,7 @@ impl<P: ParsePolicy> ExecutableProgram<P> {
 
     /// Wraps a parser-built non-empty rule set as an executable program.
     fn from_rule_set(rule_set: ExecutableRuleSet) -> Self {
-        Self {
-            rule_set,
-            policy: PhantomData,
-        }
+        Self { rule_set }
     }
 
     /// Returns the number of executable rules in the parsed program.
@@ -195,12 +178,6 @@ impl<P: ParsePolicy> ExecutableProgram<P> {
     /// Iterates over structured parsed-rule views in execution order.
     pub fn rules(&self) -> impl Iterator<Item = RuleView<'_>> + '_ {
         self.rule_set.iter().map(RuleView::new)
-    }
-
-    /// Borrows this executable program as the run/trace execution boundary.
-    #[must_use]
-    pub(crate) const fn executable_ref(&self) -> ExecutableProgramRef<'_, P> {
-        ExecutableProgramRef { program: self }
     }
 
     /// Executes this executable program to completion.
@@ -278,14 +255,6 @@ impl<P: ParsePolicy> fmt::Debug for ExecutableProgram<P> {
             .field("rule_count", &self.rule_count())
             .field("once_rule_count", &self.once_rule_count())
             .finish()
-    }
-}
-
-impl<'program, P: ParsePolicy> ExecutableProgramRef<'program, P> {
-    /// Borrows the executable parsed program.
-    #[must_use]
-    pub const fn program(self) -> &'program ExecutableProgram<P> {
-        self.program
     }
 }
 

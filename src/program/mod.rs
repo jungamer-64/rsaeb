@@ -24,5 +24,5 @@ pub(crate) use rule_set::{
     EmptyRuleSetBuilder, ExecutableRuleSet, ExecutableRuleSetBuilder, ParsedRuleSink, RuleScan,
 };
 
-pub use executable::{EmptyProgram, ExecutableProgram, ExecutableProgramRef};
+pub use executable::{EmptyProgram, ExecutableProgram};
 pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeStateSnapshot};
