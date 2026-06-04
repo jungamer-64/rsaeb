@@ -20,9 +20,8 @@ mod result;
 /// Parsed rule table storage.
 mod rule_set;
 
-pub(crate) use rule_set::RuleSetShape;
 pub(crate) use rule_set::{ExecutableRuleSet, RuleScan};
-pub(crate) use rule_set::{RuleSet, RuleSetBuilder};
+pub(crate) use rule_set::RuleSetBuilder;
 
 pub use executable::{EmptyProgram, ExecutableProgram, ExecutableProgramRef};
 pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeStateSnapshot};

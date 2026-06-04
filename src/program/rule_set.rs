@@ -7,15 +7,6 @@ use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePositi
 use crate::limits::RuleLimit;
 use crate::rule::{ParsedRule, Rule};
 
-/// Parser-built rule table before executable shape classification.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct RuleSet {
-    /// Parsed rules in execution order.
-    rules: Vec<Rule>,
-    /// Parsed `(once)` rule count assigned while building this rule table.
-    once_rule_count: PublicOnceRuleCount,
-}
-
 /// Non-empty immutable executable rule table.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ExecutableRuleSet {
@@ -27,15 +18,6 @@ pub(crate) struct ExecutableRuleSet {
     rule_count: RuleCount,
     /// Parsed `(once)` rule count assigned while building this rule table.
     once_rule_count: PublicOnceRuleCount,
-}
-
-/// Parser-built shape after empty/executable classification.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum RuleSetShape {
-    /// No executable rules were parsed.
-    Empty,
-    /// At least one executable rule was parsed.
-    Executable(ExecutableRuleSet),
 }
 
 /// Borrowed executable rule scan minted from one non-empty parsed rule table.
@@ -190,14 +172,6 @@ impl RuleSetBuilder {
         Ok(())
     }
 
-    /// Finalizes parsed rules into an immutable executable table.
-    pub(crate) fn finish(self) -> RuleSet {
-        RuleSet {
-            rules: self.rules,
-            once_rule_count: self.once_rule_count,
-        }
-    }
-
     /// Computes the next parsed `(once)` count from this rule's repeat behavior.
     ///
     /// # Errors
@@ -221,23 +195,6 @@ impl RuleSetBuilder {
                     })?;
                 Ok(next_once_rule_count)
             }
-        }
-    }
-}
-
-impl RuleSet {
-    /// Classifies this parser-built rule table by executable shape.
-    pub(crate) fn into_shape(self) -> RuleSetShape {
-        let rule_count = RuleCount::new(self.rules.len());
-        let mut rules = self.rules.into_iter();
-        match rules.next() {
-            Some(first) => RuleSetShape::Executable(ExecutableRuleSet {
-                first,
-                remaining: rules.collect(),
-                rule_count,
-                once_rule_count: self.once_rule_count,
-            }),
-            None => RuleSetShape::Empty,
         }
     }
 }
