@@ -6,8 +6,8 @@ use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, ReturnOutput, ReturnOutputView, RunResult};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
 use crate::runtime::once::{
-    ContinuingRuntimeRulePass, FinalRuntimeRulePass, RuntimeRulePassCursor, RuntimeRuleSearch,
-    RuntimeRuleTable,
+    AfterMissContinuingRulePass, AfterMissFinalRulePass, FirstContinuingRulePass,
+    FirstFinalRulePass, RuntimeRuleSearch, RuntimeRuleTable, StartedRuntimeRulePass,
 };
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
@@ -95,9 +95,35 @@ pub(super) enum AttemptSessionCursor<
     A: RuleAttemptPolicy,
 > {
     /// Started with a current rule that has successors.
-    Continuing(AttemptSession<'program, P, E, A, ContinuingRuntimeRulePass<'program>>),
+    Continuing(ContinuingAttemptSession<'program, P, E, A>),
     /// Started with the final rule in the pass.
-    Final(AttemptSession<'program, P, E, A, FinalRuntimeRulePass<'program>>),
+    Final(FinalAttemptSession<'program, P, E, A>),
+}
+
+/// Continuing rule-attempt session classified by miss history.
+pub(super) enum ContinuingAttemptSession<
+    'program,
+    P: ParsePolicy,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+> {
+    /// Continuing pass that has not missed any earlier rule in this scan.
+    First(AttemptSession<'program, P, E, A, FirstContinuingRulePass<'program>>),
+    /// Continuing pass after at least one miss.
+    AfterMiss(AttemptSession<'program, P, E, A, AfterMissContinuingRulePass<'program>>),
+}
+
+/// Final rule-attempt session classified by miss history.
+pub(super) enum FinalAttemptSession<
+    'program,
+    P: ParsePolicy,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+> {
+    /// Final pass that has not missed any earlier rule in this scan.
+    First(AttemptSession<'program, P, E, A, FirstFinalRulePass<'program>>),
+    /// Final pass after at least one miss.
+    AfterMiss(AttemptSession<'program, P, E, A, AfterMissFinalRulePass<'program>>),
 }
 
 /// Terminal rule-attempt state after the cursor can no longer resume.
@@ -469,15 +495,29 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
         program: BorrowedProgram<'program, P>,
         admitted: AdmittedRun<E>,
     ) -> Result<Self, RunStartError> {
-        let runtime_rules = RuntimeRulePassCursor::from_program(program.program)?;
-        Ok(match runtime_rules {
-            RuntimeRulePassCursor::Continuing(pass) => {
-                Self::Continuing(AttemptSession::from_pass(program, admitted, pass))
-            }
-            RuntimeRulePassCursor::Final(pass) => {
-                Self::Final(AttemptSession::from_pass(program, admitted, pass))
-            }
-        })
+        let runtime_rules = StartedRuntimeRulePass::from_program(program.program)?;
+        Ok(started_session_from_pass(program, admitted, runtime_rules))
+    }
+}
+
+/// Builds the private session classifier for a newly started rule-attempt pass.
+fn started_session_from_pass<'program, P, E, A>(
+    program: BorrowedProgram<'program, P>,
+    admitted: AdmittedRun<E>,
+    runtime_rules: StartedRuntimeRulePass<'program>,
+) -> AttemptSessionCursor<'program, P, E, A>
+where
+    P: ParsePolicy,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+{
+    match runtime_rules {
+        StartedRuntimeRulePass::Continuing(pass) => AttemptSessionCursor::Continuing(
+            ContinuingAttemptSession::First(AttemptSession::from_pass(program, admitted, pass)),
+        ),
+        StartedRuntimeRulePass::Final(pass) => AttemptSessionCursor::Final(
+            FinalAttemptSession::First(AttemptSession::from_pass(program, admitted, pass)),
+        ),
     }
 }
 

@@ -29,13 +29,100 @@ pub(crate) enum RuntimeRuleSearch<'program, 'state, 'once> {
     Stable,
 }
 
+/// Rule-attempt pass whose history and tail shape are selected by type.
+#[derive(Debug)]
+pub(crate) struct RuntimeRulePass<'program, History, Tail> {
+    /// Current executable rule attempt target.
+    current: RuntimeRuleCell<'program>,
+    /// Rules already missed in this pass.
+    history: History,
+    /// Rule targets after the current target.
+    tail: Tail,
+}
+
+/// Rule-attempt pass at the start of a scan.
+#[derive(Debug)]
+pub(crate) enum StartedRuntimeRulePass<'program> {
+    /// Started with a current rule that has successors.
+    Continuing(FirstContinuingRulePass<'program>),
+    /// Started with the final rule in the pass.
+    Final(FirstFinalRulePass<'program>),
+}
+
+/// Rule-attempt pass after at least one miss has committed.
+#[derive(Debug)]
+pub(crate) enum AfterMissRuntimeRulePass<'program> {
+    /// Current rule has successors and at least one earlier miss exists.
+    Continuing(AfterMissContinuingRulePass<'program>),
+    /// Current rule exhausts the pass and at least one earlier miss exists.
+    Final(AfterMissFinalRulePass<'program>),
+}
+
+/// Continuing pass whose current target is still the first rule in the scan.
+pub(crate) type FirstContinuingRulePass<'program> =
+    RuntimeRulePass<'program, NoMissedRules<'program>, ContinuingRuleTail<'program>>;
+
+/// Continuing pass after one or more rules have missed.
+pub(crate) type AfterMissContinuingRulePass<'program> =
+    RuntimeRulePass<'program, MissedRuntimeRules<'program>, ContinuingRuleTail<'program>>;
+
+/// Final pass whose current target is still the first rule in the scan.
+pub(crate) type FirstFinalRulePass<'program> =
+    RuntimeRulePass<'program, NoMissedRules<'program>, FinalRuleTail<'program>>;
+
+/// Final pass after one or more rules have missed.
+pub(crate) type AfterMissFinalRulePass<'program> =
+    RuntimeRulePass<'program, MissedRuntimeRules<'program>, FinalRuleTail<'program>>;
+
+/// Empty pass history with a pre-reserved buffer for future misses.
+#[derive(Debug)]
+pub(crate) struct NoMissedRules<'program> {
+    /// Empty buffer reused if the first miss commits.
+    attempted: VecDeque<RuntimeRuleCell<'program>>,
+}
+
+/// Non-empty pass history after at least one rule has missed.
+#[derive(Debug)]
+pub(crate) struct MissedRuntimeRules<'program> {
+    /// First rule missed in the current pass.
+    first: RuntimeRuleCell<'program>,
+    /// Later missed rules in original rule order.
+    remaining: VecDeque<RuntimeRuleCell<'program>>,
+}
+
 /// Non-empty tail of unattempted rules after a continuing current target.
 #[derive(Debug)]
-struct PendingRuntimeRules<'program> {
+pub(crate) struct ContinuingRuleTail<'program> {
     /// Next rule after the current target.
     next: RuntimeRuleCell<'program>,
     /// Remaining rules after `next`, in original rule order.
     remaining: VecDeque<RuntimeRuleCell<'program>>,
+}
+
+/// Empty tail for a final current target.
+#[derive(Debug)]
+pub(crate) struct FinalRuleTail<'program> {
+    /// Empty pre-reserved buffer reused if a later rewrite resets the pass.
+    spare: VecDeque<RuntimeRuleCell<'program>>,
+}
+
+/// Result of advancing a continuing tail.
+#[derive(Debug)]
+enum AdvancedRuleTail<'program> {
+    /// Another target remains after the new current target.
+    Continuing(ContinuingRuleTail<'program>),
+    /// The new current target is final.
+    Final(FinalRuleTail<'program>),
+}
+
+/// Rule-attempt pass under construction from a current target and ordered tail.
+struct RuntimeRulePassParts<'program> {
+    /// Current executable rule attempt target.
+    current: RuntimeRuleCell<'program>,
+    /// Remaining executable rules after the current target, in attempt order.
+    remaining: VecDeque<RuntimeRuleCell<'program>>,
+    /// Empty pre-reserved buffer for missed rules in the current pass.
+    attempted: VecDeque<RuntimeRuleCell<'program>>,
 }
 
 /// One executable rule classified by its run-local availability shape.
@@ -226,6 +313,257 @@ impl<'program> RuntimeRuleTable<'program> {
         }
 
         RuntimeRuleSearch::Stable
+    }
+}
+
+impl<'program> StartedRuntimeRulePass<'program> {
+    /// Builds a rule-attempt pass from an executable program.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the per-execution rule-attempt table cannot
+    /// be allocated.
+    pub(crate) fn from_program<P: ParsePolicy>(
+        program: &'program ExecutableProgram<P>,
+    ) -> Result<Self, AllocationError> {
+        Self::from_rule_scan(program.rule_scan())
+    }
+
+    /// Builds a rule-attempt pass from the executable rule table.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the per-execution rule-attempt table cannot
+    /// be allocated.
+    fn from_rule_scan(rules: RuleScan<'program>) -> Result<Self, AllocationError> {
+        let (first, remaining_rules) = rules.split_first();
+        let mut remaining = VecDeque::new();
+        let remaining_capacity = RequestedCapacity::new(remaining_rules.len());
+        try_reserve_rule_queue(
+            &mut remaining,
+            remaining_capacity,
+            AllocationContext::RuntimeRuleCell,
+        )?;
+        for rule in remaining_rules {
+            remaining.push_back(RuntimeRuleCell::new(rule));
+        }
+        let mut attempted = VecDeque::new();
+        try_reserve_rule_queue(
+            &mut attempted,
+            remaining_capacity,
+            AllocationContext::RuntimeRuleCell,
+        )?;
+        Ok(RuntimeRulePassParts {
+            current: RuntimeRuleCell::new(first),
+            remaining,
+            attempted,
+        }
+        .into_started_pass())
+    }
+}
+
+impl<'program, History, Tail> RuntimeRulePass<'program, History, Tail> {
+    /// Attempts the current target against the current runtime state.
+    pub(crate) fn attempt_current<'state, 'once>(
+        &'once mut self,
+        state: &'state State,
+    ) -> RuleAttempt<'program, 'state, 'once> {
+        self.current.attempt(state)
+    }
+}
+
+impl<'program> RuntimeRulePass<'program, NoMissedRules<'program>, ContinuingRuleTail<'program>> {
+    /// Commits the first miss in a continuing pass.
+    pub(crate) fn commit_miss(self) -> AfterMissRuntimeRulePass<'program> {
+        let Self {
+            current,
+            history,
+            tail,
+        } = self;
+        let history = history.into_missed(current);
+        advance_after_miss(history, tail)
+    }
+
+    /// Resets a first-rule continuing pass after a rewrite.
+    pub(crate) fn reset_after_rewrite(self) -> StartedRuntimeRulePass<'program> {
+        StartedRuntimeRulePass::Continuing(self)
+    }
+}
+
+impl<'program>
+    RuntimeRulePass<'program, MissedRuntimeRules<'program>, ContinuingRuleTail<'program>>
+{
+    /// Commits another miss in a continuing pass.
+    pub(crate) fn commit_miss(self) -> AfterMissRuntimeRulePass<'program> {
+        let Self {
+            current,
+            history,
+            tail,
+        } = self;
+        let history = history.push_missed(current);
+        advance_after_miss(history, tail)
+    }
+
+    /// Resets a continuing pass with non-empty miss history after a rewrite.
+    pub(crate) fn reset_after_rewrite(self) -> StartedRuntimeRulePass<'program> {
+        let Self {
+            current,
+            history,
+            tail,
+        } = self;
+        let (first, mut remaining) = history.into_parts();
+        remaining.push_back(current);
+        let attempted = tail.append_to(&mut remaining);
+        RuntimeRulePassParts {
+            current: first,
+            remaining,
+            attempted,
+        }
+        .into_started_pass()
+    }
+}
+
+impl<'program> RuntimeRulePass<'program, NoMissedRules<'program>, FinalRuleTail<'program>> {
+    /// Resets a first-rule final pass after a rewrite.
+    pub(crate) fn reset_after_rewrite(self) -> StartedRuntimeRulePass<'program> {
+        StartedRuntimeRulePass::Final(self)
+    }
+}
+
+impl<'program> RuntimeRulePass<'program, MissedRuntimeRules<'program>, FinalRuleTail<'program>> {
+    /// Resets a final pass with non-empty miss history after a rewrite.
+    pub(crate) fn reset_after_rewrite(self) -> StartedRuntimeRulePass<'program> {
+        let Self {
+            current,
+            history,
+            tail,
+        } = self;
+        let (first, mut remaining) = history.into_parts();
+        remaining.push_back(current);
+        RuntimeRulePassParts {
+            current: first,
+            remaining,
+            attempted: tail.into_spare(),
+        }
+        .into_started_pass()
+    }
+}
+
+impl<'program> NoMissedRules<'program> {
+    /// Builds empty pass history from a pre-reserved attempted-rule buffer.
+    fn new(attempted: VecDeque<RuntimeRuleCell<'program>>) -> Self {
+        Self { attempted }
+    }
+
+    /// Promotes empty history into a non-empty miss history.
+    fn into_missed(self, first: RuntimeRuleCell<'program>) -> MissedRuntimeRules<'program> {
+        MissedRuntimeRules {
+            first,
+            remaining: self.attempted,
+        }
+    }
+}
+
+impl<'program> MissedRuntimeRules<'program> {
+    /// Appends a later miss to this non-empty history.
+    fn push_missed(mut self, rule: RuntimeRuleCell<'program>) -> Self {
+        self.remaining.push_back(rule);
+        self
+    }
+
+    /// Splits this non-empty history into the first missed rule and later misses.
+    fn into_parts(
+        self,
+    ) -> (
+        RuntimeRuleCell<'program>,
+        VecDeque<RuntimeRuleCell<'program>>,
+    ) {
+        (self.first, self.remaining)
+    }
+}
+
+impl<'program> ContinuingRuleTail<'program> {
+    /// Builds a non-empty pending tail from its head and remaining rules.
+    fn new(
+        next: RuntimeRuleCell<'program>,
+        remaining: VecDeque<RuntimeRuleCell<'program>>,
+    ) -> Self {
+        Self { next, remaining }
+    }
+
+    /// Moves the pending tail to the current target after a non-final miss.
+    fn advance(mut self) -> (RuntimeRuleCell<'program>, AdvancedRuleTail<'program>) {
+        let current = self.next;
+        let advanced = match self.remaining.pop_front() {
+            Some(next) => AdvancedRuleTail::Continuing(Self::new(next, self.remaining)),
+            None => AdvancedRuleTail::Final(FinalRuleTail {
+                spare: self.remaining,
+            }),
+        };
+        (current, advanced)
+    }
+
+    /// Appends pending rules to `output` in executable order.
+    fn append_to(
+        self,
+        output: &mut VecDeque<RuntimeRuleCell<'program>>,
+    ) -> VecDeque<RuntimeRuleCell<'program>> {
+        output.push_back(self.next);
+        let mut remaining = self.remaining;
+        while let Some(rule) = remaining.pop_front() {
+            output.push_back(rule);
+        }
+        remaining
+    }
+}
+
+impl<'program> FinalRuleTail<'program> {
+    /// Consumes this final tail into its empty reset buffer.
+    fn into_spare(self) -> VecDeque<RuntimeRuleCell<'program>> {
+        self.spare
+    }
+}
+
+impl<'program> RuntimeRulePassParts<'program> {
+    /// Classifies the current target by whether the ordered tail is empty.
+    fn into_started_pass(mut self) -> StartedRuntimeRulePass<'program> {
+        let history = NoMissedRules::new(self.attempted);
+        match self.remaining.pop_front() {
+            Some(next) => StartedRuntimeRulePass::Continuing(RuntimeRulePass {
+                current: self.current,
+                history,
+                tail: ContinuingRuleTail::new(next, self.remaining),
+            }),
+            None => StartedRuntimeRulePass::Final(RuntimeRulePass {
+                current: self.current,
+                history,
+                tail: FinalRuleTail {
+                    spare: self.remaining,
+                },
+            }),
+        }
+    }
+}
+
+/// Advances a continuing pass after the current target has become a miss.
+fn advance_after_miss<'program>(
+    history: MissedRuntimeRules<'program>,
+    tail: ContinuingRuleTail<'program>,
+) -> AfterMissRuntimeRulePass<'program> {
+    let (current, tail) = tail.advance();
+    match tail {
+        AdvancedRuleTail::Continuing(tail) => {
+            AfterMissRuntimeRulePass::Continuing(RuntimeRulePass {
+                current,
+                history,
+                tail,
+            })
+        }
+        AdvancedRuleTail::Final(tail) => AfterMissRuntimeRulePass::Final(RuntimeRulePass {
+            current,
+            history,
+            tail,
+        }),
     }
 }
 

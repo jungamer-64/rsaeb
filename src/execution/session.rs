@@ -4,7 +4,6 @@ use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, ExecutableProgramRef, RunResult};
-use crate::runtime::once::{ContinuingRuntimeRulePass, FinalRuntimeRulePass};
 use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
 
 use super::advance::{
@@ -12,8 +11,8 @@ use super::advance::{
     advance_continuing_borrowed_rule_attempt, advance_final_borrowed_rule_attempt,
 };
 use super::engine::{
-    AttemptSession, AttemptSessionCursor, BorrowedProgram, CoreRunTransition, Session,
-    TerminalAttemptSession, TerminalRunCore,
+    AttemptSessionCursor, BorrowedProgram, ContinuingAttemptSession, CoreRunTransition,
+    FinalAttemptSession, Session, TerminalAttemptSession, TerminalRunCore,
 };
 use super::transition::{
     BorrowedAppliedStep, BorrowedContinuingRuleAttemptTransition, BorrowedFailedRun,
@@ -57,8 +56,8 @@ pub struct BorrowedContinuingRuleAttemptSession<
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 > {
-    /// Internal rule-attempt session pinned to a continuing pass.
-    pub(super) session: AttemptSession<'program, P, E, A, ContinuingRuntimeRulePass<'program>>,
+    /// Internal rule-attempt session pinned to a continuing pass shape.
+    pub(super) session: ContinuingAttemptSession<'program, P, E, A>,
 }
 
 /// Borrowed rule-attempt session whose current target exhausts the pass.
@@ -68,8 +67,8 @@ pub struct BorrowedFinalRuleAttemptSession<
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 > {
-    /// Internal rule-attempt session pinned to a final pass.
-    pub(super) session: AttemptSession<'program, P, E, A, FinalRuntimeRulePass<'program>>,
+    /// Internal rule-attempt session pinned to a final pass shape.
+    pub(super) session: FinalAttemptSession<'program, P, E, A>,
 }
 
 /// Terminal data split out of a borrowed rule-attempt run session.
@@ -263,25 +262,37 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
     /// Number of execution steps that have already completed in this run.
     #[must_use]
     pub const fn completed_steps(&self) -> StepCount {
-        self.session.completed_steps()
+        match &self.session {
+            ContinuingAttemptSession::First(session) => session.completed_steps(),
+            ContinuingAttemptSession::AfterMiss(session) => session.completed_steps(),
+        }
     }
 
     /// Number of executable rule-line attempts consumed so far.
     #[must_use]
     pub const fn completed_attempts(&self) -> RuleAttemptCount {
-        self.session.completed_attempts()
+        match &self.session {
+            ContinuingAttemptSession::First(session) => session.completed_attempts(),
+            ContinuingAttemptSession::AfterMiss(session) => session.completed_attempts(),
+        }
     }
 
     /// Borrow the parsed program used by this session.
     #[must_use]
     pub const fn program(&self) -> &'program ExecutableProgram<P> {
-        self.session.program.program
+        match &self.session {
+            ContinuingAttemptSession::First(session) => session.program.program,
+            ContinuingAttemptSession::AfterMiss(session) => session.program.program,
+        }
     }
 
     /// Borrow the current runtime state.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
-        self.session.state()
+        match &self.session {
+            ContinuingAttemptSession::First(session) => session.state(),
+            ContinuingAttemptSession::AfterMiss(session) => session.state(),
+        }
     }
 
     /// Advances a continuing rule-attempt session by exactly one executable rule line.
@@ -297,25 +308,37 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
     /// Number of execution steps that have already completed in this run.
     #[must_use]
     pub const fn completed_steps(&self) -> StepCount {
-        self.session.completed_steps()
+        match &self.session {
+            FinalAttemptSession::First(session) => session.completed_steps(),
+            FinalAttemptSession::AfterMiss(session) => session.completed_steps(),
+        }
     }
 
     /// Number of executable rule-line attempts consumed so far.
     #[must_use]
     pub const fn completed_attempts(&self) -> RuleAttemptCount {
-        self.session.completed_attempts()
+        match &self.session {
+            FinalAttemptSession::First(session) => session.completed_attempts(),
+            FinalAttemptSession::AfterMiss(session) => session.completed_attempts(),
+        }
     }
 
     /// Borrow the parsed program used by this session.
     #[must_use]
     pub const fn program(&self) -> &'program ExecutableProgram<P> {
-        self.session.program.program
+        match &self.session {
+            FinalAttemptSession::First(session) => session.program.program,
+            FinalAttemptSession::AfterMiss(session) => session.program.program,
+        }
     }
 
     /// Borrow the current runtime state.
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
-        self.session.state()
+        match &self.session {
+            FinalAttemptSession::First(session) => session.state(),
+            FinalAttemptSession::AfterMiss(session) => session.state(),
+        }
     }
 
     /// Advances a final rule-attempt session by exactly one executable rule line.
