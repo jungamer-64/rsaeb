@@ -11,24 +11,28 @@ mod tests;
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
 use crate::limits::SourceByteCount;
 use crate::policy::ParsePolicy;
-use crate::program::{RuleSet, RuleSetBuilder};
+use crate::program::ParsedRuleSink;
 use crate::source::{RawProgramSource, SourceLineNumber};
 
 use line::{CompactCodeLineKind, RawSourceLine};
 use location::source_line_number;
 
-/// Parses source bytes into a typed program.
+/// Parses source bytes into a target-specific rule sink.
 ///
 /// # Errors
 ///
 /// Returns `ParseError` if source location conversion, line compaction, rule
-/// parsing, or parsed-rule storage fails.
-pub(crate) fn parse_rules_impl<P: ParsePolicy>(
-    source: RawProgramSource<'_>,
-) -> Result<RuleSet, ParseError> {
+/// parsing, or parsed-rule storage fails. Returns the sink's target-shape
+/// error after syntax has been fully checked if the parsed source does not
+/// match the requested program shape.
+pub(crate) fn parse_rules_into<P, S>(source: RawProgramSource<'_>) -> Result<S::Output, S::Error>
+where
+    P: ParsePolicy,
+    S: ParsedRuleSink,
+{
     ensure_source_within_limit::<P>(source)?;
 
-    let mut rule_set = RuleSetBuilder::new();
+    let mut sink = S::new();
 
     for (zero_based_line, raw_line) in source.as_bytes().split(|&byte| byte == b'\n').enumerate() {
         let line_number = source_line_number(zero_based_line)?;
@@ -45,10 +49,10 @@ pub(crate) fn parse_rules_impl<P: ParsePolicy>(
             .into_rule_syntax()?
             .parse(P::PAYLOAD_BYTE_LIMIT)?;
 
-        rule_set.push_parsed_rule(parsed_rule, P::RULE_LIMIT)?;
+        sink.push_parsed_rule(parsed_rule, P::RULE_LIMIT)?;
     }
 
-    Ok(rule_set.finish())
+    sink.finish()
 }
 
 /// Checks raw source length before line parsing starts.

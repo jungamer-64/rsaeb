@@ -191,5 +191,11 @@ fn typed_program_parse_reports_shape_mismatches() -> TestResult {
                 if rule_count.get() == 1
         ),
         "expected empty parse to reject executable source",
+    )?;
+
+    let empty_error = EmptyProgram::<DefaultParsePolicy>::parse_text("a=b\ninvalid");
+    ensure_matches(
+        matches!(empty_error, Err(EmptyProgramParseError::Parse(_))),
+        "expected empty parse to report later syntax errors before shape mismatch",
     )
 }

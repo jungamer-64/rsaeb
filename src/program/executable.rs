@@ -7,13 +7,15 @@ use crate::execution::{BorrowedRuleAttemptCursor, BorrowedRunSession};
 use crate::input::AdmittedRun;
 use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
 use crate::limits::StepCount;
-use crate::parser::parse_rules_impl;
+use crate::parser::parse_rules_into;
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::runtime::state::State;
 use crate::source::RawProgramSource;
 use crate::trace::TraceRequest;
 
-use super::{ExecutableRuleSet, RuleScan, RuleSetShape, RunResult};
+use super::{
+    EmptyRuleSetBuilder, ExecutableRuleSet, ExecutableRuleSetBuilder, RuleScan, RunResult,
+};
 
 /// Parsed source with no executable rule lines.
 #[derive(PartialEq, Eq)]
@@ -78,12 +80,8 @@ impl<P: ParsePolicy> EmptyProgram<P> {
     /// Returns `EmptyProgramParseError` when parsing fails or when executable
     /// rules are present.
     fn parse_raw(source: RawProgramSource<'_>) -> Result<Self, EmptyProgramParseError> {
-        match parse_rules_impl::<P>(source)?.into_shape() {
-            RuleSetShape::Empty => Ok(Self::new()),
-            RuleSetShape::Executable(rule_set) => Err(EmptyProgramParseError::ExecutableRules {
-                rule_count: rule_set.rule_count(),
-            }),
-        }
+        parse_rules_into::<P, EmptyRuleSetBuilder>(source)?;
+        Ok(Self::new())
     }
 
     /// Builds a typed empty-program value.
@@ -167,10 +165,8 @@ impl<P: ParsePolicy> ExecutableProgram<P> {
     /// Returns `ExecutableProgramParseError` when parsing fails or when no
     /// executable rules are present.
     fn parse_raw(source: RawProgramSource<'_>) -> Result<Self, ExecutableProgramParseError> {
-        match parse_rules_impl::<P>(source)?.into_shape() {
-            RuleSetShape::Empty => Err(ExecutableProgramParseError::NoExecutableRules),
-            RuleSetShape::Executable(rule_set) => Ok(Self::from_rule_set(rule_set)),
-        }
+        let rule_set = parse_rules_into::<P, ExecutableRuleSetBuilder>(source)?;
+        Ok(Self::from_rule_set(rule_set))
     }
 
     /// Wraps a parser-built non-empty rule set as an executable program.

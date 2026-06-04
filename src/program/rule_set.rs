@@ -2,7 +2,10 @@ use alloc::vec::Vec;
 use core::slice;
 
 use crate::allocation::{AllocationContext, RequestedCapacity, try_push, try_reserve_total_exact};
-use crate::error::{ParseError, ParseErrorKind, ParseLimitError, ParseRepresentationError};
+use crate::error::{
+    EmptyProgramParseError, ExecutableProgramParseError, ParseError, ParseErrorKind,
+    ParseLimitError, ParseRepresentationError,
+};
 use crate::inspect::{OnceRuleCount as PublicOnceRuleCount, RuleCount, RulePosition};
 use crate::limits::RuleLimit;
 use crate::rule::{ParsedRule, Rule};
@@ -37,13 +40,52 @@ pub(crate) struct RuleScanIter<'program> {
     remaining: slice::Iter<'program, Rule>,
 }
 
-/// Parser-owned rule table builder.
+/// Parser sink that decides the target program shape while source is parsed.
+pub(crate) trait ParsedRuleSink: Sized {
+    /// Program value produced after the full source has been parsed.
+    type Output;
+    /// Error domain for parser failures plus target-shape mismatch.
+    type Error: From<ParseError>;
+
+    /// Starts the sink before source lines are parsed.
+    fn new() -> Self;
+
+    /// Accepts one parsed executable rule after syntax validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns this sink's error if the parsed rule cannot be represented,
+    /// exceeds parser limits, or cannot be stored.
+    fn push_parsed_rule(&mut self, parsed: ParsedRule, limit: RuleLimit)
+    -> Result<(), Self::Error>;
+
+    /// Finishes the target-shape parse after every source line has been checked.
+    ///
+    /// # Errors
+    ///
+    /// Returns this sink's error if the parsed source has the wrong executable
+    /// shape for the requested program target.
+    fn finish(self) -> Result<Self::Output, Self::Error>;
+}
+
+/// Parser-owned executable rule table builder.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct RuleSetBuilder {
-    /// Parsed rules in execution order.
-    rules: Vec<Rule>,
+pub(crate) struct ExecutableRuleSetBuilder {
+    /// First parsed executable rule, if any has been accepted.
+    first: Option<Rule>,
+    /// Later parsed rules in execution order.
+    remaining: Vec<Rule>,
+    /// Parsed executable rules seen so far.
+    rule_count: RuleCount,
     /// Parsed `(once)` rules seen so far.
     once_rule_count: PublicOnceRuleCount,
+}
+
+/// Parser-owned empty target builder.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct EmptyRuleSetBuilder {
+    /// Parsed executable rules seen so far.
+    rule_count: RuleCount,
 }
 
 /// Parsed rule after execution position assignment but before table insertion.
@@ -69,7 +111,7 @@ impl RuleInsertionPermit {
     /// parser rule budget, or cannot be represented as a checked rule position.
     fn new(
         current_len: usize,
-        limit: crate::limits::RuleLimit,
+        limit: RuleLimit,
         line_number: crate::source::SourceLineNumber,
     ) -> Result<Self, ParseError> {
         let attempted_rule_count = current_len.checked_add(1).ok_or_else(|| {
@@ -100,9 +142,14 @@ impl RuleInsertionPermit {
         })
     }
 
-    /// Rule-table capacity required before insertion.
-    const fn requested_capacity(&self) -> RequestedCapacity {
-        RequestedCapacity::from_rule_count(self.attempted_rule_count)
+    /// Remaining-rule capacity required before insertion into a split table.
+    const fn remaining_requested_capacity(&self) -> RequestedCapacity {
+        RequestedCapacity::new(self.attempted_rule_count.get().saturating_sub(1))
+    }
+
+    /// Rule count after this insertion commits.
+    const fn rule_count(&self) -> RuleCount {
+        self.attempted_rule_count
     }
 
     /// Execution-order position assigned to this insertion.
@@ -125,11 +172,16 @@ impl PendingRuleInsertion {
     }
 }
 
-impl RuleSetBuilder {
+impl ParsedRuleSink for ExecutableRuleSetBuilder {
+    type Output = ExecutableRuleSet;
+    type Error = ExecutableProgramParseError;
+
     /// Starts an empty parsed rule table.
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         Self {
-            rules: Vec::new(),
+            first: None,
+            remaining: Vec::new(),
+            rule_count: RuleCount::new(0),
             once_rule_count: PublicOnceRuleCount::ZERO,
         }
     }
@@ -140,61 +192,111 @@ impl RuleSetBuilder {
     ///
     /// Returns `AllocationError` if the rule position cannot be represented or
     /// the rule table cannot grow.
-    pub(crate) fn push_parsed_rule(
+    fn push_parsed_rule(
         &mut self,
         parsed: ParsedRule,
         limit: RuleLimit,
-    ) -> Result<(), ParseError> {
+    ) -> Result<(), Self::Error> {
         let line_number = parsed.line_number();
-        let insertion = RuleInsertionPermit::new(self.rules.len(), limit, line_number)?;
-        let next_once_rule_count = self.count_parsed_once_rule(&parsed, line_number)?;
+        let insertion = RuleInsertionPermit::new(self.rule_count.get(), limit, line_number)?;
+        let next_once_rule_count =
+            next_once_rule_count(self.once_rule_count, &parsed, line_number)?;
 
         let pending = PendingRuleInsertion::from_parsed(insertion.position(), parsed);
 
-        let pending_line_number = pending.line_number();
-        try_reserve_total_exact(
-            &mut self.rules,
-            insertion.requested_capacity(),
-            AllocationContext::ProgramRuleTable,
-        )
-        .map_err(|error| {
-            ParseError::at_line(pending_line_number, ParseErrorKind::Allocation(error))
-        })?;
-        try_push(
-            &mut self.rules,
-            pending.rule,
-            AllocationContext::ProgramRuleTable,
-        )
-        .map_err(|error| {
-            ParseError::at_line(pending_line_number, ParseErrorKind::Allocation(error))
-        })?;
+        if self.first.is_none() {
+            self.first = Some(pending.rule);
+        } else {
+            let pending_line_number = pending.line_number();
+            try_reserve_total_exact(
+                &mut self.remaining,
+                insertion.remaining_requested_capacity(),
+                AllocationContext::ProgramRuleTable,
+            )
+            .map_err(|error| {
+                ParseError::at_line(pending_line_number, ParseErrorKind::Allocation(error))
+            })?;
+            try_push(
+                &mut self.remaining,
+                pending.rule,
+                AllocationContext::ProgramRuleTable,
+            )
+            .map_err(|error| {
+                ParseError::at_line(pending_line_number, ParseErrorKind::Allocation(error))
+            })?;
+        }
+        self.rule_count = insertion.rule_count();
         self.once_rule_count = next_once_rule_count;
         Ok(())
     }
 
-    /// Computes the next parsed `(once)` count from this rule's repeat behavior.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError` if the next parsed `(once)` count cannot be
-    /// represented.
-    fn count_parsed_once_rule(
-        &self,
-        parsed: &ParsedRule,
-        line_number: crate::source::SourceLineNumber,
-    ) -> Result<PublicOnceRuleCount, ParseError> {
-        match parsed {
-            ParsedRule::AlwaysRewrite(_) | ParsedRule::AlwaysReturn(_) => Ok(self.once_rule_count),
-            ParsedRule::OnceRewrite(_) | ParsedRule::OnceReturn(_) => {
-                let next_once_rule_count =
-                    self.once_rule_count.checked_next().ok_or_else(|| {
-                        ParseError::at_line(
-                            line_number,
-                            ParseErrorKind::Representation(ParseRepresentationError::RuleCount),
-                        )
-                    })?;
-                Ok(next_once_rule_count)
-            }
+    fn finish(self) -> Result<Self::Output, Self::Error> {
+        let Some(first) = self.first else {
+            return Err(ExecutableProgramParseError::NoExecutableRules);
+        };
+        Ok(ExecutableRuleSet {
+            first,
+            remaining: self.remaining,
+            rule_count: self.rule_count,
+            once_rule_count: self.once_rule_count,
+        })
+    }
+}
+
+impl ParsedRuleSink for EmptyRuleSetBuilder {
+    type Output = ();
+    type Error = EmptyProgramParseError;
+
+    /// Starts an empty target-shape sink.
+    fn new() -> Self {
+        Self {
+            rule_count: RuleCount::new(0),
+        }
+    }
+
+    /// Counts one parsed rule without retaining executable rule storage.
+    fn push_parsed_rule(
+        &mut self,
+        parsed: ParsedRule,
+        limit: RuleLimit,
+    ) -> Result<(), Self::Error> {
+        let line_number = parsed.line_number();
+        let insertion = RuleInsertionPermit::new(self.rule_count.get(), limit, line_number)?;
+        self.rule_count = insertion.rule_count();
+        Ok(())
+    }
+
+    fn finish(self) -> Result<Self::Output, Self::Error> {
+        if self.rule_count.get() == 0 {
+            Ok(())
+        } else {
+            Err(EmptyProgramParseError::ExecutableRules {
+                rule_count: self.rule_count,
+            })
+        }
+    }
+}
+
+/// Computes the next parsed `(once)` count from this rule's repeat behavior.
+///
+/// # Errors
+///
+/// Returns `ParseError` if the next parsed `(once)` count cannot be
+/// represented.
+fn next_once_rule_count(
+    current: PublicOnceRuleCount,
+    parsed: &ParsedRule,
+    line_number: crate::source::SourceLineNumber,
+) -> Result<PublicOnceRuleCount, ParseError> {
+    match parsed {
+        ParsedRule::AlwaysRewrite(_) | ParsedRule::AlwaysReturn(_) => Ok(current),
+        ParsedRule::OnceRewrite(_) | ParsedRule::OnceReturn(_) => {
+            current.checked_next().ok_or_else(|| {
+                ParseError::at_line(
+                    line_number,
+                    ParseErrorKind::Representation(ParseRepresentationError::RuleCount),
+                )
+            })
         }
     }
 }

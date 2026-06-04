@@ -11,7 +11,7 @@
 //! each time execution starts. This keeps parsed source reuse separate from
 //! mutable runtime progress.
 
-/// Classified parsed-program shapes.
+/// Target-shape parsed program types.
 mod executable;
 /// Parser limit value types and defaults.
 pub(crate) mod limits;
@@ -20,8 +20,9 @@ mod result;
 /// Parsed rule table storage.
 mod rule_set;
 
-pub(crate) use rule_set::{ExecutableRuleSet, RuleScan};
-pub(crate) use rule_set::RuleSetBuilder;
+pub(crate) use rule_set::{
+    EmptyRuleSetBuilder, ExecutableRuleSet, ExecutableRuleSetBuilder, ParsedRuleSink, RuleScan,
+};
 
 pub use executable::{EmptyProgram, ExecutableProgram, ExecutableProgramRef};
 pub use result::{ReturnOutput, ReturnOutputView, RunOutcome, RunResult, RuntimeStateSnapshot};
