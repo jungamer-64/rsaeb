@@ -3,10 +3,10 @@ use alloc::{collections::VecDeque, vec::Vec};
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
 };
-use crate::inspect::{OnceReturnRuleView, OnceRewriteRuleView};
-use crate::policy::ParsePolicy;
-use crate::program::{ExecutableProgram, RuleScan};
-use crate::rule::{ReturnRule, RewriteRule, Rule};
+use crate::inspect::{
+    AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView, RuleView,
+};
+use crate::program::{ExecutableProgram, PositionedRule, RuleScan};
 use crate::runtime::matcher::{
     AvailableRuleAttempt, MatchedRuleApplication, RuleAttempt, RuleAttemptMiss,
     attempt_available_rule,
@@ -16,8 +16,10 @@ use crate::runtime::state::State;
 /// Per-run ordinary execution table with parsed rules and runtime availability paired.
 #[derive(Debug)]
 pub(crate) struct RuntimeRuleTable<'program> {
-    /// Runtime rule cells in parser execution order.
-    cells: Vec<RuntimeRuleCell<'program>>,
+    /// First runtime rule cell, preserving executable non-emptiness.
+    first: RuntimeRuleCell<'program>,
+    /// Remaining runtime rule cells in parser execution order.
+    remaining: Vec<RuntimeRuleCell<'program>>,
 }
 
 /// Outcome of scanning the ordinary runtime rule table.
@@ -73,6 +75,15 @@ pub(crate) type FirstFinalRulePass<'program> =
 /// Final pass after one or more rules have missed.
 pub(crate) type AfterMissFinalRulePass<'program> =
     RuntimeRulePass<'program, MissedRuntimeRules<'program>, FinalRuleTail<'program>>;
+
+/// Sealed boundary for the four valid runtime rule-attempt pass shapes.
+pub(crate) trait RuntimeRulePassState<'program>: pass_state::Sealed {}
+
+/// Private sealing traits for runtime pass states.
+pub(crate) mod pass_state {
+    /// Marker implemented only by valid rule-attempt pass shapes.
+    pub(crate) trait Sealed {}
+}
 
 /// Empty pass history with a pre-reserved buffer for future misses.
 #[derive(Debug)]
@@ -141,15 +152,15 @@ enum RuntimeRuleCell<'program> {
 /// Runtime cell for a reusable rewrite rule.
 #[derive(Debug)]
 struct AlwaysRewriteRuntimeRuleCell<'program> {
-    /// Parsed executable rule.
-    rule: &'program RewriteRule,
+    /// Position-bearing parsed executable rule.
+    rule: AlwaysRewriteRuleView<'program>,
 }
 
 /// Runtime cell for a once-only rewrite rule.
 #[derive(Debug)]
 struct OnceRewriteRuntimeRuleCell<'program> {
-    /// Parsed executable rule.
-    rule: &'program RewriteRule,
+    /// Position-bearing parsed executable rule.
+    rule: OnceRewriteRuleView<'program>,
     /// Run-local availability for this once rule.
     state: OnceRuleRuntimeState,
 }
@@ -157,15 +168,15 @@ struct OnceRewriteRuntimeRuleCell<'program> {
 /// Runtime cell for a reusable return rule.
 #[derive(Debug)]
 struct AlwaysReturnRuntimeRuleCell<'program> {
-    /// Parsed executable rule.
-    rule: &'program ReturnRule,
+    /// Position-bearing parsed executable rule.
+    rule: AlwaysReturnRuleView<'program>,
 }
 
 /// Runtime cell for a once-only return rule.
 #[derive(Debug)]
 struct OnceReturnRuntimeRuleCell<'program> {
-    /// Parsed executable rule.
-    rule: &'program ReturnRule,
+    /// Position-bearing parsed executable rule.
+    rule: OnceReturnRuleView<'program>,
     /// Run-local availability for this once rule.
     state: OnceRuleRuntimeState,
 }
@@ -201,6 +212,18 @@ enum RuntimeRuleTarget<'program, 'once> {
     Consumed(ConsumedRuntimeRule<'program>),
 }
 
+impl<'program> pass_state::Sealed for FirstContinuingRulePass<'program> {}
+impl<'program> RuntimeRulePassState<'program> for FirstContinuingRulePass<'program> {}
+
+impl<'program> pass_state::Sealed for AfterMissContinuingRulePass<'program> {}
+impl<'program> RuntimeRulePassState<'program> for AfterMissContinuingRulePass<'program> {}
+
+impl<'program> pass_state::Sealed for FirstFinalRulePass<'program> {}
+impl<'program> RuntimeRulePassState<'program> for FirstFinalRulePass<'program> {}
+
+impl<'program> pass_state::Sealed for AfterMissFinalRulePass<'program> {}
+impl<'program> RuntimeRulePassState<'program> for AfterMissFinalRulePass<'program> {}
+
 /// Parsed once-only rule that is already consumed in the current run.
 #[derive(Debug)]
 enum ConsumedRuntimeRule<'program> {
@@ -226,15 +249,15 @@ pub(crate) enum AvailableRuntimeRule<'program, 'once> {
 /// Reusable rewrite rule proven available for runtime-state matching.
 #[derive(Debug)]
 pub(crate) struct AvailableAlwaysRewriteRuntimeRule<'program> {
-    /// Parsed executable rule.
-    rule: &'program RewriteRule,
+    /// Position-bearing parsed executable rule.
+    rule: AlwaysRewriteRuleView<'program>,
 }
 
 /// Fresh once-only rewrite rule paired with the permit that can consume it after a match commits.
 #[derive(Debug)]
 pub(crate) struct AvailableOnceRewriteRuntimeRule<'program, 'once> {
-    /// Parsed executable rule.
-    rule: &'program RewriteRule,
+    /// Position-bearing parsed executable rule.
+    rule: OnceRewriteRuleView<'program>,
     /// Linear once-state commit permit.
     commit: OnceMatchPermit<'once>,
 }
@@ -242,15 +265,15 @@ pub(crate) struct AvailableOnceRewriteRuntimeRule<'program, 'once> {
 /// Reusable return rule proven available for runtime-state matching.
 #[derive(Debug)]
 pub(crate) struct AvailableAlwaysReturnRuntimeRule<'program> {
-    /// Parsed executable rule.
-    rule: &'program ReturnRule,
+    /// Position-bearing parsed executable rule.
+    rule: AlwaysReturnRuleView<'program>,
 }
 
 /// Fresh once-only return rule paired with the permit that can consume it after a match commits.
 #[derive(Debug)]
 pub(crate) struct AvailableOnceReturnRuntimeRule<'program, 'once> {
-    /// Parsed executable rule.
-    rule: &'program ReturnRule,
+    /// Position-bearing parsed executable rule.
+    rule: OnceReturnRuleView<'program>,
     /// Linear once-state commit permit.
     commit: OnceMatchPermit<'once>,
 }
@@ -269,8 +292,8 @@ impl<'program> RuntimeRuleTable<'program> {
     ///
     /// Returns `AllocationError` if the per-execution rule table cannot be
     /// allocated.
-    pub(crate) fn from_program<P: ParsePolicy>(
-        program: &'program ExecutableProgram<P>,
+    pub(crate) fn from_program(
+        program: &'program ExecutableProgram,
     ) -> Result<Self, AllocationError> {
         Self::from_rule_scan(program.rule_scan())
     }
@@ -282,22 +305,25 @@ impl<'program> RuntimeRuleTable<'program> {
     /// Returns `AllocationError` if the per-execution rule table cannot be
     /// allocated.
     fn from_rule_scan(rules: RuleScan<'program>) -> Result<Self, AllocationError> {
-        let rule_count = rules.iter().count();
-        let mut cells = Vec::new();
+        let (first, remaining_rules) = rules.split_first();
+        let mut remaining = Vec::new();
         try_reserve_total_exact(
-            &mut cells,
-            RequestedCapacity::new(rule_count),
+            &mut remaining,
+            RequestedCapacity::new(remaining_rules.len()),
             AllocationContext::RuntimeRuleCell,
         )?;
-        for rule in rules.iter() {
+        for rule in remaining_rules {
             try_push(
-                &mut cells,
+                &mut remaining,
                 RuntimeRuleCell::new(rule),
                 AllocationContext::RuntimeRuleCell,
             )?;
         }
 
-        Ok(Self { cells })
+        Ok(Self {
+            first: RuntimeRuleCell::new(first),
+            remaining,
+        })
     }
 
     /// Finds the first currently available rule that matches `state`.
@@ -305,7 +331,12 @@ impl<'program> RuntimeRuleTable<'program> {
         &'once mut self,
         state: &'state State,
     ) -> RuntimeRuleSearch<'program, 'state, 'once> {
-        for cell in &mut self.cells {
+        match self.first.attempt(state) {
+            RuleAttempt::Matched(matched) => return RuntimeRuleSearch::Matched(matched),
+            RuleAttempt::Missed(_missed) => {}
+        }
+
+        for cell in &mut self.remaining {
             match cell.attempt(state) {
                 RuleAttempt::Matched(matched) => return RuntimeRuleSearch::Matched(matched),
                 RuleAttempt::Missed(_missed) => {}
@@ -323,8 +354,8 @@ impl<'program> StartedRuntimeRulePass<'program> {
     ///
     /// Returns `AllocationError` if the per-execution rule-attempt table cannot
     /// be allocated.
-    pub(crate) fn from_program<P: ParsePolicy>(
-        program: &'program ExecutableProgram<P>,
+    pub(crate) fn from_program(
+        program: &'program ExecutableProgram,
     ) -> Result<Self, AllocationError> {
         Self::from_rule_scan(program.rule_scan())
     }
@@ -569,15 +600,19 @@ fn advance_after_miss<'program>(
 
 impl<'program> RuntimeRuleCell<'program> {
     /// Builds a runtime rule cell from typed parsed rule data.
-    fn new(rule: &'program Rule) -> Self {
-        match rule {
-            Rule::AlwaysRewrite(rule) => Self::AlwaysRewrite(AlwaysRewriteRuntimeRuleCell { rule }),
-            Rule::OnceRewrite(rule) => Self::OnceRewrite(OnceRewriteRuntimeRuleCell {
+    fn new(rule: PositionedRule<'program>) -> Self {
+        match rule.view() {
+            RuleView::AlwaysRewrite(rule) => {
+                Self::AlwaysRewrite(AlwaysRewriteRuntimeRuleCell { rule })
+            }
+            RuleView::OnceRewrite(rule) => Self::OnceRewrite(OnceRewriteRuntimeRuleCell {
                 rule,
                 state: OnceRuleRuntimeState::Fresh,
             }),
-            Rule::AlwaysReturn(rule) => Self::AlwaysReturn(AlwaysReturnRuntimeRuleCell { rule }),
-            Rule::OnceReturn(rule) => Self::OnceReturn(OnceReturnRuntimeRuleCell {
+            RuleView::AlwaysReturn(rule) => {
+                Self::AlwaysReturn(AlwaysReturnRuntimeRuleCell { rule })
+            }
+            RuleView::OnceReturn(rule) => Self::OnceReturn(OnceReturnRuntimeRuleCell {
                 rule,
                 state: OnceRuleRuntimeState::Fresh,
             }),
@@ -615,9 +650,7 @@ impl<'program> RuntimeRuleCell<'program> {
                         },
                     ))
                 } else {
-                    RuntimeRuleTarget::Consumed(ConsumedRuntimeRule::OnceRewrite(
-                        OnceRewriteRuleView::new(cell.rule),
-                    ))
+                    RuntimeRuleTarget::Consumed(ConsumedRuntimeRule::OnceRewrite(cell.rule))
                 }
             }
             Self::AlwaysReturn(cell) => {
@@ -634,9 +667,7 @@ impl<'program> RuntimeRuleCell<'program> {
                         },
                     ))
                 } else {
-                    RuntimeRuleTarget::Consumed(ConsumedRuntimeRule::OnceReturn(
-                        OnceReturnRuleView::new(cell.rule),
-                    ))
+                    RuntimeRuleTarget::Consumed(ConsumedRuntimeRule::OnceReturn(cell.rule))
                 }
             }
         }
@@ -680,28 +711,28 @@ fn try_reserve_rule_queue<T>(
 
 impl<'program> AvailableAlwaysRewriteRuntimeRule<'program> {
     /// Parsed reusable rewrite rule selected with no once state.
-    pub(crate) const fn rule(&self) -> &'program RewriteRule {
+    pub(crate) const fn rule(&self) -> AlwaysRewriteRuleView<'program> {
         self.rule
     }
 }
 
 impl<'program, 'once> AvailableOnceRewriteRuntimeRule<'program, 'once> {
     /// Splits this available once target into its rule and linear commit permit.
-    pub(crate) fn into_parts(self) -> (&'program RewriteRule, OnceMatchPermit<'once>) {
+    pub(crate) fn into_parts(self) -> (OnceRewriteRuleView<'program>, OnceMatchPermit<'once>) {
         (self.rule, self.commit)
     }
 }
 
 impl<'program> AvailableAlwaysReturnRuntimeRule<'program> {
     /// Parsed reusable return rule selected with no once state.
-    pub(crate) const fn rule(&self) -> &'program ReturnRule {
+    pub(crate) const fn rule(&self) -> AlwaysReturnRuleView<'program> {
         self.rule
     }
 }
 
 impl<'program, 'once> AvailableOnceReturnRuntimeRule<'program, 'once> {
     /// Splits this available once target into its rule and linear commit permit.
-    pub(crate) fn into_parts(self) -> (&'program ReturnRule, OnceMatchPermit<'once>) {
+    pub(crate) fn into_parts(self) -> (OnceReturnRuleView<'program>, OnceMatchPermit<'once>) {
         (self.rule, self.commit)
     }
 }

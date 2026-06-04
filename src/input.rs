@@ -29,7 +29,7 @@
 //! type State3 = StaticExecutionPolicy<10, 3, 8>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let input = RuntimeInput::<Input8>::validate(RuntimeInputSource::from_bytes(b"abcd"))?;
+//! let input = RuntimeInput::validate::<Input8>(RuntimeInputSource::from_bytes(b"abcd"))?;
 //!
 //! let Err(error) = input.admit::<State3>() else {
 //!     return Err("expected run admission to reject the initial state".into());
@@ -103,7 +103,7 @@ pub struct RuntimeInput {
     bytes: Vec<RuntimeByte>,
 }
 
-impl<I: RuntimeInputPolicy> fmt::Debug for RuntimeInput<I> {
+impl fmt::Debug for RuntimeInput {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RuntimeInput")
@@ -113,9 +113,9 @@ impl<I: RuntimeInputPolicy> fmt::Debug for RuntimeInput<I> {
 }
 
 /// Internal runtime input debug bytes.
-struct RuntimeInputDebugBytes<'input, I: RuntimeInputPolicy>(&'input RuntimeInput<I>);
+struct RuntimeInputDebugBytes<'input>(&'input RuntimeInput);
 
-impl<I: RuntimeInputPolicy> fmt::Debug for RuntimeInputDebugBytes<'_, I> {
+impl fmt::Debug for RuntimeInputDebugBytes<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_list()
@@ -124,7 +124,7 @@ impl<I: RuntimeInputPolicy> fmt::Debug for RuntimeInputDebugBytes<'_, I> {
     }
 }
 
-impl<I: RuntimeInputPolicy> RuntimeInput<I> {
+impl RuntimeInput {
     /// Validates a runtime input source for one run.
     ///
     /// Runtime input accepts all ASCII bytes, including bytes that would be
@@ -139,7 +139,9 @@ impl<I: RuntimeInputPolicy> RuntimeInput<I> {
     /// Returns `RuntimeInputError` if the input exceeds the selected policy, if
     /// any input byte is non-ASCII, if its one-based column cannot be
     /// represented, or if owned storage cannot be allocated.
-    pub fn validate(input: RuntimeInputSource<'_>) -> Result<Self, RuntimeInputError> {
+    pub fn validate<I: RuntimeInputPolicy>(
+        input: RuntimeInputSource<'_>,
+    ) -> Result<Self, RuntimeInputError> {
         let byte_count = RuntimeInputByteCount::new(input.as_bytes().len());
         let limit = I::INPUT_BYTE_LIMIT;
         let input_permit = limit
@@ -221,9 +223,7 @@ impl<E: ExecutionPolicy> AdmittedRun<E> {
     ///
     /// Returns `RunAdmissionError` if the validated input would exceed the
     /// initial runtime-state budget.
-    fn from_runtime_input<I: RuntimeInputPolicy>(
-        input: RuntimeInput<I>,
-    ) -> Result<Self, RunAdmissionError> {
+    fn from_runtime_input(input: RuntimeInput) -> Result<Self, RunAdmissionError> {
         let initial_state_len = RuntimeStateByteCount::from_runtime_input_count(input.byte_count());
         let limit = E::STATE_BYTE_LIMIT;
         let initial_state_permit = limit

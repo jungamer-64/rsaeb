@@ -506,11 +506,6 @@ impl<'program> RuleView<'program> {
 macro_rules! impl_rewrite_rule_view {
     ($view:ident) => {
         impl<'program> $view<'program> {
-            /// Borrows one typed rewrite rule for inspection.
-            pub(crate) const fn new(position: RulePosition, rule: &'program RewriteRule) -> Self {
-                Self { position, rule }
-            }
-
             /// Rebuilds the borrowed internal rule for private rendering.
             pub(crate) const fn into_rule(self) -> &'program RewriteRule {
                 self.rule
@@ -553,11 +548,6 @@ macro_rules! impl_rewrite_rule_view {
 macro_rules! impl_return_rule_view {
     ($view:ident) => {
         impl<'program> $view<'program> {
-            /// Borrows one typed return rule for inspection.
-            pub(crate) const fn new(position: RulePosition, rule: &'program ReturnRule) -> Self {
-                Self { position, rule }
-            }
-
             /// Rebuilds the borrowed internal rule for private rendering.
             pub(crate) const fn into_rule(self) -> &'program ReturnRule {
                 self.rule

@@ -18,16 +18,8 @@ use super::{
 };
 
 /// Parsed source with no executable rule lines.
-#[derive(PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct EmptyProgram;
-
-impl<P: ParsePolicy> Clone for EmptyProgram<P> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<P: ParsePolicy> Copy for EmptyProgram<P> {}
 
 /// Parsed source with at least one executable rule line.
 #[derive(PartialEq, Eq)]
@@ -36,7 +28,7 @@ pub struct ExecutableProgram {
     rule_set: ExecutableRuleSet,
 }
 
-impl<P: ParsePolicy> EmptyProgram<P> {
+impl EmptyProgram {
     /// Parses source bytes that must contain no executable rules.
     ///
     /// The empty-program target type is the public shape selection. Source bytes
@@ -47,8 +39,8 @@ impl<P: ParsePolicy> EmptyProgram<P> {
     ///
     /// Returns `EmptyProgramParseError` when parsing fails or when the parsed
     /// source contains executable rules.
-    pub fn parse_bytes(source: &[u8]) -> Result<Self, EmptyProgramParseError> {
-        Self::parse_raw(RawProgramSource::from_bytes(source))
+    pub fn parse_bytes<P: ParsePolicy>(source: &[u8]) -> Result<Self, EmptyProgramParseError> {
+        Self::parse_raw::<P>(RawProgramSource::from_bytes(source))
     }
 
     /// Parses UTF-8 source text that must contain no executable rules.
@@ -57,8 +49,8 @@ impl<P: ParsePolicy> EmptyProgram<P> {
     ///
     /// Returns `EmptyProgramParseError` when parsing fails or when the parsed
     /// source contains executable rules.
-    pub fn parse_text(source: &str) -> Result<Self, EmptyProgramParseError> {
-        Self::parse_raw(RawProgramSource::from_text(source))
+    pub fn parse_text<P: ParsePolicy>(source: &str) -> Result<Self, EmptyProgramParseError> {
+        Self::parse_raw::<P>(RawProgramSource::from_text(source))
     }
 
     /// Parses raw source into the empty-program target type.
@@ -67,7 +59,9 @@ impl<P: ParsePolicy> EmptyProgram<P> {
     ///
     /// Returns `EmptyProgramParseError` when parsing fails or when executable
     /// rules are present.
-    fn parse_raw(source: RawProgramSource<'_>) -> Result<Self, EmptyProgramParseError> {
+    fn parse_raw<P: ParsePolicy>(
+        source: RawProgramSource<'_>,
+    ) -> Result<Self, EmptyProgramParseError> {
         parse_rules_into::<P, EmptyRuleSetBuilder>(source)?;
         Ok(Self::new())
     }
@@ -108,7 +102,7 @@ impl<P: ParsePolicy> EmptyProgram<P> {
     }
 }
 
-impl<P: ParsePolicy> fmt::Debug for EmptyProgram<P> {
+impl fmt::Debug for EmptyProgram {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("EmptyProgram")
@@ -118,7 +112,7 @@ impl<P: ParsePolicy> fmt::Debug for EmptyProgram<P> {
     }
 }
 
-impl<P: ParsePolicy> ExecutableProgram<P> {
+impl ExecutableProgram {
     /// Parses source bytes that must contain at least one executable rule.
     ///
     /// The executable-program target type is the public shape selection. Source
@@ -130,8 +124,8 @@ impl<P: ParsePolicy> ExecutableProgram<P> {
     ///
     /// Returns `ExecutableProgramParseError` when parsing fails or when the
     /// parsed source contains no executable rules.
-    pub fn parse_bytes(source: &[u8]) -> Result<Self, ExecutableProgramParseError> {
-        Self::parse_raw(RawProgramSource::from_bytes(source))
+    pub fn parse_bytes<P: ParsePolicy>(source: &[u8]) -> Result<Self, ExecutableProgramParseError> {
+        Self::parse_raw::<P>(RawProgramSource::from_bytes(source))
     }
 
     /// Parses UTF-8 source text that must contain at least one executable rule.
@@ -140,8 +134,8 @@ impl<P: ParsePolicy> ExecutableProgram<P> {
     ///
     /// Returns `ExecutableProgramParseError` when parsing fails or when the
     /// parsed source contains no executable rules.
-    pub fn parse_text(source: &str) -> Result<Self, ExecutableProgramParseError> {
-        Self::parse_raw(RawProgramSource::from_text(source))
+    pub fn parse_text<P: ParsePolicy>(source: &str) -> Result<Self, ExecutableProgramParseError> {
+        Self::parse_raw::<P>(RawProgramSource::from_text(source))
     }
 
     /// Parses raw source into the executable-program target type.
@@ -150,7 +144,9 @@ impl<P: ParsePolicy> ExecutableProgram<P> {
     ///
     /// Returns `ExecutableProgramParseError` when parsing fails or when no
     /// executable rules are present.
-    fn parse_raw(source: RawProgramSource<'_>) -> Result<Self, ExecutableProgramParseError> {
+    fn parse_raw<P: ParsePolicy>(
+        source: RawProgramSource<'_>,
+    ) -> Result<Self, ExecutableProgramParseError> {
         let rule_set = parse_rules_into::<P, ExecutableRuleSetBuilder>(source)?;
         Ok(Self::from_rule_set(rule_set))
     }
@@ -177,7 +173,7 @@ impl<P: ParsePolicy> ExecutableProgram<P> {
 
     /// Iterates over structured parsed-rule views in execution order.
     pub fn rules(&self) -> impl Iterator<Item = RuleView<'_>> + '_ {
-        self.rule_set.iter().map(RuleView::new)
+        self.rule_set.iter().map(|positioned| positioned.view())
     }
 
     /// Executes this executable program to completion.
@@ -190,7 +186,7 @@ impl<P: ParsePolicy> ExecutableProgram<P> {
     where
         E: ExecutionPolicy,
     {
-        crate::execution::finish_borrowed_run(self.executable_ref(), admitted)
+        crate::execution::finish_borrowed_run(self, admitted)
     }
 
     /// Runs this executable program while emitting trace events selected by a typed request.
@@ -206,9 +202,9 @@ impl<P: ParsePolicy> ExecutableProgram<P> {
     ) -> Result<RunResult, R::Error>
     where
         E: ExecutionPolicy,
-        R: TraceRequest<'program, P, E>,
+        R: TraceRequest<'program, E>,
     {
-        request.trace(self.executable_ref(), admitted)
+        request.trace(self, admitted)
     }
 
     /// Starts borrowed stepwise execution.
@@ -219,7 +215,7 @@ impl<P: ParsePolicy> ExecutableProgram<P> {
     pub fn steps<E>(
         &self,
         admitted: AdmittedRun<E>,
-    ) -> Result<BorrowedRunSession<'_, P, E>, RunStartError>
+    ) -> Result<BorrowedRunSession<'_, E>, RunStartError>
     where
         E: ExecutionPolicy,
     {
@@ -234,7 +230,7 @@ impl<P: ParsePolicy> ExecutableProgram<P> {
     pub fn rule_attempts<A, E>(
         &self,
         admitted: AdmittedRun<E>,
-    ) -> Result<BorrowedRuleAttemptCursor<'_, P, E, A>, RunStartError>
+    ) -> Result<BorrowedRuleAttemptCursor<'_, E, A>, RunStartError>
     where
         A: RuleAttemptPolicy,
         E: ExecutionPolicy,
@@ -248,7 +244,7 @@ impl<P: ParsePolicy> ExecutableProgram<P> {
     }
 }
 
-impl<P: ParsePolicy> fmt::Debug for ExecutableProgram<P> {
+impl fmt::Debug for ExecutableProgram {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ExecutableProgram")

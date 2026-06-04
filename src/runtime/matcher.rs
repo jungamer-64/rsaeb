@@ -178,18 +178,16 @@ pub(crate) fn attempt_available_rule<'program, 'state, 'once>(
 ) -> AvailableRuleAttempt<'program, 'state, 'once> {
     match runtime_rule {
         AvailableRuntimeRule::AlwaysRewrite(rule) => {
-            attempt_always_rewrite_rule(AlwaysRewriteRuleView::new(rule.rule()), state)
+            attempt_always_rewrite_rule(rule.rule(), state)
         }
         AvailableRuntimeRule::OnceRewrite(rule) => {
             let (rule, commit) = rule.into_parts();
-            attempt_once_rewrite_rule(OnceRewriteRuleView::new(rule), commit, state)
+            attempt_once_rewrite_rule(rule, commit, state)
         }
-        AvailableRuntimeRule::AlwaysReturn(rule) => {
-            attempt_always_return_rule(AlwaysReturnRuleView::new(rule.rule()), state)
-        }
+        AvailableRuntimeRule::AlwaysReturn(rule) => attempt_always_return_rule(rule.rule(), state),
         AvailableRuntimeRule::OnceReturn(rule) => {
             let (rule, commit) = rule.into_parts();
-            attempt_once_return_rule(OnceReturnRuleView::new(rule), commit, state)
+            attempt_once_return_rule(rule, commit, state)
         }
     }
 }

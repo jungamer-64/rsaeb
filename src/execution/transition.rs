@@ -1,7 +1,7 @@
 use crate::error::{RuleAttemptStepError, RunFinishError, RunStepError};
 use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, StepCount};
-use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
+use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, ReturnOutput, RunResult};
 use crate::trace::RuntimeStateView;
 
@@ -13,53 +13,53 @@ use super::session::{BorrowedRuleAttemptCursor, BorrowedRunSession};
 ///
 /// Only [`BorrowedStepTransition::Applied`] carries a continuation session. Stable,
 /// returned, and failed transitions are terminal.
-pub enum BorrowedStepTransition<'program, P: ParsePolicy, E: ExecutionPolicy> {
+pub enum BorrowedStepTransition<'program, E: ExecutionPolicy> {
     /// One ordinary rewrite rule was applied and execution can continue.
-    Applied(BorrowedAppliedStep<'program, P, E>),
+    Applied(BorrowedAppliedStep<'program, E>),
     /// No rule matched the final runtime state.
-    Stable(BorrowedStableRun<'program, P>),
+    Stable(BorrowedStableRun<'program>),
     /// A matched rule executed `(return)`.
-    Returned(BorrowedReturnedRun<'program, P>),
+    Returned(BorrowedReturnedRun<'program>),
     /// A matching rule failed before committing.
-    Failed(BorrowedFailedRun<'program, P>),
+    Failed(BorrowedFailedRun<'program>),
 }
 
 /// One committed non-terminal rule application in a borrowed session.
-pub struct BorrowedAppliedStep<'program, P: ParsePolicy, E: ExecutionPolicy> {
+pub struct BorrowedAppliedStep<'program, E: ExecutionPolicy> {
     /// Step number committed by this transition.
     pub(super) step: StepCount,
     /// Borrowed rewrite rule committed by this transition.
     pub(super) rule: RuleView<'program>,
     /// Continuation session after the committed rule application.
-    pub(super) session: BorrowedRunSession<'program, P, E>,
+    pub(super) session: BorrowedRunSession<'program, E>,
 }
 
 /// Terminal borrowed run state reached by no matching rule.
-pub struct BorrowedStableRun<'program, P: ParsePolicy> {
+pub struct BorrowedStableRun<'program> {
     /// Parsed program borrowed by the terminal state.
-    pub(super) program: &'program ExecutableProgram<P>,
+    pub(super) program: &'program ExecutableProgram,
     /// Terminal runtime core containing the stable state.
     pub(super) core: TerminalRunCore,
 }
 
 /// Terminal borrowed run state reached by `(return)`.
-pub struct BorrowedReturnedRun<'program, P: ParsePolicy> {
+pub struct BorrowedReturnedRun<'program> {
     /// Step number that executed the return action.
     pub(super) step: StepCount,
     /// Borrowed return rule committed by this transition.
     pub(super) rule: RuleView<'program>,
     /// Parsed program borrowed by the terminal state.
-    pub(super) program: &'program ExecutableProgram<P>,
+    pub(super) program: &'program ExecutableProgram,
     /// Materialized return output produced by the committed return rule.
     pub(super) output: ReturnOutput,
 }
 
 /// Runtime failure that preserves uncommitted borrowed state for inspection.
-pub struct BorrowedFailedRun<'program, P: ParsePolicy> {
+pub struct BorrowedFailedRun<'program> {
     /// Runtime error that stopped the candidate step before commit.
     pub(super) error: RunStepError,
     /// Parsed program borrowed by the failed terminal state.
-    pub(super) program: &'program ExecutableProgram<P>,
+    pub(super) program: &'program ExecutableProgram,
     /// Uncommitted runtime core retained for diagnostic inspection.
     pub(super) core: TerminalRunCore,
 }
@@ -69,64 +69,45 @@ pub struct BorrowedFailedRun<'program, P: ParsePolicy> {
 /// This transition type has no stable variant because the current rule has a
 /// successor. A non-applying rule must return a cursor pointing at the next
 /// typed pass state.
-pub enum BorrowedContinuingRuleAttemptTransition<
-    'program,
-    P: ParsePolicy,
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-> {
+pub enum BorrowedContinuingRuleAttemptTransition<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
+{
     /// One executable rule line was consumed without applying.
-    Missed(BorrowedMissedRuleAttempt<'program, P, E, A>),
+    Missed(BorrowedMissedRuleAttempt<'program, E, A>),
     /// One ordinary rewrite rule was applied and execution can continue.
-    Applied(BorrowedRuleAttemptAppliedStep<'program, P, E, A>),
+    Applied(BorrowedRuleAttemptAppliedStep<'program, E, A>),
     /// A matched rule executed `(return)`.
-    Returned(BorrowedRuleAttemptReturnedRun<'program, P>),
+    Returned(BorrowedRuleAttemptReturnedRun<'program>),
     /// A matching rule failed before committing runtime state.
-    Failed(BorrowedRuleAttemptFailedRun<'program, P>),
+    Failed(BorrowedRuleAttemptFailedRun<'program>),
 }
 
 /// Result of advancing a final borrowed rule-attempt session once.
 ///
 /// This transition type has no missed-continuation variant because a
 /// non-applying final rule exhausts the pass and terminates as stable.
-pub enum BorrowedFinalRuleAttemptTransition<
-    'program,
-    P: ParsePolicy,
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-> {
+pub enum BorrowedFinalRuleAttemptTransition<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     /// The rule pass completed without a match.
-    Stable(BorrowedRuleAttemptStableRun<'program, P>),
+    Stable(BorrowedRuleAttemptStableRun<'program>),
     /// One ordinary rewrite rule was applied and execution can continue.
-    Applied(BorrowedRuleAttemptAppliedStep<'program, P, E, A>),
+    Applied(BorrowedRuleAttemptAppliedStep<'program, E, A>),
     /// A matched rule executed `(return)`.
-    Returned(BorrowedRuleAttemptReturnedRun<'program, P>),
+    Returned(BorrowedRuleAttemptReturnedRun<'program>),
     /// A matching rule failed before committing runtime state.
-    Failed(BorrowedRuleAttemptFailedRun<'program, P>),
+    Failed(BorrowedRuleAttemptFailedRun<'program>),
 }
 
 /// One consumed non-applying rule line in a continuing borrowed rule-attempt session.
-pub struct BorrowedMissedRuleAttempt<
-    'program,
-    P: ParsePolicy,
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-> {
+pub struct BorrowedMissedRuleAttempt<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     /// Rule-attempt count committed by this transition.
     pub(super) attempt: RuleAttemptCount,
     /// Non-applying rule information.
     pub(super) miss: RuleMiss<'program>,
     /// Cursor after consuming the rule line.
-    pub(super) cursor: BorrowedRuleAttemptCursor<'program, P, E, A>,
+    pub(super) cursor: BorrowedRuleAttemptCursor<'program, E, A>,
 }
 
 /// One committed non-terminal rule application in a borrowed rule-attempt session.
-pub struct BorrowedRuleAttemptAppliedStep<
-    'program,
-    P: ParsePolicy,
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-> {
+pub struct BorrowedRuleAttemptAppliedStep<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     /// Rule-attempt count committed by this transition.
     pub(super) attempt: RuleAttemptCount,
     /// Step number committed by this transition.
@@ -134,23 +115,23 @@ pub struct BorrowedRuleAttemptAppliedStep<
     /// Borrowed rewrite rule committed by this transition.
     pub(super) rule: RuleView<'program>,
     /// Cursor after the committed rule application.
-    pub(super) cursor: BorrowedRuleAttemptCursor<'program, P, E, A>,
+    pub(super) cursor: BorrowedRuleAttemptCursor<'program, E, A>,
 }
 
 /// Terminal borrowed rule-attempt run state reached by no matching rule.
-pub struct BorrowedRuleAttemptStableRun<'program, P: ParsePolicy> {
+pub struct BorrowedRuleAttemptStableRun<'program> {
     /// Number of consumed rule attempts before stability.
     pub(super) attempts: RuleAttemptCount,
     /// Final non-applying rule that exhausted the current pass.
     pub(super) final_miss: RuleMiss<'program>,
     /// Parsed program borrowed by the terminal state.
-    pub(super) program: &'program ExecutableProgram<P>,
+    pub(super) program: &'program ExecutableProgram,
     /// Terminal runtime core containing the stable state.
     pub(super) core: TerminalRunCore,
 }
 
 /// Terminal borrowed rule-attempt run state reached by `(return)`.
-pub struct BorrowedRuleAttemptReturnedRun<'program, P: ParsePolicy> {
+pub struct BorrowedRuleAttemptReturnedRun<'program> {
     /// Rule-attempt count committed by this transition.
     pub(super) attempt: RuleAttemptCount,
     /// Step number that executed the return action.
@@ -158,24 +139,24 @@ pub struct BorrowedRuleAttemptReturnedRun<'program, P: ParsePolicy> {
     /// Borrowed return rule committed by this transition.
     pub(super) rule: RuleView<'program>,
     /// Parsed program borrowed by the terminal state.
-    pub(super) program: &'program ExecutableProgram<P>,
+    pub(super) program: &'program ExecutableProgram,
     /// Materialized return output produced by the committed return rule.
     pub(super) output: ReturnOutput,
 }
 
 /// Runtime failure that preserves uncommitted borrowed rule-attempt state for inspection.
-pub struct BorrowedRuleAttemptFailedRun<'program, P: ParsePolicy> {
+pub struct BorrowedRuleAttemptFailedRun<'program> {
     /// Runtime error that stopped the candidate attempt before commit.
     pub(super) error: RuleAttemptStepError,
     /// Number of rule attempts consumed before the failure was reported.
     pub(super) attempts: RuleAttemptCount,
     /// Parsed program borrowed by the failed terminal state.
-    pub(super) program: &'program ExecutableProgram<P>,
+    pub(super) program: &'program ExecutableProgram,
     /// Uncommitted runtime core retained for diagnostic inspection.
     pub(super) core: TerminalRunCore,
 }
 
-impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedAppliedStep<'program, P, E> {
+impl<'program, E: ExecutionPolicy> BorrowedAppliedStep<'program, E> {
     /// One-based applied step count.
     #[must_use]
     pub const fn step(&self) -> StepCount {
@@ -198,14 +179,12 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> BorrowedAppliedStep<'program,
     ///
     /// This is the only borrowed transition that can resume execution.
     #[must_use]
-    pub fn into_session(self) -> BorrowedRunSession<'program, P, E> {
+    pub fn into_session(self) -> BorrowedRunSession<'program, E> {
         self.session
     }
 }
 
-impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
-    BorrowedMissedRuleAttempt<'program, P, E, A>
-{
+impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> BorrowedMissedRuleAttempt<'program, E, A> {
     /// One-based consumed rule-attempt count.
     #[must_use]
     pub const fn attempt(&self) -> RuleAttemptCount {
@@ -226,13 +205,13 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
 
     /// Continue running after observing this missed rule attempt.
     #[must_use]
-    pub fn into_cursor(self) -> BorrowedRuleAttemptCursor<'program, P, E, A> {
+    pub fn into_cursor(self) -> BorrowedRuleAttemptCursor<'program, E, A> {
         self.cursor
     }
 }
 
-impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
-    BorrowedRuleAttemptAppliedStep<'program, P, E, A>
+impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
+    BorrowedRuleAttemptAppliedStep<'program, E, A>
 {
     /// One-based consumed rule-attempt count.
     #[must_use]
@@ -260,12 +239,12 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
 
     /// Continue running after observing this applied rule attempt.
     #[must_use]
-    pub fn into_cursor(self) -> BorrowedRuleAttemptCursor<'program, P, E, A> {
+    pub fn into_cursor(self) -> BorrowedRuleAttemptCursor<'program, E, A> {
         self.cursor
     }
 }
 
-impl<'program, P: ParsePolicy> BorrowedStableRun<'program, P> {
+impl<'program> BorrowedStableRun<'program> {
     /// Number of execution steps committed before reaching the stable state.
     #[must_use]
     pub const fn steps(&self) -> StepCount {
@@ -274,7 +253,7 @@ impl<'program, P: ParsePolicy> BorrowedStableRun<'program, P> {
 
     /// Borrow the parsed program used by this terminal state.
     #[must_use]
-    pub const fn program(&self) -> &'program ExecutableProgram<P> {
+    pub const fn program(&self) -> &'program ExecutableProgram {
         self.program
     }
 
@@ -294,7 +273,7 @@ impl<'program, P: ParsePolicy> BorrowedStableRun<'program, P> {
     }
 }
 
-impl<'program, P: ParsePolicy> BorrowedRuleAttemptStableRun<'program, P> {
+impl<'program> BorrowedRuleAttemptStableRun<'program> {
     /// Number of rule attempts consumed before reaching the stable state.
     #[must_use]
     pub const fn attempts(&self) -> RuleAttemptCount {
@@ -315,7 +294,7 @@ impl<'program, P: ParsePolicy> BorrowedRuleAttemptStableRun<'program, P> {
 
     /// Borrow the parsed program used by this terminal state.
     #[must_use]
-    pub const fn program(&self) -> &'program ExecutableProgram<P> {
+    pub const fn program(&self) -> &'program ExecutableProgram {
         self.program
     }
 
@@ -335,7 +314,7 @@ impl<'program, P: ParsePolicy> BorrowedRuleAttemptStableRun<'program, P> {
     }
 }
 
-impl<'program, P: ParsePolicy> BorrowedReturnedRun<'program, P> {
+impl<'program> BorrowedReturnedRun<'program> {
     /// One-based applied step count for the return rule.
     #[must_use]
     pub const fn step(&self) -> StepCount {
@@ -344,7 +323,7 @@ impl<'program, P: ParsePolicy> BorrowedReturnedRun<'program, P> {
 
     /// Borrow the parsed program used by this terminal state.
     #[must_use]
-    pub const fn program(&self) -> &'program ExecutableProgram<P> {
+    pub const fn program(&self) -> &'program ExecutableProgram {
         self.program
     }
 
@@ -367,7 +346,7 @@ impl<'program, P: ParsePolicy> BorrowedReturnedRun<'program, P> {
     }
 }
 
-impl<'program, P: ParsePolicy> BorrowedRuleAttemptReturnedRun<'program, P> {
+impl<'program> BorrowedRuleAttemptReturnedRun<'program> {
     /// One-based consumed rule-attempt count.
     #[must_use]
     pub const fn attempt(&self) -> RuleAttemptCount {
@@ -382,7 +361,7 @@ impl<'program, P: ParsePolicy> BorrowedRuleAttemptReturnedRun<'program, P> {
 
     /// Borrow the parsed program used by this terminal state.
     #[must_use]
-    pub const fn program(&self) -> &'program ExecutableProgram<P> {
+    pub const fn program(&self) -> &'program ExecutableProgram {
         self.program
     }
 
@@ -405,11 +384,11 @@ impl<'program, P: ParsePolicy> BorrowedRuleAttemptReturnedRun<'program, P> {
     }
 }
 
-impl<'program, P: ParsePolicy> BorrowedFailedRun<'program, P> {
+impl<'program> BorrowedFailedRun<'program> {
     /// Captures a failed borrowed session without committing the attempted step.
     pub(super) fn new(
         error: RunStepError,
-        program: &'program ExecutableProgram<P>,
+        program: &'program ExecutableProgram,
         core: TerminalRunCore,
     ) -> Self {
         Self {
@@ -433,7 +412,7 @@ impl<'program, P: ParsePolicy> BorrowedFailedRun<'program, P> {
 
     /// Borrow the parsed program used by this failed session.
     #[must_use]
-    pub fn program(&self) -> &'program ExecutableProgram<P> {
+    pub fn program(&self) -> &'program ExecutableProgram {
         self.program
     }
 
@@ -453,24 +432,24 @@ impl<'program, P: ParsePolicy> BorrowedFailedRun<'program, P> {
     }
 }
 
-impl<P: ParsePolicy> core::fmt::Display for BorrowedFailedRun<'_, P> {
+impl core::fmt::Display for BorrowedFailedRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.error.fmt(formatter)
     }
 }
 
-impl<P: ParsePolicy> core::error::Error for BorrowedFailedRun<'_, P> {
+impl core::error::Error for BorrowedFailedRun<'_> {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         Some(&self.error)
     }
 }
 
-impl<'program, P: ParsePolicy> BorrowedRuleAttemptFailedRun<'program, P> {
+impl<'program> BorrowedRuleAttemptFailedRun<'program> {
     /// Captures a failed borrowed rule-attempt session without committing runtime state.
     pub(super) fn new(
         error: RuleAttemptStepError,
         attempts: RuleAttemptCount,
-        program: &'program ExecutableProgram<P>,
+        program: &'program ExecutableProgram,
         core: TerminalRunCore,
     ) -> Self {
         Self {
@@ -501,7 +480,7 @@ impl<'program, P: ParsePolicy> BorrowedRuleAttemptFailedRun<'program, P> {
 
     /// Borrow the parsed program used by this failed session.
     #[must_use]
-    pub fn program(&self) -> &'program ExecutableProgram<P> {
+    pub fn program(&self) -> &'program ExecutableProgram {
         self.program
     }
 
@@ -518,13 +497,13 @@ impl<'program, P: ParsePolicy> BorrowedRuleAttemptFailedRun<'program, P> {
     }
 }
 
-impl<P: ParsePolicy> core::fmt::Display for BorrowedRuleAttemptFailedRun<'_, P> {
+impl core::fmt::Display for BorrowedRuleAttemptFailedRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.error.fmt(formatter)
     }
 }
 
-impl<P: ParsePolicy> core::error::Error for BorrowedRuleAttemptFailedRun<'_, P> {
+impl core::error::Error for BorrowedRuleAttemptFailedRun<'_> {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         Some(&self.error)
     }

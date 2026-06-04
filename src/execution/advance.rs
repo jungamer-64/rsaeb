@@ -2,56 +2,35 @@ use crate::bytes::RuntimeStateByteCount;
 use crate::error::{RuleAttemptStepError, RunStepError};
 use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, StepCount};
-use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
-use crate::program::{ReturnOutput, ReturnOutputView};
+use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
+use crate::program::{ExecutableProgram, ReturnOutput, ReturnOutputView};
 use crate::runtime::action::{AppliedRule, PreparedRuleStep, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuleAttemptReservation, RuntimeBudgetState};
 use crate::runtime::matcher::{MatchedRuleApplication, RuleAttempt, RuleAttemptMiss};
 use crate::runtime::once::{
     AfterMissContinuingRulePass, AfterMissFinalRulePass, AfterMissRuntimeRulePass,
-    FirstContinuingRulePass, FirstFinalRulePass, StartedRuntimeRulePass,
+    FirstContinuingRulePass, FirstFinalRulePass, RuntimeRulePassState, StartedRuntimeRulePass,
 };
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
 
 use super::attempt::RuleMiss;
 use super::engine::{
-    AttemptRunCore, AttemptSession, AttemptSessionCursor, BorrowedProgram,
-    ContinuingAttemptSession, FinalAttemptSession, TerminalAttemptSession,
+    AttemptRunCore, AttemptSession, AttemptSessionCursor, ContinuingAttemptSession,
+    FinalAttemptSession, TerminalAttemptSession,
 };
 
 /// Compile-time rule witness policy for ordinary execution steps.
 pub(super) trait RunRuleWitness<'program> {
     /// Rule witness emitted by this policy.
     type Witness;
-    /// Step error domain emitted by this policy.
-    type Error: From<RunStepError>;
 
     /// Builds a witness from the matched parsed rule.
-    ///
-    /// # Errors
-    ///
-    /// Returns this policy's error when retaining the witness fails.
-    fn from_rule(rule: RuleView<'program>) -> Result<Self::Witness, Self::Error>;
-}
-
-/// Compile-time rule witness policy for rule-attempt execution steps.
-pub(super) trait AttemptRuleWitness<'program> {
-    /// Rule witness emitted by this policy.
-    type Witness;
-    /// Rule-attempt error domain emitted by this policy.
-    type Error: From<RuleAttemptStepError> + From<RunStepError>;
-
-    /// Builds a witness from the selected parsed rule.
-    ///
-    /// # Errors
-    ///
-    /// Returns this policy's error when retaining the witness fails.
-    fn from_rule(rule: RuleView<'program>) -> Result<Self::Witness, Self::Error>;
+    fn from_rule(rule: RuleView<'program>) -> Self::Witness;
 }
 
 /// Continuing rule-attempt pass behavior shared by first and after-miss states.
-trait ContinuingRuleAttemptPass<'program>: Sized {
+trait ContinuingRuleAttemptPass<'program>: RuntimeRulePassState<'program> + Sized {
     /// Attempts this pass's current target.
     fn attempt_current_rule<'state, 'once>(
         &'once mut self,
@@ -66,7 +45,7 @@ trait ContinuingRuleAttemptPass<'program>: Sized {
 }
 
 /// Final rule-attempt pass behavior shared by first and after-miss states.
-trait FinalRuleAttemptPass<'program>: Sized {
+trait FinalRuleAttemptPass<'program>: RuntimeRulePassState<'program> + Sized {
     /// Attempts this pass's current target.
     fn attempt_current_rule<'state, 'once>(
         &'once mut self,
@@ -84,10 +63,6 @@ pub(super) enum DiscardedRunWitness {}
 /// Ordinary-run witness policy that borrows parsed rule metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BorrowedRunWitness {}
-
-/// Rule-attempt witness policy that borrows parsed rule metadata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum BorrowedAttemptWitness {}
 
 /// Internal committed application paired with its public rule witness.
 pub(super) enum CoreAppliedRule<'program, RuleWitness> {
@@ -112,14 +87,7 @@ pub(super) enum CoreAppliedRule<'program, RuleWitness> {
 }
 
 /// Program-bound result of consuming one continuing rule-attempt session step.
-pub(super) enum CoreContinuingRuleAttemptStep<
-    'program,
-    P: ParsePolicy,
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-    RuleWitness,
-    StepError,
-> {
+pub(super) enum CoreContinuingRuleAttemptStep<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     /// A non-applying rule line was consumed and the run can continue.
     Missed {
         /// Rule-attempt count committed by this transition.
@@ -127,7 +95,7 @@ pub(super) enum CoreContinuingRuleAttemptStep<
         /// Non-applying rule information.
         miss: RuleMiss<'program>,
         /// Continuation session with the returned next cursor.
-        continuation: AttemptSessionCursor<'program, P, E, A>,
+        continuation: AttemptSessionCursor<'program, E, A>,
     },
     /// A rewrite committed and the rule-attempt run can continue.
     Applied {
@@ -136,9 +104,9 @@ pub(super) enum CoreContinuingRuleAttemptStep<
         /// Committed rewrite step count.
         step: StepCount,
         /// Rule witness paired with the committed rewrite.
-        rule: RuleWitness,
+        rule: RuleView<'program>,
         /// Continuation session with a fresh cursor.
-        continuation: AttemptSessionCursor<'program, P, E, A>,
+        continuation: AttemptSessionCursor<'program, E, A>,
     },
     /// A return rule committed and the run is terminal.
     Returned {
@@ -147,30 +115,23 @@ pub(super) enum CoreContinuingRuleAttemptStep<
         /// Committed return step count.
         step: StepCount,
         /// Rule witness paired with the committed return.
-        rule: RuleWitness,
+        rule: RuleView<'program>,
         /// Materialized return output.
         output: ReturnOutput,
         /// Terminal session with no resumable cursor.
-        terminal: TerminalAttemptSession<'program, P>,
+        terminal: TerminalAttemptSession<'program>,
     },
     /// A candidate attempt failed before committing runtime state.
     Failed {
         /// Error that prevented commit.
-        error: StepError,
+        error: RuleAttemptStepError,
         /// Terminal session preserving the uncommitted state.
-        terminal: TerminalAttemptSession<'program, P>,
+        terminal: TerminalAttemptSession<'program>,
     },
 }
 
 /// Program-bound result of consuming one final rule-attempt session step.
-pub(super) enum CoreFinalRuleAttemptStep<
-    'program,
-    P: ParsePolicy,
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-    RuleWitness,
-    StepError,
-> {
+pub(super) enum CoreFinalRuleAttemptStep<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     /// A rewrite committed and the rule-attempt run can continue.
     Applied {
         /// Rule-attempt count committed by this transition.
@@ -178,9 +139,9 @@ pub(super) enum CoreFinalRuleAttemptStep<
         /// Committed rewrite step count.
         step: StepCount,
         /// Rule witness paired with the committed rewrite.
-        rule: RuleWitness,
+        rule: RuleView<'program>,
         /// Continuation session with a fresh cursor.
-        continuation: AttemptSessionCursor<'program, P, E, A>,
+        continuation: AttemptSessionCursor<'program, E, A>,
     },
     /// A return rule committed and the run is terminal.
     Returned {
@@ -189,11 +150,11 @@ pub(super) enum CoreFinalRuleAttemptStep<
         /// Committed return step count.
         step: StepCount,
         /// Rule witness paired with the committed return.
-        rule: RuleWitness,
+        rule: RuleView<'program>,
         /// Materialized return output.
         output: ReturnOutput,
         /// Terminal session with no resumable cursor.
-        terminal: TerminalAttemptSession<'program, P>,
+        terminal: TerminalAttemptSession<'program>,
     },
     /// No rule in the current pass matched the current runtime state.
     Stable {
@@ -202,14 +163,14 @@ pub(super) enum CoreFinalRuleAttemptStep<
         /// Final non-applying rule that exhausted the current pass.
         final_miss: RuleMiss<'program>,
         /// Terminal session with no resumable cursor.
-        terminal: TerminalAttemptSession<'program, P>,
+        terminal: TerminalAttemptSession<'program>,
     },
     /// A candidate attempt failed before committing runtime state.
     Failed {
         /// Error that prevented commit.
-        error: StepError,
+        error: RuleAttemptStepError,
         /// Terminal session preserving the uncommitted state.
-        terminal: TerminalAttemptSession<'program, P>,
+        terminal: TerminalAttemptSession<'program>,
     },
 }
 
@@ -222,35 +183,22 @@ pub(super) struct WitnessedApplication<'program, 'once, 'budget, E: ExecutionPol
 }
 
 /// Matched rule-attempt preparation paired with its consumed-attempt count.
-type WitnessedRuleAttempt<'program, 'once, 'budget, E, W> = (
+type WitnessedRuleAttempt<'program, 'once, 'budget, E> = (
     RuleAttemptCount,
-    WitnessedApplication<'program, 'once, 'budget, E, <W as AttemptRuleWitness<'program>>::Witness>,
+    WitnessedApplication<'program, 'once, 'budget, E, RuleView<'program>>,
 );
 
 impl<'program> RunRuleWitness<'program> for DiscardedRunWitness {
     type Witness = ();
-    type Error = RunStepError;
 
-    fn from_rule(_rule: RuleView<'program>) -> Result<Self::Witness, Self::Error> {
-        Ok(())
-    }
+    fn from_rule(_rule: RuleView<'program>) -> Self::Witness {}
 }
 
 impl<'program> RunRuleWitness<'program> for BorrowedRunWitness {
     type Witness = RuleView<'program>;
-    type Error = RunStepError;
 
-    fn from_rule(rule: RuleView<'program>) -> Result<Self::Witness, Self::Error> {
-        Ok(rule)
-    }
-}
-
-impl<'program> AttemptRuleWitness<'program> for BorrowedAttemptWitness {
-    type Witness = RuleView<'program>;
-    type Error = RuleAttemptStepError;
-
-    fn from_rule(rule: RuleView<'program>) -> Result<Self::Witness, Self::Error> {
-        Ok(rule)
+    fn from_rule(rule: RuleView<'program>) -> Self::Witness {
+        rule
     }
 }
 
@@ -337,15 +285,12 @@ impl<'program, 'once, 'budget, E: ExecutionPolicy, RuleWitness>
 {
     /// Pairs a prepared application with its public rule witness before commit.
     ///
-    /// # Errors
-    ///
-    /// Returns `Error` if witness creation cannot retain the selected rule.
-    fn new<Error>(
+    fn new(
         prepared: PreparedRuleStep<'program, 'once, 'budget, E>,
-        make_witness: impl FnOnce(RuleView<'program>) -> Result<RuleWitness, Error>,
-    ) -> Result<Self, Error> {
-        let witness = make_witness(prepared.rule())?;
-        Ok(Self { prepared, witness })
+        make_witness: impl FnOnce(RuleView<'program>) -> RuleWitness,
+    ) -> Self {
+        let witness = make_witness(prepared.rule());
+        Self { prepared, witness }
     }
 
     /// Commits prepared runtime side effects and publishes the paired witness.
@@ -363,71 +308,57 @@ impl<'program, 'once, 'budget, E: ExecutionPolicy, RuleWitness>
 ///
 /// # Errors
 ///
-/// Returns the selected witness policy's error if runtime preparation or witness
-/// construction fails.
+/// Returns `RunStepError` if runtime preparation fails.
 pub(super) fn prepare_witnessed_run_application<'program, 'once, 'budget, E, W>(
     scratch: &mut RewriteScratch,
     budget: &'budget mut RuntimeBudgetState<E>,
     state_len: RuntimeStateByteCount,
     matched: MatchedRuleApplication<'program, '_, 'once>,
-) -> Result<WitnessedApplication<'program, 'once, 'budget, E, W::Witness>, W::Error>
+) -> Result<WitnessedApplication<'program, 'once, 'budget, E, W::Witness>, RunStepError>
 where
     E: ExecutionPolicy,
     W: RunRuleWitness<'program>,
 {
-    let prepared =
-        prepare_matched_rule(scratch, budget, state_len, matched).map_err(W::Error::from)?;
-    WitnessedApplication::new(prepared, W::from_rule)
+    let prepared = prepare_matched_rule(scratch, budget, state_len, matched)?;
+    Ok(WitnessedApplication::new(prepared, W::from_rule))
 }
 
 /// Advances a borrowed rule-attempt session whose current rule has successors.
-pub(super) fn advance_continuing_borrowed_rule_attempt<'program, P, E, A>(
-    session: ContinuingAttemptSession<'program, P, E, A>,
-) -> CoreContinuingRuleAttemptStep<'program, P, E, A, RuleView<'program>, RuleAttemptStepError>
+pub(super) fn advance_continuing_borrowed_rule_attempt<'program, E, A>(
+    session: ContinuingAttemptSession<'program, E, A>,
+) -> CoreContinuingRuleAttemptStep<'program, E, A>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
     match session {
-        ContinuingAttemptSession::First(session) => {
-            advance_continuing_rule_attempt::<_, _, _, _, BorrowedAttemptWitness>(session)
-        }
-        ContinuingAttemptSession::AfterMiss(session) => {
-            advance_continuing_rule_attempt::<_, _, _, _, BorrowedAttemptWitness>(session)
-        }
+        ContinuingAttemptSession::First(session) => advance_continuing_rule_attempt(session),
+        ContinuingAttemptSession::AfterMiss(session) => advance_continuing_rule_attempt(session),
     }
 }
 
 /// Advances a borrowed rule-attempt session whose current rule exhausts the pass.
-pub(super) fn advance_final_borrowed_rule_attempt<'program, P, E, A>(
-    session: FinalAttemptSession<'program, P, E, A>,
-) -> CoreFinalRuleAttemptStep<'program, P, E, A, RuleView<'program>, RuleAttemptStepError>
+pub(super) fn advance_final_borrowed_rule_attempt<'program, E, A>(
+    session: FinalAttemptSession<'program, E, A>,
+) -> CoreFinalRuleAttemptStep<'program, E, A>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
     match session {
-        FinalAttemptSession::First(session) => {
-            advance_final_rule_attempt::<_, _, _, _, BorrowedAttemptWitness>(session)
-        }
-        FinalAttemptSession::AfterMiss(session) => {
-            advance_final_rule_attempt::<_, _, _, _, BorrowedAttemptWitness>(session)
-        }
+        FinalAttemptSession::First(session) => advance_final_rule_attempt(session),
+        FinalAttemptSession::AfterMiss(session) => advance_final_rule_attempt(session),
     }
 }
 
 /// Advances a rule-attempt step whose selected rule is not final in the pass.
-fn advance_continuing_rule_attempt<'program, P, E, A, Pass, W>(
-    session: AttemptSession<'program, P, E, A, Pass>,
-) -> CoreContinuingRuleAttemptStep<'program, P, E, A, W::Witness, W::Error>
+fn advance_continuing_rule_attempt<'program, E, A, Pass>(
+    session: AttemptSession<'program, E, A, Pass>,
+) -> CoreContinuingRuleAttemptStep<'program, E, A>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
     Pass: ContinuingRuleAttemptPass<'program>,
-    W: AttemptRuleWitness<'program>,
 {
     let AttemptSession {
         program,
@@ -439,19 +370,13 @@ where
         mut scratch,
         mut budget,
         runtime_rules: mut pass,
-        program: _,
     } = core;
 
     let reservation = match attempt_budget.reserve_next_attempt(state.byte_count()) {
         Ok(reservation) => reservation,
         Err(error) => {
             let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
-            return failed_continuing_rule_attempt(
-                program,
-                core,
-                &attempt_budget,
-                <W::Error as From<RuleAttemptStepError>>::from(error),
-            );
+            return failed_continuing_rule_attempt(program, core, &attempt_budget, error);
         }
     };
 
@@ -476,7 +401,7 @@ where
         }
         RuleAttempt::Matched(matched) => {
             let state_len = state.byte_count();
-            let (attempt, witnessed) = match prepare_attempt_application::<_, _, W>(
+            let (attempt, witnessed) = match prepare_attempt_application(
                 &mut scratch,
                 &mut budget,
                 state_len,
@@ -503,15 +428,13 @@ where
 }
 
 /// Advances a rule-attempt step whose selected rule exhausts the pass.
-fn advance_final_rule_attempt<'program, P, E, A, Pass, W>(
-    session: AttemptSession<'program, P, E, A, Pass>,
-) -> CoreFinalRuleAttemptStep<'program, P, E, A, W::Witness, W::Error>
+fn advance_final_rule_attempt<'program, E, A, Pass>(
+    session: AttemptSession<'program, E, A, Pass>,
+) -> CoreFinalRuleAttemptStep<'program, E, A>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
     Pass: FinalRuleAttemptPass<'program>,
-    W: AttemptRuleWitness<'program>,
 {
     let AttemptSession {
         program,
@@ -523,19 +446,13 @@ where
         mut scratch,
         mut budget,
         runtime_rules: mut pass,
-        program: _,
     } = core;
 
     let reservation = match attempt_budget.reserve_next_attempt(state.byte_count()) {
         Ok(reservation) => reservation,
         Err(error) => {
             let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
-            return failed_final_rule_attempt(
-                program,
-                core,
-                &attempt_budget,
-                <W::Error as From<RuleAttemptStepError>>::from(error),
-            );
+            return failed_final_rule_attempt(program, core, &attempt_budget, error);
         }
     };
 
@@ -558,7 +475,7 @@ where
         }
         RuleAttempt::Matched(matched) => {
             let state_len = state.byte_count();
-            let (attempt, witnessed) = match prepare_attempt_application::<_, _, W>(
+            let (attempt, witnessed) = match prepare_attempt_application(
                 &mut scratch,
                 &mut budget,
                 state_len,
@@ -585,14 +502,13 @@ where
 }
 
 /// Reports a continuing-pass rule-attempt failure with the uncommitted runtime state.
-fn failed_continuing_rule_attempt<'program, P, E, A, Pass, RuleWitness, StepError>(
-    program: BorrowedProgram<'program, P>,
-    core: AttemptRunCore<'program, E, Pass>,
+fn failed_continuing_rule_attempt<'program, E, A, Pass>(
+    program: &'program ExecutableProgram,
+    core: AttemptRunCore<E, Pass>,
     attempt_budget: &RuleAttemptBudgetState<A>,
-    error: StepError,
-) -> CoreContinuingRuleAttemptStep<'program, P, E, A, RuleWitness, StepError>
+    error: RuleAttemptStepError,
+) -> CoreContinuingRuleAttemptStep<'program, E, A>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
@@ -607,14 +523,13 @@ where
 }
 
 /// Reports a final-pass rule-attempt failure with the uncommitted runtime state.
-fn failed_final_rule_attempt<'program, P, E, A, Pass, RuleWitness, StepError>(
-    program: BorrowedProgram<'program, P>,
-    core: AttemptRunCore<'program, E, Pass>,
+fn failed_final_rule_attempt<'program, E, A, Pass>(
+    program: &'program ExecutableProgram,
+    core: AttemptRunCore<E, Pass>,
     attempt_budget: &RuleAttemptBudgetState<A>,
-    error: StepError,
-) -> CoreFinalRuleAttemptStep<'program, P, E, A, RuleWitness, StepError>
+    error: RuleAttemptStepError,
+) -> CoreFinalRuleAttemptStep<'program, E, A>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
@@ -629,15 +544,14 @@ where
 }
 
 /// Projects a continuing-pass committed rule application into the next rule-attempt state.
-fn committed_continuing_rule_attempt_application<'program, P, E, A, Pass, RuleWitness, StepError>(
-    program: BorrowedProgram<'program, P>,
-    core: AttemptRunCore<'program, E, Pass>,
+fn committed_continuing_rule_attempt_application<'program, E, A, Pass>(
+    program: &'program ExecutableProgram,
+    core: AttemptRunCore<E, Pass>,
     attempt_budget: RuleAttemptBudgetState<A>,
     attempt: RuleAttemptCount,
-    applied: CoreAppliedRule<'program, RuleWitness>,
-) -> CoreContinuingRuleAttemptStep<'program, P, E, A, RuleWitness, StepError>
+    applied: CoreAppliedRule<'program, RuleView<'program>>,
+) -> CoreContinuingRuleAttemptStep<'program, E, A>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
     Pass: ContinuingRuleAttemptPass<'program>,
@@ -649,7 +563,6 @@ where
                 scratch,
                 budget,
                 runtime_rules,
-                program: _,
             } = core;
             let continuation = session_start_from_started_pass(
                 program,
@@ -686,15 +599,14 @@ where
 }
 
 /// Projects a final-pass committed rule application into the next rule-attempt state.
-fn committed_final_rule_attempt_application<'program, P, E, A, Pass, RuleWitness, StepError>(
-    program: BorrowedProgram<'program, P>,
-    core: AttemptRunCore<'program, E, Pass>,
+fn committed_final_rule_attempt_application<'program, E, A, Pass>(
+    program: &'program ExecutableProgram,
+    core: AttemptRunCore<E, Pass>,
     attempt_budget: RuleAttemptBudgetState<A>,
     attempt: RuleAttemptCount,
-    applied: CoreAppliedRule<'program, RuleWitness>,
-) -> CoreFinalRuleAttemptStep<'program, P, E, A, RuleWitness, StepError>
+    applied: CoreAppliedRule<'program, RuleView<'program>>,
+) -> CoreFinalRuleAttemptStep<'program, E, A>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
     Pass: FinalRuleAttemptPass<'program>,
@@ -706,7 +618,6 @@ where
                 scratch,
                 budget,
                 runtime_rules,
-                program: _,
             } = core;
             let continuation = session_start_from_started_pass(
                 program,
@@ -743,16 +654,15 @@ where
 }
 
 /// Rebuilds a typed continuation session from a reset or newly started pass.
-fn session_start_from_started_pass<'program, P, E, A>(
-    program: BorrowedProgram<'program, P>,
+fn session_start_from_started_pass<'program, E, A>(
+    program: &'program ExecutableProgram,
     state: State,
     scratch: RewriteScratch,
     budget: RuntimeBudgetState<E>,
     runtime_rules: StartedRuntimeRulePass<'program>,
     attempt_budget: RuleAttemptBudgetState<A>,
-) -> AttemptSessionCursor<'program, P, E, A>
+) -> AttemptSessionCursor<'program, E, A>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
@@ -775,16 +685,15 @@ where
 }
 
 /// Rebuilds a typed continuation session after a committed miss.
-fn session_start_from_after_miss_pass<'program, P, E, A>(
-    program: BorrowedProgram<'program, P>,
+fn session_start_from_after_miss_pass<'program, E, A>(
+    program: &'program ExecutableProgram,
     state: State,
     scratch: RewriteScratch,
     budget: RuntimeBudgetState<E>,
     runtime_rules: AfterMissRuntimeRulePass<'program>,
     attempt_budget: RuleAttemptBudgetState<A>,
-) -> AttemptSessionCursor<'program, P, E, A>
+) -> AttemptSessionCursor<'program, E, A>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
@@ -819,22 +728,20 @@ fn public_rule_miss<'program>(miss: RuleAttemptMiss<'program>) -> RuleMiss<'prog
 ///
 /// # Errors
 ///
-/// Returns the selected witness policy's error if step preparation or
-/// rule-witness materialization fails.
-fn prepare_attempt_application<'program, 'once, 'budget, E, A, W>(
+/// Returns `RuleAttemptStepError` if step preparation fails.
+fn prepare_attempt_application<'program, 'once, 'budget, E, A>(
     scratch: &mut RewriteScratch,
     budget: &'budget mut RuntimeBudgetState<E>,
     state_len: RuntimeStateByteCount,
     attempt_reservation: RuleAttemptReservation<'_, A>,
     matched: MatchedRuleApplication<'program, '_, 'once>,
-) -> Result<WitnessedRuleAttempt<'program, 'once, 'budget, E, W>, W::Error>
+) -> Result<WitnessedRuleAttempt<'program, 'once, 'budget, E>, RuleAttemptStepError>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
-    W: AttemptRuleWitness<'program>,
 {
     let prepared = prepare_matched_rule(scratch, budget, state_len, matched)?;
-    let witnessed = WitnessedApplication::new(prepared, W::from_rule)?;
+    let witnessed = WitnessedApplication::new(prepared, |rule| rule);
     let attempt = attempt_reservation.commit();
     Ok((attempt, witnessed))
 }

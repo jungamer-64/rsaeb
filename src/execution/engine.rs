@@ -2,12 +2,13 @@ use crate::error::{RunError, RunFinishError, RunStartError, TracedRunError};
 use crate::input::AdmittedRun;
 use crate::inspect::RuleView;
 use crate::limits::{RuleAttemptCount, StepCount};
-use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
+use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, ReturnOutput, ReturnOutputView, RunResult};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
 use crate::runtime::once::{
     AfterMissContinuingRulePass, AfterMissFinalRulePass, FirstContinuingRulePass,
-    FirstFinalRulePass, RuntimeRuleSearch, RuntimeRuleTable, StartedRuntimeRulePass,
+    FirstFinalRulePass, RuntimeRulePassState, RuntimeRuleSearch, RuntimeRuleTable,
+    StartedRuntimeRulePass,
 };
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
@@ -33,7 +34,7 @@ pub(super) struct ActiveRunCore<'program, E: ExecutionPolicy> {
 
 /// Active mutable rule-attempt runtime state tied to one pass shape.
 #[derive(Debug)]
-pub(super) struct AttemptRunCore<'program, E: ExecutionPolicy, Pass> {
+pub(super) struct AttemptRunCore<E: ExecutionPolicy, Pass> {
     /// Current runtime byte state.
     pub(super) state: State,
     /// Reusable buffer for candidate rewrites.
@@ -42,8 +43,6 @@ pub(super) struct AttemptRunCore<'program, E: ExecutionPolicy, Pass> {
     pub(super) budget: RuntimeBudgetState<E>,
     /// Rule-attempt pass that owns current target and remaining scan state.
     pub(super) runtime_rules: Pass,
-    /// Compile-time link between this pass and the parsed program lifetime.
-    pub(super) program: core::marker::PhantomData<&'program ()>,
 }
 
 /// Terminal runtime state after active execution can no longer resume.
@@ -56,17 +55,17 @@ pub(super) struct TerminalRunCore {
 }
 
 /// Runtime session that borrows one executable program.
-pub(super) struct Session<'program, P: ParsePolicy, E: ExecutionPolicy> {
+pub(super) struct Session<'program, E: ExecutionPolicy> {
     /// Borrowed parsed program.
-    pub(super) program: BorrowedProgram<'program, P>,
+    pub(super) program: &'program ExecutableProgram,
     /// Mutable execution state.
     pub(super) core: ActiveRunCore<'program, E>,
 }
 
 /// Terminal ordinary run session that cannot resume execution.
-pub(super) struct TerminalSession<'program, P: ParsePolicy> {
+pub(super) struct TerminalSession<'program> {
     /// Borrowed parsed program.
-    pub(super) program: BorrowedProgram<'program, P>,
+    pub(super) program: &'program ExecutableProgram,
     /// Terminal runtime state retained for observation.
     pub(super) core: TerminalRunCore,
 }
@@ -74,79 +73,55 @@ pub(super) struct TerminalSession<'program, P: ParsePolicy> {
 /// Runtime rule-attempt session parameterized by its current pass shape.
 pub(super) struct AttemptSession<
     'program,
-    P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
-    Pass,
+    Pass: RuntimeRulePassState<'program>,
 > {
     /// Borrowed parsed program.
-    pub(super) program: BorrowedProgram<'program, P>,
+    pub(super) program: &'program ExecutableProgram,
     /// Mutable execution state.
-    pub(super) core: AttemptRunCore<'program, E, Pass>,
+    pub(super) core: AttemptRunCore<E, Pass>,
     /// Rule-attempt budget and consumed-attempt count.
     pub(super) attempt_budget: RuleAttemptBudgetState<A>,
 }
 
 /// Newly started rule-attempt session classified by pass shape.
-pub(super) enum AttemptSessionCursor<
-    'program,
-    P: ParsePolicy,
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-> {
+pub(super) enum AttemptSessionCursor<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     /// Started with a current rule that has successors.
-    Continuing(ContinuingAttemptSession<'program, P, E, A>),
+    Continuing(ContinuingAttemptSession<'program, E, A>),
     /// Started with the final rule in the pass.
-    Final(FinalAttemptSession<'program, P, E, A>),
+    Final(FinalAttemptSession<'program, E, A>),
 }
 
 /// Continuing rule-attempt session classified by miss history.
-pub(super) enum ContinuingAttemptSession<
-    'program,
-    P: ParsePolicy,
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-> {
+pub(super) enum ContinuingAttemptSession<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     /// Continuing pass that has not missed any earlier rule in this scan.
-    First(AttemptSession<'program, P, E, A, FirstContinuingRulePass<'program>>),
+    First(AttemptSession<'program, E, A, FirstContinuingRulePass<'program>>),
     /// Continuing pass after at least one miss.
-    AfterMiss(AttemptSession<'program, P, E, A, AfterMissContinuingRulePass<'program>>),
+    AfterMiss(AttemptSession<'program, E, A, AfterMissContinuingRulePass<'program>>),
 }
 
 /// Final rule-attempt session classified by miss history.
-pub(super) enum FinalAttemptSession<
-    'program,
-    P: ParsePolicy,
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-> {
+pub(super) enum FinalAttemptSession<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     /// Final pass that has not missed any earlier rule in this scan.
-    First(AttemptSession<'program, P, E, A, FirstFinalRulePass<'program>>),
+    First(AttemptSession<'program, E, A, FirstFinalRulePass<'program>>),
     /// Final pass after at least one miss.
-    AfterMiss(AttemptSession<'program, P, E, A, AfterMissFinalRulePass<'program>>),
+    AfterMiss(AttemptSession<'program, E, A, AfterMissFinalRulePass<'program>>),
 }
 
 /// Terminal rule-attempt state after the cursor can no longer resume.
-pub(super) struct TerminalAttemptSession<'program, P: ParsePolicy> {
+pub(super) struct TerminalAttemptSession<'program> {
     /// Borrowed parsed program.
-    pub(super) program: BorrowedProgram<'program, P>,
+    pub(super) program: &'program ExecutableProgram,
     /// Terminal runtime state retained for observation.
     pub(super) core: TerminalRunCore,
     /// Rule attempts consumed before terminal state.
     pub(super) attempts: RuleAttemptCount,
 }
 
-/// Borrowed program owner for run-to-completion and tracing.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct BorrowedProgram<'program, P: ParsePolicy> {
-    /// Parsed program borrowed by this run.
-    pub(super) program: &'program ExecutableProgram<P>,
-}
-
 /// Result of consuming one active ordinary run session.
-pub(super) enum CoreRunTransition<'program, P, E, RuleWitness, StepError>
+pub(super) enum CoreRunTransition<'program, E, RuleWitness, StepError>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
 {
     /// One rewrite rule committed and execution can continue.
@@ -156,7 +131,7 @@ where
         /// Rule witness paired with the committed rewrite.
         rule: RuleWitness,
         /// Continuation session after the committed rewrite.
-        continuation: Session<'program, P, E>,
+        continuation: Session<'program, E>,
     },
     /// One return rule committed and the run is terminal.
     Returned {
@@ -169,19 +144,19 @@ where
         /// Materialized return output.
         output: ReturnOutput,
         /// Terminal run session.
-        terminal: TerminalSession<'program, P>,
+        terminal: TerminalSession<'program>,
     },
     /// No rule matched the current runtime state.
     Stable {
         /// Terminal run session.
-        terminal: TerminalSession<'program, P>,
+        terminal: TerminalSession<'program>,
     },
     /// A candidate step failed before committing runtime state.
     Failed {
         /// Error that prevented commit.
         error: StepError,
         /// Terminal run session preserving uncommitted state.
-        terminal: TerminalSession<'program, P>,
+        terminal: TerminalSession<'program>,
     },
 }
 
@@ -191,8 +166,8 @@ impl<'program, E: ExecutionPolicy> ActiveRunCore<'program, E> {
     /// # Errors
     ///
     /// Returns `RunStartError` if per-run rule state allocation fails.
-    fn new<P: ParsePolicy>(
-        program: &'program ExecutableProgram<P>,
+    fn new(
+        program: &'program ExecutableProgram,
         admitted: AdmittedRun<E>,
     ) -> Result<Self, RunStartError> {
         let (input, budget) = admitted.into_runtime_parts();
@@ -217,7 +192,7 @@ impl<'program, E: ExecutionPolicy> ActiveRunCore<'program, E> {
     }
 }
 
-impl<'program, E: ExecutionPolicy, Pass> AttemptRunCore<'program, E, Pass> {
+impl<E: ExecutionPolicy, Pass> AttemptRunCore<E, Pass> {
     /// Builds the mutable rule-attempt runtime core from a typed pass.
     fn new(runtime_rules: Pass, admitted: AdmittedRun<E>) -> Self {
         let (input, budget) = admitted.into_runtime_parts();
@@ -227,7 +202,6 @@ impl<'program, E: ExecutionPolicy, Pass> AttemptRunCore<'program, E, Pass> {
             scratch: RewriteScratch::new(),
             budget,
             runtime_rules,
-            program: core::marker::PhantomData,
         }
     }
 
@@ -243,7 +217,6 @@ impl<'program, E: ExecutionPolicy, Pass> AttemptRunCore<'program, E, Pass> {
             scratch,
             budget,
             runtime_rules,
-            program: core::marker::PhantomData,
         }
     }
 
@@ -292,23 +265,23 @@ impl TerminalRunCore {
     }
 }
 
-impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<'program, P, E> {
+impl<'program, E: ExecutionPolicy> Session<'program, E> {
     /// Starts a new run session for a parsed program and admitted run witness.
     ///
     /// # Errors
     ///
     /// Returns `RunStartError` if allocating per-run rule state fails.
     pub(super) fn new(
-        program: BorrowedProgram<'program, P>,
+        program: &'program ExecutableProgram,
         admitted: AdmittedRun<E>,
     ) -> Result<Self, RunStartError> {
-        let core = ActiveRunCore::new(program.program, admitted)?;
+        let core = ActiveRunCore::new(program, admitted)?;
         Ok(Self { program, core })
     }
 
     /// Borrows the parsed program.
-    pub(super) const fn program(&self) -> &'program ExecutableProgram<P> {
-        self.program.program
+    pub(super) const fn program(&self) -> &'program ExecutableProgram {
+        self.program
     }
 
     /// Number of execution steps that have already completed in this run.
@@ -332,7 +305,7 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<'program, P, E> {
     /// uncommitted runtime state.
     pub(super) fn advance_run_step<W>(
         self,
-    ) -> CoreRunTransition<'program, P, E, W::Witness, W::Error>
+    ) -> CoreRunTransition<'program, E, W::Witness, crate::error::RunStepError>
     where
         W: RunRuleWitness<'program>,
     {
@@ -447,8 +420,8 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<'program, P, E> {
     }
 }
 
-impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy, Pass>
-    AttemptSession<'program, P, E, A, Pass>
+impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy, Pass: RuntimeRulePassState<'program>>
+    AttemptSession<'program, E, A, Pass>
 {
     /// Starts active rule-attempt execution from a typed pass.
     ///
@@ -456,7 +429,7 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy, Pass>
     ///
     /// Returns `RunStartError` if admitted runtime state cannot be initialized.
     fn from_pass(
-        program: BorrowedProgram<'program, P>,
+        program: &'program ExecutableProgram,
         admitted: AdmittedRun<E>,
         pass: Pass,
     ) -> Self {
@@ -483,31 +456,28 @@ impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy, Pass>
     }
 }
 
-impl<'program, P: ParsePolicy, E: ExecutionPolicy, A: RuleAttemptPolicy>
-    AttemptSessionCursor<'program, P, E, A>
-{
+impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> AttemptSessionCursor<'program, E, A> {
     /// Starts active rule-attempt execution from an executable program witness.
     ///
     /// # Errors
     ///
     /// Returns `RunStartError` if allocating per-run rule-attempt state fails.
     pub(super) fn new(
-        program: BorrowedProgram<'program, P>,
+        program: &'program ExecutableProgram,
         admitted: AdmittedRun<E>,
     ) -> Result<Self, RunStartError> {
-        let runtime_rules = StartedRuntimeRulePass::from_program(program.program)?;
+        let runtime_rules = StartedRuntimeRulePass::from_program(program)?;
         Ok(started_session_from_pass(program, admitted, runtime_rules))
     }
 }
 
 /// Builds the private session classifier for a newly started rule-attempt pass.
-fn started_session_from_pass<'program, P, E, A>(
-    program: BorrowedProgram<'program, P>,
+fn started_session_from_pass<'program, E, A>(
+    program: &'program ExecutableProgram,
     admitted: AdmittedRun<E>,
     runtime_rules: StartedRuntimeRulePass<'program>,
-) -> AttemptSessionCursor<'program, P, E, A>
+) -> AttemptSessionCursor<'program, E, A>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
@@ -521,7 +491,7 @@ where
     }
 }
 
-impl<'program, P: ParsePolicy, E: ExecutionPolicy> Session<'program, P, E> {
+impl<'program, E: ExecutionPolicy> Session<'program, E> {
     /// Runs to completion while emitting borrowed trace events.
     ///
     /// # Errors

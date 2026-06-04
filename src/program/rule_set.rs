@@ -209,11 +209,6 @@ impl ExecutableRuleSet {
 }
 
 impl<'program> PositionedRule<'program> {
-    /// Topology-derived execution-order position.
-    pub(crate) const fn position(self) -> RulePosition {
-        self.position
-    }
-
     /// Positionless executable rule.
     pub(crate) const fn rule(self) -> &'program Rule {
         self.rule
@@ -262,5 +257,12 @@ impl<'program> Iterator for RuleScanIter<'program> {
         let position = RulePosition::from_zero_based(self.next_zero_based);
         self.next_zero_based = self.next_zero_based.saturating_add(1);
         Some(PositionedRule { position, rule })
+    }
+}
+
+impl ExactSizeIterator for RuleScanIter<'_> {
+    fn len(&self) -> usize {
+        let first_len = if self.first.is_some() { 1 } else { 0 };
+        self.remaining.len().saturating_add(first_len)
     }
 }

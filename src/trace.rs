@@ -98,10 +98,10 @@ use crate::error::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
 use crate::input::AdmittedRun;
 use crate::inspect::RuleView;
 use crate::limits::{StepCount, TraceSnapshotByteLimit};
-use crate::policy::{ExecutionPolicy, ParsePolicy, TraceSnapshotPolicy};
+use crate::policy::{ExecutionPolicy, TraceSnapshotPolicy};
 use crate::program::limits::TraceSnapshotBytePermit;
 use crate::program::{
-    ExecutableProgramRef, ReturnOutput, ReturnOutputView, RunResult, RuntimeStateSnapshot,
+    ExecutableProgram, ReturnOutput, ReturnOutputView, RunResult, RuntimeStateSnapshot,
 };
 use alloc::vec::Vec;
 
@@ -131,9 +131,7 @@ pub struct SnapshotTrace<T: TraceSnapshotPolicy, F> {
 ///
 /// Implementations exist only for crate-defined request wrappers, so callers
 /// choose borrowed or snapshot tracing by type instead of by a runtime selector.
-pub trait TraceRequest<'program, P: ParsePolicy, E: ExecutionPolicy>:
-    request_sealed::Sealed
-{
+pub trait TraceRequest<'program, E: ExecutionPolicy>: request_sealed::Sealed {
     /// Error type produced by this request.
     type Error;
 
@@ -145,7 +143,7 @@ pub trait TraceRequest<'program, P: ParsePolicy, E: ExecutionPolicy>:
     /// materialization, or the user callback fails.
     fn trace(
         self,
-        executable: ExecutableProgramRef<'program, P>,
+        executable: &'program ExecutableProgram,
         admitted: AdmittedRun<E>,
     ) -> Result<RunResult, Self::Error>;
 }
@@ -187,9 +185,8 @@ impl<F> request_sealed::Sealed for BorrowedTrace<F> {}
 
 impl<T: TraceSnapshotPolicy, F> request_sealed::Sealed for SnapshotTrace<T, F> {}
 
-impl<'program, P, E, F, TraceError> TraceRequest<'program, P, E> for BorrowedTrace<F>
+impl<'program, E, F, TraceError> TraceRequest<'program, E> for BorrowedTrace<F>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
     F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), TraceError>,
 {
@@ -197,16 +194,15 @@ where
 
     fn trace(
         self,
-        executable: ExecutableProgramRef<'program, P>,
+        executable: &'program ExecutableProgram,
         admitted: AdmittedRun<E>,
     ) -> Result<RunResult, Self::Error> {
         crate::execution::trace_events(executable, admitted, self.callback)
     }
 }
 
-impl<'program, P, E, T, F, TraceError> TraceRequest<'program, P, E> for SnapshotTrace<T, F>
+impl<'program, E, T, F, TraceError> TraceRequest<'program, E> for SnapshotTrace<T, F>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
     T: TraceSnapshotPolicy,
     F: FnMut(TraceSnapshotEvent<'program>) -> Result<(), TraceError>,
@@ -215,7 +211,7 @@ where
 
     fn trace(
         self,
-        executable: ExecutableProgramRef<'program, P>,
+        executable: &'program ExecutableProgram,
         admitted: AdmittedRun<E>,
     ) -> Result<RunResult, Self::Error> {
         let Self {
