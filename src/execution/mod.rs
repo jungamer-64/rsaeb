@@ -2,7 +2,8 @@
 //!
 //! Run-to-completion, tracing, stepwise, and rule-attempt execution start only
 //! from [`ExecutableProgram`](crate::program::ExecutableProgram), which is
-//! produced by [`ExecutableProgram::parse`](crate::program::ExecutableProgram::parse).
+//! produced by target-shape parse entrypoints such as
+//! [`ExecutableProgram::parse_text`](crate::program::ExecutableProgram::parse_text).
 //!
 //! A step transition is a typestate value, not a status flag. Applied steps
 //! carry the continuation session. Stable and returned states are terminal.
@@ -22,12 +23,11 @@
 //! use rsaeb::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy};
 //! use rsaeb::program::ExecutableProgram;
-//! use rsaeb::source::ExecutableProgramSource;
 //!
 //! type TinyState = StaticExecutionPolicy<10, 1, 16_777_216>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse(ExecutableProgramSource::from_text("a=aaaa"))?;
+//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text("a=aaaa")?;
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
 //! let session = executable.steps(input.admit::<TinyState>()?)?;
 //!

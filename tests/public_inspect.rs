@@ -5,7 +5,6 @@ mod support;
 use rsaeb::inspect::{OnceRuleCount, RewriteActionView, RuleAnchor, RuleView};
 use rsaeb::policy::DefaultParsePolicy;
 use rsaeb::program::ExecutableProgram;
-use rsaeb::source::ExecutableProgramSource;
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// # Errors
@@ -177,9 +176,7 @@ fn inspect_canonical_source_reparses_to_same_public_rule_view() -> TestResult {
         .ok_or(TestFailure::message("expected parsed rule"))?;
     let canonical = rule.canonical_source()?;
 
-    let reparsed = ExecutableProgram::<DefaultParsePolicy>::parse(
-        ExecutableProgramSource::from_bytes(canonical.as_slice()),
-    )?;
+    let reparsed = ExecutableProgram::<DefaultParsePolicy>::parse_bytes(canonical.as_slice())?;
     let reparsed_rule = reparsed
         .rules()
         .next()

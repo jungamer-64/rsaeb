@@ -15,7 +15,6 @@ use rsaeb::limits::{
 };
 use rsaeb::policy::{DefaultParsePolicy, ExecutionPolicy, ParsePolicy, StaticParsePolicy};
 use rsaeb::program::{ExecutableProgram, RunResult};
-use rsaeb::source::ExecutableProgramSource;
 use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
@@ -144,7 +143,7 @@ fn ensure_step_limit_run<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolic
 /// Returns `TestFailure` if parsing succeeds or reports another error domain.
 fn ensure_parse_limit_error<P: ParsePolicy>(case: ParseLimitCase) -> TestResult {
     let Err(ExecutableProgramParseError::Parse(error)) =
-        ExecutableProgram::<P>::parse(ExecutableProgramSource::from_text(case.source))
+        ExecutableProgram::<P>::parse_text(case.source)
     else {
         return Err(TestFailure::message(case.message));
     };

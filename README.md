@@ -38,10 +38,9 @@ admit it into one execution under an execution policy, then run:
 use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
 use rsaeb::program::{ExecutableProgram, RunOutcome};
-use rsaeb::source::ExecutableProgramSource;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let executable = ExecutableProgram::<DefaultParsePolicy>::parse(ExecutableProgramSource::from_text("a=b"))?;
+    let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text("a=b")?;
     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
     let admitted = input.admit::<DefaultExecutionPolicy>()?;
     let result = executable.execute(admitted)?;
@@ -57,10 +56,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`ExecutableProgramSource` and `EmptyProgramSource` label source input by the
-program shape the host expects; `ExecutableProgram::parse` and
-`EmptyProgram::parse` perform source validation and reject content that does not
-match that expected shape at the parse boundary.
+`ExecutableProgram::parse_text` / `parse_bytes` and
+`EmptyProgram::parse_text` / `parse_bytes` are the public source boundaries.
+The target program type selects the expected shape, while parsing validates
+syntax and rejects content that does not match that shape.
 `RuntimeInputSource` and `RuntimeInput::validate` do the same for runtime input
 bytes. Reuse parsed executable programs freely: an `ExecutableProgram` is
 immutable, and `(once)` consumption is local to each execution. Runtime state
@@ -72,9 +71,8 @@ become a parser-assigned lookup failure.
 The normal host flow is:
 
 1. Load source bytes or text outside the interpreter.
-2. Construct `ExecutableProgramSource` or `EmptyProgramSource`.
-3. Parse with the matching `ExecutableProgram::parse` or
-   `EmptyProgram::parse`.
+2. Parse with `ExecutableProgram::parse_text` / `parse_bytes` or
+   `EmptyProgram::parse_text` / `parse_bytes`.
 4. Label host input bytes with `RuntimeInputSource::from_bytes`.
 5. Validate with `RuntimeInput::validate`.
 6. Admit with `RuntimeInput::admit::<E>()` under an `ExecutionPolicy`.
@@ -125,10 +123,9 @@ a b = b b  # this is parsed as ab=bb
 ```
 
 Comments may contain arbitrary non-ASCII or non-UTF-8 bytes when source is
-provided with `ExecutableProgramSource::from_bytes` or
-`EmptyProgramSource::from_bytes`. Executable code outside comments must be
-ASCII. ASCII control bytes are invalid in executable code except for ASCII
-whitespace that is removed during compaction.
+provided through `parse_bytes`. Executable code outside comments must be ASCII.
+ASCII control bytes are invalid in executable code except for ASCII whitespace
+that is removed during compaction.
 
 Parse error columns are one-based byte positions in the original source line
 before whitespace compaction. Diagnostics point at the user's source text, not
@@ -414,8 +411,8 @@ reported through `TraceSnapshotError`, because snapshot materialization is
 outside runtime execution.
 
 Filesystem failures are not part of the library error model. External I/O must
-be handled before bytes enter `ExecutableProgramSource`,
-`EmptyProgramSource`, or `RuntimeInputSource::from_bytes`.
+be handled before bytes enter `parse_bytes`, `parse_text`, or
+`RuntimeInputSource::from_bytes`.
 
 ## Development Checks
 

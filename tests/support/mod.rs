@@ -10,7 +10,6 @@ use rsaeb::error::{
 };
 use rsaeb::policy::DefaultParsePolicy;
 use rsaeb::program::ExecutableProgram;
-use rsaeb::source::ExecutableProgramSource;
 
 pub enum TestFailure {
     Message(String),
@@ -157,7 +156,7 @@ pub type TestResult = Result<(), TestFailure>;
 pub fn parse_program(
     source: &str,
 ) -> Result<ExecutableProgram<DefaultParsePolicy>, ExecutableProgramParseError> {
-    ExecutableProgram::parse(ExecutableProgramSource::from_text(source))
+    ExecutableProgram::parse_text(source)
 }
 
 /// Converts a pattern-match assertion into the shared test result type.

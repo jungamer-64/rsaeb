@@ -10,7 +10,6 @@ use rsaeb::policy::{
     StaticExecutionPolicy, StaticRuntimeInputPolicy,
 };
 use rsaeb::program::{EmptyProgram, ExecutableProgram, RunOutcome, RunResult};
-use rsaeb::source::{EmptyProgramSource, ExecutableProgramSource};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
 /// Returns stable output bytes when they match `expected`.
@@ -91,8 +90,7 @@ fn runtime_input_moves_owned_bytes_into_execution() -> TestResult {
 /// explicit default names.
 #[test]
 fn domain_default_policies_support_explicit_names() -> TestResult {
-    let explicit_program =
-        ExecutableProgram::<DefaultParsePolicy>::parse(ExecutableProgramSource::from_text("a=b"))?;
+    let explicit_program = ExecutableProgram::<DefaultParsePolicy>::parse_text("a=b")?;
 
     let explicit_input =
         RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
@@ -112,9 +110,7 @@ fn domain_default_policies_support_explicit_names() -> TestResult {
 #[test]
 fn runtime_input_validates_ascii_boundary() -> TestResult {
     let input: Vec<u8> = (0x00..=0x7f).collect();
-    let program = EmptyProgram::<DefaultParsePolicy>::parse(EmptyProgramSource::from_text(
-        "# no executable rules",
-    ))?;
+    let program = EmptyProgram::<DefaultParsePolicy>::parse_text("# no executable rules")?;
     let runtime_input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(
         RuntimeInputSource::from_bytes(&input),
     )?;

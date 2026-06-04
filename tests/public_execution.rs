@@ -18,7 +18,6 @@ use rsaeb::policy::{
     DefaultParsePolicy, ExecutionPolicy, ParsePolicy, RuleAttemptPolicy, StaticRuleAttemptPolicy,
 };
 use rsaeb::program::{EmptyProgram, ExecutableProgram, RunOutcome, RunResult};
-use rsaeb::source::EmptyProgramSource;
 use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
@@ -733,24 +732,18 @@ fn execution_rule_attempt_start_and_final_miss_are_typed() -> TestResult {
             return Err(TestFailure::message("expected immediate stable terminal"));
         }
     }
-    let empty_program = EmptyProgram::<DefaultParsePolicy>::parse(EmptyProgramSource::from_text(
-        "# no executable rules",
-    ))?;
+    let empty_program = EmptyProgram::<DefaultParsePolicy>::parse_text("# no executable rules")?;
     ensure_eq!(empty_program.rule_count().get(), 0)?;
     let borrowed_empty_result = empty_program.stabilize(runtime_input(b"empty", limits)?)?;
     expect_stable_bytes(&borrowed_empty_result, b"empty")?;
     ensure_eq!(borrowed_empty_result.steps().get(), 0)?;
 
-    let owned_empty = EmptyProgram::<DefaultParsePolicy>::parse(EmptyProgramSource::from_text(
-        "# no executable rules",
-    ))?;
+    let owned_empty = EmptyProgram::<DefaultParsePolicy>::parse_text("# no executable rules")?;
     let owned_empty_result = owned_empty.stabilize(runtime_input(b"owned", limits)?)?;
     expect_stable_bytes(&owned_empty_result, b"owned")?;
     ensure_eq!(owned_empty_result.steps().get(), 0)?;
 
-    let owned_empty = EmptyProgram::<DefaultParsePolicy>::parse(EmptyProgramSource::from_text(
-        "# no executable rules",
-    ))?;
+    let owned_empty = EmptyProgram::<DefaultParsePolicy>::parse_text("# no executable rules")?;
     ensure_eq!(owned_empty.rule_count().get(), 0)
 }
 

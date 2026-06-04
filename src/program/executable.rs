@@ -10,6 +10,7 @@ use crate::limits::StepCount;
 use crate::parser::parse_rules_impl;
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
 use crate::runtime::state::State;
+use crate::source::RawProgramSource;
 use crate::trace::TraceRequest;
 
 use super::{ExecutableRuleSet, RuleScan, RuleSetShape, RunResult};
@@ -46,6 +47,45 @@ pub struct ExecutableProgramRef<'program, P: ParsePolicy> {
 }
 
 impl<P: ParsePolicy> EmptyProgram<P> {
+    /// Parses source bytes that must contain no executable rules.
+    ///
+    /// The empty-program target type is the public shape selection. Source bytes
+    /// are not wrapped in a separate expected-shape marker; syntax validation
+    /// and executable-rule rejection happen in this parse boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns `EmptyProgramParseError` when parsing fails or when the parsed
+    /// source contains executable rules.
+    pub fn parse_bytes(source: &[u8]) -> Result<Self, EmptyProgramParseError> {
+        Self::parse_raw(RawProgramSource::from_bytes(source))
+    }
+
+    /// Parses UTF-8 source text that must contain no executable rules.
+    ///
+    /// # Errors
+    ///
+    /// Returns `EmptyProgramParseError` when parsing fails or when the parsed
+    /// source contains executable rules.
+    pub fn parse_text(source: &str) -> Result<Self, EmptyProgramParseError> {
+        Self::parse_raw(RawProgramSource::from_text(source))
+    }
+
+    /// Parses raw source into the empty-program target type.
+    ///
+    /// # Errors
+    ///
+    /// Returns `EmptyProgramParseError` when parsing fails or when executable
+    /// rules are present.
+    fn parse_raw(source: RawProgramSource<'_>) -> Result<Self, EmptyProgramParseError> {
+        match parse_rules_impl::<P>(source)?.into_shape() {
+            RuleSetShape::Empty => Ok(Self::new()),
+            RuleSetShape::Executable(rule_set) => Err(EmptyProgramParseError::ExecutableRules {
+                rule_count: rule_set.rule_count(),
+            }),
+        }
+    }
+
     /// Builds a typed empty-program value.
     const fn new() -> Self {
         Self {
@@ -95,6 +135,44 @@ impl<P: ParsePolicy> fmt::Debug for EmptyProgram<P> {
 }
 
 impl<P: ParsePolicy> ExecutableProgram<P> {
+    /// Parses source bytes that must contain at least one executable rule.
+    ///
+    /// The executable-program target type is the public shape selection. Source
+    /// bytes are not wrapped in a separate expected-shape marker; syntax
+    /// validation and non-empty executable-rule proof happen in this parse
+    /// boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ExecutableProgramParseError` when parsing fails or when the
+    /// parsed source contains no executable rules.
+    pub fn parse_bytes(source: &[u8]) -> Result<Self, ExecutableProgramParseError> {
+        Self::parse_raw(RawProgramSource::from_bytes(source))
+    }
+
+    /// Parses UTF-8 source text that must contain at least one executable rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ExecutableProgramParseError` when parsing fails or when the
+    /// parsed source contains no executable rules.
+    pub fn parse_text(source: &str) -> Result<Self, ExecutableProgramParseError> {
+        Self::parse_raw(RawProgramSource::from_text(source))
+    }
+
+    /// Parses raw source into the executable-program target type.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ExecutableProgramParseError` when parsing fails or when no
+    /// executable rules are present.
+    fn parse_raw(source: RawProgramSource<'_>) -> Result<Self, ExecutableProgramParseError> {
+        match parse_rules_impl::<P>(source)?.into_shape() {
+            RuleSetShape::Empty => Err(ExecutableProgramParseError::NoExecutableRules),
+            RuleSetShape::Executable(rule_set) => Ok(Self::from_rule_set(rule_set)),
+        }
+    }
+
     /// Wraps a parser-built non-empty rule set as an executable program.
     fn from_rule_set(rule_set: ExecutableRuleSet) -> Self {
         Self {

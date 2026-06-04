@@ -60,9 +60,9 @@ impl fmt::Display for CodeLineByteCount {
     }
 }
 
-/// Maximum source length accepted by
-/// [`program::ExecutableProgram::parse`](crate::program::ExecutableProgram::parse)
-/// and [`program::EmptyProgram::parse`](crate::program::EmptyProgram::parse).
+/// Maximum source length accepted by target-shape parse entrypoints such as
+/// [`program::ExecutableProgram::parse_text`](crate::program::ExecutableProgram::parse_text)
+/// and [`program::EmptyProgram::parse_text`](crate::program::EmptyProgram::parse_text).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceByteLimit {
     /// Maximum accepted source byte length.
@@ -96,9 +96,9 @@ impl SourceByteLimit {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SourceBytePermit;
 
-/// Maximum executable code-line length accepted by
-/// [`program::ExecutableProgram::parse`](crate::program::ExecutableProgram::parse)
-/// and [`program::EmptyProgram::parse`](crate::program::EmptyProgram::parse).
+/// Maximum executable code-line length accepted by target-shape parse entrypoints such as
+/// [`program::ExecutableProgram::parse_text`](crate::program::ExecutableProgram::parse_text)
+/// and [`program::EmptyProgram::parse_text`](crate::program::EmptyProgram::parse_text).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CodeLineByteLimit {
     /// Maximum accepted executable code-line byte length.
@@ -135,9 +135,9 @@ impl CodeLineByteLimit {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CodeLineBytePermit;
 
-/// Maximum parsed payload length accepted by
-/// [`program::ExecutableProgram::parse`](crate::program::ExecutableProgram::parse)
-/// and [`program::EmptyProgram::parse`](crate::program::EmptyProgram::parse).
+/// Maximum parsed payload length accepted by target-shape parse entrypoints such as
+/// [`program::ExecutableProgram::parse_text`](crate::program::ExecutableProgram::parse_text)
+/// and [`program::EmptyProgram::parse_text`](crate::program::EmptyProgram::parse_text).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PayloadByteLimit {
     /// Maximum accepted executable payload byte length.
@@ -171,9 +171,9 @@ impl PayloadByteLimit {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PayloadBytePermit;
 
-/// Maximum executable rule count accepted by
-/// [`program::ExecutableProgram::parse`](crate::program::ExecutableProgram::parse)
-/// and [`program::EmptyProgram::parse`](crate::program::EmptyProgram::parse).
+/// Maximum executable rule count accepted by target-shape parse entrypoints such as
+/// [`program::ExecutableProgram::parse_text`](crate::program::ExecutableProgram::parse_text)
+/// and [`program::EmptyProgram::parse_text`](crate::program::EmptyProgram::parse_text).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleLimit {
     /// Maximum accepted executable rule count.

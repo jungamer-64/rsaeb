@@ -16,12 +16,11 @@
 //! use rsaeb::inspect::{RuleAnchor, RuleView};
 //! use rsaeb::policy::DefaultParsePolicy;
 //! use rsaeb::program::ExecutableProgram;
-//! use rsaeb::source::ExecutableProgramSource;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse(ExecutableProgramSource::from_text(
+//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text(
 //!     "(once)(start)a=(return)done",
-//! ))?;
+//! )?;
 //! let rule = executable.rules().next().ok_or("missing rule")?;
 //!
 //! if rule.position().number().get() != 1 {

@@ -9,7 +9,6 @@ use rsaeb::input::AdmittedRun;
 use rsaeb::inspect::OnceRuleCount;
 use rsaeb::policy::{DefaultParsePolicy, ExecutionPolicy};
 use rsaeb::program::{EmptyProgram, ExecutableProgram, RunOutcome, RunResult};
-use rsaeb::source::{EmptyProgramSource, ExecutableProgramSource};
 use runtime_support::{
     DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, DefaultRunPolicy, TestRunPolicy,
 };
@@ -104,9 +103,7 @@ fn program_parse_accepts_text_and_byte_sources() -> TestResult {
     expect_stable_bytes(&result, b"b")?;
     ensure_matches(result.steps().get() == 1, "expected one execution step")?;
 
-    let program = ExecutableProgram::<DefaultParsePolicy>::parse(
-        ExecutableProgramSource::from_bytes(b"a=b#\xff"),
-    )?;
+    let program = ExecutableProgram::<DefaultParsePolicy>::parse_bytes(b"a=b#\xff")?;
     let input = runtime_input(b"a", limits)?;
     let result = execute_program(&program, input)?;
     expect_stable_bytes(&result, b"b")?;
@@ -137,7 +134,7 @@ fn program_language_surface_handles_spacing_comments_and_actions() -> TestResult
     let result = execute_program(&program, runtime_input(b"a", limits)?)?;
     expect_stable_bytes(&result, b"b")?;
 
-    let program = EmptyProgram::<DefaultParsePolicy>::parse(EmptyProgramSource::from_text("#a=b"))?;
+    let program = EmptyProgram::<DefaultParsePolicy>::parse_text("#a=b")?;
     let result = stabilize_empty_program(program, runtime_input(b"a", limits)?)?;
     expect_stable_bytes(&result, b"a")?;
 
@@ -177,9 +174,7 @@ fn program_values_are_reusable_across_runs() -> TestResult {
 /// Returns `TestFailure` if typed parse shape errors lose their public variants.
 #[test]
 fn typed_program_parse_reports_shape_mismatches() -> TestResult {
-    let executable_error = ExecutableProgram::<DefaultParsePolicy>::parse(
-        ExecutableProgramSource::from_text("# empty"),
-    );
+    let executable_error = ExecutableProgram::<DefaultParsePolicy>::parse_text("# empty");
     ensure_matches(
         matches!(
             executable_error,
@@ -188,8 +183,7 @@ fn typed_program_parse_reports_shape_mismatches() -> TestResult {
         "expected executable parse to reject empty source",
     )?;
 
-    let empty_error =
-        EmptyProgram::<DefaultParsePolicy>::parse(EmptyProgramSource::from_text("a=b"));
+    let empty_error = EmptyProgram::<DefaultParsePolicy>::parse_text("a=b");
     ensure_matches(
         matches!(
             empty_error,

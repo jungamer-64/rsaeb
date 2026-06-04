@@ -29,11 +29,10 @@
 //! ```compile_fail
 //! use rsaeb::policy::DefaultExecutionPolicy;
 //! use rsaeb::program::ExecutableProgram;
-//! use rsaeb::source::ExecutableProgramSource;
 //!
 //! type ExecutionOnly = DefaultExecutionPolicy;
 //!
-//! let _program = ExecutableProgram::<ExecutionOnly>::parse(ExecutableProgramSource::from_text("a=b"));
+//! let _program = ExecutableProgram::<ExecutionOnly>::parse_text("a=b");
 //! ```
 //!
 //! Public boundary types no longer infer default policy domains. The policy
@@ -41,9 +40,8 @@
 //!
 //! ```compile_fail
 //! use rsaeb::program::ExecutableProgram;
-//! use rsaeb::source::ExecutableProgramSource;
 //!
-//! let _program: ExecutableProgram = ExecutableProgram::parse(ExecutableProgramSource::from_text("a=b")).unwrap();
+//! let _program: ExecutableProgram = ExecutableProgram::parse_text("a=b").unwrap();
 //! ```
 //!
 //! ```compile_fail
@@ -67,9 +65,8 @@
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeInputPolicy};
 //! use rsaeb::program::ExecutableProgram;
-//! use rsaeb::source::ExecutableProgramSource;
 //!
-//! let program = ExecutableProgram::<DefaultParsePolicy>::parse(ExecutableProgramSource::from_text("a=b")).unwrap();
+//! let program = ExecutableProgram::<DefaultParsePolicy>::parse_text("a=b").unwrap();
 //! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a")).unwrap();
 //! let admitted = input.admit::<DefaultExecutionPolicy>().unwrap();
 //! let _result = program.stabilize(admitted).unwrap();

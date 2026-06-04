@@ -18,12 +18,12 @@ pub(crate) struct RawProgramSource<'source> {
 
 impl<'source> RawProgramSource<'source> {
     /// Labels raw bytes as parser input.
-    const fn from_bytes(bytes: &'source [u8]) -> Self {
+    pub(crate) const fn from_bytes(bytes: &'source [u8]) -> Self {
         Self { bytes }
     }
 
     /// Labels a UTF-8 string as parser input.
-    const fn from_text(source: &'source str) -> Self {
+    pub(crate) const fn from_text(source: &'source str) -> Self {
         Self {
             bytes: source.as_bytes(),
         }
