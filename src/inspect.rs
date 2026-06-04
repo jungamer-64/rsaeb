@@ -94,16 +94,15 @@ impl OnceRuleCount {
     /// ZERO boundary value.
     pub(crate) const ZERO: Self = Self { value: 0 };
 
+    /// Creates a parsed `(once)` rule count from topology-derived data.
+    pub(crate) const fn new(value: usize) -> Self {
+        Self { value }
+    }
+
     /// Parsed `(once)` rule count as a primitive value.
     #[must_use]
     pub const fn get(self) -> usize {
         self.value
-    }
-
-    /// Returns the checked next result.
-    pub(crate) fn checked_next(self) -> Option<Self> {
-        let value = self.value.checked_add(1)?;
-        Some(Self { value })
     }
 }
 
@@ -116,9 +115,10 @@ pub struct RuleNumber {
 
 impl RuleNumber {
     /// Builds an index from a zero-based offset.
-    fn from_zero_based(zero_based: usize) -> Option<Self> {
-        let one_based = zero_based.checked_add(1)?;
-        Some(Self { one_based })
+    const fn from_zero_based(zero_based: usize) -> Self {
+        Self {
+            one_based: zero_based.saturating_add(1),
+        }
     }
 
     /// One-based rule number as a primitive value.
@@ -141,9 +141,10 @@ pub struct RulePosition {
 
 impl RulePosition {
     /// Builds an index from a zero-based offset.
-    pub(crate) fn from_zero_based(zero_based: usize) -> Option<Self> {
-        let number = RuleNumber::from_zero_based(zero_based)?;
-        Some(Self { number })
+    pub(crate) const fn from_zero_based(zero_based: usize) -> Self {
+        Self {
+            number: RuleNumber::from_zero_based(zero_based),
+        }
     }
 
     /// One-based rule number for display.
@@ -351,6 +352,8 @@ pub enum RuleView<'program> {
 /// Read-only structured view of a reusable non-terminal rewrite rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AlwaysRewriteRuleView<'program> {
+    /// Execution-order position derived from the containing rule topology.
+    position: RulePosition,
     /// Parsed rewrite rule borrowed from the program rule table.
     rule: &'program RewriteRule,
 }
@@ -358,6 +361,8 @@ pub struct AlwaysRewriteRuleView<'program> {
 /// Read-only structured view of a once-only non-terminal rewrite rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OnceRewriteRuleView<'program> {
+    /// Execution-order position derived from the containing rule topology.
+    position: RulePosition,
     /// Parsed rewrite rule borrowed from the program rule table.
     rule: &'program RewriteRule,
 }
@@ -365,6 +370,8 @@ pub struct OnceRewriteRuleView<'program> {
 /// Read-only structured view of a reusable terminal return rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AlwaysReturnRuleView<'program> {
+    /// Execution-order position derived from the containing rule topology.
+    position: RulePosition,
     /// Parsed return rule borrowed from the program rule table.
     rule: &'program ReturnRule,
 }
@@ -372,39 +379,53 @@ pub struct AlwaysReturnRuleView<'program> {
 /// Read-only structured view of a once-only terminal return rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OnceReturnRuleView<'program> {
+    /// Execution-order position derived from the containing rule topology.
+    position: RulePosition,
     /// Parsed return rule borrowed from the program rule table.
     rule: &'program ReturnRule,
 }
 
 impl<'program> RuleView<'program> {
-    /// Borrows a parsed rule with its stored execution-order position.
-    pub(crate) fn new(rule: &'program Rule) -> Self {
+    /// Borrows a parsed rule with its topology-derived execution-order position.
+    pub(crate) fn new(position: RulePosition, rule: &'program Rule) -> Self {
         match rule {
-            Rule::AlwaysRewrite(rule) => Self::from_always_rewrite(rule),
-            Rule::OnceRewrite(rule) => Self::from_once_rewrite(rule),
-            Rule::AlwaysReturn(rule) => Self::from_always_return(rule),
-            Rule::OnceReturn(rule) => Self::from_once_return(rule),
+            Rule::AlwaysRewrite(rule) => Self::from_always_rewrite(position, rule),
+            Rule::OnceRewrite(rule) => Self::from_once_rewrite(position, rule),
+            Rule::AlwaysReturn(rule) => Self::from_always_return(position, rule),
+            Rule::OnceReturn(rule) => Self::from_once_return(position, rule),
         }
     }
 
     /// Borrows a reusable rewrite rule.
-    pub(crate) const fn from_always_rewrite(rule: &'program RewriteRule) -> Self {
-        Self::AlwaysRewrite(AlwaysRewriteRuleView { rule })
+    pub(crate) const fn from_always_rewrite(
+        position: RulePosition,
+        rule: &'program RewriteRule,
+    ) -> Self {
+        Self::AlwaysRewrite(AlwaysRewriteRuleView { position, rule })
     }
 
     /// Borrows a once-only rewrite rule.
-    pub(crate) const fn from_once_rewrite(rule: &'program RewriteRule) -> Self {
-        Self::OnceRewrite(OnceRewriteRuleView { rule })
+    pub(crate) const fn from_once_rewrite(
+        position: RulePosition,
+        rule: &'program RewriteRule,
+    ) -> Self {
+        Self::OnceRewrite(OnceRewriteRuleView { position, rule })
     }
 
     /// Borrows a reusable return rule.
-    pub(crate) const fn from_always_return(rule: &'program ReturnRule) -> Self {
-        Self::AlwaysReturn(AlwaysReturnRuleView { rule })
+    pub(crate) const fn from_always_return(
+        position: RulePosition,
+        rule: &'program ReturnRule,
+    ) -> Self {
+        Self::AlwaysReturn(AlwaysReturnRuleView { position, rule })
     }
 
     /// Borrows a once-only return rule.
-    pub(crate) const fn from_once_return(rule: &'program ReturnRule) -> Self {
-        Self::OnceReturn(OnceReturnRuleView { rule })
+    pub(crate) const fn from_once_return(
+        position: RulePosition,
+        rule: &'program ReturnRule,
+    ) -> Self {
+        Self::OnceReturn(OnceReturnRuleView { position, rule })
     }
 
     /// Program-local parsed-rule position.
@@ -486,8 +507,8 @@ macro_rules! impl_rewrite_rule_view {
     ($view:ident) => {
         impl<'program> $view<'program> {
             /// Borrows one typed rewrite rule for inspection.
-            pub(crate) const fn new(rule: &'program RewriteRule) -> Self {
-                Self { rule }
+            pub(crate) const fn new(position: RulePosition, rule: &'program RewriteRule) -> Self {
+                Self { position, rule }
             }
 
             /// Rebuilds the borrowed internal rule for private rendering.
@@ -498,7 +519,7 @@ macro_rules! impl_rewrite_rule_view {
             /// Program-local parsed-rule position.
             #[must_use]
             pub fn position(self) -> RulePosition {
-                self.rule.pattern().position()
+                self.position
             }
 
             /// One-based source line number.
@@ -533,8 +554,8 @@ macro_rules! impl_return_rule_view {
     ($view:ident) => {
         impl<'program> $view<'program> {
             /// Borrows one typed return rule for inspection.
-            pub(crate) const fn new(rule: &'program ReturnRule) -> Self {
-                Self { rule }
+            pub(crate) const fn new(position: RulePosition, rule: &'program ReturnRule) -> Self {
+                Self { position, rule }
             }
 
             /// Rebuilds the borrowed internal rule for private rendering.
@@ -545,7 +566,7 @@ macro_rules! impl_return_rule_view {
             /// Program-local parsed-rule position.
             #[must_use]
             pub fn position(self) -> RulePosition {
-                self.rule.pattern().position()
+                self.position
             }
 
             /// One-based source line number.

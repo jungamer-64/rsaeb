@@ -11,7 +11,7 @@ mod tests;
 use crate::error::{ParseError, ParseErrorKind, ParseLimitError};
 use crate::limits::SourceByteCount;
 use crate::policy::ParsePolicy;
-use crate::program::ParsedRuleSink;
+use crate::program::RuleSink;
 use crate::source::{RawProgramSource, SourceLineNumber};
 
 use line::{CompactCodeLineKind, RawSourceLine};
@@ -28,7 +28,7 @@ use location::source_line_number;
 pub(crate) fn parse_rules_into<P, S>(source: RawProgramSource<'_>) -> Result<S::Output, S::Error>
 where
     P: ParsePolicy,
-    S: ParsedRuleSink,
+    S: RuleSink,
 {
     ensure_source_within_limit::<P>(source)?;
 
@@ -45,11 +45,11 @@ where
             CompactCodeLineKind::Rule(line) => line,
         };
 
-        let parsed_rule = non_empty_code
+        let rule = non_empty_code
             .into_rule_syntax()?
             .parse(P::PAYLOAD_BYTE_LIMIT)?;
 
-        sink.push_parsed_rule(parsed_rule, P::RULE_LIMIT)?;
+        sink.push_rule(rule, P::RULE_LIMIT)?;
     }
 
     sink.finish()

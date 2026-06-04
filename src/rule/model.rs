@@ -1,5 +1,5 @@
 use crate::bytes::Payload;
-use crate::inspect::{PayloadView, RewriteActionView, RuleAnchor, RulePosition};
+use crate::inspect::{PayloadView, RewriteActionView, RuleAnchor};
 use crate::source::SourceLineNumber;
 
 /// Parsed non-return rewrite action.
@@ -11,48 +11,6 @@ pub(crate) enum RewriteAction {
     MoveStart(Payload),
     /// Move replacement payload to the end of runtime state.
     MoveEnd(Payload),
-}
-
-/// Parser-built match pattern before program-local position assignment.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ParsedRulePattern {
-    /// Original source line containing this rule.
-    line_number: SourceLineNumber,
-    /// Parsed match anchor modifier.
-    anchor: RuleAnchorSyntax,
-    /// Left-side executable match payload.
-    lhs: Payload,
-}
-
-/// Parsed rewrite rule before program-local position assignment.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ParsedRewriteRule {
-    /// Positionless parsed match pattern.
-    pattern: ParsedRulePattern,
-    /// Right-side rewrite action.
-    action: RewriteAction,
-}
-
-/// Parsed return rule before program-local position assignment.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ParsedReturnRule {
-    /// Positionless parsed match pattern.
-    pattern: ParsedRulePattern,
-    /// Right-side return output.
-    output: Payload,
-}
-
-/// Internal parsed rule.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ParsedRule {
-    /// Reusable non-terminal rewrite rule.
-    AlwaysRewrite(ParsedRewriteRule),
-    /// Once-only non-terminal rewrite rule.
-    OnceRewrite(ParsedRewriteRule),
-    /// Reusable terminal return rule.
-    AlwaysReturn(ParsedReturnRule),
-    /// Once-only terminal return rule.
-    OnceReturn(ParsedReturnRule),
 }
 
 /// Match anchor as it appears in parsed syntax.
@@ -79,11 +37,9 @@ pub(crate) enum CanonicalRightSide<'rule> {
     Return(&'rule Payload),
 }
 
-/// Stored match fields shared by all executable rule variants.
+/// Positionless match fields shared by all executable rule variants.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct RulePattern {
-    /// Execution-order position assigned by the parsed program.
-    position: RulePosition,
     /// Original source line for diagnostics and inspection.
     line_number: SourceLineNumber,
     /// Match anchor used by the runtime matcher.
@@ -110,7 +66,7 @@ pub(crate) struct ReturnRule {
     output: Payload,
 }
 
-/// Internal rule.
+/// Positionless executable rule produced directly by the parser.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Rule {
     /// Reusable non-terminal rewrite rule.
@@ -150,91 +106,6 @@ impl RewriteAction {
     }
 }
 
-impl ParsedRulePattern {
-    /// Groups parsed left-side rule fields before program-level position assignment.
-    pub(crate) const fn new(
-        line_number: SourceLineNumber,
-        anchor: RuleAnchorSyntax,
-        lhs: Payload,
-    ) -> Self {
-        Self {
-            line_number,
-            anchor,
-            lhs,
-        }
-    }
-}
-
-impl ParsedRewriteRule {
-    /// Combines parsed match fields with a rewrite action.
-    const fn from_parts(pattern: ParsedRulePattern, action: RewriteAction) -> Self {
-        Self { pattern, action }
-    }
-
-    /// Source line used for diagnostics and public inspection.
-    const fn line_number(&self) -> SourceLineNumber {
-        self.pattern.line_number
-    }
-
-    /// Assigns execution position to this parsed rewrite rule.
-    fn into_rule(self, position: RulePosition) -> RewriteRule {
-        RewriteRule::from_parts(
-            RulePattern::from_parsed(position, self.pattern),
-            self.action,
-        )
-    }
-}
-
-impl ParsedReturnRule {
-    /// Combines parsed match fields with return output.
-    const fn from_parts(pattern: ParsedRulePattern, output: Payload) -> Self {
-        Self { pattern, output }
-    }
-
-    /// Source line used for diagnostics and public inspection.
-    const fn line_number(&self) -> SourceLineNumber {
-        self.pattern.line_number
-    }
-
-    /// Assigns execution position to this parsed return rule.
-    fn into_rule(self, position: RulePosition) -> ReturnRule {
-        ReturnRule::from_parts(
-            RulePattern::from_parsed(position, self.pattern),
-            self.output,
-        )
-    }
-}
-
-impl ParsedRule {
-    /// Builds a reusable rewrite rule.
-    pub(crate) const fn always_rewrite(pattern: ParsedRulePattern, action: RewriteAction) -> Self {
-        Self::AlwaysRewrite(ParsedRewriteRule::from_parts(pattern, action))
-    }
-
-    /// Builds a once-only rewrite rule.
-    pub(crate) const fn once_rewrite(pattern: ParsedRulePattern, action: RewriteAction) -> Self {
-        Self::OnceRewrite(ParsedRewriteRule::from_parts(pattern, action))
-    }
-
-    /// Builds a reusable return rule.
-    pub(crate) const fn always_return(pattern: ParsedRulePattern, output: Payload) -> Self {
-        Self::AlwaysReturn(ParsedReturnRule::from_parts(pattern, output))
-    }
-
-    /// Builds a once-only return rule.
-    pub(crate) const fn once_return(pattern: ParsedRulePattern, output: Payload) -> Self {
-        Self::OnceReturn(ParsedReturnRule::from_parts(pattern, output))
-    }
-
-    /// Source line used for diagnostics and public inspection.
-    pub(crate) const fn line_number(&self) -> SourceLineNumber {
-        match self {
-            Self::AlwaysRewrite(rule) | Self::OnceRewrite(rule) => rule.line_number(),
-            Self::AlwaysReturn(rule) | Self::OnceReturn(rule) => rule.line_number(),
-        }
-    }
-}
-
 impl RuleAnchorSyntax {
     /// Converts parser syntax into the public inspection anchor.
     pub(crate) const fn public_anchor(self) -> RuleAnchor {
@@ -247,19 +118,17 @@ impl RuleAnchorSyntax {
 }
 
 impl RulePattern {
-    /// Assigns program-local position to parsed match fields.
-    fn from_parsed(position: RulePosition, pattern: ParsedRulePattern) -> Self {
+    /// Groups parsed left-side rule fields.
+    pub(crate) const fn new(
+        line_number: SourceLineNumber,
+        anchor: RuleAnchorSyntax,
+        lhs: Payload,
+    ) -> Self {
         Self {
-            position,
-            line_number: pattern.line_number,
-            anchor: pattern.anchor,
-            lhs: pattern.lhs,
+            line_number,
+            anchor,
+            lhs,
         }
-    }
-
-    /// Execution-order position assigned by the parsed program.
-    pub(crate) const fn position(&self) -> RulePosition {
-        self.position
     }
 
     /// Source line used for diagnostics and public inspection.
@@ -323,14 +192,24 @@ impl ReturnRule {
 }
 
 impl Rule {
-    /// Assigns execution position to a parsed rule.
-    pub(crate) fn from_parsed(position: RulePosition, parsed: ParsedRule) -> Self {
-        match parsed {
-            ParsedRule::AlwaysRewrite(rule) => Self::AlwaysRewrite(rule.into_rule(position)),
-            ParsedRule::OnceRewrite(rule) => Self::OnceRewrite(rule.into_rule(position)),
-            ParsedRule::AlwaysReturn(rule) => Self::AlwaysReturn(rule.into_rule(position)),
-            ParsedRule::OnceReturn(rule) => Self::OnceReturn(rule.into_rule(position)),
-        }
+    /// Builds a reusable rewrite rule.
+    pub(crate) const fn always_rewrite(pattern: RulePattern, action: RewriteAction) -> Self {
+        Self::AlwaysRewrite(RewriteRule::from_parts(pattern, action))
+    }
+
+    /// Builds a once-only rewrite rule.
+    pub(crate) const fn once_rewrite(pattern: RulePattern, action: RewriteAction) -> Self {
+        Self::OnceRewrite(RewriteRule::from_parts(pattern, action))
+    }
+
+    /// Builds a reusable return rule.
+    pub(crate) const fn always_return(pattern: RulePattern, output: Payload) -> Self {
+        Self::AlwaysReturn(ReturnRule::from_parts(pattern, output))
+    }
+
+    /// Builds a once-only return rule.
+    pub(crate) const fn once_return(pattern: RulePattern, output: Payload) -> Self {
+        Self::OnceReturn(ReturnRule::from_parts(pattern, output))
     }
 
     /// Shared executable match fields.
@@ -344,5 +223,10 @@ impl Rule {
     /// Source line used for diagnostics and public inspection.
     pub(crate) const fn line_number(&self) -> SourceLineNumber {
         self.pattern().line_number()
+    }
+
+    /// Returns whether this rule has once-only runtime availability.
+    pub(crate) const fn is_once(&self) -> bool {
+        matches!(self, Self::OnceRewrite(_) | Self::OnceReturn(_))
     }
 }
