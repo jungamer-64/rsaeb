@@ -436,6 +436,86 @@
 //! }
 //! ```
 //!
+//! Successful rewrite and return outcomes no longer erase their action
+//! provenance into [`inspect::RuleView`]:
+//!
+//! ```compile_fail
+//! use rsaeb::execution::BorrowedAppliedStep;
+//! use rsaeb::inspect::RuleView;
+//! use rsaeb::policy::ExecutionPolicy;
+//!
+//! fn erase_applied<'program, E: ExecutionPolicy>(
+//!     applied: &BorrowedAppliedStep<'program, E>,
+//! ) -> RuleView<'program> {
+//!     applied.rule()
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::execution::BorrowedReturnedRun;
+//! use rsaeb::inspect::RuleView;
+//!
+//! fn erase_returned<'program>(
+//!     returned: &BorrowedReturnedRun<'program>,
+//! ) -> RuleView<'program> {
+//!     returned.rule()
+//! }
+//! ```
+//!
+//! Action-specific success witnesses expose only their valid action accessor:
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RewriteRuleView;
+//!
+//! fn invalid(rule: RewriteRuleView<'_>) {
+//!     let _ = rule.output();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::ReturnRuleView;
+//!
+//! fn invalid(rule: ReturnRuleView<'_>) {
+//!     let _ = rule.rewrite_action();
+//! }
+//! ```
+//!
+//! Old trace effect types and shape-erased `Step` variants have been deleted:
+//!
+//! ```compile_fail
+//! use rsaeb::trace::BorrowedTraceEffect;
+//!
+//! fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::trace::TraceSnapshotEffect;
+//!
+//! fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::trace::BorrowedTraceEvent;
+//!
+//! fn old_step(event: BorrowedTraceEvent<'_, '_>) {
+//!     match event {
+//!         BorrowedTraceEvent::Step { .. } => {}
+//!         _ => {}
+//!     }
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::trace::TraceSnapshotEvent;
+//!
+//! fn old_step(event: TraceSnapshotEvent<'_>) {
+//!     match event {
+//!         TraceSnapshotEvent::Step { .. } => {}
+//!         _ => {}
+//!     }
+//! }
+//! ```
+//!
 //! # Typed boundaries
 //!
 //! Program source and runtime input are different byte domains. Program payload
@@ -728,8 +808,14 @@
 //!     admitted,
 //!     BorrowedTrace::new(|event| {
 //!         byte_counts.push(event.byte_count().get());
-//!         if let BorrowedTraceEvent::Step { rule, .. } = event {
-//!             let _line = rule.line_number();
+//!         match event {
+//!             BorrowedTraceEvent::Initial { .. } => {}
+//!             BorrowedTraceEvent::Rewritten { rule, .. } => {
+//!                 let _rewrite = rule.rewrite_action();
+//!             }
+//!             BorrowedTraceEvent::Returned { rule, .. } => {
+//!                 let _output = rule.output();
+//!             }
 //!         }
 //!         Ok::<(), Infallible>(())
 //!     }),
@@ -749,7 +835,7 @@
 //!     StaticTraceSnapshotPolicy,
 //! };
 //! use rsaeb::program::ExecutableProgram;
-//! use rsaeb::trace::{SnapshotTrace, TraceSnapshotEffect, TraceSnapshotEvent};
+//! use rsaeb::trace::{SnapshotTrace, TraceSnapshotEvent};
 //!
 //! type TenSteps = StaticExecutionPolicy<10, 16_777_216, 16_777_216>;
 //! type SnapshotBytes = StaticTraceSnapshotPolicy<16_777_216>;
@@ -766,14 +852,12 @@
 //!     SnapshotTrace::<SnapshotBytes, _>::new(|event| {
 //!         match event {
 //!             TraceSnapshotEvent::Initial { state } => states.push(state.into_raw_bytes()),
-//!             TraceSnapshotEvent::Step {
-//!                 effect: TraceSnapshotEffect::Continue { state },
-//!                 ..
-//!             } => states.push(state.into_raw_bytes()),
-//!             TraceSnapshotEvent::Step {
-//!                 effect: TraceSnapshotEffect::Return { output },
-//!                 ..
-//!             } => returns.push(output.into_raw_bytes()),
+//!             TraceSnapshotEvent::Rewritten { state, .. } => {
+//!                 states.push(state.into_raw_bytes());
+//!             }
+//!             TraceSnapshotEvent::Returned { output, .. } => {
+//!                 returns.push(output.into_raw_bytes());
+//!             }
 //!         }
 //!         Ok::<(), core::convert::Infallible>(())
 //!     }),

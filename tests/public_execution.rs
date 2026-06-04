@@ -12,7 +12,7 @@ use rsaeb::execution::{
     OnceConsumedRuleMiss, RuleMiss,
 };
 use rsaeb::input::AdmittedRun;
-use rsaeb::inspect::{RewriteActionView, RuleAnchor, RuleView};
+use rsaeb::inspect::{ReturnRuleView, RewriteActionView, RewriteRuleView, RuleAnchor};
 use rsaeb::limits::{ReturnByteLimit, RuleAttemptLimit, RuntimeStateByteLimit};
 use rsaeb::policy::{
     DefaultParsePolicy, ExecutionPolicy, RuleAttemptPolicy, StaticRuleAttemptPolicy,
@@ -228,50 +228,184 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
     }};
 }
 
-enum ExpectedRuleAction<'expected> {
-    Replace(&'expected [u8]),
-    Return(&'expected [u8]),
-}
-
 struct ExpectedBorrowedRuleView<'expected> {
     position: usize,
     line_number: usize,
     lhs: &'expected [u8],
-    action: ExpectedRuleAction<'expected>,
+    canonical_source: &'expected [u8],
 }
 
-/// Ensures a borrowed public rule view retained the expected parsed-rule metadata.
+/// Ensures a committed rewrite witness retained the expected parsed-rule metadata.
 ///
 /// # Errors
 ///
 /// Returns `TestFailure` if the rule metadata or materialized payloads differ.
-fn ensure_borrowed_rule_view(
-    rule: RuleView<'_>,
+fn ensure_borrowed_rewrite_rule_view(
+    rule: RewriteRuleView<'_>,
     expected: ExpectedBorrowedRuleView<'_>,
+    expected_replacement: &[u8],
 ) -> TestResult {
     ensure_eq!(rule.position().number().get(), expected.position)?;
     ensure_eq!(rule.line_number().get(), expected.line_number)?;
     ensure_eq!(rule.anchor(), RuleAnchor::Anywhere)?;
     ensure_eq!(rule.lhs().materialize()?.as_slice(), expected.lhs)?;
-    match (rule, expected.action) {
-        (RuleView::AlwaysRewrite(rewrite), ExpectedRuleAction::Replace(expected)) => {
-            match rewrite.rewrite_action() {
-                RewriteActionView::Replace(payload) => {
-                    ensure_eq!(payload.materialize()?.as_slice(), expected)
-                }
-                RewriteActionView::MoveStart(_) | RewriteActionView::MoveEnd(_) => {
-                    Err(TestFailure::message("unexpected borrowed rewrite action"))
-                }
-            }
+    ensure_eq!(
+        rule.canonical_source()?.as_slice(),
+        expected.canonical_source,
+    )?;
+    match rule.rewrite_action() {
+        RewriteActionView::Replace(payload) => {
+            ensure_eq!(payload.materialize()?.as_slice(), expected_replacement)
         }
-        (RuleView::AlwaysReturn(return_rule), ExpectedRuleAction::Return(expected)) => {
-            let payload = return_rule.output();
-            ensure_eq!(payload.materialize()?.as_slice(), expected)
+        RewriteActionView::MoveStart(_) | RewriteActionView::MoveEnd(_) => {
+            Err(TestFailure::message("unexpected borrowed rewrite action"))
         }
-        (RuleView::OnceRewrite(_) | RuleView::OnceReturn(_), _)
-        | (RuleView::AlwaysRewrite(_), ExpectedRuleAction::Return(_))
-        | (RuleView::AlwaysReturn(_), ExpectedRuleAction::Replace(_)) => {
-            Err(TestFailure::message("unexpected borrowed rule view action"))
+    }
+}
+
+/// Ensures a committed return witness retained the expected parsed-rule metadata.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the rule metadata or materialized payloads differ.
+fn ensure_borrowed_return_rule_view(
+    rule: ReturnRuleView<'_>,
+    expected: ExpectedBorrowedRuleView<'_>,
+    expected_output: &[u8],
+) -> TestResult {
+    ensure_eq!(rule.position().number().get(), expected.position)?;
+    ensure_eq!(rule.line_number().get(), expected.line_number)?;
+    ensure_eq!(rule.anchor(), RuleAnchor::Anywhere)?;
+    ensure_eq!(rule.lhs().materialize()?.as_slice(), expected.lhs)?;
+    ensure_eq!(
+        rule.canonical_source()?.as_slice(),
+        expected.canonical_source,
+    )?;
+    ensure_eq!(rule.output().materialize()?.as_slice(), expected_output,)
+}
+
+/// Verifies a committed rewrite witness has the expected repeat shape.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the repeat shape differs.
+fn ensure_rewrite_rule_shape(rule: RewriteRuleView<'_>, expected_once: bool) -> TestResult {
+    ensure_matches(
+        matches!(
+            (rule, expected_once),
+            (RewriteRuleView::Always(_), false) | (RewriteRuleView::Once(_), true)
+        ),
+        "unexpected committed rewrite rule shape",
+    )
+}
+
+/// Verifies a committed return witness has the expected repeat shape.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the repeat shape differs.
+fn ensure_return_rule_shape(rule: ReturnRuleView<'_>, expected_once: bool) -> TestResult {
+    ensure_matches(
+        matches!(
+            (rule, expected_once),
+            (ReturnRuleView::Always(_), false) | (ReturnRuleView::Once(_), true)
+        ),
+        "unexpected committed return rule shape",
+    )
+}
+
+/// Verifies one stepwise rewrite outcome carries its exact repeat/action witness.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the program does not produce the expected rewrite.
+fn ensure_stepwise_rewrite_rule_shape(source: &str, expected_once: bool) -> TestResult {
+    let program = parse_program(source)?;
+    match program
+        .steps(runtime_input(b"a", default_test_run_policy())?)?
+        .step()
+    {
+        BorrowedStepTransition::Applied(applied) => {
+            ensure_rewrite_rule_shape(applied.rule(), expected_once)
+        }
+        BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::Failed(_) => {
+            Err(TestFailure::message("expected stepwise rewrite outcome"))
+        }
+    }
+}
+
+/// Verifies one stepwise return outcome carries its exact repeat/action witness.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the program does not produce the expected return.
+fn ensure_stepwise_return_rule_shape(source: &str, expected_once: bool) -> TestResult {
+    let program = parse_program(source)?;
+    match program
+        .steps(runtime_input(b"a", default_test_run_policy())?)?
+        .step()
+    {
+        BorrowedStepTransition::Returned(returned) => {
+            ensure_return_rule_shape(returned.rule(), expected_once)
+        }
+        BorrowedStepTransition::Applied(_)
+        | BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::Failed(_) => {
+            Err(TestFailure::message("expected stepwise return outcome"))
+        }
+    }
+}
+
+/// Verifies one rule-attempt rewrite outcome carries its exact repeat/action witness.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the program does not produce the expected rewrite.
+fn ensure_rule_attempt_rewrite_rule_shape(source: &str, expected_once: bool) -> TestResult {
+    let program = parse_program(source)?;
+    let cursor = program.rule_attempts::<StaticRuleAttemptPolicy<1>, _>(runtime_input(
+        b"a",
+        default_test_run_policy(),
+    )?)?;
+    let BorrowedRuleAttemptCursor::Final(execution) = cursor else {
+        return Err(TestFailure::message("expected final rule-attempt cursor"));
+    };
+    match expect_final_rule_attempt_transition(execution.step())? {
+        BorrowedFinalRuleAttemptTransition::Applied(applied) => {
+            ensure_rewrite_rule_shape(applied.rule(), expected_once)
+        }
+        BorrowedFinalRuleAttemptTransition::Stable(_)
+        | BorrowedFinalRuleAttemptTransition::Returned(_)
+        | BorrowedFinalRuleAttemptTransition::Failed(_) => Err(TestFailure::message(
+            "expected rule-attempt rewrite outcome",
+        )),
+    }
+}
+
+/// Verifies one rule-attempt return outcome carries its exact repeat/action witness.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the program does not produce the expected return.
+fn ensure_rule_attempt_return_rule_shape(source: &str, expected_once: bool) -> TestResult {
+    let program = parse_program(source)?;
+    let cursor = program.rule_attempts::<StaticRuleAttemptPolicy<1>, _>(runtime_input(
+        b"a",
+        default_test_run_policy(),
+    )?)?;
+    let BorrowedRuleAttemptCursor::Final(execution) = cursor else {
+        return Err(TestFailure::message("expected final rule-attempt cursor"));
+    };
+    match expect_final_rule_attempt_transition(execution.step())? {
+        BorrowedFinalRuleAttemptTransition::Returned(returned) => {
+            ensure_return_rule_shape(returned.rule(), expected_once)
+        }
+        BorrowedFinalRuleAttemptTransition::Applied(_)
+        | BorrowedFinalRuleAttemptTransition::Stable(_)
+        | BorrowedFinalRuleAttemptTransition::Failed(_) => {
+            Err(TestFailure::message("expected rule-attempt return outcome"))
         }
     }
 }
@@ -1188,14 +1322,15 @@ fn execution_borrowed_transitions_retain_rule_views() -> TestResult {
     let execution = match execution.step() {
         BorrowedStepTransition::Applied(applied) => {
             ensure_eq!(applied.step().get(), 1)?;
-            ensure_borrowed_rule_view(
+            ensure_borrowed_rewrite_rule_view(
                 applied.rule(),
                 ExpectedBorrowedRuleView {
                     position: 1,
                     line_number: 1,
                     lhs: b"a",
-                    action: ExpectedRuleAction::Replace(b"b"),
+                    canonical_source: b"a=b",
                 },
+                b"b",
             )?;
             applied.into_session()
         }
@@ -1207,14 +1342,15 @@ fn execution_borrowed_transitions_retain_rule_views() -> TestResult {
     };
 
     match execution.step() {
-        BorrowedStepTransition::Returned(returned) => ensure_borrowed_rule_view(
+        BorrowedStepTransition::Returned(returned) => ensure_borrowed_return_rule_view(
             returned.rule(),
             ExpectedBorrowedRuleView {
                 position: 2,
                 line_number: 2,
                 lhs: b"b",
-                action: ExpectedRuleAction::Return(b"ok"),
+                canonical_source: b"b=(return)ok",
             },
+            b"ok",
         ),
         BorrowedStepTransition::Applied(_)
         | BorrowedStepTransition::Stable(_)
@@ -1222,6 +1358,23 @@ fn execution_borrowed_transitions_retain_rule_views() -> TestResult {
             Err(TestFailure::message("expected borrowed returned rule view"))
         }
     }
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if successful stepwise or rule-attempt outcomes erase
+/// their action or repeat provenance.
+#[test]
+fn execution_success_outcomes_preserve_exact_rule_shapes() -> TestResult {
+    ensure_stepwise_rewrite_rule_shape("a=b", false)?;
+    ensure_stepwise_rewrite_rule_shape("(once)a=b", true)?;
+    ensure_stepwise_return_rule_shape("a=(return)ok", false)?;
+    ensure_stepwise_return_rule_shape("(once)a=(return)ok", true)?;
+
+    ensure_rule_attempt_rewrite_rule_shape("a=b", false)?;
+    ensure_rule_attempt_rewrite_rule_shape("(once)a=b", true)?;
+    ensure_rule_attempt_return_rule_shape("a=(return)ok", false)?;
+    ensure_rule_attempt_return_rule_shape("(once)a=(return)ok", true)
 }
 
 /// # Errors

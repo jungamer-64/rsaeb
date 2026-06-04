@@ -1,9 +1,9 @@
 use crate::bytes::RuntimeStateByteCount;
-use crate::error::{RuleAttemptStepError, RunStepError};
-use crate::inspect::RuleView;
+use crate::error::RuleAttemptStepError;
+use crate::inspect::{ReturnRuleView, RewriteRuleView};
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
-use crate::program::{ExecutableProgram, ReturnOutput, ReturnOutputView};
+use crate::program::{ExecutableProgram, ReturnOutput};
 use crate::runtime::action::{AppliedRule, PreparedRuleStep, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuleAttemptReservation, RuntimeBudgetState};
 use crate::runtime::matcher::{MatchedRuleApplication, RuleAttempt, RuleAttemptMiss};
@@ -65,7 +65,7 @@ pub(super) enum CoreContinuingRuleAttemptStep<'program, E: ExecutionPolicy, A: R
         /// Committed rewrite step count.
         step: StepCount,
         /// Rule witness paired with the committed rewrite.
-        rule: RuleView<'program>,
+        rule: RewriteRuleView<'program>,
         /// Continuation session with a fresh cursor.
         continuation: AttemptSessionCursor<'program, E, A>,
     },
@@ -76,7 +76,7 @@ pub(super) enum CoreContinuingRuleAttemptStep<'program, E: ExecutionPolicy, A: R
         /// Committed return step count.
         step: StepCount,
         /// Rule witness paired with the committed return.
-        rule: RuleView<'program>,
+        rule: ReturnRuleView<'program>,
         /// Materialized return output.
         output: ReturnOutput,
         /// Terminal session with no resumable cursor.
@@ -100,7 +100,7 @@ pub(super) enum CoreFinalRuleAttemptStep<'program, E: ExecutionPolicy, A: RuleAt
         /// Committed rewrite step count.
         step: StepCount,
         /// Rule witness paired with the committed rewrite.
-        rule: RuleView<'program>,
+        rule: RewriteRuleView<'program>,
         /// Continuation session with a fresh cursor.
         continuation: AttemptSessionCursor<'program, E, A>,
     },
@@ -111,7 +111,7 @@ pub(super) enum CoreFinalRuleAttemptStep<'program, E: ExecutionPolicy, A: RuleAt
         /// Committed return step count.
         step: StepCount,
         /// Rule witness paired with the committed return.
-        rule: RuleView<'program>,
+        rule: ReturnRuleView<'program>,
         /// Materialized return output.
         output: ReturnOutput,
         /// Terminal session with no resumable cursor.
@@ -273,7 +273,7 @@ where
         }
         RuleAttempt::Matched(matched) => {
             let state_len = state.byte_count();
-            let (attempt, witnessed) = match prepare_attempt_application(
+            let (attempt, prepared) = match prepare_attempt_application(
                 &mut scratch,
                 &mut budget,
                 state_len,
@@ -286,7 +286,7 @@ where
                     return failed_continuing_rule_attempt(program, core, &attempt_budget, error);
                 }
             };
-            let applied = witnessed.commit(&mut state, &mut scratch);
+            let applied = prepared.commit(&mut state, &mut scratch);
             let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
             committed_continuing_rule_attempt_application(
                 program,
@@ -347,7 +347,7 @@ where
         }
         RuleAttempt::Matched(matched) => {
             let state_len = state.byte_count();
-            let (attempt, witnessed) = match prepare_attempt_application(
+            let (attempt, prepared) = match prepare_attempt_application(
                 &mut scratch,
                 &mut budget,
                 state_len,
@@ -360,7 +360,7 @@ where
                     return failed_final_rule_attempt(program, core, &attempt_budget, error);
                 }
             };
-            let applied = witnessed.commit(&mut state, &mut scratch);
+            let applied = prepared.commit(&mut state, &mut scratch);
             let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
             committed_final_rule_attempt_application(
                 program,
@@ -421,7 +421,7 @@ fn committed_continuing_rule_attempt_application<'program, E, A, Pass>(
     core: AttemptRunCore<E, Pass>,
     attempt_budget: RuleAttemptBudgetState<A>,
     attempt: RuleAttemptCount,
-    applied: CoreAppliedRule<'program, RuleView<'program>>,
+    applied: AppliedRule<'program>,
 ) -> CoreContinuingRuleAttemptStep<'program, E, A>
 where
     E: ExecutionPolicy,
@@ -429,7 +429,9 @@ where
     Pass: ContinuingRuleAttemptPass<'program>,
 {
     match applied {
-        CoreAppliedRule::Continued { step, rule } => {
+        AppliedRule::Continued(committed) => {
+            let step = committed.step();
+            let rule = committed.rule();
             let AttemptRunCore {
                 state,
                 scratch,
@@ -451,22 +453,22 @@ where
                 continuation,
             }
         }
-        CoreAppliedRule::Terminal {
-            step,
-            rule,
-            output_view: _,
-            output,
-        } => CoreContinuingRuleAttemptStep::Returned {
-            attempt,
-            step,
-            rule,
-            output,
-            terminal: TerminalAttemptSession {
-                program,
-                core: core.into_terminal(),
-                attempts: attempt_budget.completed_attempts(),
-            },
-        },
+        AppliedRule::Terminal(committed) => {
+            let step = committed.step();
+            let rule = committed.rule();
+            let output = committed.into_output();
+            CoreContinuingRuleAttemptStep::Returned {
+                attempt,
+                step,
+                rule,
+                output,
+                terminal: TerminalAttemptSession {
+                    program,
+                    core: core.into_terminal(),
+                    attempts: attempt_budget.completed_attempts(),
+                },
+            }
+        }
     }
 }
 
@@ -476,7 +478,7 @@ fn committed_final_rule_attempt_application<'program, E, A, Pass>(
     core: AttemptRunCore<E, Pass>,
     attempt_budget: RuleAttemptBudgetState<A>,
     attempt: RuleAttemptCount,
-    applied: CoreAppliedRule<'program, RuleView<'program>>,
+    applied: AppliedRule<'program>,
 ) -> CoreFinalRuleAttemptStep<'program, E, A>
 where
     E: ExecutionPolicy,
@@ -484,7 +486,9 @@ where
     Pass: FinalRuleAttemptPass<'program>,
 {
     match applied {
-        CoreAppliedRule::Continued { step, rule } => {
+        AppliedRule::Continued(committed) => {
+            let step = committed.step();
+            let rule = committed.rule();
             let AttemptRunCore {
                 state,
                 scratch,
@@ -506,22 +510,22 @@ where
                 continuation,
             }
         }
-        CoreAppliedRule::Terminal {
-            step,
-            rule,
-            output_view: _,
-            output,
-        } => CoreFinalRuleAttemptStep::Returned {
-            attempt,
-            step,
-            rule,
-            output,
-            terminal: TerminalAttemptSession {
-                program,
-                core: core.into_terminal(),
-                attempts: attempt_budget.completed_attempts(),
-            },
-        },
+        AppliedRule::Terminal(committed) => {
+            let step = committed.step();
+            let rule = committed.rule();
+            let output = committed.into_output();
+            CoreFinalRuleAttemptStep::Returned {
+                attempt,
+                step,
+                rule,
+                output,
+                terminal: TerminalAttemptSession {
+                    program,
+                    core: core.into_terminal(),
+                    attempts: attempt_budget.completed_attempts(),
+                },
+            }
+        }
     }
 }
 
@@ -607,13 +611,18 @@ fn prepare_attempt_application<'program, 'once, 'budget, E, A>(
     state_len: RuntimeStateByteCount,
     attempt_reservation: RuleAttemptReservation<'_, A>,
     matched: MatchedRuleApplication<'program, '_, 'once>,
-) -> Result<WitnessedRuleAttempt<'program, 'once, 'budget, E>, RuleAttemptStepError>
+) -> Result<
+    (
+        RuleAttemptCount,
+        PreparedRuleStep<'program, 'once, 'budget, E>,
+    ),
+    RuleAttemptStepError,
+>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
     let prepared = prepare_matched_rule(scratch, budget, state_len, matched)?;
-    let witnessed = WitnessedApplication::new(prepared, |rule| rule);
     let attempt = attempt_reservation.commit();
-    Ok((attempt, witnessed))
+    Ok((attempt, prepared))
 }

@@ -95,8 +95,14 @@ cannot be confused with a missed rule that still has a successor. `EmptyProgram`
 exposes only inspection and `.stabilize(admitted)`, which materializes the
 admitted input as a zero-step stable result.
 
-The exact typestate names, transition variants, tracing events, and error
-variants are documented in rustdoc.
+Successful rewrite outcomes expose `inspect::RewriteRuleView`, while successful
+return outcomes expose `inspect::ReturnRuleView`. General `inspect::RuleView`
+remains the program-inspection and miss-reporting surface, but cannot erase the
+action provenance of a committed outcome. Trace events carry the same boundary
+directly through `Initial`, `Rewritten`, and `Returned` variants.
+
+The exact typestate names, transition variants, tracing events, and error variants
+are documented in rustdoc.
 
 ## A=B Language Reference
 

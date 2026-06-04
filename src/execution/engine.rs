@@ -1,9 +1,10 @@
-use crate::error::{RunError, RunFinishError, RunStartError, TracedRunError};
+use crate::error::{RunError, RunFinishError, RunStartError, RunStepError, TracedRunError};
 use crate::input::AdmittedRun;
-use crate::inspect::RuleView;
+use crate::inspect::{ReturnRuleView, RewriteRuleView};
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, ReturnOutput, ReturnOutputView, RunResult};
+use crate::runtime::action::{AppliedRule, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
 use crate::runtime::once::{
     AfterMissContinuingRulePass, AfterMissFinalRulePass, FirstContinuingRulePass,
@@ -12,12 +13,7 @@ use crate::runtime::once::{
 };
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
-use crate::trace::{BorrowedTraceEffect, BorrowedTraceEvent, RuntimeStateView};
-
-use super::advance::{
-    BorrowedRunWitness, CoreAppliedRule, DiscardedRunWitness, RunRuleWitness,
-    prepare_witnessed_run_application,
-};
+use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
 
 /// Active mutable runtime state tied to one borrowed executable program.
 #[derive(Debug)]
@@ -120,7 +116,7 @@ pub(super) struct TerminalAttemptSession<'program> {
 }
 
 /// Result of consuming one active ordinary run session.
-pub(super) enum CoreRunTransition<'program, E, RuleWitness, StepError>
+pub(super) enum CoreRunTransition<'program, E>
 where
     E: ExecutionPolicy,
 {
@@ -129,7 +125,7 @@ where
         /// Committed step count.
         step: StepCount,
         /// Rule witness paired with the committed rewrite.
-        rule: RuleWitness,
+        rule: RewriteRuleView<'program>,
         /// Continuation session after the committed rewrite.
         continuation: Session<'program, E>,
     },
@@ -138,7 +134,7 @@ where
         /// Committed return step count.
         step: StepCount,
         /// Rule witness paired with the committed return.
-        rule: RuleWitness,
+        rule: ReturnRuleView<'program>,
         /// Borrowed return-output view for trace callbacks.
         output_view: ReturnOutputView<'program>,
         /// Materialized return output.
@@ -154,7 +150,7 @@ where
     /// A candidate step failed before committing runtime state.
     Failed {
         /// Error that prevented commit.
-        error: StepError,
+        error: RunStepError,
         /// Terminal run session preserving uncommitted state.
         terminal: TerminalSession<'program>,
     },
@@ -303,12 +299,7 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
     ///
     /// Failed preparation returns a terminal transition that preserves
     /// uncommitted runtime state.
-    pub(super) fn advance_run_step<W>(
-        self,
-    ) -> CoreRunTransition<'program, E, W::Witness, crate::error::RunStepError>
-    where
-        W: RunRuleWitness<'program>,
-    {
+    pub(super) fn advance_run_step(self) -> CoreRunTransition<'program, E> {
         let Session { program, core } = self;
         let ActiveRunCore {
             mut state,
@@ -332,13 +323,8 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
             }
         };
         let state_len = state.byte_count();
-        let witnessed = match prepare_witnessed_run_application::<_, W>(
-            &mut scratch,
-            &mut budget,
-            state_len,
-            matched,
-        ) {
-            Ok(witnessed) => witnessed,
+        let prepared = match prepare_matched_rule(&mut scratch, &mut budget, state_len, matched) {
+            Ok(prepared) => prepared,
             Err(error) => {
                 return CoreRunTransition::Failed {
                     error,
@@ -352,11 +338,11 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
                 };
             }
         };
-        let applied = witnessed.commit(&mut state, &mut scratch);
+        let applied = prepared.commit(&mut state, &mut scratch);
         match applied {
-            CoreAppliedRule::Continued { step, rule } => CoreRunTransition::Applied {
-                step,
-                rule,
+            AppliedRule::Continued(committed) => CoreRunTransition::Applied {
+                step: committed.step(),
+                rule: committed.rule(),
                 continuation: Session {
                     program,
                     core: ActiveRunCore {
@@ -367,24 +353,25 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
                     },
                 },
             },
-            CoreAppliedRule::Terminal {
-                step,
-                rule,
-                output_view,
-                output,
-            } => CoreRunTransition::Returned {
-                step,
-                rule,
-                output_view,
-                output,
-                terminal: TerminalSession {
-                    program,
-                    core: TerminalRunCore {
-                        state,
-                        steps: budget.completed_steps(),
+            AppliedRule::Terminal(committed) => {
+                let step = committed.step();
+                let rule = committed.rule();
+                let output_view = committed.output_view();
+                let output = committed.into_output();
+                CoreRunTransition::Returned {
+                    step,
+                    rule,
+                    output_view,
+                    output,
+                    terminal: TerminalSession {
+                        program,
+                        core: TerminalRunCore {
+                            state,
+                            steps: budget.completed_steps(),
+                        },
                     },
-                },
-            },
+                }
+            }
         }
     }
 
@@ -397,7 +384,7 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
     pub(super) fn finish(self) -> Result<RunResult, RunFinishError> {
         let mut session = self;
         loop {
-            match session.advance_run_step::<DiscardedRunWitness>() {
+            match session.advance_run_step() {
                 CoreRunTransition::Applied { continuation, .. } => {
                     session = continuation;
                 }
@@ -512,20 +499,18 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
 
         let mut session = self;
         loop {
-            match session.advance_run_step::<BorrowedRunWitness>() {
+            match session.advance_run_step() {
                 CoreRunTransition::Applied {
                     step,
                     rule,
                     continuation,
                 } => {
-                    Self::emit_step_trace(
-                        &mut trace,
+                    trace(BorrowedTraceEvent::Rewritten {
                         step,
                         rule,
-                        BorrowedTraceEffect::Continue {
-                            state: continuation.state(),
-                        },
-                    )?;
+                        state: continuation.state(),
+                    })
+                    .map_err(TracedRunError::Trace)?;
                     session = continuation;
                 }
                 CoreRunTransition::Returned {
@@ -535,14 +520,12 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
                     output,
                     ..
                 } => {
-                    Self::emit_step_trace(
-                        &mut trace,
+                    trace(BorrowedTraceEvent::Returned {
                         step,
                         rule,
-                        BorrowedTraceEffect::Return {
-                            output: output_view,
-                        },
-                    )?;
+                        output: output_view,
+                    })
+                    .map_err(TracedRunError::Trace)?;
                     return Ok(RunResult::from_return(output, step));
                 }
                 CoreRunTransition::Stable { terminal } => {
@@ -559,22 +542,5 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
                 }
             }
         }
-    }
-
-    /// Emits one borrowed step trace event.
-    ///
-    /// # Errors
-    ///
-    /// Returns `TracedRunError::Trace` if the trace sink rejects the event.
-    fn emit_step_trace<F, TraceError>(
-        trace: &mut F,
-        step: StepCount,
-        rule: RuleView<'program>,
-        effect: BorrowedTraceEffect<'program, '_>,
-    ) -> Result<(), TracedRunError<TraceError>>
-    where
-        F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), TraceError>,
-    {
-        trace(BorrowedTraceEvent::Step { step, rule, effect }).map_err(TracedRunError::Trace)
     }
 }

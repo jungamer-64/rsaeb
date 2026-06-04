@@ -6,7 +6,7 @@ use crate::program::{ExecutableProgram, RunResult};
 use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
 
 use super::advance::{
-    BorrowedRunWitness, CoreContinuingRuleAttemptStep, CoreFinalRuleAttemptStep,
+    CoreContinuingRuleAttemptStep, CoreFinalRuleAttemptStep,
     advance_continuing_borrowed_rule_attempt, advance_final_borrowed_rule_attempt,
 };
 use super::engine::{
@@ -340,7 +340,7 @@ impl<'program> BorrowedRuleAttemptTerminal<'program> {
 fn step_borrowed_run<'program, E: ExecutionPolicy>(
     session: BorrowedRunSession<'program, E>,
 ) -> BorrowedStepTransition<'program, E> {
-    match session.session.advance_run_step::<BorrowedRunWitness>() {
+    match session.session.advance_run_step() {
         CoreRunTransition::Applied {
             step,
             rule,

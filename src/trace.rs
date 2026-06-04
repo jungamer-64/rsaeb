@@ -12,7 +12,7 @@
 //! checked per event.
 //!
 //! ```
-//! use rsaeb::trace::{SnapshotTrace, TraceSnapshotEffect, TraceSnapshotEvent};
+//! use rsaeb::trace::{SnapshotTrace, TraceSnapshotEvent};
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
 //!     DefaultParsePolicy, DefaultRuntimeInputPolicy, StaticExecutionPolicy,
@@ -32,14 +32,12 @@
 //! executable.trace(admitted, SnapshotTrace::<SnapshotBytes, _>::new(|event| {
 //!         match event {
 //!             TraceSnapshotEvent::Initial { state } => retained.push(state.into_raw_bytes()),
-//!             TraceSnapshotEvent::Step {
-//!                 effect: TraceSnapshotEffect::Continue { state },
-//!                 ..
-//!             } => retained.push(state.into_raw_bytes()),
-//!             TraceSnapshotEvent::Step {
-//!                 effect: TraceSnapshotEffect::Return { output },
-//!                 ..
-//!             } => retained.push(output.into_raw_bytes()),
+//!             TraceSnapshotEvent::Rewritten { state, .. } => {
+//!                 retained.push(state.into_raw_bytes());
+//!             }
+//!             TraceSnapshotEvent::Returned { output, .. } => {
+//!                 retained.push(output.into_raw_bytes());
+//!             }
 //!         }
 //!         Ok::<(), core::convert::Infallible>(())
 //!     }))?;
@@ -96,7 +94,7 @@ use core::marker::PhantomData;
 
 use crate::error::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
 use crate::input::AdmittedRun;
-use crate::inspect::RuleView;
+use crate::inspect::{ReturnRuleView, RewriteRuleView};
 use crate::limits::{StepCount, TraceSnapshotByteLimit};
 use crate::policy::{ExecutionPolicy, TraceSnapshotPolicy};
 use crate::program::limits::TraceSnapshotBytePermit;
@@ -352,6 +350,24 @@ pub enum BorrowedTraceEvent<'program, 'run> {
         /// Initial runtime state.
         state: RuntimeStateView<'run>,
     },
+    /// One rewrite committed and produced the next runtime state.
+    Rewritten {
+        /// Committed step count.
+        step: StepCount,
+        /// Exact rewrite rule committed by this step.
+        rule: RewriteRuleView<'program>,
+        /// Runtime state after the committed rewrite.
+        state: RuntimeStateView<'run>,
+    },
+    /// One return committed and produced terminal output.
+    Returned {
+        /// Committed step count.
+        step: StepCount,
+        /// Exact return rule committed by this step.
+        rule: ReturnRuleView<'program>,
+        /// Borrowed terminal return output.
+        output: ReturnOutputView<'program>,
+    },
 }
 
 /// Trace event emitted by trace snapshot APIs.
@@ -368,6 +384,24 @@ pub enum TraceSnapshotEvent<'program> {
         /// Initial runtime state.
         state: RuntimeStateSnapshot,
     },
+    /// One rewrite committed and produced the next runtime state.
+    Rewritten {
+        /// Committed step count.
+        step: StepCount,
+        /// Exact rewrite rule committed by this step.
+        rule: RewriteRuleView<'program>,
+        /// Materialized runtime state after the committed rewrite.
+        state: RuntimeStateSnapshot,
+    },
+    /// One return committed and produced terminal output.
+    Returned {
+        /// Committed step count.
+        step: StepCount,
+        /// Exact return rule committed by this step.
+        rule: ReturnRuleView<'program>,
+        /// Materialized terminal return output.
+        output: ReturnOutput,
+    },
 }
 
 impl<'program> BorrowedTraceEvent<'program, '_> {
@@ -378,7 +412,12 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
             Self::Initial { state } => {
                 TraceSnapshotByteCount::from_runtime_state_count(state.byte_count())
             }
-            Self::Step { effect, .. } => effect.byte_count(),
+            Self::Rewritten { state, .. } => {
+                TraceSnapshotByteCount::from_runtime_state_count(state.byte_count())
+            }
+            Self::Returned { output, .. } => {
+                TraceSnapshotByteCount::from_return_output_count(output.byte_count())
+            }
         }
     }
 
@@ -387,7 +426,8 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
     pub fn is_empty(self) -> bool {
         match self {
             Self::Initial { state } => state.is_empty(),
-            Self::Step { effect, .. } => effect.is_empty(),
+            Self::Rewritten { state, .. } => state.is_empty(),
+            Self::Returned { output, .. } => output.is_empty(),
         }
     }
 
@@ -410,11 +450,28 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
                     state: RuntimeStateSnapshot::from_trace_state_view(state, permit)?,
                 })
             }
-            Self::Step { step, rule, effect } => Ok(TraceSnapshotEvent::Step {
-                step,
-                rule,
-                effect: effect.to_snapshot::<T>()?,
-            }),
+            Self::Rewritten { step, rule, state } => {
+                let permit = ensure_trace_len(
+                    TraceSnapshotByteCount::from_runtime_state_count(state.byte_count()),
+                    T::TRACE_SNAPSHOT_BYTE_LIMIT,
+                )?;
+                Ok(TraceSnapshotEvent::Rewritten {
+                    step,
+                    rule,
+                    state: RuntimeStateSnapshot::from_trace_state_view(state, permit)?,
+                })
+            }
+            Self::Returned { step, rule, output } => {
+                let permit = ensure_trace_len(
+                    TraceSnapshotByteCount::from_return_output_count(output.byte_count()),
+                    T::TRACE_SNAPSHOT_BYTE_LIMIT,
+                )?;
+                Ok(TraceSnapshotEvent::Returned {
+                    step,
+                    rule,
+                    output: ReturnOutput::from_trace_return_output_view(output, permit)?,
+                })
+            }
         }
     }
 }

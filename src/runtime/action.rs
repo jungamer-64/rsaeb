@@ -1,7 +1,8 @@
 use crate::bytes::ReturnOutputByteCount;
 use crate::error::RunStepError;
 use crate::inspect::{
-    AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView, RuleView,
+    AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView,
+    ReturnRuleView, RewriteRuleView,
 };
 use crate::limits::StepCount;
 use crate::policy::ExecutionPolicy;
@@ -18,7 +19,7 @@ use super::state::State;
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum AppliedRule<'program> {
     /// One rewrite rule committed and execution may continue.
-    Continued(CommittedRewriteRule),
+    Continued(CommittedRewriteRule<'program>),
     /// One return rule committed and execution is terminal.
     Terminal(CommittedReturnRule<'program>),
 }
@@ -38,9 +39,11 @@ pub(crate) enum PreparedRuleStep<'program, 'once, 'budget, E: ExecutionPolicy> {
 
 /// Committed non-terminal rewrite rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CommittedRewriteRule {
+pub(crate) struct CommittedRewriteRule<'program> {
     /// Step number assigned by the runtime budget.
     step: StepCount,
+    /// Exact rewrite rule whose action committed this step.
+    rule: RewriteRuleView<'program>,
 }
 
 /// Committed terminal return rule.
@@ -48,6 +51,8 @@ pub(crate) struct CommittedRewriteRule {
 pub(crate) struct CommittedReturnRule<'program> {
     /// Step number assigned by the runtime budget.
     step: StepCount,
+    /// Exact return rule whose action committed this step.
+    rule: ReturnRuleView<'program>,
     /// Borrowed return output payload from the committed parsed rule.
     output_view: ReturnOutputView<'program>,
     /// Materialized return output produced before committing the terminal step.
@@ -106,10 +111,15 @@ pub(crate) struct PreparedOnceReturnRule<'program, 'once, 'budget, E: ExecutionP
     output: ReturnOutput,
 }
 
-impl CommittedRewriteRule {
+impl<'program> CommittedRewriteRule<'program> {
     /// Step number assigned by the runtime budget.
     pub(crate) const fn step(self) -> StepCount {
         self.step
+    }
+
+    /// Exact rewrite rule whose action committed this step.
+    pub(crate) const fn rule(self) -> RewriteRuleView<'program> {
+        self.rule
     }
 }
 
@@ -121,6 +131,11 @@ impl CommittedReturnRule<'_> {
 }
 
 impl<'program> CommittedReturnRule<'program> {
+    /// Exact return rule whose action committed this step.
+    pub(crate) const fn rule(&self) -> ReturnRuleView<'program> {
+        self.rule
+    }
+
     /// Borrowed return output payload from the committed parsed rule.
     pub(crate) const fn output_view(&self) -> ReturnOutputView<'program> {
         self.output_view
@@ -133,16 +148,6 @@ impl<'program> CommittedReturnRule<'program> {
 }
 
 impl<'program, E: ExecutionPolicy> PreparedRuleStep<'program, '_, '_, E> {
-    /// Parsed rule selected by this prepared step.
-    pub(crate) const fn rule(&self) -> RuleView<'program> {
-        match self {
-            Self::AlwaysRewrite(prepared) => RuleView::AlwaysRewrite(prepared.rule),
-            Self::OnceRewrite(prepared) => RuleView::OnceRewrite(prepared.rule),
-            Self::AlwaysReturn(prepared) => RuleView::AlwaysReturn(prepared.rule),
-            Self::OnceReturn(prepared) => RuleView::OnceReturn(prepared.rule),
-        }
-    }
-
     /// Commits the prepared runtime side effects.
     pub(crate) fn commit(
         self,
@@ -153,18 +158,25 @@ impl<'program, E: ExecutionPolicy> PreparedRuleStep<'program, '_, '_, E> {
             Self::AlwaysRewrite(prepared) => {
                 let step = prepared.step.commit();
                 state.commit_rewrite(prepared.rewrite, scratch);
-                AppliedRule::Continued(CommittedRewriteRule { step })
+                AppliedRule::Continued(CommittedRewriteRule {
+                    step,
+                    rule: RewriteRuleView::Always(prepared.rule),
+                })
             }
             Self::OnceRewrite(prepared) => {
                 prepared.once_commit.commit();
                 let step = prepared.step.commit();
                 state.commit_rewrite(prepared.rewrite, scratch);
-                AppliedRule::Continued(CommittedRewriteRule { step })
+                AppliedRule::Continued(CommittedRewriteRule {
+                    step,
+                    rule: RewriteRuleView::Once(prepared.rule),
+                })
             }
             Self::AlwaysReturn(prepared) => {
                 let step = prepared.step.commit();
                 AppliedRule::Terminal(CommittedReturnRule {
                     step,
+                    rule: ReturnRuleView::Always(prepared.rule),
                     output_view: prepared.output_view,
                     output: prepared.output,
                 })
@@ -174,6 +186,7 @@ impl<'program, E: ExecutionPolicy> PreparedRuleStep<'program, '_, '_, E> {
                 let step = prepared.step.commit();
                 AppliedRule::Terminal(CommittedReturnRule {
                     step,
+                    rule: ReturnRuleView::Once(prepared.rule),
                     output_view: prepared.output_view,
                     output: prepared.output,
                 })

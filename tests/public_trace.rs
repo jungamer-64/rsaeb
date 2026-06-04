@@ -10,13 +10,11 @@ use rsaeb::error::{
 };
 use rsaeb::execution::BorrowedStepTransition;
 use rsaeb::input::AdmittedRun;
+use rsaeb::inspect::{ReturnRuleView, RewriteRuleView};
 use rsaeb::limits::TraceSnapshotByteLimit;
 use rsaeb::policy::{DefaultTraceSnapshotPolicy, StaticTraceSnapshotPolicy};
 use rsaeb::program::{ExecutableProgram, RunOutcome, RunResult};
-use rsaeb::trace::{
-    BorrowedTrace, BorrowedTraceEffect, BorrowedTraceEvent, SnapshotTrace, TraceSnapshotEffect,
-    TraceSnapshotEvent,
-};
+use rsaeb::trace::{BorrowedTrace, BorrowedTraceEvent, SnapshotTrace, TraceSnapshotEvent};
 use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
 
@@ -59,10 +57,8 @@ fn trace_snapshot_example(
 fn snapshot_event_bytes<'event>(event: &'event TraceSnapshotEvent<'_>) -> &'event [u8] {
     match event {
         TraceSnapshotEvent::Initial { state } => state.as_slice(),
-        TraceSnapshotEvent::Step { effect, .. } => match effect {
-            TraceSnapshotEffect::Continue { state } => state.as_slice(),
-            TraceSnapshotEffect::Return { output } => output.as_slice(),
-        },
+        TraceSnapshotEvent::Rewritten { state, .. } => state.as_slice(),
+        TraceSnapshotEvent::Returned { output, .. } => output.as_slice(),
     }
 }
 
@@ -85,6 +81,69 @@ enum CommittedStepSignature {
         rule_position: usize,
         output: Vec<u8>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutcomeRuleShape {
+    AlwaysRewrite,
+    OnceRewrite,
+    AlwaysReturn,
+    OnceReturn,
+}
+
+fn rewrite_rule_shape(rule: RewriteRuleView<'_>) -> OutcomeRuleShape {
+    match rule {
+        RewriteRuleView::Always(_) => OutcomeRuleShape::AlwaysRewrite,
+        RewriteRuleView::Once(_) => OutcomeRuleShape::OnceRewrite,
+    }
+}
+
+fn return_rule_shape(rule: ReturnRuleView<'_>) -> OutcomeRuleShape {
+    match rule {
+        ReturnRuleView::Always(_) => OutcomeRuleShape::AlwaysReturn,
+        ReturnRuleView::Once(_) => OutcomeRuleShape::OnceReturn,
+    }
+}
+
+/// Verifies borrowed and snapshot tracing preserve one exact outcome rule shape.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if either trace surface erases action or repeat provenance.
+fn ensure_trace_rule_shape(source: &str, expected: OutcomeRuleShape) -> TestResult {
+    let program = parse_program(source)?;
+    let limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
+    let mut borrowed_shape = None;
+    program
+        .trace(
+            runtime_input(b"a", limits)?,
+            BorrowedTrace::new(|event| {
+                let shape = match event {
+                    BorrowedTraceEvent::Initial { .. } => return Ok(()),
+                    BorrowedTraceEvent::Rewritten { rule, .. } => rewrite_rule_shape(rule),
+                    BorrowedTraceEvent::Returned { rule, .. } => return_rule_shape(rule),
+                };
+                borrowed_shape = Some(shape);
+                Ok(())
+            }),
+        )
+        .map_err(traced_test_failure)?;
+    ensure_eq!(borrowed_shape, Some(expected))?;
+
+    let mut snapshot_shape = None;
+    program.trace(
+        runtime_input(b"a", limits)?,
+        SnapshotTrace::<DefaultTraceSnapshotPolicy, _>::new(|event| {
+            let shape = match event {
+                TraceSnapshotEvent::Initial { .. } => return Ok(()),
+                TraceSnapshotEvent::Rewritten { rule, .. } => rewrite_rule_shape(rule),
+                TraceSnapshotEvent::Returned { rule, .. } => return_rule_shape(rule),
+            };
+            snapshot_shape = Some(shape);
+            Ok::<(), TestFailure>(())
+        }),
+    )?;
+    ensure_eq!(snapshot_shape, Some(expected))
 }
 
 /// Validates test bytes as runtime input.
@@ -113,22 +172,21 @@ fn borrowed_trace_step_signatures(
         .trace(
             admitted,
             BorrowedTrace::new(|event| {
-                if let BorrowedTraceEvent::Step { step, rule, effect } = event {
-                    match effect {
-                        BorrowedTraceEffect::Continue { state } => {
-                            signatures.push(CommittedStepSignature::Continue {
-                                step: step.get(),
-                                rule_position: rule.position().number().get(),
-                                state: state.materialize()?.into_raw_bytes(),
-                            });
-                        }
-                        BorrowedTraceEffect::Return { output } => {
-                            signatures.push(CommittedStepSignature::Return {
-                                step: step.get(),
-                                rule_position: rule.position().number().get(),
-                                output: output.materialize()?.into_raw_bytes(),
-                            });
-                        }
+                match event {
+                    BorrowedTraceEvent::Initial { .. } => {}
+                    BorrowedTraceEvent::Rewritten { step, rule, state } => {
+                        signatures.push(CommittedStepSignature::Continue {
+                            step: step.get(),
+                            rule_position: rule.position().number().get(),
+                            state: state.materialize()?.into_raw_bytes(),
+                        });
+                    }
+                    BorrowedTraceEvent::Returned { step, rule, output } => {
+                        signatures.push(CommittedStepSignature::Return {
+                            step: step.get(),
+                            rule_position: rule.position().number().get(),
+                            output: output.materialize()?.into_raw_bytes(),
+                        });
                     }
                 }
                 Ok(())
@@ -191,14 +249,12 @@ fn trace_events_are_emitted_without_snapshots() -> TestResult {
             BorrowedTrace::new(|event| {
                 let bytes = match event {
                     BorrowedTraceEvent::Initial { state }
-                    | BorrowedTraceEvent::Step {
-                        effect: BorrowedTraceEffect::Continue { state },
-                        ..
-                    } => state.materialize()?.into_raw_bytes(),
-                    BorrowedTraceEvent::Step {
-                        effect: BorrowedTraceEffect::Return { output },
-                        ..
-                    } => output.materialize()?.into_raw_bytes(),
+                    | BorrowedTraceEvent::Rewritten { state, .. } => {
+                        state.materialize()?.into_raw_bytes()
+                    }
+                    BorrowedTraceEvent::Returned { output, .. } => {
+                        output.materialize()?.into_raw_bytes()
+                    }
                 };
                 seen.push((event.byte_count().get(), bytes));
                 Ok(())
@@ -219,7 +275,7 @@ fn trace_events_are_emitted_without_snapshots() -> TestResult {
 /// # Errors
 ///
 /// Returns `TestFailure` if borrowed trace and borrowed stepwise execution report
-/// different committed rule effects.
+/// different committed outcomes.
 #[test]
 fn borrowed_trace_steps_match_borrowed_stepwise_commits() -> TestResult {
     let source = "(once)a=b\nb=(return)ok";
@@ -234,10 +290,22 @@ fn borrowed_trace_steps_match_borrowed_stepwise_commits() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if trace snapshot events lose materialized bytes or
-/// structured effects.
+/// Returns `TestFailure` if borrowed or snapshot tracing erases successful
+/// outcome action/repeat provenance.
 #[test]
-fn trace_snapshot_events_carry_bytes_and_structured_effects() -> TestResult {
+fn trace_success_events_preserve_exact_rule_shapes() -> TestResult {
+    ensure_trace_rule_shape("a=b", OutcomeRuleShape::AlwaysRewrite)?;
+    ensure_trace_rule_shape("(once)a=b", OutcomeRuleShape::OnceRewrite)?;
+    ensure_trace_rule_shape("a=(return)ok", OutcomeRuleShape::AlwaysReturn)?;
+    ensure_trace_rule_shape("(once)a=(return)ok", OutcomeRuleShape::OnceReturn)
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if trace snapshot events lose materialized bytes or
+/// exact outcome variants.
+#[test]
+fn trace_snapshot_events_carry_bytes_and_exact_outcomes() -> TestResult {
     let program = parse_program("a=b\nb=(return)ok")?;
     let (result, events) = trace_snapshot_example(&program)?;
 
@@ -261,33 +329,21 @@ fn trace_snapshot_events_carry_bytes_and_structured_effects() -> TestResult {
     ensure_eq!(snapshot_event_bytes(first_step), b"b".as_slice())?;
     ensure_eq!(snapshot_event_bytes(second_step), b"ok".as_slice())?;
     ensure_matches(
-        matches!(
-            first_step,
-            TraceSnapshotEvent::Step {
-                effect: TraceSnapshotEffect::Continue { .. },
-                ..
-            }
-        ),
-        "expected continue step",
+        matches!(first_step, TraceSnapshotEvent::Rewritten { .. }),
+        "expected rewritten step",
     )?;
     ensure_matches(
-        matches!(
-            second_step,
-            TraceSnapshotEvent::Step {
-                effect: TraceSnapshotEffect::Return { .. },
-                ..
-            }
-        ),
+        matches!(second_step, TraceSnapshotEvent::Returned { .. }),
         "expected return step",
     )
 }
 
 /// # Errors
 ///
-/// Returns `TestFailure` if a continuing trace snapshot step does not carry the
+/// Returns `TestFailure` if a rewritten trace snapshot step does not carry the
 /// expected rule view.
 #[test]
-fn trace_snapshot_continue_step_carries_rule_view() -> TestResult {
+fn trace_snapshot_rewritten_step_carries_rule_view() -> TestResult {
     let program = parse_program("a=b\nb=(return)ok")?;
     let (_, events) = trace_snapshot_example(&program)?;
     let first_step = events
@@ -295,19 +351,50 @@ fn trace_snapshot_continue_step_carries_rule_view() -> TestResult {
         .ok_or(TestFailure::message("expected first trace step"))?;
 
     match first_step {
-        TraceSnapshotEvent::Step {
-            rule,
-            effect: TraceSnapshotEffect::Continue { state },
-            ..
-        } => {
+        TraceSnapshotEvent::Rewritten { rule, state, .. } => {
             ensure_eq!(state.as_slice(), b"b".as_slice())?;
             ensure_eq!(rule.canonical_source()?.as_slice(), b"a=b".as_slice())?;
             Ok(())
         }
-        TraceSnapshotEvent::Initial { .. } | TraceSnapshotEvent::Step { .. } => {
-            Err(TestFailure::message("expected continuing step event"))
+        TraceSnapshotEvent::Initial { .. } | TraceSnapshotEvent::Returned { .. } => {
+            Err(TestFailure::message("expected rewritten step event"))
         }
     }
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if empty detection reads bytes from the wrong exact
+/// trace variant.
+#[test]
+fn trace_event_empty_detection_follows_exact_variant_payloads() -> TestResult {
+    let limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
+
+    let rewritten_program = parse_program("a=")?;
+    let mut rewritten_empty = Vec::new();
+    rewritten_program
+        .trace(
+            runtime_input(b"a", limits)?,
+            BorrowedTrace::new(|event| {
+                rewritten_empty.push(event.is_empty());
+                Ok::<(), TestFailure>(())
+            }),
+        )
+        .map_err(traced_test_failure)?;
+    ensure_eq!(rewritten_empty, [false, true])?;
+
+    let returned_program = parse_program("=(return)")?;
+    let mut returned_empty = Vec::new();
+    returned_program
+        .trace(
+            runtime_input(b"", limits)?,
+            BorrowedTrace::new(|event| {
+                returned_empty.push(event.is_empty());
+                Ok::<(), TestFailure>(())
+            }),
+        )
+        .map_err(traced_test_failure)?;
+    ensure_eq!(returned_empty, [true, true])
 }
 
 /// # Errors
@@ -462,13 +549,7 @@ fn trace_final_event_matches_run_result() -> TestResult {
         .ok_or(TestFailure::message("trace event count overflow"))?;
     ensure_eq!(events.len(), expected_event_count)?;
     ensure_matches(
-        matches!(
-            last,
-            TraceSnapshotEvent::Step {
-                effect: TraceSnapshotEffect::Return { .. },
-                ..
-            }
-        ),
+        matches!(last, TraceSnapshotEvent::Returned { .. }),
         "expected final return step",
     )
 }

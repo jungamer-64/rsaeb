@@ -262,7 +262,7 @@ impl<'program> Iterator for RuleScanIter<'program> {
 
 impl ExactSizeIterator for RuleScanIter<'_> {
     fn len(&self) -> usize {
-        let first_len = if self.first.is_some() { 1 } else { 0 };
+        let first_len = usize::from(self.first.is_some());
         self.remaining.len().saturating_add(first_len)
     }
 }

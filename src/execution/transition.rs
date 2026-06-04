@@ -1,5 +1,5 @@
 use crate::error::{RuleAttemptStepError, RunFinishError, RunStepError};
-use crate::inspect::RuleView;
+use crate::inspect::{ReturnRuleView, RewriteRuleView};
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, ReturnOutput, RunResult};
@@ -29,7 +29,7 @@ pub struct BorrowedAppliedStep<'program, E: ExecutionPolicy> {
     /// Step number committed by this transition.
     pub(super) step: StepCount,
     /// Borrowed rewrite rule committed by this transition.
-    pub(super) rule: RuleView<'program>,
+    pub(super) rule: RewriteRuleView<'program>,
     /// Continuation session after the committed rule application.
     pub(super) session: BorrowedRunSession<'program, E>,
 }
@@ -47,7 +47,7 @@ pub struct BorrowedReturnedRun<'program> {
     /// Step number that executed the return action.
     pub(super) step: StepCount,
     /// Borrowed return rule committed by this transition.
-    pub(super) rule: RuleView<'program>,
+    pub(super) rule: ReturnRuleView<'program>,
     /// Parsed program borrowed by the terminal state.
     pub(super) program: &'program ExecutableProgram,
     /// Materialized return output produced by the committed return rule.
@@ -113,7 +113,7 @@ pub struct BorrowedRuleAttemptAppliedStep<'program, E: ExecutionPolicy, A: RuleA
     /// Step number committed by this transition.
     pub(super) step: StepCount,
     /// Borrowed rewrite rule committed by this transition.
-    pub(super) rule: RuleView<'program>,
+    pub(super) rule: RewriteRuleView<'program>,
     /// Cursor after the committed rule application.
     pub(super) cursor: BorrowedRuleAttemptCursor<'program, E, A>,
 }
@@ -137,7 +137,7 @@ pub struct BorrowedRuleAttemptReturnedRun<'program> {
     /// Step number that executed the return action.
     pub(super) step: StepCount,
     /// Borrowed return rule committed by this transition.
-    pub(super) rule: RuleView<'program>,
+    pub(super) rule: ReturnRuleView<'program>,
     /// Parsed program borrowed by the terminal state.
     pub(super) program: &'program ExecutableProgram,
     /// Materialized return output produced by the committed return rule.
@@ -165,7 +165,7 @@ impl<'program, E: ExecutionPolicy> BorrowedAppliedStep<'program, E> {
 
     /// Borrowed rule committed by this transition.
     #[must_use]
-    pub const fn rule(&self) -> RuleView<'program> {
+    pub const fn rule(&self) -> RewriteRuleView<'program> {
         self.rule
     }
 
@@ -227,7 +227,7 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
 
     /// Borrowed rule committed by this rule-attempt transition.
     #[must_use]
-    pub const fn rule(&self) -> RuleView<'program> {
+    pub const fn rule(&self) -> RewriteRuleView<'program> {
         self.rule
     }
 
@@ -329,7 +329,7 @@ impl<'program> BorrowedReturnedRun<'program> {
 
     /// Borrowed return rule committed by this terminal state.
     #[must_use]
-    pub const fn rule(&self) -> RuleView<'program> {
+    pub const fn rule(&self) -> ReturnRuleView<'program> {
         self.rule
     }
 
@@ -367,7 +367,7 @@ impl<'program> BorrowedRuleAttemptReturnedRun<'program> {
 
     /// Borrowed return rule committed by this terminal state.
     #[must_use]
-    pub const fn rule(&self) -> RuleView<'program> {
+    pub const fn rule(&self) -> ReturnRuleView<'program> {
         self.rule
     }
 
