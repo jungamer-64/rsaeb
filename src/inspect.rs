@@ -18,7 +18,7 @@
 //! use rsaeb::program::ExecutableProgram;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text(
+//! let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>(
 //!     "(once)(start)a=(return)done",
 //! )?;
 //! let rule = executable.rules().next().ok_or("missing rule")?;

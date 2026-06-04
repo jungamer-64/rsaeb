@@ -15,7 +15,7 @@ use rsaeb::input::AdmittedRun;
 use rsaeb::inspect::{RewriteActionView, RuleAnchor, RuleView};
 use rsaeb::limits::{ReturnByteLimit, RuleAttemptLimit, RuntimeStateByteLimit};
 use rsaeb::policy::{
-    DefaultParsePolicy, ExecutionPolicy, ParsePolicy, RuleAttemptPolicy, StaticRuleAttemptPolicy,
+    DefaultParsePolicy, ExecutionPolicy, RuleAttemptPolicy, StaticRuleAttemptPolicy,
 };
 use rsaeb::program::{EmptyProgram, ExecutableProgram, RunOutcome, RunResult};
 use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
@@ -299,8 +299,8 @@ fn rule_miss_signature(miss: &RuleMiss<'_>) -> RuleMissSignature {
 /// # Errors
 ///
 /// Returns `TestFailure` if state materialization fails.
-fn applied_signature<P: ParsePolicy, E: ExecutionPolicy>(
-    applied: &BorrowedAppliedStep<'_, P, E>,
+fn applied_signature<E: ExecutionPolicy>(
+    applied: &BorrowedAppliedStep<'_, E>,
 ) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Applied {
         step: applied.step().get(),
@@ -314,9 +314,7 @@ fn applied_signature<P: ParsePolicy, E: ExecutionPolicy>(
 /// # Errors
 ///
 /// Returns `TestFailure` if stable-state materialization fails.
-fn stable_signature<P: ParsePolicy>(
-    stable: &BorrowedStableRun<'_, P>,
-) -> Result<StepSignature, TestFailure> {
+fn stable_signature(stable: &BorrowedStableRun<'_>) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Stable {
         steps: stable.steps().get(),
         state: runtime_view_bytes(stable.state())?,
@@ -324,7 +322,7 @@ fn stable_signature<P: ParsePolicy>(
 }
 
 /// Builds a comparable signature for a returned step.
-fn returned_signature<P: ParsePolicy>(returned: &BorrowedReturnedRun<'_, P>) -> StepSignature {
+fn returned_signature(returned: &BorrowedReturnedRun<'_>) -> StepSignature {
     StepSignature::Return {
         step: returned.step().get(),
         rule_position: returned.rule().position().number().get(),
@@ -344,7 +342,7 @@ fn default_test_run_policy() -> DefaultInputRunPolicy<10, DEFAULT_BYTE_BUDGET, D
 /// Returns `TestFailure` if the program cannot be parsed, input is rejected, or
 /// rule-attempt execution fails.
 fn borrowed_rule_attempt_signatures<const ATTEMPTS: usize>(
-    program: &ExecutableProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram,
     input: &'static [u8],
 ) -> Result<Vec<BorrowedRuleAttemptSignature>, TestFailure> {
     let execution = program.rule_attempts::<StaticRuleAttemptPolicy<ATTEMPTS>, _>(
@@ -358,8 +356,8 @@ fn borrowed_rule_attempt_signatures<const ATTEMPTS: usize>(
 /// # Errors
 ///
 /// Returns `TestFailure` if a step fails or transition materialization fails.
-fn finish_step_signatures<P: ParsePolicy, E: ExecutionPolicy>(
-    mut execution: BorrowedRunSession<'_, P, E>,
+fn finish_step_signatures<E: ExecutionPolicy>(
+    mut execution: BorrowedRunSession<'_, E>,
 ) -> Result<Vec<StepSignature>, TestFailure> {
     let mut signatures = Vec::new();
     loop {
@@ -388,11 +386,10 @@ fn finish_step_signatures<P: ParsePolicy, E: ExecutionPolicy>(
 /// # Errors
 ///
 /// Returns `TestFailure` if a rule attempt fails or state materialization fails.
-fn finish_borrowed_rule_attempt_signatures<P, E, A>(
-    execution: BorrowedRuleAttemptCursor<'_, P, E, A>,
+fn finish_borrowed_rule_attempt_signatures<E, A>(
+    execution: BorrowedRuleAttemptCursor<'_, E, A>,
 ) -> Result<Vec<BorrowedRuleAttemptSignature>, TestFailure>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
@@ -404,9 +401,9 @@ where
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping fails.
-fn expect_step_transition<'program, P: ParsePolicy, E: ExecutionPolicy>(
-    result: BorrowedStepTransition<'program, P, E>,
-) -> Result<BorrowedStepTransition<'program, P, E>, TestFailure> {
+fn expect_step_transition<'program, E: ExecutionPolicy>(
+    result: BorrowedStepTransition<'program, E>,
+) -> Result<BorrowedStepTransition<'program, E>, TestFailure> {
     expect_non_failed_transition!(result, BorrowedStepTransition::Failed)
 }
 
@@ -415,9 +412,9 @@ fn expect_step_transition<'program, P: ParsePolicy, E: ExecutionPolicy>(
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping does not fail.
-fn expect_failed_transition<'program, P: ParsePolicy, E: ExecutionPolicy>(
-    result: BorrowedStepTransition<'program, P, E>,
-) -> Result<BorrowedFailedRun<'program, P>, TestFailure> {
+fn expect_failed_transition<'program, E: ExecutionPolicy>(
+    result: BorrowedStepTransition<'program, E>,
+) -> Result<BorrowedFailedRun<'program>, TestFailure> {
     match result {
         BorrowedStepTransition::Failed(failed) => Ok(failed),
         BorrowedStepTransition::Applied(_)
@@ -444,7 +441,7 @@ fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolicy>(
 ///
 /// Returns `TestFailure` if execution fails.
 fn execute_program<E>(
-    program: &ExecutableProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram,
     admitted: AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
@@ -458,11 +455,10 @@ where
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping fails.
-fn expect_continuing_rule_attempt_transition<'program, P, E, A>(
-    result: BorrowedContinuingRuleAttemptTransition<'program, P, E, A>,
-) -> Result<BorrowedContinuingRuleAttemptTransition<'program, P, E, A>, TestFailure>
+fn expect_continuing_rule_attempt_transition<'program, E, A>(
+    result: BorrowedContinuingRuleAttemptTransition<'program, E, A>,
+) -> Result<BorrowedContinuingRuleAttemptTransition<'program, E, A>, TestFailure>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
@@ -474,11 +470,10 @@ where
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping fails.
-fn expect_final_rule_attempt_transition<'program, P, E, A>(
-    result: BorrowedFinalRuleAttemptTransition<'program, P, E, A>,
-) -> Result<BorrowedFinalRuleAttemptTransition<'program, P, E, A>, TestFailure>
+fn expect_final_rule_attempt_transition<'program, E, A>(
+    result: BorrowedFinalRuleAttemptTransition<'program, E, A>,
+) -> Result<BorrowedFinalRuleAttemptTransition<'program, E, A>, TestFailure>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
@@ -490,11 +485,10 @@ where
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping does not fail.
-fn expect_failed_continuing_rule_attempt<'program, P, E, A>(
-    result: BorrowedContinuingRuleAttemptTransition<'program, P, E, A>,
-) -> Result<BorrowedRuleAttemptFailedRun<'program, P>, TestFailure>
+fn expect_failed_continuing_rule_attempt<'program, E, A>(
+    result: BorrowedContinuingRuleAttemptTransition<'program, E, A>,
+) -> Result<BorrowedRuleAttemptFailedRun<'program>, TestFailure>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
@@ -513,11 +507,10 @@ where
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping does not fail.
-fn expect_failed_final_rule_attempt<'program, P, E, A>(
-    result: BorrowedFinalRuleAttemptTransition<'program, P, E, A>,
-) -> Result<BorrowedRuleAttemptFailedRun<'program, P>, TestFailure>
+fn expect_failed_final_rule_attempt<'program, E, A>(
+    result: BorrowedFinalRuleAttemptTransition<'program, E, A>,
+) -> Result<BorrowedRuleAttemptFailedRun<'program>, TestFailure>
 where
-    P: ParsePolicy,
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
@@ -732,18 +725,18 @@ fn execution_rule_attempt_start_and_final_miss_are_typed() -> TestResult {
             return Err(TestFailure::message("expected immediate stable terminal"));
         }
     }
-    let empty_program = EmptyProgram::<DefaultParsePolicy>::parse_text("# no executable rules")?;
+    let empty_program = EmptyProgram::parse_text::<DefaultParsePolicy>("# no executable rules")?;
     ensure_eq!(empty_program.rule_count().get(), 0)?;
     let borrowed_empty_result = empty_program.stabilize(runtime_input(b"empty", limits)?)?;
     expect_stable_bytes(&borrowed_empty_result, b"empty")?;
     ensure_eq!(borrowed_empty_result.steps().get(), 0)?;
 
-    let owned_empty = EmptyProgram::<DefaultParsePolicy>::parse_text("# no executable rules")?;
+    let owned_empty = EmptyProgram::parse_text::<DefaultParsePolicy>("# no executable rules")?;
     let owned_empty_result = owned_empty.stabilize(runtime_input(b"owned", limits)?)?;
     expect_stable_bytes(&owned_empty_result, b"owned")?;
     ensure_eq!(owned_empty_result.steps().get(), 0)?;
 
-    let owned_empty = EmptyProgram::<DefaultParsePolicy>::parse_text("# no executable rules")?;
+    let owned_empty = EmptyProgram::parse_text::<DefaultParsePolicy>("# no executable rules")?;
     ensure_eq!(owned_empty.rule_count().get(), 0)
 }
 

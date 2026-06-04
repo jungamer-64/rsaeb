@@ -153,10 +153,8 @@ pub type TestResult = Result<(), TestFailure>;
 /// Returns `ExecutableProgramParseError` if the source violates parser syntax,
 /// resource constraints, allocation constraints, or contains no executable
 /// rules.
-pub fn parse_program(
-    source: &str,
-) -> Result<ExecutableProgram<DefaultParsePolicy>, ExecutableProgramParseError> {
-    ExecutableProgram::parse_text(source)
+pub fn parse_program(source: &str) -> Result<ExecutableProgram, ExecutableProgramParseError> {
+    ExecutableProgram::parse_text::<DefaultParsePolicy>(source)
 }
 
 /// Converts a pattern-match assertion into the shared test result type.

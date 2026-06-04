@@ -40,8 +40,8 @@ use rsaeb::policy::{DefaultExecutionPolicy, DefaultParsePolicy, DefaultRuntimeIn
 use rsaeb::program::{ExecutableProgram, RunOutcome};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text("a=b")?;
-    let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+    let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>("a=b")?;
+    let input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
     let admitted = input.admit::<DefaultExecutionPolicy>()?;
     let result = executable.execute(admitted)?;
 
@@ -59,7 +59,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 `ExecutableProgram::parse_text` / `parse_bytes` and
 `EmptyProgram::parse_text` / `parse_bytes` are the public source boundaries.
 The target program type selects the expected shape, while parsing validates
-syntax and rejects content that does not match that shape.
+syntax and rejects content that does not match that shape. Parse and input
+policies are selected only at construction; they do not parameterize the
+resulting `ExecutableProgram`, `EmptyProgram`, or `RuntimeInput` values.
+Empty-target parsing rejects the first fully parsed executable rule immediately.
 `RuntimeInputSource` and `RuntimeInput::validate` do the same for runtime input
 bytes. Reuse parsed executable programs freely: an `ExecutableProgram` is
 immutable, and `(once)` consumption is local to each execution. Runtime state

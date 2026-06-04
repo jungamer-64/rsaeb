@@ -108,9 +108,9 @@ impl From<ParseError> for ExecutableProgramParseError {
 
 /// Error while parsing source that must contain no executable rules.
 ///
-/// This error keeps syntax/resource failures separate from shape mismatches:
-/// source may be syntactically valid A=B input and still be rejected because the
-/// caller asked for an empty program.
+/// This error keeps syntax/resource failures separate from shape mismatches.
+/// Empty-target parsing rejects the first fully parsed executable rule without
+/// parsing later source lines.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmptyProgramParseError {
     /// Source failed the ordinary parser contract.

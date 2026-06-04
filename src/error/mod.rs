@@ -34,8 +34,8 @@
 //!
 //! type Input8 = StaticRuntimeInputPolicy<8>;
 //!
-//! fn validate(bytes: &[u8]) -> Result<RuntimeInput<Input8>, RuntimeInputError> {
-//!     RuntimeInput::<Input8>::validate(RuntimeInputSource::from_bytes(bytes))
+//! fn validate(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
+//!     RuntimeInput::validate::<Input8>(RuntimeInputSource::from_bytes(bytes))
 //! }
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {

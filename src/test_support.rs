@@ -219,8 +219,8 @@ impl<I: RuntimeInputPolicy, E: ExecutionPolicy> TestRunPolicy<I, E> {
 pub(crate) fn runtime_input<I: RuntimeInputPolicy, E: ExecutionPolicy>(
     bytes: &[u8],
     _policy: TestRunPolicy<I, E>,
-) -> Result<RuntimeInput<I>, RuntimeInputError> {
-    RuntimeInput::<I>::validate(RuntimeInputSource::from_bytes(bytes))
+) -> Result<RuntimeInput, RuntimeInputError> {
+    RuntimeInput::validate::<I>(RuntimeInputSource::from_bytes(bytes))
 }
 
 /// Validates and admits test input into an execution witness.
@@ -244,8 +244,8 @@ pub(crate) fn admitted_run<I: RuntimeInputPolicy, E: ExecutionPolicy>(
 /// rules.
 pub(crate) fn parse_program(
     source: &str,
-) -> Result<ExecutableProgram<DefaultParsePolicy>, ExecutableProgramParseError> {
-    ExecutableProgram::parse_text(source)
+) -> Result<ExecutableProgram, ExecutableProgramParseError> {
+    ExecutableProgram::parse_text::<DefaultParsePolicy>(source)
 }
 
 /// Parses empty source text with the default parser limits.
@@ -254,10 +254,8 @@ pub(crate) fn parse_program(
 ///
 /// Returns `EmptyProgramParseError` if the source violates parser syntax,
 /// resource constraints, allocation constraints, or contains executable rules.
-pub(crate) fn parse_empty_program(
-    source: &str,
-) -> Result<EmptyProgram<DefaultParsePolicy>, EmptyProgramParseError> {
-    EmptyProgram::parse_text(source)
+pub(crate) fn parse_empty_program(source: &str) -> Result<EmptyProgram, EmptyProgramParseError> {
+    EmptyProgram::parse_text::<DefaultParsePolicy>(source)
 }
 
 /// Executes a parsed program that is expected to contain executable rules.
@@ -266,7 +264,7 @@ pub(crate) fn parse_empty_program(
 ///
 /// Returns `TestFailure` if the program is empty or execution fails.
 pub(crate) fn execute_program<E>(
-    program: &ExecutableProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram,
     admitted: AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
@@ -281,7 +279,7 @@ where
 ///
 /// Returns `TestFailure` if the program is executable or stabilization fails.
 pub(crate) fn stabilize_empty_program<E>(
-    program: EmptyProgram<DefaultParsePolicy>,
+    program: EmptyProgram,
     admitted: AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
@@ -299,8 +297,8 @@ where
 /// rules.
 pub(crate) fn parse_program_bytes(
     source: &[u8],
-) -> Result<ExecutableProgram<DefaultParsePolicy>, ExecutableProgramParseError> {
-    ExecutableProgram::parse_bytes(source)
+) -> Result<ExecutableProgram, ExecutableProgramParseError> {
+    ExecutableProgram::parse_bytes::<DefaultParsePolicy>(source)
 }
 
 /// Converts a boolean assertion into the shared test result type.

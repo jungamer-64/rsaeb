@@ -13,7 +13,7 @@ use rsaeb::limits::{
     CodeLineByteLimit, PayloadByteLimit, ReturnByteLimit, RuleLimit, RuntimeStateByteLimit,
     SourceByteLimit, StepLimit,
 };
-use rsaeb::policy::{DefaultParsePolicy, ExecutionPolicy, ParsePolicy, StaticParsePolicy};
+use rsaeb::policy::{ExecutionPolicy, ParsePolicy, StaticParsePolicy};
 use rsaeb::program::{ExecutableProgram, RunResult};
 use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
@@ -143,7 +143,7 @@ fn ensure_step_limit_run<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolic
 /// Returns `TestFailure` if parsing succeeds or reports another error domain.
 fn ensure_parse_limit_error<P: ParsePolicy>(case: ParseLimitCase) -> TestResult {
     let Err(ExecutableProgramParseError::Parse(error)) =
-        ExecutableProgram::<P>::parse_text(case.source)
+        ExecutableProgram::parse_text::<P>(case.source)
     else {
         return Err(TestFailure::message(case.message));
     };
@@ -262,7 +262,7 @@ fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: ExecutionPolicy>(
 ///
 /// Returns `TestFailure` if the program is empty before execution can start.
 fn run_executable_program<E>(
-    program: &ExecutableProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram,
     admitted: AdmittedRun<E>,
 ) -> Result<Result<RunResult, RunError>, TestFailure>
 where

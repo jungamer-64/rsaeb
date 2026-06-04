@@ -64,6 +64,30 @@ fn inspect_rule_views_expose_structured_public_data() -> TestResult {
 
 /// # Errors
 ///
+/// Returns `TestFailure` if rule topology stops deriving positions and counts
+/// independently from source-line layout.
+#[test]
+fn inspect_topology_derives_positions_and_counts_across_blank_lines() -> TestResult {
+    let inspected = parse_program("# comment\n\n(once)a=b\n  # comment\nc=(return)d")?;
+    let mut rules = inspected.rules();
+    let first = rules
+        .next()
+        .ok_or(TestFailure::message("expected first topology rule"))?;
+    let second = rules
+        .next()
+        .ok_or(TestFailure::message("expected second topology rule"))?;
+
+    ensure_eq!(inspected.rule_count().get(), 2)?;
+    ensure_eq!(inspected.once_rule_count().get(), 1)?;
+    ensure_matches(rules.next().is_none(), "expected exactly two rules")?;
+    ensure_eq!(first.position().number().get(), 1)?;
+    ensure_eq!(first.line_number().get(), 3)?;
+    ensure_eq!(second.position().number().get(), 2)?;
+    ensure_eq!(second.line_number().get(), 5)
+}
+
+/// # Errors
+///
 /// Returns `TestFailure` if all parser-to-runtime rule variants do not keep
 /// repeat, action, and canonical-source shape distinct.
 #[test]
@@ -176,7 +200,7 @@ fn inspect_canonical_source_reparses_to_same_public_rule_view() -> TestResult {
         .ok_or(TestFailure::message("expected parsed rule"))?;
     let canonical = rule.canonical_source()?;
 
-    let reparsed = ExecutableProgram::<DefaultParsePolicy>::parse_bytes(canonical.as_slice())?;
+    let reparsed = ExecutableProgram::parse_bytes::<DefaultParsePolicy>(canonical.as_slice())?;
     let reparsed_rule = reparsed
         .rules()
         .next()

@@ -1,10 +1,10 @@
 use super::state::State;
-use crate::bytes::Payload;
 use crate::error::{
     ReturnOutputLimitError, RunStepError, RuntimeInputError, RuntimeStateLimitError, StepLimitError,
 };
 use crate::execution::{BorrowedFailedRun, BorrowedStepTransition};
 use crate::input::{RuntimeInput, RuntimeInputSource};
+use crate::inspect::PayloadView;
 use crate::limits::{
     ReturnByteLimit, ReturnOutputByteCount, RuntimeInputByteCount, RuntimeInputByteLimit,
     RuntimeStateByteCount, RuntimeStateByteLimit, StepCount, StepLimit,
@@ -40,9 +40,9 @@ fn expect_runtime_byte(state: &State, index: usize) -> Result<u8, TestFailure> {
 /// # Errors
 ///
 /// Returns `TestFailure` if the payload has no byte at `index`.
-fn expect_payload_byte(payload: &Payload, index: usize) -> Result<u8, TestFailure> {
+fn expect_payload_byte(payload: PayloadView<'_>, index: usize) -> Result<u8, TestFailure> {
     payload
-        .bytes()
+        .materialized_bytes()
         .nth(index)
         .ok_or(TestFailure::message("expected payload byte"))
 }
@@ -69,9 +69,9 @@ fn expect_step_limit(error: RunStepError) -> Result<StepLimitError, TestFailure>
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping succeeds.
-fn expect_step_error<'program, P: crate::policy::ParsePolicy, E: ExecutionPolicy>(
-    result: BorrowedStepTransition<'program, P, E>,
-) -> Result<BorrowedFailedRun<'program, P>, TestFailure> {
+fn expect_step_error<'program, E: ExecutionPolicy>(
+    result: BorrowedStepTransition<'program, E>,
+) -> Result<BorrowedFailedRun<'program>, TestFailure> {
     match result {
         BorrowedStepTransition::Failed(failed) => Ok(failed),
         BorrowedStepTransition::Applied(_)
@@ -85,9 +85,9 @@ fn expect_step_error<'program, P: crate::policy::ParsePolicy, E: ExecutionPolicy
 /// # Errors
 ///
 /// Returns `TestFailure` if stepping fails.
-fn expect_step_transition<'program, P: crate::policy::ParsePolicy, E: ExecutionPolicy>(
-    result: BorrowedStepTransition<'program, P, E>,
-) -> Result<BorrowedStepTransition<'program, P, E>, TestFailure> {
+fn expect_step_transition<'program, E: ExecutionPolicy>(
+    result: BorrowedStepTransition<'program, E>,
+) -> Result<BorrowedStepTransition<'program, E>, TestFailure> {
     match result {
         BorrowedStepTransition::Failed(failed) => Err(TestFailure::from(failed.into_error())),
         transition => Ok(transition),
@@ -269,7 +269,7 @@ fn return_action_bypasses_rewrite_state_mutation_path() -> TestResult {
 #[test]
 fn runtime_input_error_is_structured_at_the_runtime_boundary() -> TestResult {
     let Err(error) =
-        RuntimeInput::<TestInputPolicy<2>>::validate(RuntimeInputSource::from_bytes(b"abc"))
+        RuntimeInput::validate::<TestInputPolicy<2>>(RuntimeInputSource::from_bytes(b"abc"))
     else {
         return Err(TestFailure::message("expected input limit error"));
     };
@@ -282,7 +282,7 @@ fn runtime_input_error_is_structured_at_the_runtime_boundary() -> TestResult {
         },
     )?;
 
-    let Err(error) = RuntimeInput::<TestInputPolicy<1>>::validate(RuntimeInputSource::from_bytes(
+    let Err(error) = RuntimeInput::validate::<TestInputPolicy<1>>(RuntimeInputSource::from_bytes(
         "a\u{80}".as_bytes(),
     )) else {
         return Err(TestFailure::message(
@@ -298,7 +298,7 @@ fn runtime_input_error_is_structured_at_the_runtime_boundary() -> TestResult {
         },
     )?;
 
-    let Err(error) = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(
+    let Err(error) = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(
         RuntimeInputSource::from_bytes("a\u{80}".as_bytes()),
     ) else {
         return Err(TestFailure::message("expected input error"));
@@ -325,7 +325,7 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
         .iter()
         .next()
         .ok_or(TestFailure::message("expected parsed rule"))?
-        .pattern()
+        .view()
         .lhs();
     let limits = DefaultInputRunPolicy::<10_000, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     let (input, _) = admitted_run(b"a=()# ", limits)?.into_runtime_parts();

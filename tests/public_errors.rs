@@ -9,7 +9,7 @@ use rsaeb::error::{
     ParseRepresentationError, PayloadKind, RunError, RunFinishError, RunStepError,
 };
 use rsaeb::input::{AdmittedRun, RuntimeInput, RuntimeInputSource};
-use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy, ExecutionPolicy};
+use rsaeb::policy::{DefaultRuntimeInputPolicy, ExecutionPolicy};
 use rsaeb::program::{ExecutableProgram, RunResult};
 use runtime_support::{DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, TestRunPolicy};
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
@@ -44,7 +44,7 @@ fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: rsaeb::policy::Executi
 ///
 /// Returns `TestFailure` if the program is empty before execution can start.
 fn run_executable_program<E>(
-    program: &ExecutableProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram,
     admitted: AdmittedRun<E>,
 ) -> Result<Result<RunResult, RunError>, TestFailure>
 where
@@ -134,7 +134,7 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
     )?;
 
     let Err(input_error) =
-        RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(&[
+        RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(&[
             0xff,
         ]))
     else {
@@ -161,11 +161,11 @@ fn errors_display_output_names_domain_contexts() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if exposed parser representation errors lose display output.
+/// Returns `TestFailure` if exposed source representation errors lose display output.
 #[test]
 fn errors_representation_subdomain_is_public() -> TestResult {
     ensure_eq!(
-        ParseRepresentationError::RulePosition.to_string(),
-        "rule position could not be represented",
+        ParseRepresentationError::SourceLineNumber.to_string(),
+        "source line number could not be represented",
     )
 }

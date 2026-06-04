@@ -7,7 +7,7 @@ mod support;
 use rsaeb::error::{EmptyProgramParseError, ExecutableProgramParseError};
 use rsaeb::input::AdmittedRun;
 use rsaeb::inspect::OnceRuleCount;
-use rsaeb::policy::{DefaultParsePolicy, ExecutionPolicy};
+use rsaeb::policy::{DefaultParsePolicy, ExecutionPolicy, StaticParsePolicy};
 use rsaeb::program::{EmptyProgram, ExecutableProgram, RunOutcome, RunResult};
 use runtime_support::{
     DEFAULT_BYTE_BUDGET, DefaultInputRunPolicy, DefaultRunPolicy, TestRunPolicy,
@@ -65,7 +65,7 @@ fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: rsaeb::policy::Executi
 ///
 /// Returns `TestFailure` if the program is empty or execution fails.
 fn execute_program<E>(
-    program: &ExecutableProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram,
     admitted: AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
@@ -80,7 +80,7 @@ where
 ///
 /// Returns `TestFailure` if the program is executable or stabilization fails.
 fn stabilize_empty_program<E>(
-    program: EmptyProgram<DefaultParsePolicy>,
+    program: EmptyProgram,
     admitted: AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
@@ -103,11 +103,27 @@ fn program_parse_accepts_text_and_byte_sources() -> TestResult {
     expect_stable_bytes(&result, b"b")?;
     ensure_matches(result.steps().get() == 1, "expected one execution step")?;
 
-    let program = ExecutableProgram::<DefaultParsePolicy>::parse_bytes(b"a=b#\xff")?;
+    let program = ExecutableProgram::parse_bytes::<DefaultParsePolicy>(b"a=b#\xff")?;
     let input = runtime_input(b"a", limits)?;
     let result = execute_program(&program, input)?;
     expect_stable_bytes(&result, b"b")?;
     Ok(())
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if construction policy provenance leaks into parsed
+/// program value types.
+#[test]
+fn construction_parse_policy_does_not_parameterize_program_values() -> TestResult {
+    type TightParse = StaticParsePolicy<32, 16, 8, 2>;
+
+    let default: ExecutableProgram = ExecutableProgram::parse_text::<DefaultParsePolicy>("a=b")?;
+    let tight: ExecutableProgram = ExecutableProgram::parse_text::<TightParse>("a=b")?;
+    let empty: EmptyProgram = EmptyProgram::parse_text::<TightParse>("# empty")?;
+
+    ensure_eq!(default.rule_count(), tight.rule_count())?;
+    ensure_eq!(empty.rule_count().get(), 0)
 }
 
 /// # Errors
@@ -134,7 +150,7 @@ fn program_language_surface_handles_spacing_comments_and_actions() -> TestResult
     let result = execute_program(&program, runtime_input(b"a", limits)?)?;
     expect_stable_bytes(&result, b"b")?;
 
-    let program = EmptyProgram::<DefaultParsePolicy>::parse_text("#a=b")?;
+    let program = EmptyProgram::parse_text::<DefaultParsePolicy>("#a=b")?;
     let result = stabilize_empty_program(program, runtime_input(b"a", limits)?)?;
     expect_stable_bytes(&result, b"a")?;
 
@@ -174,7 +190,7 @@ fn program_values_are_reusable_across_runs() -> TestResult {
 /// Returns `TestFailure` if typed parse shape errors lose their public variants.
 #[test]
 fn typed_program_parse_reports_shape_mismatches() -> TestResult {
-    let executable_error = ExecutableProgram::<DefaultParsePolicy>::parse_text("# empty");
+    let executable_error = ExecutableProgram::parse_text::<DefaultParsePolicy>("# empty");
     ensure_matches(
         matches!(
             executable_error,
@@ -183,19 +199,24 @@ fn typed_program_parse_reports_shape_mismatches() -> TestResult {
         "expected executable parse to reject empty source",
     )?;
 
-    let empty_error = EmptyProgram::<DefaultParsePolicy>::parse_text("a=b");
+    let empty_error = EmptyProgram::parse_text::<DefaultParsePolicy>("a=b");
     ensure_matches(
         matches!(
             empty_error,
-            Err(EmptyProgramParseError::ExecutableRules { rule_count })
-                if rule_count.get() == 1
+            Err(EmptyProgramParseError::ExecutableRule { line_number })
+                if line_number.get() == 1
         ),
         "expected empty parse to reject executable source",
     )?;
 
-    let empty_error = EmptyProgram::<DefaultParsePolicy>::parse_text("a=b\ninvalid");
+    let empty_error =
+        EmptyProgram::parse_text::<DefaultParsePolicy>("# comment\n\n(once)a=b\ninvalid");
     ensure_matches(
-        matches!(empty_error, Err(EmptyProgramParseError::Parse(_))),
-        "expected empty parse to report later syntax errors before shape mismatch",
+        matches!(
+            empty_error,
+            Err(EmptyProgramParseError::ExecutableRule { line_number })
+                if line_number.get() == 3
+        ),
+        "expected empty parse to reject the first executable rule immediately",
     )
 }

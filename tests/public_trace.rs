@@ -11,7 +11,6 @@ use rsaeb::error::{
 use rsaeb::execution::BorrowedStepTransition;
 use rsaeb::input::AdmittedRun;
 use rsaeb::limits::TraceSnapshotByteLimit;
-use rsaeb::policy::DefaultParsePolicy;
 use rsaeb::policy::{DefaultTraceSnapshotPolicy, StaticTraceSnapshotPolicy};
 use rsaeb::program::{ExecutableProgram, RunOutcome, RunResult};
 use rsaeb::trace::{
@@ -42,7 +41,7 @@ fn expect_trace_snapshot_error<T>(
 /// Returns `TestFailure` if parsing, input validation, runtime execution, or
 /// trace snapshot materialization fails.
 fn trace_snapshot_example(
-    program: &ExecutableProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram,
 ) -> Result<(RunResult, Vec<TraceSnapshotEvent<'_>>), TestFailure> {
     let mut events = Vec::new();
     let limits = DefaultInputRunPolicy::<10_000, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
@@ -106,7 +105,7 @@ fn runtime_input<I: rsaeb::policy::RuntimeInputPolicy, E: rsaeb::policy::Executi
 ///
 /// Returns `TestFailure` if tracing or materialization fails.
 fn borrowed_trace_step_signatures(
-    program: &ExecutableProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram,
     admitted: AdmittedRun<impl rsaeb::policy::ExecutionPolicy>,
 ) -> Result<Vec<CommittedStepSignature>, TestFailure> {
     let mut signatures = Vec::new();
@@ -145,7 +144,7 @@ fn borrowed_trace_step_signatures(
 ///
 /// Returns `TestFailure` if stepping or materialization fails.
 fn borrowed_step_signatures(
-    program: &ExecutableProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram,
     admitted: AdmittedRun<impl rsaeb::policy::ExecutionPolicy>,
 ) -> Result<Vec<CommittedStepSignature>, TestFailure> {
     let mut signatures = Vec::new();

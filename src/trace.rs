@@ -24,8 +24,8 @@
 //! type SnapshotBytes = StaticTraceSnapshotPolicy<16_777_216>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text("a=b\nb=(return)ok")?;
-//! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>("a=b\nb=(return)ok")?;
+//! let input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<TenSteps>()?;
 //! let mut retained = Vec::new();
 //!
@@ -66,8 +66,8 @@
 //! type EmptySnapshot = StaticTraceSnapshotPolicy<0>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text("a=b")?;
-//! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>("a=b")?;
+//! let input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<TenSteps>()?;
 //!
 //! let result = executable.trace(

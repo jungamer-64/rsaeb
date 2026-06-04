@@ -22,9 +22,8 @@ use location::source_line_number;
 /// # Errors
 ///
 /// Returns `ParseError` if source location conversion, line compaction, rule
-/// parsing, or parsed-rule storage fails. Returns the sink's target-shape
-/// error after syntax has been fully checked if the parsed source does not
-/// match the requested program shape.
+/// parsing, or rule storage fails. A target sink may reject a fully parsed rule
+/// immediately when that rule proves the requested program shape is invalid.
 pub(crate) fn parse_rules_into<P, S>(source: RawProgramSource<'_>) -> Result<S::Output, S::Error>
 where
     P: ParsePolicy,

@@ -106,6 +106,41 @@
 //! }
 //! ```
 //!
+//! Construction policies no longer parameterize stored program or input values:
+//!
+//! ```compile_fail
+//! use rsaeb::input::RuntimeInput;
+//! use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy};
+//! use rsaeb::program::{EmptyProgram, ExecutableProgram};
+//!
+//! fn old_shapes(
+//!     _executable: ExecutableProgram<DefaultParsePolicy>,
+//!     _empty: EmptyProgram<DefaultParsePolicy>,
+//!     _input: RuntimeInput<DefaultRuntimeInputPolicy>,
+//! ) {}
+//! ```
+//!
+//! The old executable-program reference wrapper has been deleted:
+//!
+//! ```compile_fail
+//! use rsaeb::program::ExecutableProgramRef;
+//!
+//! fn main() {}
+//! ```
+//!
+//! Rule topology no longer fails through parser representation variants, and
+//! empty-target parsing no longer reports a completed rule count:
+//!
+//! ```compile_fail
+//! use rsaeb::error::{EmptyProgramParseError, ParseRepresentationError};
+//!
+//! fn old_diagnostics(error: EmptyProgramParseError) {
+//!     let _ = ParseRepresentationError::RulePosition;
+//!     let _ = ParseRepresentationError::RuleCount;
+//!     if let EmptyProgramParseError::ExecutableRules { .. } = error {}
+//! }
+//! ```
+//!
 //! Old executable and empty wrapper types have been deleted:
 //!
 //! ```compile_fail
@@ -240,8 +275,8 @@
 //! use rsaeb::program::ExecutableProgram;
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text("a=b")?;
-//!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//!     let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>("a=b")?;
+//!     let input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
 //!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
 //!     let _ = executable.into_steps(admitted)?;
 //!     Ok(())
@@ -259,8 +294,8 @@
 //! use rsaeb::program::ExecutableProgram;
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text("a=b")?;
-//!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//!     let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>("a=b")?;
+//!     let input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
 //!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
 //!     let cursor = executable.rule_attempts::<DefaultRuleAttemptPolicy, _>(admitted)?;
 //!     let _ = cursor.step();
@@ -333,8 +368,8 @@
 //! use rsaeb::program::EmptyProgram;
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let empty = EmptyProgram::<DefaultParsePolicy>::parse_text("# empty")?;
-//!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//!     let empty = EmptyProgram::parse_text::<DefaultParsePolicy>("# empty")?;
+//!     let input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
 //!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
 //!     let _ = empty.execute(admitted)?;
 //!     Ok(())
@@ -350,8 +385,8 @@
 //! use rsaeb::program::ExecutableProgram;
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text("a=b")?;
-//!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//!     let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>("a=b")?;
+//!     let input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
 //!     let _ = executable.execute(input)?;
 //!     Ok(())
 //! }
@@ -367,8 +402,8 @@
 //! use rsaeb::program::ExecutableProgram;
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text("a=b")?;
-//!     let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//!     let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>("a=b")?;
+//!     let input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
 //!     let admitted = input.admit::<DefaultExecutionPolicy>()?;
 //!     let terminal = match executable.steps(admitted)?.step() {
 //!         BorrowedStepTransition::Stable(stable) => stable,
@@ -386,7 +421,7 @@
 //! use rsaeb::policy::DefaultExecutionPolicy;
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let _ = RuntimeInput::<DefaultExecutionPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//!     let _ = RuntimeInput::validate::<DefaultExecutionPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
 //!     Ok(())
 //! }
 //! ```
@@ -426,8 +461,8 @@
 //! use rsaeb::program::{ExecutableProgram, RunOutcome};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text("a=b")?;
-//! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>("a=b")?;
+//! let input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<DefaultExecutionPolicy>()?;
 //! let result = executable.execute(admitted)?;
 //!
@@ -449,8 +484,8 @@
 //! use rsaeb::program::{EmptyProgram, RunOutcome};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let empty = EmptyProgram::<DefaultParsePolicy>::parse_text("# empty")?;
-//! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"unchanged"))?;
+//! let empty = EmptyProgram::parse_text::<DefaultParsePolicy>("# empty")?;
+//! let input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"unchanged"))?;
 //! let admitted = input.admit::<DefaultExecutionPolicy>()?;
 //! let result = empty.stabilize(admitted)?;
 //!
@@ -476,10 +511,10 @@
 //! type ShortRun = StaticExecutionPolicy<10_000, 16_777_216, 16_777_216>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text("(once)a=b\na=c")?;
+//! let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>("(once)a=b\na=c")?;
 //!
-//! let first_input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"aa"))?;
-//! let second_input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"aa"))?;
+//! let first_input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"aa"))?;
+//! let second_input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"aa"))?;
 //!
 //! let first = executable.execute(first_input.admit::<ShortRun>()?)?;
 //! let second = executable.execute(second_input.admit::<ShortRun>()?)?;
@@ -509,8 +544,8 @@
 //! type NoSteps = StaticExecutionPolicy<0, 4, 4>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text("a=b")?;
-//! let input = RuntimeInput::<TinyInput>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>("a=b")?;
+//! let input = RuntimeInput::validate::<TinyInput>(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<NoSteps>()?;
 //! let result = executable.execute(admitted);
 //!
@@ -539,8 +574,8 @@
 //! type TenSteps = StaticExecutionPolicy<10, 16_777_216, 16_777_216>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text("a=b\nb=c")?;
-//! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>("a=b\nb=c")?;
+//! let input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<TenSteps>()?;
 //! let execution = executable.steps(admitted)?;
 //!
@@ -593,8 +628,8 @@
 //! type TenAttempts = StaticRuleAttemptPolicy<10>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text("z=x\na=b")?;
-//! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>("z=x\na=b")?;
+//! let input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<TenSteps>()?;
 //! let execution = executable.rule_attempts::<TenAttempts, _>(admitted)?;
 //!
@@ -641,7 +676,7 @@
 //! use rsaeb::program::ExecutableProgram;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text("( once ) ( start ) a = ( end ) b # comment")?;
+//! let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>("( once ) ( start ) a = ( end ) b # comment")?;
 //! let rule = executable.rules().next().ok_or("missing parsed rule")?;
 //!
 //! if rule.anchor() != RuleAnchor::Start {
@@ -684,9 +719,9 @@
 //! type TenSteps = StaticExecutionPolicy<10, 16_777_216, 16_777_216>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text("a=b\nb=(return)ok")?;
+//! let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>("a=b\nb=(return)ok")?;
 //! let mut byte_counts = Vec::new();
-//! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<TenSteps>()?;
 //!
 //! executable.trace(
@@ -720,8 +755,8 @@
 //! type SnapshotBytes = StaticTraceSnapshotPolicy<16_777_216>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text("a=b\nb=(return)ok")?;
-//! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>("a=b\nb=(return)ok")?;
+//! let input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
 //! let admitted = input.admit::<TenSteps>()?;
 //! let mut states = Vec::new();
 //! let mut returns = Vec::new();
@@ -770,8 +805,8 @@
 //!
 //! type HostInput = StaticRuntimeInputPolicy<4>;
 //!
-//! fn validate_host_input(bytes: &[u8]) -> Result<RuntimeInput<HostInput>, RuntimeInputError> {
-//!     RuntimeInput::<HostInput>::validate(RuntimeInputSource::from_bytes(bytes))
+//! fn validate_host_input(bytes: &[u8]) -> Result<RuntimeInput, RuntimeInputError> {
+//!     RuntimeInput::validate::<HostInput>(RuntimeInputSource::from_bytes(bytes))
 //! }
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {

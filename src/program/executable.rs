@@ -24,7 +24,7 @@ pub struct EmptyProgram;
 /// Parsed source with at least one executable rule line.
 #[derive(PartialEq, Eq)]
 pub struct ExecutableProgram {
-    /// Immutable non-empty rule table plus parsed `(once)` metadata.
+    /// Immutable non-empty executable rule topology.
     rule_set: ExecutableRuleSet,
 }
 

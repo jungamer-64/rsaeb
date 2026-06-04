@@ -397,7 +397,7 @@ impl LeftPayloadSyntax<'_> {
 struct ParsedLeftSide {
     /// Parser-local repeat classification.
     repeat: LeftRepeatSyntax,
-    /// Parsed match pattern before position assignment.
+    /// Positionless final match pattern.
     pattern: RulePattern,
 }
 

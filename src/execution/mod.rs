@@ -27,8 +27,8 @@
 //! type TinyState = StaticExecutionPolicy<10, 1, 16_777_216>;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let executable = ExecutableProgram::<DefaultParsePolicy>::parse_text("a=aaaa")?;
-//! let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+//! let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>("a=aaaa")?;
+//! let input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
 //! let session = executable.steps(input.admit::<TinyState>()?)?;
 //!
 //! let BorrowedStepTransition::Failed(failed) = session.step() else {

@@ -72,6 +72,6 @@ pub fn admitted_run<I: RuntimeInputPolicy, E: ExecutionPolicy>(
     bytes: &[u8],
     _policy: TestRunPolicy<I, E>,
 ) -> Result<AdmittedRun<E>, TestFailure> {
-    let input = RuntimeInput::<I>::validate(RuntimeInputSource::from_bytes(bytes))?;
+    let input = RuntimeInput::validate::<I>(RuntimeInputSource::from_bytes(bytes))?;
     Ok(input.admit::<E>()?)
 }

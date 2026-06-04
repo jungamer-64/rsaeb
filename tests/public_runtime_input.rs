@@ -30,10 +30,8 @@ fn expect_stable_bytes(result: &RunResult, expected: &[u8]) -> TestResult {
 /// # Errors
 ///
 /// Returns `RuntimeInputError` if validation rejects the bytes.
-fn runtime_input(
-    bytes: &[u8],
-) -> Result<RuntimeInput<DefaultRuntimeInputPolicy>, rsaeb::error::RuntimeInputError> {
-    RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(bytes))
+fn runtime_input(bytes: &[u8]) -> Result<RuntimeInput, rsaeb::error::RuntimeInputError> {
+    RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(bytes))
 }
 
 /// Executes a parsed program that is expected to contain executable rules.
@@ -42,7 +40,7 @@ fn runtime_input(
 ///
 /// Returns `TestFailure` if the program is empty or execution fails.
 fn execute_program<E>(
-    program: &ExecutableProgram<DefaultParsePolicy>,
+    program: &ExecutableProgram,
     admitted: rsaeb::input::AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
@@ -57,7 +55,7 @@ where
 ///
 /// Returns `TestFailure` if the program is executable or stabilization fails.
 fn stabilize_empty_program<E>(
-    program: EmptyProgram<DefaultParsePolicy>,
+    program: EmptyProgram,
     admitted: rsaeb::input::AdmittedRun<E>,
 ) -> Result<RunResult, TestFailure>
 where
@@ -72,7 +70,7 @@ where
 /// consumed by execution.
 #[test]
 fn runtime_input_moves_owned_bytes_into_execution() -> TestResult {
-    let input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(
+    let input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(
         RuntimeInputSource::from_bytes(b"a=()# "),
     )?;
 
@@ -90,10 +88,10 @@ fn runtime_input_moves_owned_bytes_into_execution() -> TestResult {
 /// explicit default names.
 #[test]
 fn domain_default_policies_support_explicit_names() -> TestResult {
-    let explicit_program = ExecutableProgram::<DefaultParsePolicy>::parse_text("a=b")?;
+    let explicit_program = ExecutableProgram::parse_text::<DefaultParsePolicy>("a=b")?;
 
     let explicit_input =
-        RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(b"a"))?;
+        RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
 
     let explicit_result = execute_program(
         &explicit_program,
@@ -105,13 +103,28 @@ fn domain_default_policies_support_explicit_names() -> TestResult {
 
 /// # Errors
 ///
+/// Returns `TestFailure` if input-validation policy provenance leaks into the
+/// validated runtime-input value type.
+#[test]
+fn validation_policy_does_not_parameterize_runtime_input_values() -> TestResult {
+    let default: RuntimeInput =
+        RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
+    let tight: RuntimeInput = RuntimeInput::validate::<StaticRuntimeInputPolicy<1>>(
+        RuntimeInputSource::from_bytes(b"a"),
+    )?;
+
+    ensure_eq!(default.byte_count(), tight.byte_count())
+}
+
+/// # Errors
+///
 /// Returns `TestFailure` if the runtime input public boundary accepts
 /// non-ASCII bytes or rejects ASCII bytes.
 #[test]
 fn runtime_input_validates_ascii_boundary() -> TestResult {
     let input: Vec<u8> = (0x00..=0x7f).collect();
-    let program = EmptyProgram::<DefaultParsePolicy>::parse_text("# no executable rules")?;
-    let runtime_input = RuntimeInput::<DefaultRuntimeInputPolicy>::validate(
+    let program = EmptyProgram::parse_text::<DefaultParsePolicy>("# no executable rules")?;
+    let runtime_input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(
         RuntimeInputSource::from_bytes(&input),
     )?;
     let result =
@@ -121,7 +134,7 @@ fn runtime_input_validates_ascii_boundary() -> TestResult {
 
     for byte in 0x80..=0xff {
         ensure_matches(
-            RuntimeInput::<DefaultRuntimeInputPolicy>::validate(RuntimeInputSource::from_bytes(&[
+            RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(&[
                 byte,
             ]))
             .is_err(),
@@ -156,7 +169,7 @@ fn runtime_input_reports_public_errors_and_debug_bytes() -> TestResult {
 /// information.
 #[test]
 fn runtime_input_reports_public_limit_errors() -> TestResult {
-    let Err(limit_error) = RuntimeInput::<StaticRuntimeInputPolicy<1>>::validate(
+    let Err(limit_error) = RuntimeInput::validate::<StaticRuntimeInputPolicy<1>>(
         RuntimeInputSource::from_bytes(b"aa"),
     ) else {
         return Err(TestFailure::message(
