@@ -337,86 +337,6 @@ impl core::fmt::Debug for RuntimeStateView<'_> {
     }
 }
 
-/// Borrowed trace effect emitted by borrowed tracing APIs.
-///
-/// Borrowed effects avoid allocation by borrowing the post-step state or parsed
-/// return payload for the duration of the callback.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BorrowedTraceEffect<'program, 'run> {
-    /// The step produced the next runtime state and execution may continue.
-    Continue {
-        /// Runtime state after a non-terminal applied step.
-        state: RuntimeStateView<'run>,
-    },
-    /// The step executed `(return)` and produced final output bytes.
-    Return {
-        /// `(return)` output bytes.
-        output: ReturnOutputView<'program>,
-    },
-}
-
-/// Owned trace effect emitted by trace snapshot APIs.
-///
-/// Continuation steps materialize the post-step runtime state. Return steps
-/// materialize the final `(return)` output instead of a state.
-#[derive(Debug, PartialEq, Eq)]
-pub enum TraceSnapshotEffect {
-    /// The step produced the next runtime state and execution may continue.
-    Continue {
-        /// Runtime state after a non-terminal applied step.
-        state: RuntimeStateSnapshot,
-    },
-    /// The step executed `(return)` and produced final output bytes.
-    Return {
-        /// `(return)` output bytes.
-        output: ReturnOutput,
-    },
-}
-
-impl BorrowedTraceEffect<'_, '_> {
-    /// Byte length that would be materialized by snapshot tracing.
-    #[must_use]
-    pub fn byte_count(self) -> TraceSnapshotByteCount {
-        match self {
-            Self::Continue { state } => {
-                TraceSnapshotByteCount::from_runtime_state_count(state.byte_count())
-            }
-            Self::Return { output } => {
-                TraceSnapshotByteCount::from_return_output_count(output.byte_count())
-            }
-        }
-    }
-
-    /// Whether the carried bytes are empty.
-    #[must_use]
-    pub fn is_empty(self) -> bool {
-        match self {
-            Self::Continue { state } => state.is_empty(),
-            Self::Return { output } => output.is_empty(),
-        }
-    }
-
-    /// Materializes this borrowed trace effect into an owned snapshot effect.
-    ///
-    /// # Errors
-    ///
-    /// Returns `TraceSnapshotError` if the effect exceeds `limit` or snapshot
-    /// allocation fails.
-    fn to_snapshot<T: TraceSnapshotPolicy>(
-        self,
-    ) -> Result<TraceSnapshotEffect, TraceSnapshotError> {
-        let permit = ensure_trace_len(self.byte_count(), T::TRACE_SNAPSHOT_BYTE_LIMIT)?;
-        match self {
-            Self::Continue { state } => Ok(TraceSnapshotEffect::Continue {
-                state: RuntimeStateSnapshot::from_trace_state_view(state, permit)?,
-            }),
-            Self::Return { output } => Ok(TraceSnapshotEffect::Return {
-                output: ReturnOutput::from_trace_return_output_view(output, permit)?,
-            }),
-        }
-    }
-}
-
 /// Trace event emitted by borrowed tracing APIs.
 ///
 /// The event borrows runtime bytes only for the duration of the callback. This
@@ -431,15 +351,6 @@ pub enum BorrowedTraceEvent<'program, 'run> {
     Initial {
         /// Initial runtime state.
         state: RuntimeStateView<'run>,
-    },
-    /// One applied rule.
-    Step {
-        /// One-based applied step count.
-        step: StepCount,
-        /// Structured view of the applied rule.
-        rule: RuleView<'program>,
-        /// Structured result of the execution step.
-        effect: BorrowedTraceEffect<'program, 'run>,
     },
 }
 
@@ -456,15 +367,6 @@ pub enum TraceSnapshotEvent<'program> {
     Initial {
         /// Initial runtime state.
         state: RuntimeStateSnapshot,
-    },
-    /// One applied rule.
-    Step {
-        /// One-based applied step count.
-        step: StepCount,
-        /// Structured view of the applied rule.
-        rule: RuleView<'program>,
-        /// Structured result of the execution step.
-        effect: TraceSnapshotEffect,
     },
 }
 

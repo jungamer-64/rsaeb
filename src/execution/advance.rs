@@ -20,15 +20,6 @@ use super::engine::{
     FinalAttemptSession, TerminalAttemptSession,
 };
 
-/// Compile-time rule witness policy for ordinary execution steps.
-pub(super) trait RunRuleWitness<'program> {
-    /// Rule witness emitted by this policy.
-    type Witness;
-
-    /// Builds a witness from the matched parsed rule.
-    fn from_rule(rule: RuleView<'program>) -> Self::Witness;
-}
-
 /// Continuing rule-attempt pass behavior shared by first and after-miss states.
 trait ContinuingRuleAttemptPass<'program>: RuntimeRulePassState<'program> + Sized {
     /// Attempts this pass's current target.
@@ -54,36 +45,6 @@ trait FinalRuleAttemptPass<'program>: RuntimeRulePassState<'program> + Sized {
 
     /// Resets this pass after a committed rewrite.
     fn reset_attempt_after_rewrite(self) -> StartedRuntimeRulePass<'program>;
-}
-
-/// Ordinary-run witness policy that discards rule metadata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DiscardedRunWitness {}
-
-/// Ordinary-run witness policy that borrows parsed rule metadata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum BorrowedRunWitness {}
-
-/// Internal committed application paired with its public rule witness.
-pub(super) enum CoreAppliedRule<'program, RuleWitness> {
-    /// One rewrite rule committed and execution may continue.
-    Continued {
-        /// Committed step count.
-        step: StepCount,
-        /// Rule witness selected before runtime side effects committed.
-        rule: RuleWitness,
-    },
-    /// One return rule committed and execution is terminal.
-    Terminal {
-        /// Committed step count.
-        step: StepCount,
-        /// Rule witness selected before runtime side effects committed.
-        rule: RuleWitness,
-        /// Borrowed return-output view for trace callbacks.
-        output_view: ReturnOutputView<'program>,
-        /// Materialized return output.
-        output: ReturnOutput,
-    },
 }
 
 /// Program-bound result of consuming one continuing rule-attempt session step.
@@ -174,34 +135,6 @@ pub(super) enum CoreFinalRuleAttemptStep<'program, E: ExecutionPolicy, A: RuleAt
     },
 }
 
-/// Rule application after the public witness has been created but before runtime side effects commit.
-pub(super) struct WitnessedApplication<'program, 'once, 'budget, E: ExecutionPolicy, RuleWitness> {
-    /// Failure-prone runtime preparation that must still be committed linearly.
-    prepared: PreparedRuleStep<'program, 'once, 'budget, E>,
-    /// Public rule witness created before mutation commits.
-    witness: RuleWitness,
-}
-
-/// Matched rule-attempt preparation paired with its consumed-attempt count.
-type WitnessedRuleAttempt<'program, 'once, 'budget, E> = (
-    RuleAttemptCount,
-    WitnessedApplication<'program, 'once, 'budget, E, RuleView<'program>>,
-);
-
-impl<'program> RunRuleWitness<'program> for DiscardedRunWitness {
-    type Witness = ();
-
-    fn from_rule(_rule: RuleView<'program>) -> Self::Witness {}
-}
-
-impl<'program> RunRuleWitness<'program> for BorrowedRunWitness {
-    type Witness = RuleView<'program>;
-
-    fn from_rule(rule: RuleView<'program>) -> Self::Witness {
-        rule
-    }
-}
-
 impl<'program> ContinuingRuleAttemptPass<'program> for FirstContinuingRulePass<'program> {
     fn attempt_current_rule<'state, 'once>(
         &'once mut self,
@@ -260,67 +193,6 @@ impl<'program> FinalRuleAttemptPass<'program> for AfterMissFinalRulePass<'progra
     fn reset_attempt_after_rewrite(self) -> StartedRuntimeRulePass<'program> {
         self.reset_after_rewrite()
     }
-}
-
-impl<'program, RuleWitness> CoreAppliedRule<'program, RuleWitness> {
-    /// Combines a committed runtime application with its pre-commit rule witness.
-    fn from_applied_rule(applied: AppliedRule<'program>, rule: RuleWitness) -> Self {
-        match applied {
-            AppliedRule::Continued(committed) => Self::Continued {
-                step: committed.step(),
-                rule,
-            },
-            AppliedRule::Terminal(committed) => Self::Terminal {
-                step: committed.step(),
-                rule,
-                output_view: committed.output_view(),
-                output: committed.into_output(),
-            },
-        }
-    }
-}
-
-impl<'program, 'once, 'budget, E: ExecutionPolicy, RuleWitness>
-    WitnessedApplication<'program, 'once, 'budget, E, RuleWitness>
-{
-    /// Pairs a prepared application with its public rule witness before commit.
-    ///
-    fn new(
-        prepared: PreparedRuleStep<'program, 'once, 'budget, E>,
-        make_witness: impl FnOnce(RuleView<'program>) -> RuleWitness,
-    ) -> Self {
-        let witness = make_witness(prepared.rule());
-        Self { prepared, witness }
-    }
-
-    /// Commits prepared runtime side effects and publishes the paired witness.
-    pub(super) fn commit(
-        self,
-        state: &mut State,
-        scratch: &mut RewriteScratch,
-    ) -> CoreAppliedRule<'program, RuleWitness> {
-        let applied = self.prepared.commit(state, scratch);
-        CoreAppliedRule::from_applied_rule(applied, self.witness)
-    }
-}
-
-/// Prepares one matched ordinary execution step under a compile-time witness policy.
-///
-/// # Errors
-///
-/// Returns `RunStepError` if runtime preparation fails.
-pub(super) fn prepare_witnessed_run_application<'program, 'once, 'budget, E, W>(
-    scratch: &mut RewriteScratch,
-    budget: &'budget mut RuntimeBudgetState<E>,
-    state_len: RuntimeStateByteCount,
-    matched: MatchedRuleApplication<'program, '_, 'once>,
-) -> Result<WitnessedApplication<'program, 'once, 'budget, E, W::Witness>, RunStepError>
-where
-    E: ExecutionPolicy,
-    W: RunRuleWitness<'program>,
-{
-    let prepared = prepare_matched_rule(scratch, budget, state_len, matched)?;
-    Ok(WitnessedApplication::new(prepared, W::from_rule))
 }
 
 /// Advances a borrowed rule-attempt session whose current rule has successors.
