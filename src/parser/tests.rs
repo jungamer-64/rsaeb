@@ -1,7 +1,7 @@
 use crate::error::{
     LeftModifierKind, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind,
 };
-use crate::inspect::{RewriteActionView, RuleAnchor, RuleCount, RuleView};
+use crate::inspect::{RewriteActionView, RuleAnchor, RuleView};
 use crate::program::ExecutableProgram;
 use crate::test_support::{
     TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_error_position,
@@ -25,8 +25,8 @@ fn expect_rule(
 }
 
 /// Returns the parsed executable rule count.
-fn rule_count(program: &ExecutableProgram) -> RuleCount {
-    program.rule_count()
+fn rule_count(program: &ExecutableProgram) -> usize {
+    program.rule_count().get()
 }
 
 /// # Errors
@@ -41,7 +41,7 @@ fn compacting_source_whitespace_and_comments_preserves_rule_domain() -> TestResu
          ( once ) ( start ) x = ( end ) y",
     )?;
 
-    ensure_eq!(rule_count(&program), RuleCount::new(3))?;
+    ensure_eq!(rule_count(&program), 3)?;
     ensure_eq!(
         expect_rule(&program, 0)?.canonical_source()?.as_slice(),
         b"ab=bb".as_slice(),
@@ -63,7 +63,10 @@ fn compacting_source_whitespace_and_comments_preserves_rule_domain() -> TestResu
 #[test]
 fn empty_code_lines_and_comments_do_not_become_rules() -> TestResult {
     let program = parse_empty_program(" \t\r\n# comment\n")?;
-    ensure_eq!(program.rule_count(), RuleCount::new(0))
+    ensure_matches(
+        program.rules().next().is_none(),
+        "expected no rules for empty program",
+    )
 }
 
 /// # Errors
@@ -74,7 +77,7 @@ fn comments_may_contain_non_utf8_bytes_because_source_is_byte_oriented() -> Test
     let program = parse_program_bytes(b"a=b#\xff\xfe\n")?;
     let rule = expect_rule(&program, 0)?;
 
-    ensure_eq!(rule_count(&program), RuleCount::new(1))?;
+    ensure_eq!(rule_count(&program), 1)?;
     ensure_eq!(rule.canonical_source()?.as_slice(), b"a=b".as_slice())
 }
 
@@ -243,8 +246,8 @@ fn spaced_source_and_compact_source_parse_to_the_same_rule_view() -> TestResult 
     let compact_rule = expect_rule(&compact, 0)?;
     let spaced_rule = expect_rule(&spaced, 0)?;
 
-    ensure_eq!(rule_count(&compact), RuleCount::new(1))?;
-    ensure_eq!(rule_count(&spaced), RuleCount::new(1))?;
+    ensure_eq!(rule_count(&compact), 1)?;
+    ensure_eq!(rule_count(&spaced), 1)?;
     ensure_eq!(spaced_rule.anchor(), RuleAnchor::Start)?;
     ensure_eq!(spaced_rule.lhs().materialize()?.as_slice(), b"a".as_slice())?;
     match spaced_rule {

@@ -170,7 +170,7 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
                             signatures.push(BorrowedRuleAttemptSignature::Applied {
                                 attempt: applied.attempt().get(),
                                 step: applied.step().get(),
-                                rule_position: applied.rule().position().number().get(),
+                                rule_position: applied.rule().position().get(),
                                 state: runtime_view_bytes(applied.state())?,
                             });
                             cursor = applied.into_cursor();
@@ -179,7 +179,7 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
                             signatures.push(BorrowedRuleAttemptSignature::Return {
                                 attempt: returned.attempt().get(),
                                 step: returned.step().get(),
-                                rule_position: returned.rule().position().number().get(),
+                                rule_position: returned.rule().position().get(),
                                 output: returned.output().as_slice().to_vec(),
                             });
                             return Ok(signatures);
@@ -204,7 +204,7 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
                             signatures.push(BorrowedRuleAttemptSignature::Applied {
                                 attempt: applied.attempt().get(),
                                 step: applied.step().get(),
-                                rule_position: applied.rule().position().number().get(),
+                                rule_position: applied.rule().position().get(),
                                 state: runtime_view_bytes(applied.state())?,
                             });
                             cursor = applied.into_cursor();
@@ -213,7 +213,7 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
                             signatures.push(BorrowedRuleAttemptSignature::Return {
                                 attempt: returned.attempt().get(),
                                 step: returned.step().get(),
-                                rule_position: returned.rule().position().number().get(),
+                                rule_position: returned.rule().position().get(),
                                 output: returned.output().as_slice().to_vec(),
                             });
                             return Ok(signatures);
@@ -245,7 +245,7 @@ fn ensure_borrowed_rewrite_rule_view(
     expected: ExpectedBorrowedRuleView<'_>,
     expected_replacement: &[u8],
 ) -> TestResult {
-    ensure_eq!(rule.position().number().get(), expected.position)?;
+    ensure_eq!(rule.position().get(), expected.position)?;
     ensure_eq!(rule.line_number().get(), expected.line_number)?;
     ensure_eq!(rule.anchor(), RuleAnchor::Anywhere)?;
     ensure_eq!(rule.lhs().materialize()?.as_slice(), expected.lhs)?;
@@ -273,7 +273,7 @@ fn ensure_borrowed_return_rule_view(
     expected: ExpectedBorrowedRuleView<'_>,
     expected_output: &[u8],
 ) -> TestResult {
-    ensure_eq!(rule.position().number().get(), expected.position)?;
+    ensure_eq!(rule.position().get(), expected.position)?;
     ensure_eq!(rule.line_number().get(), expected.line_number)?;
     ensure_eq!(rule.anchor(), RuleAnchor::Anywhere)?;
     ensure_eq!(rule.lhs().materialize()?.as_slice(), expected.lhs)?;
@@ -413,16 +413,16 @@ fn ensure_rule_attempt_return_rule_shape(source: &str, expected_once: bool) -> T
 fn rule_miss_signature(miss: &RuleMiss<'_>) -> RuleMissSignature {
     match *miss {
         RuleMiss::StateMismatch(miss) => RuleMissSignature::StateMismatch {
-            rule_position: miss.rule().position().number().get(),
+            rule_position: miss.rule().position().get(),
         },
         RuleMiss::OnceConsumed(OnceConsumedRuleMiss::Rewrite(rule)) => {
             RuleMissSignature::OnceRewriteConsumed {
-                rule_position: rule.position().number().get(),
+                rule_position: rule.position().get(),
             }
         }
         RuleMiss::OnceConsumed(OnceConsumedRuleMiss::Return(rule)) => {
             RuleMissSignature::OnceReturnConsumed {
-                rule_position: rule.position().number().get(),
+                rule_position: rule.position().get(),
             }
         }
     }
@@ -438,7 +438,7 @@ fn applied_signature<E: ExecutionPolicy>(
 ) -> Result<StepSignature, TestFailure> {
     Ok(StepSignature::Applied {
         step: applied.step().get(),
-        rule_position: applied.rule().position().number().get(),
+        rule_position: applied.rule().position().get(),
         state: runtime_view_bytes(applied.state())?,
     })
 }
@@ -459,7 +459,7 @@ fn stable_signature(stable: &BorrowedStableRun<'_>) -> Result<StepSignature, Tes
 fn returned_signature(returned: &BorrowedReturnedRun<'_>) -> StepSignature {
     StepSignature::Return {
         step: returned.step().get(),
-        rule_position: returned.rule().position().number().get(),
+        rule_position: returned.rule().position().get(),
         output: returned.output().as_slice().to_vec(),
     }
 }
@@ -706,7 +706,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
     let execution = match expect_step_transition(execution.step())? {
         BorrowedStepTransition::Applied(applied) => {
             ensure_eq!(applied.step().get(), 1)?;
-            ensure_eq!(applied.rule().position().number().get(), 1)?;
+            ensure_eq!(applied.rule().position().get(), 1)?;
             ensure_eq!(
                 runtime_view_bytes(applied.state())?.as_slice(),
                 b"b".as_slice()
@@ -724,7 +724,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
     let execution = match expect_step_transition(execution.step())? {
         BorrowedStepTransition::Applied(applied) => {
             ensure_eq!(applied.step().get(), 2)?;
-            ensure_eq!(applied.rule().position().number().get(), 2)?;
+            ensure_eq!(applied.rule().position().get(), 2)?;
             ensure_eq!(
                 runtime_view_bytes(applied.state())?.as_slice(),
                 b"c".as_slice()
@@ -860,7 +860,10 @@ fn execution_rule_attempt_start_and_final_miss_are_typed() -> TestResult {
         }
     }
     let empty_program = EmptyProgram::parse_text::<DefaultParsePolicy>("# no executable rules")?;
-    ensure_eq!(empty_program.rule_count().get(), 0)?;
+    ensure_matches(
+        empty_program.rules().next().is_none(),
+        "expected no rules for borrowed empty program",
+    )?;
     let borrowed_empty_result = empty_program.stabilize(runtime_input(b"empty", limits)?)?;
     expect_stable_bytes(&borrowed_empty_result, b"empty")?;
     ensure_eq!(borrowed_empty_result.steps().get(), 0)?;
@@ -871,7 +874,10 @@ fn execution_rule_attempt_start_and_final_miss_are_typed() -> TestResult {
     ensure_eq!(owned_empty_result.steps().get(), 0)?;
 
     let owned_empty = EmptyProgram::parse_text::<DefaultParsePolicy>("# no executable rules")?;
-    ensure_eq!(owned_empty.rule_count().get(), 0)
+    ensure_matches(
+        owned_empty.rules().next().is_none(),
+        "expected no rules for owned empty program",
+    )
 }
 
 /// # Errors

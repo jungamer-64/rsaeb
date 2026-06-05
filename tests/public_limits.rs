@@ -317,6 +317,16 @@ fn parse_resource_limit_errors_are_structured() -> TestResult {
         },
         message: "expected rule limit error",
     })?;
+    ensure_parse_limit_error::<
+        StaticParsePolicy<DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET, 0>,
+    >(ParseLimitCase {
+        source: "a=b",
+        expected: ExpectedParseLimit::Rules {
+            limit: RuleLimit::new(0),
+            attempted_count: 1,
+        },
+        message: "expected zero rule limit error",
+    })?;
     Ok(())
 }
 

@@ -48,12 +48,13 @@
 
 use alloc::vec::Vec;
 use core::fmt;
+use core::num::NonZeroUsize;
 
 use crate::allocation::{AllocationContext, AllocationError};
 use crate::bytes::{Payload, PayloadByteCount};
 use crate::limits::SourceByteCount;
 use crate::materialized::{CanonicalRuleSourceDomain, MaterializedBytes, PayloadInspectionDomain};
-use crate::rule::{ReturnRule, RewriteRule, Rule};
+use crate::rule::{ReturnRule, RewriteRule};
 use crate::source::SourceLineNumber;
 
 /// Number of parsed rules.
@@ -78,6 +79,55 @@ impl RuleCount {
     pub const fn get(self) -> usize {
         self.value
     }
+
+    /// Returns the checked next rule count.
+    pub(crate) fn checked_next(self) -> Option<Self> {
+        let value = self.value.checked_add(1)?;
+        Some(Self { value })
+    }
+}
+
+/// Non-zero number of parsed executable rules.
+///
+/// This count is produced only by [`program::ExecutableProgram`](crate::program::ExecutableProgram).
+/// Empty programs do not expose a zero-valued executable count; their empty
+/// topology is represented by the program type itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ExecutableRuleCount {
+    /// Non-zero total executable rule count.
+    value: NonZeroUsize,
+}
+
+impl ExecutableRuleCount {
+    /// ONE boundary value.
+    pub(crate) const ONE: Self = Self {
+        value: NonZeroUsize::MIN,
+    };
+
+    /// Builds a non-zero executable count from a general rule count.
+    pub(crate) fn from_rule_count(count: RuleCount) -> Option<Self> {
+        Some(Self {
+            value: NonZeroUsize::new(count.get())?,
+        })
+    }
+
+    /// Returns this executable count as a general parsed-rule count.
+    pub(crate) const fn as_rule_count(self) -> RuleCount {
+        RuleCount {
+            value: self.value.get(),
+        }
+    }
+
+    /// Returns the checked next general parsed-rule count.
+    pub(crate) fn checked_next_rule_count(self) -> Option<RuleCount> {
+        self.as_rule_count().checked_next()
+    }
+
+    /// Non-zero parsed-rule count as a primitive value.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.value.get()
+    }
 }
 
 /// Number of parsed `(once)` rules.
@@ -94,15 +144,16 @@ impl OnceRuleCount {
     /// ZERO boundary value.
     pub(crate) const ZERO: Self = Self { value: 0 };
 
-    /// Creates a parsed `(once)` rule count from topology-derived data.
-    pub(crate) const fn new(value: usize) -> Self {
-        Self { value }
-    }
-
     /// Parsed `(once)` rule count as a primitive value.
     #[must_use]
     pub const fn get(self) -> usize {
         self.value
+    }
+
+    /// Returns the checked next once-rule count.
+    pub(crate) fn checked_next(self) -> Option<Self> {
+        let value = self.value.checked_add(1)?;
+        Some(Self { value })
     }
 }
 
@@ -114,21 +165,26 @@ impl OnceRuleCount {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RulePosition {
     /// One-based execution-order position.
-    one_based: usize,
+    one_based: NonZeroUsize,
 }
 
 impl RulePosition {
-    /// Builds an index from a zero-based offset.
-    pub(crate) const fn from_zero_based(zero_based: usize) -> Self {
+    /// FIRST boundary value.
+    pub(crate) const FIRST: Self = Self {
+        one_based: NonZeroUsize::MIN,
+    };
+
+    /// Builds a position from a non-zero executable-rule count.
+    pub(crate) const fn from_executable_count(count: ExecutableRuleCount) -> Self {
         Self {
-            one_based: zero_based.saturating_add(1),
+            one_based: count.value,
         }
     }
 
     /// One-based rule position as a primitive value.
     #[must_use]
     pub const fn get(self) -> usize {
-        self.one_based
+        self.one_based.get()
     }
 }
 
@@ -382,16 +438,6 @@ pub struct OnceReturnRuleView<'program> {
 }
 
 impl<'program> RuleView<'program> {
-    /// Borrows a parsed rule with its topology-derived execution-order position.
-    pub(crate) fn new(position: RulePosition, rule: &'program Rule) -> Self {
-        match rule {
-            Rule::AlwaysRewrite(rule) => Self::from_always_rewrite(position, rule),
-            Rule::OnceRewrite(rule) => Self::from_once_rewrite(position, rule),
-            Rule::AlwaysReturn(rule) => Self::from_always_return(position, rule),
-            Rule::OnceReturn(rule) => Self::from_once_return(position, rule),
-        }
-    }
-
     /// Borrows a reusable rewrite rule.
     pub(crate) const fn from_always_rewrite(
         position: RulePosition,
@@ -632,6 +678,11 @@ impl<'program> From<ReturnRuleView<'program>> for RuleView<'program> {
 macro_rules! impl_rewrite_rule_view {
     ($view:ident) => {
         impl<'program> $view<'program> {
+            /// Borrows a stored rewrite rule with its topology-derived position.
+            pub(crate) const fn new(position: RulePosition, rule: &'program RewriteRule) -> Self {
+                Self { position, rule }
+            }
+
             /// Rebuilds the borrowed internal rule for private rendering.
             pub(crate) const fn into_rule(self) -> &'program RewriteRule {
                 self.rule
@@ -674,6 +725,11 @@ macro_rules! impl_rewrite_rule_view {
 macro_rules! impl_return_rule_view {
     ($view:ident) => {
         impl<'program> $view<'program> {
+            /// Borrows a stored return rule with its topology-derived position.
+            pub(crate) const fn new(position: RulePosition, rule: &'program ReturnRule) -> Self {
+                Self { position, rule }
+            }
+
             /// Rebuilds the borrowed internal rule for private rendering.
             pub(crate) const fn into_rule(self) -> &'program ReturnRule {
                 self.rule

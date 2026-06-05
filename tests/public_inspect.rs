@@ -2,7 +2,7 @@
 
 mod support;
 
-use rsaeb::inspect::{OnceRuleCount, RewriteActionView, RuleAnchor, RuleView};
+use rsaeb::inspect::{ExecutableRuleCount, OnceRuleCount, RewriteActionView, RuleAnchor, RuleView};
 use rsaeb::policy::DefaultParsePolicy;
 use rsaeb::program::ExecutableProgram;
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
@@ -80,10 +80,21 @@ fn inspect_topology_derives_positions_and_counts_across_blank_lines() -> TestRes
     ensure_eq!(inspected.rule_count().get(), 2)?;
     ensure_eq!(inspected.once_rule_count().get(), 1)?;
     ensure_matches(rules.next().is_none(), "expected exactly two rules")?;
-    ensure_eq!(first.position().number().get(), 1)?;
+    ensure_eq!(first.position().get(), 1)?;
     ensure_eq!(first.line_number().get(), 3)?;
-    ensure_eq!(second.position().number().get(), 2)?;
+    ensure_eq!(second.position().get(), 2)?;
     ensure_eq!(second.line_number().get(), 5)
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if executable programs expose a zero-capable rule
+/// count instead of the executable-only count witness.
+#[test]
+fn inspect_executable_rule_count_is_non_zero_typed() -> TestResult {
+    let inspected = parse_program("a=b")?;
+    let count: ExecutableRuleCount = inspected.rule_count();
+    ensure_eq!(count.get(), 1)
 }
 
 /// # Errors

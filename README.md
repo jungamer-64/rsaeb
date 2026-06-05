@@ -101,6 +101,11 @@ remains the program-inspection and miss-reporting surface, but cannot erase the
 action provenance of a committed outcome. Trace events carry the same boundary
 directly through `Initial`, `Rewritten`, and `Returned` variants.
 
+Executable rule counts are non-zero by type, and parsed rule positions are
+stored topology witnesses rather than iterator-derived numbers. `(once)` rules
+receive dense parser-assigned slots that each run consumes through its own
+runtime availability table.
+
 The exact typestate names, transition variants, tracing events, and error variants
 are documented in rustdoc.
 

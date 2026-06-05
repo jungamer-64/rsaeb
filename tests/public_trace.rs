@@ -177,14 +177,14 @@ fn borrowed_trace_step_signatures(
                     BorrowedTraceEvent::Rewritten { step, rule, state } => {
                         signatures.push(CommittedStepSignature::Continue {
                             step: step.get(),
-                            rule_position: rule.position().number().get(),
+                            rule_position: rule.position().get(),
                             state: state.materialize()?.into_raw_bytes(),
                         });
                     }
                     BorrowedTraceEvent::Returned { step, rule, output } => {
                         signatures.push(CommittedStepSignature::Return {
                             step: step.get(),
-                            rule_position: rule.position().number().get(),
+                            rule_position: rule.position().get(),
                             output: output.materialize()?.into_raw_bytes(),
                         });
                     }
@@ -212,7 +212,7 @@ fn borrowed_step_signatures(
             BorrowedStepTransition::Applied(applied) => {
                 signatures.push(CommittedStepSignature::Continue {
                     step: applied.step().get(),
-                    rule_position: applied.rule().position().number().get(),
+                    rule_position: applied.rule().position().get(),
                     state: applied.state().materialize()?.into_raw_bytes(),
                 });
                 session = applied.into_session();
@@ -220,7 +220,7 @@ fn borrowed_step_signatures(
             BorrowedStepTransition::Returned(returned) => {
                 signatures.push(CommittedStepSignature::Return {
                     step: returned.step().get(),
-                    rule_position: returned.rule().position().number().get(),
+                    rule_position: returned.rule().position().get(),
                     output: returned.output().as_slice().to_vec(),
                 });
                 return Ok(signatures);

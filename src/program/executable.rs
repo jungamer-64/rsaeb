@@ -5,7 +5,7 @@ use crate::error::{
 };
 use crate::execution::{BorrowedRuleAttemptCursor, BorrowedRunSession};
 use crate::input::AdmittedRun;
-use crate::inspect::{OnceRuleCount, RuleCount, RuleView};
+use crate::inspect::{ExecutableRuleCount, OnceRuleCount, RuleView};
 use crate::limits::StepCount;
 use crate::parser::parse_rules_into;
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
@@ -145,7 +145,7 @@ impl ExecutableProgram {
     /// Blank lines and comment-only lines are not executable rules and are not
     /// counted.
     #[must_use]
-    pub fn rule_count(&self) -> RuleCount {
+    pub fn rule_count(&self) -> ExecutableRuleCount {
         self.rule_set.rule_count()
     }
 

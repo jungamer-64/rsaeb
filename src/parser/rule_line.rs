@@ -4,7 +4,7 @@ use crate::allocation::{AllocationContext, try_push};
 use crate::bytes::{CompactByte, Payload, PayloadSyntax};
 use crate::error::{LeftModifierKind, ParseError, ParseErrorKind, PayloadKind, RightActionKind};
 use crate::limits::PayloadByteLimit;
-use crate::rule::{RewriteAction, Rule, RuleAnchorSyntax, RulePattern};
+use crate::rule::{ParsedRule, RewriteAction, RuleAnchorSyntax, RulePattern};
 use crate::source::{SourceColumn, SourceLineNumber, SourcePosition};
 use crate::syntax::SyntaxToken;
 
@@ -44,7 +44,7 @@ impl RuleSyntaxLine {
     ///
     /// Returns `ParseError` if either rule side contains invalid modifier,
     /// action, or payload syntax.
-    pub(super) fn parse(&self, payload_limit: PayloadByteLimit) -> Result<Rule, ParseError> {
+    pub(super) fn parse(&self, payload_limit: PayloadByteLimit) -> Result<ParsedRule, ParseError> {
         let (left, right) = self.syntax_parts();
         let left = left.parse(payload_limit)?;
         let right = right.parse(payload_limit)?;
@@ -403,19 +403,19 @@ struct ParsedLeftSide {
 
 impl ParsedLeftSide {
     /// Combines the parsed left side with a parsed right side without rejoining rule shape.
-    fn into_parsed_rule(self, right: ParsedRightSide) -> Rule {
+    fn into_parsed_rule(self, right: ParsedRightSide) -> ParsedRule {
         match (self.repeat, right) {
             (LeftRepeatSyntax::Always, ParsedRightSide::Rewrite(action)) => {
-                Rule::always_rewrite(self.pattern, action)
+                ParsedRule::always_rewrite(self.pattern, action)
             }
             (LeftRepeatSyntax::Once, ParsedRightSide::Rewrite(action)) => {
-                Rule::once_rewrite(self.pattern, action)
+                ParsedRule::once_rewrite(self.pattern, action)
             }
             (LeftRepeatSyntax::Always, ParsedRightSide::Return(output)) => {
-                Rule::always_return(self.pattern, output)
+                ParsedRule::always_return(self.pattern, output)
             }
             (LeftRepeatSyntax::Once, ParsedRightSide::Return(output)) => {
-                Rule::once_return(self.pattern, output)
+                ParsedRule::once_return(self.pattern, output)
             }
         }
     }

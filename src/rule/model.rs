@@ -68,7 +68,7 @@ pub(crate) struct ReturnRule {
 
 /// Positionless executable rule produced directly by the parser.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Rule {
+pub(crate) enum ParsedRule {
     /// Reusable non-terminal rewrite rule.
     AlwaysRewrite(RewriteRule),
     /// Once-only non-terminal rewrite rule.
@@ -191,7 +191,7 @@ impl ReturnRule {
     }
 }
 
-impl Rule {
+impl ParsedRule {
     /// Builds a reusable rewrite rule.
     pub(crate) const fn always_rewrite(pattern: RulePattern, action: RewriteAction) -> Self {
         Self::AlwaysRewrite(RewriteRule::from_parts(pattern, action))
@@ -224,5 +224,4 @@ impl Rule {
     pub(crate) const fn line_number(&self) -> SourceLineNumber {
         self.pattern().line_number()
     }
-
 }

@@ -123,7 +123,10 @@ fn construction_parse_policy_does_not_parameterize_program_values() -> TestResul
     let empty: EmptyProgram = EmptyProgram::parse_text::<TightParse>("# empty")?;
 
     ensure_eq!(default.rule_count(), tight.rule_count())?;
-    ensure_eq!(empty.rule_count().get(), 0)
+    ensure_matches(
+        empty.rules().next().is_none(),
+        "expected no rules for empty program",
+    )
 }
 
 /// # Errors

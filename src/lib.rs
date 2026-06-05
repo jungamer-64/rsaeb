@@ -24,9 +24,10 @@
 //!   stepwise execution, and rule-attempt execution exist only on this type.
 //!
 //! `(once)` repeat intent and right-side action shape are parsed into the rule
-//! variant itself. Every run builds its own per-rule runtime availability cells,
-//! so consumed once rules are filtered before matching and once-state mismatch
-//! is not a public runtime error class.
+//! variant itself. Program topology assigns rule positions and dense once-rule
+//! slots once at parse time; every run builds its own slot-indexed availability
+//! table, so consumed once rules are filtered before matching and once-state
+//! mismatch is not a public runtime error class.
 //!
 //! # API map
 //!
@@ -183,6 +184,60 @@
 //!
 //! fn main() {
 //!     let _ = |rule: RuleView<'_>| matches!(rule, RuleView::Always(_));
+//! }
+//! ```
+//!
+//! Rule topology no longer exposes a separate `RuleNumber` wrapper. A
+//! [`inspect::RulePosition`] is already the one-based topology witness:
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleNumber;
+//!
+//! fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleView;
+//!
+//! fn invalid(rule: RuleView<'_>) {
+//!     let _ = rule.position().number();
+//! }
+//! ```
+//!
+//! Empty programs do not expose zero-valued executable-rule counts. Empty
+//! topology is represented by [`program::EmptyProgram`] itself:
+//!
+//! ```compile_fail
+//! use rsaeb::policy::DefaultParsePolicy;
+//! use rsaeb::program::EmptyProgram;
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let empty = EmptyProgram::parse_text::<DefaultParsePolicy>("# empty")?;
+//!     let _ = empty.rule_count();
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::policy::DefaultParsePolicy;
+//! use rsaeb::program::EmptyProgram;
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let empty = EmptyProgram::parse_text::<DefaultParsePolicy>("# empty")?;
+//!     let _ = empty.once_rule_count();
+//!     Ok(())
+//! }
+//! ```
+//!
+//! Executable programs expose a non-zero executable-rule count, not the old
+//! zero-capable [`inspect::RuleCount`]:
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleCount;
+//! use rsaeb::program::ExecutableProgram;
+//!
+//! fn invalid(program: &ExecutableProgram) -> RuleCount {
+//!     program.rule_count()
 //! }
 //! ```
 //!
@@ -661,7 +716,7 @@
 //!
 //! let execution = match execution.step() {
 //!     BorrowedStepTransition::Applied(applied) => {
-//!         if applied.rule().position().number().get() != 1 {
+//!         if applied.rule().position().get() != 1 {
 //!             return Err("unexpected first applied rule".into());
 //!         }
 //!         if applied.state().materialize()?.as_slice() != b"b" {
@@ -676,7 +731,7 @@
 //!
 //! match execution.step() {
 //!     BorrowedStepTransition::Applied(applied) => {
-//!         if applied.rule().position().number().get() != 2 {
+//!         if applied.rule().position().get() != 2 {
 //!             return Err("unexpected second applied rule".into());
 //!         }
 //!     }
@@ -733,7 +788,7 @@
 //! };
 //! match execution.step() {
 //!     BorrowedFinalRuleAttemptTransition::Applied(applied) => {
-//!         if applied.step().get() != 1 || applied.rule().position().number().get() != 2 {
+//!         if applied.step().get() != 1 || applied.rule().position().get() != 2 {
 //!             return Err("unexpected applied rule attempt".into());
 //!         }
 //!     }

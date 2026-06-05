@@ -8,5 +8,5 @@ pub(crate) use canonical::{
     canonical_once_rewrite_source,
 };
 pub(crate) use model::{
-    ReturnRule, RewriteAction, RewriteRule, Rule, RuleAnchorSyntax, RulePattern,
+    ParsedRule, ReturnRule, RewriteAction, RewriteRule, RuleAnchorSyntax, RulePattern,
 };

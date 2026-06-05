@@ -21,8 +21,8 @@ mod result;
 mod rule_set;
 
 pub(crate) use rule_set::{
-    EmptyRuleSetBuilder, ExecutableRuleSet, ExecutableRuleSetBuilder, PositionedRule, RuleScan,
-    RuleSink,
+    EmptyRuleSetBuilder, ExecutableRuleSet, ExecutableRuleSetBuilder, OnceRuleSlot, RuleScan,
+    RuleSink, RuntimeStoredRule, StoredRuleRef,
 };
 
 pub use executable::{EmptyProgram, ExecutableProgram};

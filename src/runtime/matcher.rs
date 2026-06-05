@@ -114,6 +114,14 @@ impl<'program> RuleAttemptMiss<'program> {
 }
 
 impl<'program, 'state> MatchedAlwaysRewriteApplication<'program, 'state> {
+    /// Builds a matched reusable rewrite application.
+    pub(crate) const fn new(
+        rule: AlwaysRewriteRuleView<'program>,
+        state_match: StateMatch<'state>,
+    ) -> Self {
+        Self { rule, state_match }
+    }
+
     /// Splits matched reusable rewrite data into preparation parts.
     pub(crate) fn into_parts(
         self,
@@ -128,6 +136,19 @@ impl<'program, 'state> MatchedAlwaysRewriteApplication<'program, 'state> {
 }
 
 impl<'program, 'state, 'once> MatchedOnceRewriteApplication<'program, 'state, 'once> {
+    /// Builds a matched once-only rewrite application.
+    pub(crate) const fn new(
+        rule: OnceRewriteRuleView<'program>,
+        state_match: StateMatch<'state>,
+        commit: OnceMatchPermit<'once>,
+    ) -> Self {
+        Self {
+            rule,
+            state_match,
+            commit,
+        }
+    }
+
     /// Splits matched once-only rewrite data into preparation parts.
     pub(crate) fn into_parts(
         self,
@@ -143,6 +164,14 @@ impl<'program, 'state, 'once> MatchedOnceRewriteApplication<'program, 'state, 'o
 }
 
 impl<'program, 'state> MatchedAlwaysReturnApplication<'program, 'state> {
+    /// Builds a matched reusable return application.
+    pub(crate) const fn new(
+        rule: AlwaysReturnRuleView<'program>,
+        state_match: StateMatch<'state>,
+    ) -> Self {
+        Self { rule, state_match }
+    }
+
     /// Splits matched reusable return data into preparation parts.
     pub(crate) fn into_parts(
         self,
@@ -157,6 +186,19 @@ impl<'program, 'state> MatchedAlwaysReturnApplication<'program, 'state> {
 }
 
 impl<'program, 'state, 'once> MatchedOnceReturnApplication<'program, 'state, 'once> {
+    /// Builds a matched once-only return application.
+    pub(crate) const fn new(
+        rule: OnceReturnRuleView<'program>,
+        state_match: StateMatch<'state>,
+        commit: OnceMatchPermit<'once>,
+    ) -> Self {
+        Self {
+            rule,
+            state_match,
+            commit,
+        }
+    }
+
     /// Splits matched once-only return data into preparation parts.
     pub(crate) fn into_parts(
         self,
@@ -168,6 +210,46 @@ impl<'program, 'state, 'once> MatchedOnceReturnApplication<'program, 'state, 'on
     ) {
         let output = self.rule.into_rule().output();
         (self.rule, self.state_match, output, self.commit)
+    }
+}
+
+impl<'program, 'state, 'once> MatchedRuleApplication<'program, 'state, 'once> {
+    /// Builds a matched reusable rewrite application.
+    pub(crate) const fn always_rewrite(
+        rule: AlwaysRewriteRuleView<'program>,
+        state_match: StateMatch<'state>,
+    ) -> Self {
+        Self::AlwaysRewrite(MatchedAlwaysRewriteApplication::new(rule, state_match))
+    }
+
+    /// Builds a matched once-only rewrite application.
+    pub(crate) const fn once_rewrite(
+        rule: OnceRewriteRuleView<'program>,
+        state_match: StateMatch<'state>,
+        commit: OnceMatchPermit<'once>,
+    ) -> Self {
+        Self::OnceRewrite(MatchedOnceRewriteApplication::new(
+            rule,
+            state_match,
+            commit,
+        ))
+    }
+
+    /// Builds a matched reusable return application.
+    pub(crate) const fn always_return(
+        rule: AlwaysReturnRuleView<'program>,
+        state_match: StateMatch<'state>,
+    ) -> Self {
+        Self::AlwaysReturn(MatchedAlwaysReturnApplication::new(rule, state_match))
+    }
+
+    /// Builds a matched once-only return application.
+    pub(crate) const fn once_return(
+        rule: OnceReturnRuleView<'program>,
+        state_match: StateMatch<'state>,
+        commit: OnceMatchPermit<'once>,
+    ) -> Self {
+        Self::OnceReturn(MatchedOnceReturnApplication::new(rule, state_match, commit))
     }
 }
 
@@ -284,6 +366,14 @@ fn match_rule_state<'state>(pattern: &RulePattern, state: &'state State) -> Rule
         Some(state_match) => RuleStateMatch::Matched(state_match),
         None => RuleStateMatch::Mismatched,
     }
+}
+
+/// Finds a rule pattern's match span in the current state.
+pub(crate) fn match_rule_pattern<'state>(
+    pattern: &RulePattern,
+    state: &'state State,
+) -> Option<StateMatch<'state>> {
+    find_match(state, pattern)
 }
 
 /// Finds this rule pattern's match span in the current state.
