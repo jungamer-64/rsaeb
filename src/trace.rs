@@ -32,10 +32,16 @@
 //! executable.trace(admitted, SnapshotTrace::<SnapshotBytes, _>::new(|event| {
 //!         match event {
 //!             TraceSnapshotEvent::Initial { state } => retained.push(state.into_raw_bytes()),
-//!             TraceSnapshotEvent::Rewritten { state, .. } => {
+//!             TraceSnapshotEvent::AlwaysRewritten { state, .. } => {
 //!                 retained.push(state.into_raw_bytes());
 //!             }
-//!             TraceSnapshotEvent::Returned { output, .. } => {
+//!             TraceSnapshotEvent::OnceRewritten { state, .. } => {
+//!                 retained.push(state.into_raw_bytes());
+//!             }
+//!             TraceSnapshotEvent::AlwaysReturned { output, .. } => {
+//!                 retained.push(output.into_raw_bytes());
+//!             }
+//!             TraceSnapshotEvent::OnceReturned { output, .. } => {
 //!                 retained.push(output.into_raw_bytes());
 //!             }
 //!         }
@@ -94,7 +100,9 @@ use core::marker::PhantomData;
 
 use crate::error::{TraceSnapshotError, TraceSnapshotRunError, TracedRunError};
 use crate::input::AdmittedRun;
-use crate::inspect::{ReturnRuleView, RewriteRuleView};
+use crate::inspect::{
+    AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView,
+};
 use crate::limits::{StepCount, TraceSnapshotByteLimit};
 use crate::policy::{ExecutionPolicy, TraceSnapshotPolicy};
 use crate::program::limits::TraceSnapshotBytePermit;
@@ -350,21 +358,39 @@ pub enum BorrowedTraceEvent<'program, 'run> {
         /// Initial runtime state.
         state: RuntimeStateView<'run>,
     },
-    /// One rewrite committed and produced the next runtime state.
-    Rewritten {
+    /// One reusable rewrite committed and produced the next runtime state.
+    AlwaysRewritten {
         /// Committed step count.
         step: StepCount,
         /// Exact rewrite rule committed by this step.
-        rule: RewriteRuleView<'program>,
+        rule: AlwaysRewriteRuleView<'program>,
         /// Runtime state after the committed rewrite.
         state: RuntimeStateView<'run>,
     },
-    /// One return committed and produced terminal output.
-    Returned {
+    /// One once-only rewrite committed and produced the next runtime state.
+    OnceRewritten {
+        /// Committed step count.
+        step: StepCount,
+        /// Exact rewrite rule committed by this step.
+        rule: OnceRewriteRuleView<'program>,
+        /// Runtime state after the committed rewrite.
+        state: RuntimeStateView<'run>,
+    },
+    /// One reusable return committed and produced terminal output.
+    AlwaysReturned {
         /// Committed step count.
         step: StepCount,
         /// Exact return rule committed by this step.
-        rule: ReturnRuleView<'program>,
+        rule: AlwaysReturnRuleView<'program>,
+        /// Borrowed terminal return output.
+        output: ReturnOutputView<'program>,
+    },
+    /// One once-only return committed and produced terminal output.
+    OnceReturned {
+        /// Committed step count.
+        step: StepCount,
+        /// Exact return rule committed by this step.
+        rule: OnceReturnRuleView<'program>,
         /// Borrowed terminal return output.
         output: ReturnOutputView<'program>,
     },
@@ -384,21 +410,39 @@ pub enum TraceSnapshotEvent<'program> {
         /// Initial runtime state.
         state: RuntimeStateSnapshot,
     },
-    /// One rewrite committed and produced the next runtime state.
-    Rewritten {
+    /// One reusable rewrite committed and produced the next runtime state.
+    AlwaysRewritten {
         /// Committed step count.
         step: StepCount,
         /// Exact rewrite rule committed by this step.
-        rule: RewriteRuleView<'program>,
+        rule: AlwaysRewriteRuleView<'program>,
         /// Materialized runtime state after the committed rewrite.
         state: RuntimeStateSnapshot,
     },
-    /// One return committed and produced terminal output.
-    Returned {
+    /// One once-only rewrite committed and produced the next runtime state.
+    OnceRewritten {
+        /// Committed step count.
+        step: StepCount,
+        /// Exact rewrite rule committed by this step.
+        rule: OnceRewriteRuleView<'program>,
+        /// Materialized runtime state after the committed rewrite.
+        state: RuntimeStateSnapshot,
+    },
+    /// One reusable return committed and produced terminal output.
+    AlwaysReturned {
         /// Committed step count.
         step: StepCount,
         /// Exact return rule committed by this step.
-        rule: ReturnRuleView<'program>,
+        rule: AlwaysReturnRuleView<'program>,
+        /// Materialized terminal return output.
+        output: ReturnOutput,
+    },
+    /// One once-only return committed and produced terminal output.
+    OnceReturned {
+        /// Committed step count.
+        step: StepCount,
+        /// Exact return rule committed by this step.
+        rule: OnceReturnRuleView<'program>,
         /// Materialized terminal return output.
         output: ReturnOutput,
     },
@@ -412,10 +456,10 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
             Self::Initial { state } => {
                 TraceSnapshotByteCount::from_runtime_state_count(state.byte_count())
             }
-            Self::Rewritten { state, .. } => {
+            Self::AlwaysRewritten { state, .. } | Self::OnceRewritten { state, .. } => {
                 TraceSnapshotByteCount::from_runtime_state_count(state.byte_count())
             }
-            Self::Returned { output, .. } => {
+            Self::AlwaysReturned { output, .. } | Self::OnceReturned { output, .. } => {
                 TraceSnapshotByteCount::from_return_output_count(output.byte_count())
             }
         }
@@ -426,8 +470,12 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
     pub fn is_empty(self) -> bool {
         match self {
             Self::Initial { state } => state.is_empty(),
-            Self::Rewritten { state, .. } => state.is_empty(),
-            Self::Returned { output, .. } => output.is_empty(),
+            Self::AlwaysRewritten { state, .. } | Self::OnceRewritten { state, .. } => {
+                state.is_empty()
+            }
+            Self::AlwaysReturned { output, .. } | Self::OnceReturned { output, .. } => {
+                output.is_empty()
+            }
         }
     }
 
@@ -450,23 +498,45 @@ impl<'program> BorrowedTraceEvent<'program, '_> {
                     state: RuntimeStateSnapshot::from_trace_state_view(state, permit)?,
                 })
             }
-            Self::Rewritten { step, rule, state } => {
+            Self::AlwaysRewritten { step, rule, state } => {
                 let permit = ensure_trace_len(
                     TraceSnapshotByteCount::from_runtime_state_count(state.byte_count()),
                     T::TRACE_SNAPSHOT_BYTE_LIMIT,
                 )?;
-                Ok(TraceSnapshotEvent::Rewritten {
+                Ok(TraceSnapshotEvent::AlwaysRewritten {
                     step,
                     rule,
                     state: RuntimeStateSnapshot::from_trace_state_view(state, permit)?,
                 })
             }
-            Self::Returned { step, rule, output } => {
+            Self::OnceRewritten { step, rule, state } => {
+                let permit = ensure_trace_len(
+                    TraceSnapshotByteCount::from_runtime_state_count(state.byte_count()),
+                    T::TRACE_SNAPSHOT_BYTE_LIMIT,
+                )?;
+                Ok(TraceSnapshotEvent::OnceRewritten {
+                    step,
+                    rule,
+                    state: RuntimeStateSnapshot::from_trace_state_view(state, permit)?,
+                })
+            }
+            Self::AlwaysReturned { step, rule, output } => {
                 let permit = ensure_trace_len(
                     TraceSnapshotByteCount::from_return_output_count(output.byte_count()),
                     T::TRACE_SNAPSHOT_BYTE_LIMIT,
                 )?;
-                Ok(TraceSnapshotEvent::Returned {
+                Ok(TraceSnapshotEvent::AlwaysReturned {
+                    step,
+                    rule,
+                    output: ReturnOutput::from_trace_return_output_view(output, permit)?,
+                })
+            }
+            Self::OnceReturned { step, rule, output } => {
+                let permit = ensure_trace_len(
+                    TraceSnapshotByteCount::from_return_output_count(output.byte_count()),
+                    T::TRACE_SNAPSHOT_BYTE_LIMIT,
+                )?;
+                Ok(TraceSnapshotEvent::OnceReturned {
                     step,
                     rule,
                     output: ReturnOutput::from_trace_return_output_view(output, permit)?,

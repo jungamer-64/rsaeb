@@ -1,6 +1,8 @@
 use crate::error::{RunError, RunFinishError, RunStartError, RunStepError, TracedRunError};
 use crate::input::AdmittedRun;
-use crate::inspect::{ReturnRuleView, RewriteRuleView};
+use crate::inspect::{
+    AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView,
+};
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, ReturnOutput, ReturnOutputView, RunResult};
@@ -120,21 +122,43 @@ pub(super) enum CoreRunTransition<'program, E>
 where
     E: ExecutionPolicy,
 {
-    /// One rewrite rule committed and execution can continue.
-    Applied {
+    /// One reusable rewrite rule committed and execution can continue.
+    AlwaysRewritten {
         /// Committed step count.
         step: StepCount,
         /// Rule witness paired with the committed rewrite.
-        rule: RewriteRuleView<'program>,
+        rule: AlwaysRewriteRuleView<'program>,
         /// Continuation session after the committed rewrite.
         continuation: Session<'program, E>,
     },
-    /// One return rule committed and the run is terminal.
-    Returned {
+    /// One once-only rewrite rule committed and execution can continue.
+    OnceRewritten {
+        /// Committed step count.
+        step: StepCount,
+        /// Rule witness paired with the committed rewrite.
+        rule: OnceRewriteRuleView<'program>,
+        /// Continuation session after the committed rewrite.
+        continuation: Session<'program, E>,
+    },
+    /// One reusable return rule committed and the run is terminal.
+    AlwaysReturned {
         /// Committed return step count.
         step: StepCount,
         /// Rule witness paired with the committed return.
-        rule: ReturnRuleView<'program>,
+        rule: AlwaysReturnRuleView<'program>,
+        /// Borrowed return-output view for trace callbacks.
+        output_view: ReturnOutputView<'program>,
+        /// Materialized return output.
+        output: ReturnOutput,
+        /// Terminal run session.
+        terminal: TerminalSession<'program>,
+    },
+    /// One once-only return rule committed and the run is terminal.
+    OnceReturned {
+        /// Committed return step count.
+        step: StepCount,
+        /// Rule witness paired with the committed return.
+        rule: OnceReturnRuleView<'program>,
         /// Borrowed return-output view for trace callbacks.
         output_view: ReturnOutputView<'program>,
         /// Materialized return output.
@@ -340,7 +364,7 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
         };
         let applied = prepared.commit(&mut state, &mut scratch);
         match applied {
-            AppliedRule::Continued(committed) => CoreRunTransition::Applied {
+            AppliedRule::AlwaysRewritten(committed) => CoreRunTransition::AlwaysRewritten {
                 step: committed.step(),
                 rule: committed.rule(),
                 continuation: Session {
@@ -353,12 +377,44 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
                     },
                 },
             },
-            AppliedRule::Terminal(committed) => {
+            AppliedRule::OnceRewritten(committed) => CoreRunTransition::OnceRewritten {
+                step: committed.step(),
+                rule: committed.rule(),
+                continuation: Session {
+                    program,
+                    core: ActiveRunCore {
+                        state,
+                        scratch,
+                        budget,
+                        runtime_rules,
+                    },
+                },
+            },
+            AppliedRule::AlwaysReturned(committed) => {
                 let step = committed.step();
                 let rule = committed.rule();
                 let output_view = committed.output_view();
                 let output = committed.into_output();
-                CoreRunTransition::Returned {
+                CoreRunTransition::AlwaysReturned {
+                    step,
+                    rule,
+                    output_view,
+                    output,
+                    terminal: TerminalSession {
+                        program,
+                        core: TerminalRunCore {
+                            state,
+                            steps: budget.completed_steps(),
+                        },
+                    },
+                }
+            }
+            AppliedRule::OnceReturned(committed) => {
+                let step = committed.step();
+                let rule = committed.rule();
+                let output_view = committed.output_view();
+                let output = committed.into_output();
+                CoreRunTransition::OnceReturned {
                     step,
                     rule,
                     output_view,
@@ -385,10 +441,17 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
         let mut session = self;
         loop {
             match session.advance_run_step() {
-                CoreRunTransition::Applied { continuation, .. } => {
+                CoreRunTransition::AlwaysRewritten { continuation, .. }
+                | CoreRunTransition::OnceRewritten { continuation, .. } => {
                     session = continuation;
                 }
-                CoreRunTransition::Returned {
+                CoreRunTransition::AlwaysReturned {
+                    step,
+                    output_view: _,
+                    output,
+                    ..
+                }
+                | CoreRunTransition::OnceReturned {
                     step,
                     output_view: _,
                     output,
@@ -501,12 +564,12 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
         let mut session = self;
         loop {
             match session.advance_run_step() {
-                CoreRunTransition::Applied {
+                CoreRunTransition::AlwaysRewritten {
                     step,
                     rule,
                     continuation,
                 } => {
-                    trace(BorrowedTraceEvent::Rewritten {
+                    trace(BorrowedTraceEvent::AlwaysRewritten {
                         step,
                         rule,
                         state: continuation.state(),
@@ -514,14 +577,42 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
                     .map_err(TracedRunError::Trace)?;
                     session = continuation;
                 }
-                CoreRunTransition::Returned {
+                CoreRunTransition::OnceRewritten {
+                    step,
+                    rule,
+                    continuation,
+                } => {
+                    trace(BorrowedTraceEvent::OnceRewritten {
+                        step,
+                        rule,
+                        state: continuation.state(),
+                    })
+                    .map_err(TracedRunError::Trace)?;
+                    session = continuation;
+                }
+                CoreRunTransition::AlwaysReturned {
                     step,
                     rule,
                     output_view,
                     output,
                     ..
                 } => {
-                    trace(BorrowedTraceEvent::Returned {
+                    trace(BorrowedTraceEvent::AlwaysReturned {
+                        step,
+                        rule,
+                        output: output_view,
+                    })
+                    .map_err(TracedRunError::Trace)?;
+                    return Ok(RunResult::from_return(output, step));
+                }
+                CoreRunTransition::OnceReturned {
+                    step,
+                    rule,
+                    output_view,
+                    output,
+                    ..
+                } => {
+                    trace(BorrowedTraceEvent::OnceReturned {
                         step,
                         rule,
                         output: output_view,

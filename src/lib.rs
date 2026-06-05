@@ -588,6 +588,140 @@
 //! }
 //! ```
 //!
+//! Old shape-erased step transition variants have been deleted:
+//!
+//! ```compile_fail
+//! use rsaeb::execution::BorrowedStepTransition;
+//! use rsaeb::policy::DefaultExecutionPolicy;
+//!
+//! fn invalid(transition: BorrowedStepTransition<'static, DefaultExecutionPolicy>) {
+//!     match transition {
+//!         BorrowedStepTransition::Applied(_) => {}
+//!         _ => {}
+//!     }
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::execution::BorrowedStepTransition;
+//! use rsaeb::policy::DefaultExecutionPolicy;
+//!
+//! fn invalid(transition: BorrowedStepTransition<'static, DefaultExecutionPolicy>) {
+//!     match transition {
+//!         BorrowedStepTransition::Returned(_) => {}
+//!         _ => {}
+//!     }
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::execution::{
+//!     BorrowedContinuingRuleAttemptTransition, BorrowedFinalRuleAttemptTransition,
+//! };
+//! use rsaeb::policy::{DefaultExecutionPolicy, DefaultRuleAttemptPolicy};
+//!
+//! fn invalid_continuing(
+//!     transition: BorrowedContinuingRuleAttemptTransition<
+//!         'static,
+//!         DefaultExecutionPolicy,
+//!         DefaultRuleAttemptPolicy,
+//!     >,
+//! ) {
+//!     match transition {
+//!         BorrowedContinuingRuleAttemptTransition::Applied(_) => {}
+//!         _ => {}
+//!     }
+//! }
+//!
+//! fn invalid_final(
+//!     transition: BorrowedFinalRuleAttemptTransition<
+//!         'static,
+//!         DefaultExecutionPolicy,
+//!         DefaultRuleAttemptPolicy,
+//!     >,
+//! ) {
+//!     match transition {
+//!         BorrowedFinalRuleAttemptTransition::Returned(_) => {}
+//!         _ => {}
+//!     }
+//! }
+//! ```
+//!
+//! Old shape-erased trace success variants have been deleted:
+//!
+//! ```compile_fail
+//! use rsaeb::trace::BorrowedTraceEvent;
+//!
+//! fn invalid(event: BorrowedTraceEvent<'static, 'static>) {
+//!     match event {
+//!         BorrowedTraceEvent::Rewritten { .. } => {}
+//!         _ => {}
+//!     }
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
+//!
+//! fn invalid_borrowed(event: BorrowedTraceEvent<'static, 'static>) {
+//!     match event {
+//!         BorrowedTraceEvent::Returned { .. } => {}
+//!         _ => {}
+//!     }
+//! }
+//!
+//! fn invalid_snapshot(event: TraceSnapshotEvent<'static>) {
+//!     match event {
+//!         TraceSnapshotEvent::Rewritten { .. } => {}
+//!         _ => {}
+//!     }
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::trace::TraceSnapshotEvent;
+//!
+//! fn invalid(event: TraceSnapshotEvent<'static>) {
+//!     match event {
+//!         TraceSnapshotEvent::Returned { .. } => {}
+//!         _ => {}
+//!     }
+//! }
+//! ```
+//!
+//! Old shape-erased miss carriers and miss variants have been deleted:
+//!
+//! ```compile_fail
+//! use rsaeb::execution::{OnceConsumedRuleMiss, StateMismatchRuleMiss};
+//!
+//! fn main() {
+//!     let _ = core::mem::size_of::<StateMismatchRuleMiss<'static>>();
+//!     let _ = core::mem::size_of::<OnceConsumedRuleMiss<'static>>();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::execution::RuleMiss;
+//!
+//! fn invalid(miss: RuleMiss<'static>) {
+//!     match miss {
+//!         RuleMiss::StateMismatch(_) => {}
+//!         _ => {}
+//!     }
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::execution::RuleMiss;
+//!
+//! fn invalid(miss: RuleMiss<'static>) {
+//!     match miss {
+//!         RuleMiss::OnceConsumed(_) => {}
+//!         _ => {}
+//!     }
+//! }
+//! ```
+//!
 //! # Typed boundaries
 //!
 //! Program source and runtime input are different byte domains. Program payload
@@ -732,7 +866,7 @@
 //! let execution = executable.steps(admitted)?;
 //!
 //! let execution = match execution.step() {
-//!     BorrowedStepTransition::Applied(applied) => {
+//!     BorrowedStepTransition::AlwaysRewritten(applied) => {
 //!         if applied.rule().position().get() != 1 {
 //!             return Err("unexpected first applied rule".into());
 //!         }
@@ -741,18 +875,26 @@
 //!         }
 //!         applied.into_session()
 //!     }
-//!     BorrowedStepTransition::Stable(_) | BorrowedStepTransition::Returned(_) | BorrowedStepTransition::Failed(_) => {
+//!     BorrowedStepTransition::OnceRewritten(_)
+//!     | BorrowedStepTransition::Stable(_)
+//!     | BorrowedStepTransition::AlwaysReturned(_)
+//!     | BorrowedStepTransition::OnceReturned(_)
+//!     | BorrowedStepTransition::Failed(_) => {
 //!         return Err("expected first applied step".into());
 //!     }
 //! };
 //!
 //! match execution.step() {
-//!     BorrowedStepTransition::Applied(applied) => {
+//!     BorrowedStepTransition::AlwaysRewritten(applied) => {
 //!         if applied.rule().position().get() != 2 {
 //!             return Err("unexpected second applied rule".into());
 //!         }
 //!     }
-//!     BorrowedStepTransition::Stable(_) | BorrowedStepTransition::Returned(_) | BorrowedStepTransition::Failed(_) => {
+//!     BorrowedStepTransition::OnceRewritten(_)
+//!     | BorrowedStepTransition::Stable(_)
+//!     | BorrowedStepTransition::AlwaysReturned(_)
+//!     | BorrowedStepTransition::OnceReturned(_)
+//!     | BorrowedStepTransition::Failed(_) => {
 //!         return Err("expected second applied step".into());
 //!     }
 //! }
@@ -790,13 +932,15 @@
 //! };
 //! let execution = match execution.step() {
 //!     BorrowedContinuingRuleAttemptTransition::Missed(missed) => {
-//!         if !matches!(missed.miss(), RuleMiss::StateMismatch(_)) {
+//!         if !matches!(missed.miss(), RuleMiss::AlwaysRewriteStateMismatch(_)) {
 //!             return Err("unexpected miss shape".into());
 //!         }
 //!         missed.into_cursor()
 //!     }
-//!     BorrowedContinuingRuleAttemptTransition::Applied(_)
-//!     | BorrowedContinuingRuleAttemptTransition::Returned(_)
+//!     BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(_)
+//!     | BorrowedContinuingRuleAttemptTransition::OnceRewritten(_)
+//!     | BorrowedContinuingRuleAttemptTransition::AlwaysReturned(_)
+//!     | BorrowedContinuingRuleAttemptTransition::OnceReturned(_)
 //!     | BorrowedContinuingRuleAttemptTransition::Failed(_) => return Err("expected first rule to miss".into()),
 //! };
 //!
@@ -804,13 +948,15 @@
 //!     return Err("expected final cursor after first miss".into());
 //! };
 //! match execution.step() {
-//!     BorrowedFinalRuleAttemptTransition::Applied(applied) => {
+//!     BorrowedFinalRuleAttemptTransition::AlwaysRewritten(applied) => {
 //!         if applied.step().get() != 1 || applied.rule().position().get() != 2 {
 //!             return Err("unexpected applied rule attempt".into());
 //!         }
 //!     }
 //!     BorrowedFinalRuleAttemptTransition::Stable(_)
-//!     | BorrowedFinalRuleAttemptTransition::Returned(_)
+//!     | BorrowedFinalRuleAttemptTransition::OnceRewritten(_)
+//!     | BorrowedFinalRuleAttemptTransition::AlwaysReturned(_)
+//!     | BorrowedFinalRuleAttemptTransition::OnceReturned(_)
 //!     | BorrowedFinalRuleAttemptTransition::Failed(_) => return Err("expected second rule to apply".into()),
 //! }
 //! # Ok(())
@@ -882,10 +1028,16 @@
 //!         byte_counts.push(event.byte_count().get());
 //!         match event {
 //!             BorrowedTraceEvent::Initial { .. } => {}
-//!             BorrowedTraceEvent::Rewritten { rule, .. } => {
+//!             BorrowedTraceEvent::AlwaysRewritten { rule, .. } => {
 //!                 let _rewrite = rule.rewrite_action();
 //!             }
-//!             BorrowedTraceEvent::Returned { rule, .. } => {
+//!             BorrowedTraceEvent::OnceRewritten { rule, .. } => {
+//!                 let _rewrite = rule.rewrite_action();
+//!             }
+//!             BorrowedTraceEvent::AlwaysReturned { rule, .. } => {
+//!                 let _output = rule.output();
+//!             }
+//!             BorrowedTraceEvent::OnceReturned { rule, .. } => {
 //!                 let _output = rule.output();
 //!             }
 //!         }
@@ -924,10 +1076,16 @@
 //!     SnapshotTrace::<SnapshotBytes, _>::new(|event| {
 //!         match event {
 //!             TraceSnapshotEvent::Initial { state } => states.push(state.into_raw_bytes()),
-//!             TraceSnapshotEvent::Rewritten { state, .. } => {
+//!             TraceSnapshotEvent::AlwaysRewritten { state, .. } => {
 //!                 states.push(state.into_raw_bytes());
 //!             }
-//!             TraceSnapshotEvent::Returned { output, .. } => {
+//!             TraceSnapshotEvent::OnceRewritten { state, .. } => {
+//!                 states.push(state.into_raw_bytes());
+//!             }
+//!             TraceSnapshotEvent::AlwaysReturned { output, .. } => {
+//!                 returns.push(output.into_raw_bytes());
+//!             }
+//!             TraceSnapshotEvent::OnceReturned { output, .. } => {
 //!                 returns.push(output.into_raw_bytes());
 //!             }
 //!         }

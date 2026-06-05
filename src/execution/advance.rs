@@ -1,6 +1,8 @@
 use crate::bytes::RuntimeStateByteCount;
 use crate::error::RuleAttemptStepError;
-use crate::inspect::{ReturnRuleView, RewriteRuleView};
+use crate::inspect::{
+    AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView,
+};
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, ReturnOutput};
@@ -58,25 +60,49 @@ pub(super) enum CoreContinuingRuleAttemptStep<'program, E: ExecutionPolicy, A: R
         /// Continuation session with the returned next cursor.
         continuation: AttemptSessionCursor<'program, E, A>,
     },
-    /// A rewrite committed and the rule-attempt run can continue.
-    Applied {
+    /// A reusable rewrite committed and the rule-attempt run can continue.
+    AlwaysRewritten {
         /// Rule-attempt count committed by this transition.
         attempt: RuleAttemptCount,
         /// Committed rewrite step count.
         step: StepCount,
         /// Rule witness paired with the committed rewrite.
-        rule: RewriteRuleView<'program>,
+        rule: AlwaysRewriteRuleView<'program>,
         /// Continuation session with a fresh cursor.
         continuation: AttemptSessionCursor<'program, E, A>,
     },
-    /// A return rule committed and the run is terminal.
-    Returned {
+    /// A once-only rewrite committed and the rule-attempt run can continue.
+    OnceRewritten {
+        /// Rule-attempt count committed by this transition.
+        attempt: RuleAttemptCount,
+        /// Committed rewrite step count.
+        step: StepCount,
+        /// Rule witness paired with the committed rewrite.
+        rule: OnceRewriteRuleView<'program>,
+        /// Continuation session with a fresh cursor.
+        continuation: AttemptSessionCursor<'program, E, A>,
+    },
+    /// A reusable return rule committed and the run is terminal.
+    AlwaysReturned {
         /// Rule-attempt count committed by this transition.
         attempt: RuleAttemptCount,
         /// Committed return step count.
         step: StepCount,
         /// Rule witness paired with the committed return.
-        rule: ReturnRuleView<'program>,
+        rule: AlwaysReturnRuleView<'program>,
+        /// Materialized return output.
+        output: ReturnOutput,
+        /// Terminal session with no resumable cursor.
+        terminal: TerminalAttemptSession<'program>,
+    },
+    /// A once-only return rule committed and the run is terminal.
+    OnceReturned {
+        /// Rule-attempt count committed by this transition.
+        attempt: RuleAttemptCount,
+        /// Committed return step count.
+        step: StepCount,
+        /// Rule witness paired with the committed return.
+        rule: OnceReturnRuleView<'program>,
         /// Materialized return output.
         output: ReturnOutput,
         /// Terminal session with no resumable cursor.
@@ -93,25 +119,49 @@ pub(super) enum CoreContinuingRuleAttemptStep<'program, E: ExecutionPolicy, A: R
 
 /// Program-bound result of consuming one final rule-attempt session step.
 pub(super) enum CoreFinalRuleAttemptStep<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
-    /// A rewrite committed and the rule-attempt run can continue.
-    Applied {
+    /// A reusable rewrite committed and the rule-attempt run can continue.
+    AlwaysRewritten {
         /// Rule-attempt count committed by this transition.
         attempt: RuleAttemptCount,
         /// Committed rewrite step count.
         step: StepCount,
         /// Rule witness paired with the committed rewrite.
-        rule: RewriteRuleView<'program>,
+        rule: AlwaysRewriteRuleView<'program>,
         /// Continuation session with a fresh cursor.
         continuation: AttemptSessionCursor<'program, E, A>,
     },
-    /// A return rule committed and the run is terminal.
-    Returned {
+    /// A once-only rewrite committed and the rule-attempt run can continue.
+    OnceRewritten {
+        /// Rule-attempt count committed by this transition.
+        attempt: RuleAttemptCount,
+        /// Committed rewrite step count.
+        step: StepCount,
+        /// Rule witness paired with the committed rewrite.
+        rule: OnceRewriteRuleView<'program>,
+        /// Continuation session with a fresh cursor.
+        continuation: AttemptSessionCursor<'program, E, A>,
+    },
+    /// A reusable return rule committed and the run is terminal.
+    AlwaysReturned {
         /// Rule-attempt count committed by this transition.
         attempt: RuleAttemptCount,
         /// Committed return step count.
         step: StepCount,
         /// Rule witness paired with the committed return.
-        rule: ReturnRuleView<'program>,
+        rule: AlwaysReturnRuleView<'program>,
+        /// Materialized return output.
+        output: ReturnOutput,
+        /// Terminal session with no resumable cursor.
+        terminal: TerminalAttemptSession<'program>,
+    },
+    /// A once-only return rule committed and the run is terminal.
+    OnceReturned {
+        /// Rule-attempt count committed by this transition.
+        attempt: RuleAttemptCount,
+        /// Committed return step count.
+        step: StepCount,
+        /// Rule witness paired with the committed return.
+        rule: OnceReturnRuleView<'program>,
         /// Materialized return output.
         output: ReturnOutput,
         /// Terminal session with no resumable cursor.
@@ -429,7 +479,7 @@ where
     Pass: ContinuingRuleAttemptPass<'program>,
 {
     match applied {
-        AppliedRule::Continued(committed) => {
+        AppliedRule::AlwaysRewritten(committed) => {
             let step = committed.step();
             let rule = committed.rule();
             let AttemptRunCore {
@@ -446,18 +496,58 @@ where
                 runtime_rules.reset_attempt_after_rewrite(),
                 attempt_budget,
             );
-            CoreContinuingRuleAttemptStep::Applied {
+            CoreContinuingRuleAttemptStep::AlwaysRewritten {
                 attempt,
                 step,
                 rule,
                 continuation,
             }
         }
-        AppliedRule::Terminal(committed) => {
+        AppliedRule::OnceRewritten(committed) => {
+            let step = committed.step();
+            let rule = committed.rule();
+            let AttemptRunCore {
+                state,
+                scratch,
+                budget,
+                runtime_rules,
+            } = core;
+            let continuation = session_start_from_started_pass(
+                program,
+                state,
+                scratch,
+                budget,
+                runtime_rules.reset_attempt_after_rewrite(),
+                attempt_budget,
+            );
+            CoreContinuingRuleAttemptStep::OnceRewritten {
+                attempt,
+                step,
+                rule,
+                continuation,
+            }
+        }
+        AppliedRule::AlwaysReturned(committed) => {
             let step = committed.step();
             let rule = committed.rule();
             let output = committed.into_output();
-            CoreContinuingRuleAttemptStep::Returned {
+            CoreContinuingRuleAttemptStep::AlwaysReturned {
+                attempt,
+                step,
+                rule,
+                output,
+                terminal: TerminalAttemptSession {
+                    program,
+                    core: core.into_terminal(),
+                    attempts: attempt_budget.completed_attempts(),
+                },
+            }
+        }
+        AppliedRule::OnceReturned(committed) => {
+            let step = committed.step();
+            let rule = committed.rule();
+            let output = committed.into_output();
+            CoreContinuingRuleAttemptStep::OnceReturned {
                 attempt,
                 step,
                 rule,
@@ -486,7 +576,7 @@ where
     Pass: FinalRuleAttemptPass<'program>,
 {
     match applied {
-        AppliedRule::Continued(committed) => {
+        AppliedRule::AlwaysRewritten(committed) => {
             let step = committed.step();
             let rule = committed.rule();
             let AttemptRunCore {
@@ -503,18 +593,58 @@ where
                 runtime_rules.reset_attempt_after_rewrite(),
                 attempt_budget,
             );
-            CoreFinalRuleAttemptStep::Applied {
+            CoreFinalRuleAttemptStep::AlwaysRewritten {
                 attempt,
                 step,
                 rule,
                 continuation,
             }
         }
-        AppliedRule::Terminal(committed) => {
+        AppliedRule::OnceRewritten(committed) => {
+            let step = committed.step();
+            let rule = committed.rule();
+            let AttemptRunCore {
+                state,
+                scratch,
+                budget,
+                runtime_rules,
+            } = core;
+            let continuation = session_start_from_started_pass(
+                program,
+                state,
+                scratch,
+                budget,
+                runtime_rules.reset_attempt_after_rewrite(),
+                attempt_budget,
+            );
+            CoreFinalRuleAttemptStep::OnceRewritten {
+                attempt,
+                step,
+                rule,
+                continuation,
+            }
+        }
+        AppliedRule::AlwaysReturned(committed) => {
             let step = committed.step();
             let rule = committed.rule();
             let output = committed.into_output();
-            CoreFinalRuleAttemptStep::Returned {
+            CoreFinalRuleAttemptStep::AlwaysReturned {
+                attempt,
+                step,
+                rule,
+                output,
+                terminal: TerminalAttemptSession {
+                    program,
+                    core: core.into_terminal(),
+                    attempts: attempt_budget.completed_attempts(),
+                },
+            }
+        }
+        AppliedRule::OnceReturned(committed) => {
+            let step = committed.step();
+            let rule = committed.rule();
+            let output = committed.into_output();
+            CoreFinalRuleAttemptStep::OnceReturned {
                 attempt,
                 step,
                 rule,
@@ -594,7 +724,18 @@ where
 /// Projects runtime miss shapes into the public typed miss API.
 fn public_rule_miss<'program>(miss: RuleAttemptMiss<'program>) -> RuleMiss<'program> {
     match miss {
-        RuleAttemptMiss::StateMismatch(rule) => RuleMiss::state_mismatch(rule),
+        RuleAttemptMiss::AlwaysRewriteStateMismatch(rule) => {
+            RuleMiss::always_rewrite_state_mismatch(rule)
+        }
+        RuleAttemptMiss::OnceRewriteStateMismatch(rule) => {
+            RuleMiss::once_rewrite_state_mismatch(rule)
+        }
+        RuleAttemptMiss::AlwaysReturnStateMismatch(rule) => {
+            RuleMiss::always_return_state_mismatch(rule)
+        }
+        RuleAttemptMiss::OnceReturnStateMismatch(rule) => {
+            RuleMiss::once_return_state_mismatch(rule)
+        }
         RuleAttemptMiss::OnceRewriteConsumed(rule) => RuleMiss::once_rewrite_consumed(rule),
         RuleAttemptMiss::OnceReturnConsumed(rule) => RuleMiss::once_return_consumed(rule),
     }

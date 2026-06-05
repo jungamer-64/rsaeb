@@ -95,11 +95,12 @@ cannot be confused with a missed rule that still has a successor. `EmptyProgram`
 exposes only `.stabilize(admitted)`, which materializes the admitted input as a
 zero-step stable result.
 
-Successful rewrite outcomes expose `inspect::RewriteRuleView`, while successful
-return outcomes expose `inspect::ReturnRuleView`. General `inspect::RuleView`
-remains the program-inspection and miss-reporting surface, but cannot erase the
-action provenance of a committed outcome. Trace events carry the same boundary
-directly through `Initial`, `Rewritten`, and `Returned` variants.
+Successful outcomes expose the exact concrete rule view that committed:
+`AlwaysRewriteRuleView`, `OnceRewriteRuleView`, `AlwaysReturnRuleView`, or
+`OnceReturnRuleView`. General `inspect::RuleView` remains only the
+program-inspection surface; committed successes and rule misses do not erase
+their repeat/action provenance back into it. Trace events carry the same
+boundary directly through exact rewritten/returned variants.
 
 Executable rule counts are non-zero by type, and parsed rule positions are
 stored topology witnesses rather than iterator-derived numbers. `(once)` is

@@ -5,7 +5,7 @@
 //! produced by target-shape parse entrypoints such as
 //! [`ExecutableProgram::parse_text`](crate::program::ExecutableProgram::parse_text).
 //!
-//! A step transition is a typestate value, not a status flag. Applied steps
+//! A step transition is a typestate value, not a status flag. Rewritten steps
 //! carry the continuation session. Stable and returned states are terminal.
 //! Failed states are also terminal for the borrowed API: they preserve the
 //! uncommitted state for diagnostics and then let the caller discard the run
@@ -64,15 +64,17 @@ mod engine;
 mod session;
 /// Public step and terminal transition typestates.
 mod transition;
-pub use attempt::{OnceConsumedRuleMiss, RuleMiss, StateMismatchRuleMiss};
+pub use attempt::RuleMiss;
 pub use session::{
     BorrowedContinuingRuleAttemptSession, BorrowedFinalRuleAttemptSession,
     BorrowedRuleAttemptCursor, BorrowedRunSession,
 };
 pub use transition::{
-    BorrowedAppliedStep, BorrowedContinuingRuleAttemptTransition, BorrowedFailedRun,
-    BorrowedFinalRuleAttemptTransition, BorrowedMissedRuleAttempt, BorrowedReturnedRun,
-    BorrowedRuleAttemptAppliedStep, BorrowedRuleAttemptFailedRun, BorrowedRuleAttemptReturnedRun,
+    BorrowedAlwaysReturnRun, BorrowedAlwaysRewriteStep, BorrowedContinuingRuleAttemptTransition,
+    BorrowedFailedRun, BorrowedFinalRuleAttemptTransition, BorrowedMissedRuleAttempt,
+    BorrowedOnceReturnRun, BorrowedOnceRewriteStep, BorrowedRuleAttemptAlwaysReturnRun,
+    BorrowedRuleAttemptAlwaysRewriteStep, BorrowedRuleAttemptFailedRun,
+    BorrowedRuleAttemptOnceReturnRun, BorrowedRuleAttemptOnceRewriteStep,
     BorrowedRuleAttemptStableRun, BorrowedStableRun, BorrowedStepTransition,
 };
 

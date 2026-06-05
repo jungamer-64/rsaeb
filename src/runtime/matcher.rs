@@ -2,7 +2,7 @@ use super::once::{AvailableRuntimeRule, OnceMatchPermit};
 use super::state::{State, StateMatch, StatePayloadMatch};
 use crate::bytes::Payload;
 use crate::inspect::{
-    AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView, RuleView,
+    AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView,
 };
 use crate::rule::{RewriteAction, RulePattern};
 
@@ -80,8 +80,14 @@ pub(crate) struct MatchedOnceReturnApplication<'program, 'state, 'once> {
 /// Non-applying rule consumed by a rule-attempt step.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum RuleAttemptMiss<'program> {
-    /// Available rule did not match the current runtime state.
-    StateMismatch(RuleView<'program>),
+    /// Available reusable rewrite rule did not match the current runtime state.
+    AlwaysRewriteStateMismatch(AlwaysRewriteRuleView<'program>),
+    /// Available once-only rewrite rule did not match the current runtime state.
+    OnceRewriteStateMismatch(OnceRewriteRuleView<'program>),
+    /// Available reusable return rule did not match the current runtime state.
+    AlwaysReturnStateMismatch(AlwaysReturnRuleView<'program>),
+    /// Available once-only return rule did not match the current runtime state.
+    OnceReturnStateMismatch(OnceReturnRuleView<'program>),
     /// Once-only rewrite rule had already committed in this run.
     OnceRewriteConsumed(OnceRewriteRuleView<'program>),
     /// Once-only return rule had already committed in this run.
@@ -89,9 +95,26 @@ pub(crate) enum RuleAttemptMiss<'program> {
 }
 
 impl<'program> RuleAttemptMiss<'program> {
-    /// Captures an available rule that failed runtime-state matching.
-    pub(crate) const fn state_mismatch(rule: RuleView<'program>) -> Self {
-        Self::StateMismatch(rule)
+    /// Captures an available reusable rewrite rule that failed runtime-state matching.
+    pub(crate) const fn always_rewrite_state_mismatch(
+        rule: AlwaysRewriteRuleView<'program>,
+    ) -> Self {
+        Self::AlwaysRewriteStateMismatch(rule)
+    }
+
+    /// Captures an available once-only rewrite rule that failed runtime-state matching.
+    pub(crate) const fn once_rewrite_state_mismatch(rule: OnceRewriteRuleView<'program>) -> Self {
+        Self::OnceRewriteStateMismatch(rule)
+    }
+
+    /// Captures an available reusable return rule that failed runtime-state matching.
+    pub(crate) const fn always_return_state_mismatch(rule: AlwaysReturnRuleView<'program>) -> Self {
+        Self::AlwaysReturnStateMismatch(rule)
+    }
+
+    /// Captures an available once-only return rule that failed runtime-state matching.
+    pub(crate) const fn once_return_state_mismatch(rule: OnceReturnRuleView<'program>) -> Self {
+        Self::OnceReturnStateMismatch(rule)
     }
 
     /// Captures a consumed once-only rewrite rule.
@@ -192,9 +215,9 @@ fn attempt_always_rewrite_rule<'program, 'state, 'once>(
     let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
         StatePayloadMatch::Matched(state_match) => state_match,
         StatePayloadMatch::Mismatched => {
-            return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::state_mismatch(
-                RuleView::AlwaysRewrite(rule),
-            ));
+            return AvailableRuleAttempt::StateMismatch(
+                RuleAttemptMiss::always_rewrite_state_mismatch(rule),
+            );
         }
     };
 
@@ -212,9 +235,9 @@ fn attempt_once_rewrite_rule<'program, 'state, 'once>(
     let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
         StatePayloadMatch::Matched(state_match) => state_match,
         StatePayloadMatch::Mismatched => {
-            return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::state_mismatch(
-                RuleView::OnceRewrite(rule),
-            ));
+            return AvailableRuleAttempt::StateMismatch(
+                RuleAttemptMiss::once_rewrite_state_mismatch(rule),
+            );
         }
     };
 
@@ -235,9 +258,9 @@ fn attempt_always_return_rule<'program, 'state, 'once>(
     let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
         StatePayloadMatch::Matched(state_match) => state_match,
         StatePayloadMatch::Mismatched => {
-            return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::state_mismatch(
-                RuleView::AlwaysReturn(rule),
-            ));
+            return AvailableRuleAttempt::StateMismatch(
+                RuleAttemptMiss::always_return_state_mismatch(rule),
+            );
         }
     };
 
@@ -255,9 +278,9 @@ fn attempt_once_return_rule<'program, 'state, 'once>(
     let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
         StatePayloadMatch::Matched(state_match) => state_match,
         StatePayloadMatch::Mismatched => {
-            return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::state_mismatch(
-                RuleView::OnceReturn(rule),
-            ));
+            return AvailableRuleAttempt::StateMismatch(
+                RuleAttemptMiss::once_return_state_mismatch(rule),
+            );
         }
     };
 

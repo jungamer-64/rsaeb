@@ -74,9 +74,13 @@ fn expect_step_error<'program, E: ExecutionPolicy>(
 ) -> Result<BorrowedFailedRun<'program>, TestFailure> {
     match result {
         BorrowedStepTransition::Failed(failed) => Ok(failed),
-        BorrowedStepTransition::Applied(_)
+        BorrowedStepTransition::AlwaysRewritten(_)
+        | BorrowedStepTransition::OnceRewritten(_)
         | BorrowedStepTransition::Stable(_)
-        | BorrowedStepTransition::Returned(_) => Err(TestFailure::message("expected step error")),
+        | BorrowedStepTransition::AlwaysReturned(_)
+        | BorrowedStepTransition::OnceReturned(_) => {
+            Err(TestFailure::message("expected step error"))
+        }
     }
 }
 
@@ -138,8 +142,10 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
                 b"x".as_slice()
             )?;
         }
-        BorrowedStepTransition::Applied(_)
-        | BorrowedStepTransition::Returned(_)
+        BorrowedStepTransition::AlwaysRewritten(_)
+        | BorrowedStepTransition::OnceRewritten(_)
+        | BorrowedStepTransition::AlwaysReturned(_)
+        | BorrowedStepTransition::OnceReturned(_)
         | BorrowedStepTransition::Failed(_) => {
             return Err(TestFailure::message("expected stable completion"));
         }
@@ -243,7 +249,7 @@ fn return_action_bypasses_rewrite_state_mutation_path() -> TestResult {
     let session = program.steps(admitted_run(b"a", limits)?)?;
 
     match expect_step_transition(session.step())? {
-        BorrowedStepTransition::Returned(returned) => {
+        BorrowedStepTransition::AlwaysReturned(returned) => {
             let result = returned.into_result();
             ensure_eq!(result.steps().get(), 1)?;
             ensure_matches(
@@ -254,8 +260,10 @@ fn return_action_bypasses_rewrite_state_mutation_path() -> TestResult {
                 "expected return output to bypass rewrite state limit",
             )
         }
-        BorrowedStepTransition::Applied(_)
+        BorrowedStepTransition::AlwaysRewritten(_)
+        | BorrowedStepTransition::OnceRewritten(_)
         | BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::OnceReturned(_)
         | BorrowedStepTransition::Failed(_) => {
             Err(TestFailure::message("expected return transition"))
         }
@@ -409,11 +417,13 @@ fn empty_payload_matches_keep_anchor_specific_span_placement() -> TestResult {
         let session = program.steps(admitted_run(b"ab", limits)?)?;
 
         match expect_step_transition(session.step())? {
-            BorrowedStepTransition::Applied(applied) => {
+            BorrowedStepTransition::AlwaysRewritten(applied) => {
                 ensure_eq!(runtime_view_bytes(applied.state()).as_slice(), expected)?;
             }
             BorrowedStepTransition::Stable(_)
-            | BorrowedStepTransition::Returned(_)
+            | BorrowedStepTransition::OnceRewritten(_)
+            | BorrowedStepTransition::AlwaysReturned(_)
+            | BorrowedStepTransition::OnceReturned(_)
             | BorrowedStepTransition::Failed(_) => {
                 return Err(TestFailure::message("expected one empty-payload rewrite"));
             }
@@ -457,12 +467,14 @@ fn anywhere_non_empty_search_keeps_leftmost_match() -> TestResult {
     let session = program.steps(admitted_run(b"abab", limits)?)?;
 
     match expect_step_transition(session.step())? {
-        BorrowedStepTransition::Applied(applied) => {
+        BorrowedStepTransition::AlwaysRewritten(applied) => {
             ensure_eq!(applied.step().get(), 1)?;
             ensure_eq!(runtime_view_bytes(applied.state()).as_slice(), b"axab")
         }
         BorrowedStepTransition::Stable(_)
-        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::OnceRewritten(_)
+        | BorrowedStepTransition::AlwaysReturned(_)
+        | BorrowedStepTransition::OnceReturned(_)
         | BorrowedStepTransition::Failed(_) => {
             Err(TestFailure::message("expected leftmost anywhere rewrite"))
         }

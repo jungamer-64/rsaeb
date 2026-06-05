@@ -14,9 +14,11 @@ use super::engine::{
     Session, TerminalAttemptSession, TerminalRunCore,
 };
 use super::transition::{
-    BorrowedAppliedStep, BorrowedContinuingRuleAttemptTransition, BorrowedFailedRun,
-    BorrowedFinalRuleAttemptTransition, BorrowedMissedRuleAttempt, BorrowedReturnedRun,
-    BorrowedRuleAttemptAppliedStep, BorrowedRuleAttemptFailedRun, BorrowedRuleAttemptReturnedRun,
+    BorrowedAlwaysReturnRun, BorrowedAlwaysRewriteStep, BorrowedContinuingRuleAttemptTransition,
+    BorrowedFailedRun, BorrowedFinalRuleAttemptTransition, BorrowedMissedRuleAttempt,
+    BorrowedOnceReturnRun, BorrowedOnceRewriteStep, BorrowedRuleAttemptAlwaysReturnRun,
+    BorrowedRuleAttemptAlwaysRewriteStep, BorrowedRuleAttemptFailedRun,
+    BorrowedRuleAttemptOnceReturnRun, BorrowedRuleAttemptOnceRewriteStep,
     BorrowedRuleAttemptStableRun, BorrowedStableRun, BorrowedStepTransition,
 };
 
@@ -144,9 +146,9 @@ impl<'program, E: ExecutionPolicy> BorrowedRunSession<'program, E> {
 
     /// Advances this run by exactly one matching rule when possible.
     ///
-    /// Applying an ordinary rewrite returns [`BorrowedStepTransition::Applied`] with a
-    /// continuation session. No match, `(return)`, and runtime failure all
-    /// consume the session into terminal typestates.
+    /// Applying a rewrite returns an exact rewritten transition with a continuation
+    /// session. No match, `(return)`, and runtime failure all consume the session
+    /// into terminal typestates.
     #[must_use]
     pub fn step(self) -> BorrowedStepTransition<'program, E> {
         step_borrowed_run(self)
@@ -341,24 +343,47 @@ fn step_borrowed_run<'program, E: ExecutionPolicy>(
     session: BorrowedRunSession<'program, E>,
 ) -> BorrowedStepTransition<'program, E> {
     match session.session.advance_run_step() {
-        CoreRunTransition::Applied {
+        CoreRunTransition::AlwaysRewritten {
             step,
             rule,
             continuation,
-        } => BorrowedStepTransition::Applied(BorrowedAppliedStep {
+        } => BorrowedStepTransition::AlwaysRewritten(BorrowedAlwaysRewriteStep {
             step,
             rule,
             session: BorrowedRunSession {
                 session: continuation,
             },
         }),
-        CoreRunTransition::Returned {
+        CoreRunTransition::OnceRewritten {
+            step,
+            rule,
+            continuation,
+        } => BorrowedStepTransition::OnceRewritten(BorrowedOnceRewriteStep {
+            step,
+            rule,
+            session: BorrowedRunSession {
+                session: continuation,
+            },
+        }),
+        CoreRunTransition::AlwaysReturned {
             step,
             rule,
             output_view: _,
             output,
             terminal,
-        } => BorrowedStepTransition::Returned(BorrowedReturnedRun {
+        } => BorrowedStepTransition::AlwaysReturned(BorrowedAlwaysReturnRun {
+            step,
+            rule,
+            program: terminal.program,
+            output,
+        }),
+        CoreRunTransition::OnceReturned {
+            step,
+            rule,
+            output_view: _,
+            output,
+            terminal,
+        } => BorrowedStepTransition::OnceReturned(BorrowedOnceReturnRun {
             step,
             rule,
             program: terminal.program,
@@ -390,18 +415,33 @@ fn project_continuing_rule_attempt_step<'program, E: ExecutionPolicy, A: RuleAtt
             miss,
             cursor: BorrowedRuleAttemptCursor::from_cursor(continuation),
         }),
-        CoreContinuingRuleAttemptStep::Applied {
+        CoreContinuingRuleAttemptStep::AlwaysRewritten {
             attempt,
             step,
             rule,
             continuation,
-        } => BorrowedContinuingRuleAttemptTransition::Applied(BorrowedRuleAttemptAppliedStep {
+        } => BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(
+            BorrowedRuleAttemptAlwaysRewriteStep {
+                attempt,
+                step,
+                rule,
+                cursor: BorrowedRuleAttemptCursor::from_cursor(continuation),
+            },
+        ),
+        CoreContinuingRuleAttemptStep::OnceRewritten {
             attempt,
             step,
             rule,
-            cursor: BorrowedRuleAttemptCursor::from_cursor(continuation),
-        }),
-        CoreContinuingRuleAttemptStep::Returned {
+            continuation,
+        } => BorrowedContinuingRuleAttemptTransition::OnceRewritten(
+            BorrowedRuleAttemptOnceRewriteStep {
+                attempt,
+                step,
+                rule,
+                cursor: BorrowedRuleAttemptCursor::from_cursor(continuation),
+            },
+        ),
+        CoreContinuingRuleAttemptStep::AlwaysReturned {
             attempt,
             step,
             rule,
@@ -409,13 +449,33 @@ fn project_continuing_rule_attempt_step<'program, E: ExecutionPolicy, A: RuleAtt
             terminal,
         } => {
             let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
-            BorrowedContinuingRuleAttemptTransition::Returned(BorrowedRuleAttemptReturnedRun {
-                attempt,
-                step,
-                rule,
-                program: terminal.program,
-                output,
-            })
+            BorrowedContinuingRuleAttemptTransition::AlwaysReturned(
+                BorrowedRuleAttemptAlwaysReturnRun {
+                    attempt,
+                    step,
+                    rule,
+                    program: terminal.program,
+                    output,
+                },
+            )
+        }
+        CoreContinuingRuleAttemptStep::OnceReturned {
+            attempt,
+            step,
+            rule,
+            output,
+            terminal,
+        } => {
+            let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
+            BorrowedContinuingRuleAttemptTransition::OnceReturned(
+                BorrowedRuleAttemptOnceReturnRun {
+                    attempt,
+                    step,
+                    rule,
+                    program: terminal.program,
+                    output,
+                },
+            )
         }
         CoreContinuingRuleAttemptStep::Failed { error, terminal } => {
             let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
@@ -434,18 +494,33 @@ fn project_final_rule_attempt_step<'program, E: ExecutionPolicy, A: RuleAttemptP
     step: CoreFinalRuleAttemptStep<'program, E, A>,
 ) -> BorrowedFinalRuleAttemptTransition<'program, E, A> {
     match step {
-        CoreFinalRuleAttemptStep::Applied {
+        CoreFinalRuleAttemptStep::AlwaysRewritten {
             attempt,
             step,
             rule,
             continuation,
-        } => BorrowedFinalRuleAttemptTransition::Applied(BorrowedRuleAttemptAppliedStep {
+        } => BorrowedFinalRuleAttemptTransition::AlwaysRewritten(
+            BorrowedRuleAttemptAlwaysRewriteStep {
+                attempt,
+                step,
+                rule,
+                cursor: BorrowedRuleAttemptCursor::from_cursor(continuation),
+            },
+        ),
+        CoreFinalRuleAttemptStep::OnceRewritten {
             attempt,
             step,
             rule,
-            cursor: BorrowedRuleAttemptCursor::from_cursor(continuation),
-        }),
-        CoreFinalRuleAttemptStep::Returned {
+            continuation,
+        } => {
+            BorrowedFinalRuleAttemptTransition::OnceRewritten(BorrowedRuleAttemptOnceRewriteStep {
+                attempt,
+                step,
+                rule,
+                cursor: BorrowedRuleAttemptCursor::from_cursor(continuation),
+            })
+        }
+        CoreFinalRuleAttemptStep::AlwaysReturned {
             attempt,
             step,
             rule,
@@ -453,7 +528,23 @@ fn project_final_rule_attempt_step<'program, E: ExecutionPolicy, A: RuleAttemptP
             terminal,
         } => {
             let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
-            BorrowedFinalRuleAttemptTransition::Returned(BorrowedRuleAttemptReturnedRun {
+            BorrowedFinalRuleAttemptTransition::AlwaysReturned(BorrowedRuleAttemptAlwaysReturnRun {
+                attempt,
+                step,
+                rule,
+                program: terminal.program,
+                output,
+            })
+        }
+        CoreFinalRuleAttemptStep::OnceReturned {
+            attempt,
+            step,
+            rule,
+            output,
+            terminal,
+        } => {
+            let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
+            BorrowedFinalRuleAttemptTransition::OnceReturned(BorrowedRuleAttemptOnceReturnRun {
                 attempt,
                 step,
                 rule,

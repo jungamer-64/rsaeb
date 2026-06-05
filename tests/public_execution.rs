@@ -6,13 +6,15 @@ mod support;
 
 use rsaeb::error::{RuleAttemptStepError, RunStepError};
 use rsaeb::execution::{
-    BorrowedAppliedStep, BorrowedContinuingRuleAttemptTransition, BorrowedFailedRun,
-    BorrowedFinalRuleAttemptTransition, BorrowedReturnedRun, BorrowedRuleAttemptCursor,
-    BorrowedRuleAttemptFailedRun, BorrowedRunSession, BorrowedStableRun, BorrowedStepTransition,
-    OnceConsumedRuleMiss, RuleMiss,
+    BorrowedContinuingRuleAttemptTransition, BorrowedFailedRun, BorrowedFinalRuleAttemptTransition,
+    BorrowedRuleAttemptCursor, BorrowedRuleAttemptFailedRun, BorrowedRunSession, BorrowedStableRun,
+    BorrowedStepTransition, RuleMiss,
 };
 use rsaeb::input::AdmittedRun;
-use rsaeb::inspect::{ReturnRuleView, RewriteActionView, RewriteRuleView, RuleAnchor, RuleView};
+use rsaeb::inspect::{
+    AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView,
+    RewriteActionView, RuleAnchor, RuleView,
+};
 use rsaeb::limits::{ReturnByteLimit, RuleAttemptLimit, RuntimeStateByteLimit};
 use rsaeb::policy::{
     DefaultParsePolicy, ExecutionPolicy, RuleAttemptPolicy, StaticRuleAttemptPolicy,
@@ -90,7 +92,10 @@ enum BorrowedRuleAttemptSignature {
 
 #[derive(Debug, PartialEq, Eq)]
 enum RuleMissSignature {
-    StateMismatch { rule_position: usize },
+    AlwaysRewriteStateMismatch { rule_position: usize },
+    OnceRewriteStateMismatch { rule_position: usize },
+    AlwaysReturnStateMismatch { rule_position: usize },
+    OnceReturnStateMismatch { rule_position: usize },
     OnceRewriteConsumed { rule_position: usize },
     OnceReturnConsumed { rule_position: usize },
 }
@@ -99,7 +104,7 @@ macro_rules! borrowed_state_mismatch {
     ($attempt:expr, $rule_position:expr, $state:expr) => {
         BorrowedRuleAttemptSignature::Missed {
             attempt: $attempt,
-            miss: RuleMissSignature::StateMismatch {
+            miss: RuleMissSignature::AlwaysRewriteStateMismatch {
                 rule_position: $rule_position,
             },
             state: $state.to_vec(),
@@ -166,7 +171,7 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
                             });
                             cursor = missed.into_cursor();
                         }
-                        BorrowedContinuingRuleAttemptTransition::Applied(applied) => {
+                        BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(applied) => {
                             signatures.push(BorrowedRuleAttemptSignature::Applied {
                                 attempt: applied.attempt().get(),
                                 step: applied.step().get(),
@@ -175,7 +180,25 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
                             });
                             cursor = applied.into_cursor();
                         }
-                        BorrowedContinuingRuleAttemptTransition::Returned(returned) => {
+                        BorrowedContinuingRuleAttemptTransition::OnceRewritten(applied) => {
+                            signatures.push(BorrowedRuleAttemptSignature::Applied {
+                                attempt: applied.attempt().get(),
+                                step: applied.step().get(),
+                                rule_position: applied.rule().position().get(),
+                                state: runtime_view_bytes(applied.state())?,
+                            });
+                            cursor = applied.into_cursor();
+                        }
+                        BorrowedContinuingRuleAttemptTransition::AlwaysReturned(returned) => {
+                            signatures.push(BorrowedRuleAttemptSignature::Return {
+                                attempt: returned.attempt().get(),
+                                step: returned.step().get(),
+                                rule_position: returned.rule().position().get(),
+                                output: returned.output().as_slice().to_vec(),
+                            });
+                            return Ok(signatures);
+                        }
+                        BorrowedContinuingRuleAttemptTransition::OnceReturned(returned) => {
                             signatures.push(BorrowedRuleAttemptSignature::Return {
                                 attempt: returned.attempt().get(),
                                 step: returned.step().get(),
@@ -200,7 +223,7 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
                             });
                             return Ok(signatures);
                         }
-                        BorrowedFinalRuleAttemptTransition::Applied(applied) => {
+                        BorrowedFinalRuleAttemptTransition::AlwaysRewritten(applied) => {
                             signatures.push(BorrowedRuleAttemptSignature::Applied {
                                 attempt: applied.attempt().get(),
                                 step: applied.step().get(),
@@ -209,7 +232,25 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
                             });
                             cursor = applied.into_cursor();
                         }
-                        BorrowedFinalRuleAttemptTransition::Returned(returned) => {
+                        BorrowedFinalRuleAttemptTransition::OnceRewritten(applied) => {
+                            signatures.push(BorrowedRuleAttemptSignature::Applied {
+                                attempt: applied.attempt().get(),
+                                step: applied.step().get(),
+                                rule_position: applied.rule().position().get(),
+                                state: runtime_view_bytes(applied.state())?,
+                            });
+                            cursor = applied.into_cursor();
+                        }
+                        BorrowedFinalRuleAttemptTransition::AlwaysReturned(returned) => {
+                            signatures.push(BorrowedRuleAttemptSignature::Return {
+                                attempt: returned.attempt().get(),
+                                step: returned.step().get(),
+                                rule_position: returned.rule().position().get(),
+                                output: returned.output().as_slice().to_vec(),
+                            });
+                            return Ok(signatures);
+                        }
+                        BorrowedFinalRuleAttemptTransition::OnceReturned(returned) => {
                             signatures.push(BorrowedRuleAttemptSignature::Return {
                                 attempt: returned.attempt().get(),
                                 step: returned.step().get(),
@@ -235,16 +276,120 @@ struct ExpectedBorrowedRuleView<'expected> {
     canonical_source: &'expected [u8],
 }
 
+trait RewriteRuleViewContract<'program>: Copy {
+    fn position(self) -> rsaeb::inspect::RulePosition;
+    fn line_number(self) -> rsaeb::source::SourceLineNumber;
+    fn anchor(self) -> RuleAnchor;
+    fn lhs(self) -> rsaeb::inspect::PayloadView<'program>;
+    /// Materializes this rule as canonical source.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if canonical source materialization cannot allocate.
+    fn canonical_source(
+        self,
+    ) -> Result<rsaeb::inspect::CanonicalRuleSource, rsaeb::error::AllocationError>;
+    fn rewrite_action(self) -> RewriteActionView<'program>;
+}
+
+trait ReturnRuleViewContract<'program>: Copy {
+    fn position(self) -> rsaeb::inspect::RulePosition;
+    fn line_number(self) -> rsaeb::source::SourceLineNumber;
+    fn anchor(self) -> RuleAnchor;
+    fn lhs(self) -> rsaeb::inspect::PayloadView<'program>;
+    /// Materializes this rule as canonical source.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if canonical source materialization cannot allocate.
+    fn canonical_source(
+        self,
+    ) -> Result<rsaeb::inspect::CanonicalRuleSource, rsaeb::error::AllocationError>;
+    fn output(self) -> rsaeb::inspect::PayloadView<'program>;
+}
+
+macro_rules! impl_rewrite_rule_view_contract {
+    ($rule:ident) => {
+        impl<'program> RewriteRuleViewContract<'program> for $rule<'program> {
+            fn position(self) -> rsaeb::inspect::RulePosition {
+                self.position()
+            }
+
+            fn line_number(self) -> rsaeb::source::SourceLineNumber {
+                self.line_number()
+            }
+
+            fn anchor(self) -> RuleAnchor {
+                self.anchor()
+            }
+
+            fn lhs(self) -> rsaeb::inspect::PayloadView<'program> {
+                self.lhs()
+            }
+
+            fn canonical_source(
+                self,
+            ) -> Result<rsaeb::inspect::CanonicalRuleSource, rsaeb::error::AllocationError> {
+                self.canonical_source()
+            }
+
+            fn rewrite_action(self) -> RewriteActionView<'program> {
+                self.rewrite_action()
+            }
+        }
+    };
+}
+
+macro_rules! impl_return_rule_view_contract {
+    ($rule:ident) => {
+        impl<'program> ReturnRuleViewContract<'program> for $rule<'program> {
+            fn position(self) -> rsaeb::inspect::RulePosition {
+                self.position()
+            }
+
+            fn line_number(self) -> rsaeb::source::SourceLineNumber {
+                self.line_number()
+            }
+
+            fn anchor(self) -> RuleAnchor {
+                self.anchor()
+            }
+
+            fn lhs(self) -> rsaeb::inspect::PayloadView<'program> {
+                self.lhs()
+            }
+
+            fn canonical_source(
+                self,
+            ) -> Result<rsaeb::inspect::CanonicalRuleSource, rsaeb::error::AllocationError> {
+                self.canonical_source()
+            }
+
+            fn output(self) -> rsaeb::inspect::PayloadView<'program> {
+                self.output()
+            }
+        }
+    };
+}
+
+impl_rewrite_rule_view_contract!(AlwaysRewriteRuleView);
+impl_rewrite_rule_view_contract!(OnceRewriteRuleView);
+impl_return_rule_view_contract!(AlwaysReturnRuleView);
+impl_return_rule_view_contract!(OnceReturnRuleView);
+
 /// Ensures a committed rewrite witness retained the expected parsed-rule metadata.
 ///
 /// # Errors
 ///
 /// Returns `TestFailure` if the rule metadata or materialized payloads differ.
-fn ensure_borrowed_rewrite_rule_view(
-    rule: RewriteRuleView<'_>,
+fn ensure_borrowed_rewrite_rule_view<'program, R>(
+    rule: R,
     expected: ExpectedBorrowedRuleView<'_>,
     expected_replacement: &[u8],
-) -> TestResult {
+) -> TestResult
+where
+    R: RewriteRuleViewContract<'program>,
+{
     ensure_eq!(rule.position().get(), expected.position)?;
     ensure_eq!(rule.line_number().get(), expected.line_number)?;
     ensure_eq!(rule.anchor(), RuleAnchor::Anywhere)?;
@@ -268,11 +413,14 @@ fn ensure_borrowed_rewrite_rule_view(
 /// # Errors
 ///
 /// Returns `TestFailure` if the rule metadata or materialized payloads differ.
-fn ensure_borrowed_return_rule_view(
-    rule: ReturnRuleView<'_>,
+fn ensure_borrowed_return_rule_view<'program, R>(
+    rule: R,
     expected: ExpectedBorrowedRuleView<'_>,
     expected_output: &[u8],
-) -> TestResult {
+) -> TestResult
+where
+    R: ReturnRuleViewContract<'program>,
+{
     ensure_eq!(rule.position().get(), expected.position)?;
     ensure_eq!(rule.line_number().get(), expected.line_number)?;
     ensure_eq!(rule.anchor(), RuleAnchor::Anywhere)?;
@@ -282,36 +430,6 @@ fn ensure_borrowed_return_rule_view(
         expected.canonical_source,
     )?;
     ensure_eq!(rule.output().materialize()?.as_slice(), expected_output,)
-}
-
-/// Verifies a committed rewrite witness has the expected repeat shape.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if the repeat shape differs.
-fn ensure_rewrite_rule_shape(rule: RewriteRuleView<'_>, expected_once: bool) -> TestResult {
-    ensure_matches(
-        matches!(
-            (rule, expected_once),
-            (RewriteRuleView::Always(_), false) | (RewriteRuleView::Once(_), true)
-        ),
-        "unexpected committed rewrite rule shape",
-    )
-}
-
-/// Verifies a committed return witness has the expected repeat shape.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if the repeat shape differs.
-fn ensure_return_rule_shape(rule: ReturnRuleView<'_>, expected_once: bool) -> TestResult {
-    ensure_matches(
-        matches!(
-            (rule, expected_once),
-            (ReturnRuleView::Always(_), false) | (ReturnRuleView::Once(_), true)
-        ),
-        "unexpected committed return rule shape",
-    )
 }
 
 /// Verifies one stepwise rewrite outcome carries its exact repeat/action witness.
@@ -325,11 +443,16 @@ fn ensure_stepwise_rewrite_rule_shape(source: &str, expected_once: bool) -> Test
         .steps(runtime_input(b"a", default_test_run_policy())?)?
         .step()
     {
-        BorrowedStepTransition::Applied(applied) => {
-            ensure_rewrite_rule_shape(applied.rule(), expected_once)
+        BorrowedStepTransition::AlwaysRewritten(_) if !expected_once => Ok(()),
+        BorrowedStepTransition::OnceRewritten(_) if expected_once => Ok(()),
+        BorrowedStepTransition::AlwaysRewritten(_) | BorrowedStepTransition::OnceRewritten(_) => {
+            Err(TestFailure::message(
+                "unexpected committed rewrite rule shape",
+            ))
         }
         BorrowedStepTransition::Stable(_)
-        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::AlwaysReturned(_)
+        | BorrowedStepTransition::OnceReturned(_)
         | BorrowedStepTransition::Failed(_) => {
             Err(TestFailure::message("expected stepwise rewrite outcome"))
         }
@@ -347,10 +470,13 @@ fn ensure_stepwise_return_rule_shape(source: &str, expected_once: bool) -> TestR
         .steps(runtime_input(b"a", default_test_run_policy())?)?
         .step()
     {
-        BorrowedStepTransition::Returned(returned) => {
-            ensure_return_rule_shape(returned.rule(), expected_once)
-        }
-        BorrowedStepTransition::Applied(_)
+        BorrowedStepTransition::AlwaysReturned(_) if !expected_once => Ok(()),
+        BorrowedStepTransition::OnceReturned(_) if expected_once => Ok(()),
+        BorrowedStepTransition::AlwaysReturned(_) | BorrowedStepTransition::OnceReturned(_) => Err(
+            TestFailure::message("unexpected committed return rule shape"),
+        ),
+        BorrowedStepTransition::AlwaysRewritten(_)
+        | BorrowedStepTransition::OnceRewritten(_)
         | BorrowedStepTransition::Stable(_)
         | BorrowedStepTransition::Failed(_) => {
             Err(TestFailure::message("expected stepwise return outcome"))
@@ -373,11 +499,15 @@ fn ensure_rule_attempt_rewrite_rule_shape(source: &str, expected_once: bool) -> 
         return Err(TestFailure::message("expected final rule-attempt cursor"));
     };
     match expect_final_rule_attempt_transition(execution.step())? {
-        BorrowedFinalRuleAttemptTransition::Applied(applied) => {
-            ensure_rewrite_rule_shape(applied.rule(), expected_once)
-        }
+        BorrowedFinalRuleAttemptTransition::AlwaysRewritten(_) if !expected_once => Ok(()),
+        BorrowedFinalRuleAttemptTransition::OnceRewritten(_) if expected_once => Ok(()),
+        BorrowedFinalRuleAttemptTransition::AlwaysRewritten(_)
+        | BorrowedFinalRuleAttemptTransition::OnceRewritten(_) => Err(TestFailure::message(
+            "unexpected committed rewrite rule shape",
+        )),
         BorrowedFinalRuleAttemptTransition::Stable(_)
-        | BorrowedFinalRuleAttemptTransition::Returned(_)
+        | BorrowedFinalRuleAttemptTransition::AlwaysReturned(_)
+        | BorrowedFinalRuleAttemptTransition::OnceReturned(_)
         | BorrowedFinalRuleAttemptTransition::Failed(_) => Err(TestFailure::message(
             "expected rule-attempt rewrite outcome",
         )),
@@ -399,10 +529,14 @@ fn ensure_rule_attempt_return_rule_shape(source: &str, expected_once: bool) -> T
         return Err(TestFailure::message("expected final rule-attempt cursor"));
     };
     match expect_final_rule_attempt_transition(execution.step())? {
-        BorrowedFinalRuleAttemptTransition::Returned(returned) => {
-            ensure_return_rule_shape(returned.rule(), expected_once)
-        }
-        BorrowedFinalRuleAttemptTransition::Applied(_)
+        BorrowedFinalRuleAttemptTransition::AlwaysReturned(_) if !expected_once => Ok(()),
+        BorrowedFinalRuleAttemptTransition::OnceReturned(_) if expected_once => Ok(()),
+        BorrowedFinalRuleAttemptTransition::AlwaysReturned(_)
+        | BorrowedFinalRuleAttemptTransition::OnceReturned(_) => Err(TestFailure::message(
+            "unexpected committed return rule shape",
+        )),
+        BorrowedFinalRuleAttemptTransition::AlwaysRewritten(_)
+        | BorrowedFinalRuleAttemptTransition::OnceRewritten(_)
         | BorrowedFinalRuleAttemptTransition::Stable(_)
         | BorrowedFinalRuleAttemptTransition::Failed(_) => {
             Err(TestFailure::message("expected rule-attempt return outcome"))
@@ -412,35 +546,27 @@ fn ensure_rule_attempt_return_rule_shape(source: &str, expected_once: bool) -> T
 
 fn rule_miss_signature(miss: &RuleMiss<'_>) -> RuleMissSignature {
     match *miss {
-        RuleMiss::StateMismatch(miss) => RuleMissSignature::StateMismatch {
-            rule_position: miss.rule().position().get(),
+        RuleMiss::AlwaysRewriteStateMismatch(rule) => {
+            RuleMissSignature::AlwaysRewriteStateMismatch {
+                rule_position: rule.position().get(),
+            }
+        }
+        RuleMiss::OnceRewriteStateMismatch(rule) => RuleMissSignature::OnceRewriteStateMismatch {
+            rule_position: rule.position().get(),
         },
-        RuleMiss::OnceConsumed(OnceConsumedRuleMiss::Rewrite(rule)) => {
-            RuleMissSignature::OnceRewriteConsumed {
-                rule_position: rule.position().get(),
-            }
-        }
-        RuleMiss::OnceConsumed(OnceConsumedRuleMiss::Return(rule)) => {
-            RuleMissSignature::OnceReturnConsumed {
-                rule_position: rule.position().get(),
-            }
-        }
+        RuleMiss::AlwaysReturnStateMismatch(rule) => RuleMissSignature::AlwaysReturnStateMismatch {
+            rule_position: rule.position().get(),
+        },
+        RuleMiss::OnceReturnStateMismatch(rule) => RuleMissSignature::OnceReturnStateMismatch {
+            rule_position: rule.position().get(),
+        },
+        RuleMiss::OnceRewriteConsumed(rule) => RuleMissSignature::OnceRewriteConsumed {
+            rule_position: rule.position().get(),
+        },
+        RuleMiss::OnceReturnConsumed(rule) => RuleMissSignature::OnceReturnConsumed {
+            rule_position: rule.position().get(),
+        },
     }
-}
-
-/// Builds a comparable signature for an applied step.
-///
-/// # Errors
-///
-/// Returns `TestFailure` if state materialization fails.
-fn applied_signature<E: ExecutionPolicy>(
-    applied: &BorrowedAppliedStep<'_, E>,
-) -> Result<StepSignature, TestFailure> {
-    Ok(StepSignature::Applied {
-        step: applied.step().get(),
-        rule_position: applied.rule().position().get(),
-        state: runtime_view_bytes(applied.state())?,
-    })
 }
 
 /// Builds a comparable signature for a stable terminal state.
@@ -453,15 +579,6 @@ fn stable_signature(stable: &BorrowedStableRun<'_>) -> Result<StepSignature, Tes
         steps: stable.steps().get(),
         state: runtime_view_bytes(stable.state())?,
     })
-}
-
-/// Builds a comparable signature for a returned step.
-fn returned_signature(returned: &BorrowedReturnedRun<'_>) -> StepSignature {
-    StepSignature::Return {
-        step: returned.step().get(),
-        rule_position: returned.rule().position().get(),
-        output: returned.output().as_slice().to_vec(),
-    }
 }
 
 fn default_test_run_policy() -> DefaultInputRunPolicy<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>
@@ -496,16 +613,40 @@ fn finish_step_signatures<E: ExecutionPolicy>(
     let mut signatures = Vec::new();
     loop {
         match expect_step_transition(execution.step())? {
-            BorrowedStepTransition::Applied(applied) => {
-                signatures.push(applied_signature(&applied)?);
+            BorrowedStepTransition::AlwaysRewritten(applied) => {
+                signatures.push(StepSignature::Applied {
+                    step: applied.step().get(),
+                    rule_position: applied.rule().position().get(),
+                    state: runtime_view_bytes(applied.state())?,
+                });
+                execution = applied.into_session();
+            }
+            BorrowedStepTransition::OnceRewritten(applied) => {
+                signatures.push(StepSignature::Applied {
+                    step: applied.step().get(),
+                    rule_position: applied.rule().position().get(),
+                    state: runtime_view_bytes(applied.state())?,
+                });
                 execution = applied.into_session();
             }
             BorrowedStepTransition::Stable(stable) => {
                 signatures.push(stable_signature(&stable)?);
                 return Ok(signatures);
             }
-            BorrowedStepTransition::Returned(returned) => {
-                signatures.push(returned_signature(&returned));
+            BorrowedStepTransition::AlwaysReturned(returned) => {
+                signatures.push(StepSignature::Return {
+                    step: returned.step().get(),
+                    rule_position: returned.rule().position().get(),
+                    output: returned.output().as_slice().to_vec(),
+                });
+                return Ok(signatures);
+            }
+            BorrowedStepTransition::OnceReturned(returned) => {
+                signatures.push(StepSignature::Return {
+                    step: returned.step().get(),
+                    rule_position: returned.rule().position().get(),
+                    output: returned.output().as_slice().to_vec(),
+                });
                 return Ok(signatures);
             }
             BorrowedStepTransition::Failed(failed) => {
@@ -551,9 +692,13 @@ fn expect_failed_transition<'program, E: ExecutionPolicy>(
 ) -> Result<BorrowedFailedRun<'program>, TestFailure> {
     match result {
         BorrowedStepTransition::Failed(failed) => Ok(failed),
-        BorrowedStepTransition::Applied(_)
+        BorrowedStepTransition::AlwaysRewritten(_)
+        | BorrowedStepTransition::OnceRewritten(_)
         | BorrowedStepTransition::Stable(_)
-        | BorrowedStepTransition::Returned(_) => Err(TestFailure::message("expected failed step")),
+        | BorrowedStepTransition::AlwaysReturned(_)
+        | BorrowedStepTransition::OnceReturned(_) => {
+            Err(TestFailure::message("expected failed step"))
+        }
     }
 }
 
@@ -629,8 +774,10 @@ where
     match result {
         BorrowedContinuingRuleAttemptTransition::Failed(failed) => Ok(failed),
         BorrowedContinuingRuleAttemptTransition::Missed(_)
-        | BorrowedContinuingRuleAttemptTransition::Applied(_)
-        | BorrowedContinuingRuleAttemptTransition::Returned(_) => {
+        | BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceRewritten(_)
+        | BorrowedContinuingRuleAttemptTransition::AlwaysReturned(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceReturned(_) => {
             Err(TestFailure::message("expected failed rule attempt"))
         }
     }
@@ -651,8 +798,10 @@ where
     match result {
         BorrowedFinalRuleAttemptTransition::Failed(failed) => Ok(failed),
         BorrowedFinalRuleAttemptTransition::Stable(_)
-        | BorrowedFinalRuleAttemptTransition::Applied(_)
-        | BorrowedFinalRuleAttemptTransition::Returned(_) => {
+        | BorrowedFinalRuleAttemptTransition::AlwaysRewritten(_)
+        | BorrowedFinalRuleAttemptTransition::OnceRewritten(_)
+        | BorrowedFinalRuleAttemptTransition::AlwaysReturned(_)
+        | BorrowedFinalRuleAttemptTransition::OnceReturned(_) => {
             Err(TestFailure::message("expected failed rule attempt"))
         }
     }
@@ -704,7 +853,7 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
     ensure_eq!(execution.completed_steps().get(), 0)?;
 
     let execution = match expect_step_transition(execution.step())? {
-        BorrowedStepTransition::Applied(applied) => {
+        BorrowedStepTransition::AlwaysRewritten(applied) => {
             ensure_eq!(applied.step().get(), 1)?;
             ensure_eq!(applied.rule().position().get(), 1)?;
             ensure_eq!(
@@ -715,14 +864,16 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
             applied.into_session()
         }
         BorrowedStepTransition::Stable(_)
-        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::OnceRewritten(_)
+        | BorrowedStepTransition::AlwaysReturned(_)
+        | BorrowedStepTransition::OnceReturned(_)
         | BorrowedStepTransition::Failed(_) => {
             return Err(TestFailure::message("expected first applied step"));
         }
     };
 
     let execution = match expect_step_transition(execution.step())? {
-        BorrowedStepTransition::Applied(applied) => {
+        BorrowedStepTransition::AlwaysRewritten(applied) => {
             ensure_eq!(applied.step().get(), 2)?;
             ensure_eq!(applied.rule().position().get(), 2)?;
             ensure_eq!(
@@ -732,7 +883,9 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
             applied.into_session()
         }
         BorrowedStepTransition::Stable(_)
-        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::OnceRewritten(_)
+        | BorrowedStepTransition::AlwaysReturned(_)
+        | BorrowedStepTransition::OnceReturned(_)
         | BorrowedStepTransition::Failed(_) => {
             return Err(TestFailure::message("expected second applied step"));
         }
@@ -746,8 +899,10 @@ fn execution_stepwise_transition_surface_is_rule_by_rule() -> TestResult {
                 b"c".as_slice()
             )?;
         }
-        BorrowedStepTransition::Applied(_)
-        | BorrowedStepTransition::Returned(_)
+        BorrowedStepTransition::AlwaysRewritten(_)
+        | BorrowedStepTransition::OnceRewritten(_)
+        | BorrowedStepTransition::AlwaysReturned(_)
+        | BorrowedStepTransition::OnceReturned(_)
         | BorrowedStepTransition::Failed(_) => {
             return Err(TestFailure::message("expected stable completion"));
         }
@@ -775,7 +930,7 @@ fn execution_rule_attempt_surface_reports_misses_and_resets_after_apply() -> Tes
             borrowed_stable!(
                 8,
                 2,
-                RuleMissSignature::StateMismatch { rule_position: 3 },
+                RuleMissSignature::AlwaysRewriteStateMismatch { rule_position: 3 },
                 b"c",
             ),
         ],
@@ -794,7 +949,7 @@ fn execution_rule_attempt_surface_reports_misses_resets_and_returns() -> TestRes
         [
             BorrowedRuleAttemptSignature::Missed {
                 attempt: 1,
-                miss: RuleMissSignature::StateMismatch { rule_position: 1 },
+                miss: RuleMissSignature::AlwaysRewriteStateMismatch { rule_position: 1 },
                 state: b"a".to_vec(),
             },
             BorrowedRuleAttemptSignature::Applied {
@@ -805,12 +960,12 @@ fn execution_rule_attempt_surface_reports_misses_resets_and_returns() -> TestRes
             },
             BorrowedRuleAttemptSignature::Missed {
                 attempt: 3,
-                miss: RuleMissSignature::StateMismatch { rule_position: 1 },
+                miss: RuleMissSignature::AlwaysRewriteStateMismatch { rule_position: 1 },
                 state: b"b".to_vec(),
             },
             BorrowedRuleAttemptSignature::Missed {
                 attempt: 4,
-                miss: RuleMissSignature::StateMismatch { rule_position: 2 },
+                miss: RuleMissSignature::AlwaysRewriteStateMismatch { rule_position: 2 },
                 state: b"b".to_vec(),
             },
             BorrowedRuleAttemptSignature::Return {
@@ -846,15 +1001,17 @@ fn execution_rule_attempt_start_and_final_miss_are_typed() -> TestResult {
             let final_miss = stable.final_miss();
             ensure_eq!(
                 rule_miss_signature(final_miss),
-                RuleMissSignature::StateMismatch { rule_position: 1 },
+                RuleMissSignature::AlwaysRewriteStateMismatch { rule_position: 1 },
             )?;
             ensure_eq!(
                 runtime_view_bytes(stable.state())?.as_slice(),
                 b"z".as_slice(),
             )?;
         }
-        BorrowedFinalRuleAttemptTransition::Applied(_)
-        | BorrowedFinalRuleAttemptTransition::Returned(_)
+        BorrowedFinalRuleAttemptTransition::AlwaysRewritten(_)
+        | BorrowedFinalRuleAttemptTransition::OnceRewritten(_)
+        | BorrowedFinalRuleAttemptTransition::AlwaysReturned(_)
+        | BorrowedFinalRuleAttemptTransition::OnceReturned(_)
         | BorrowedFinalRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message("expected immediate stable terminal"));
         }
@@ -890,9 +1047,11 @@ fn execution_rule_attempt_miss_shapes_are_typed() -> TestResult {
         ));
     };
     let cursor = match expect_continuing_rule_attempt_transition(execution.step())? {
-        BorrowedContinuingRuleAttemptTransition::Applied(applied) => applied.into_cursor(),
+        BorrowedContinuingRuleAttemptTransition::OnceRewritten(applied) => applied.into_cursor(),
         BorrowedContinuingRuleAttemptTransition::Missed(_)
-        | BorrowedContinuingRuleAttemptTransition::Returned(_)
+        | BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(_)
+        | BorrowedContinuingRuleAttemptTransition::AlwaysReturned(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceReturned(_)
         | BorrowedContinuingRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message("expected first once rewrite to apply"));
         }
@@ -911,8 +1070,10 @@ fn execution_rule_attempt_miss_shapes_are_typed() -> TestResult {
             )?;
             missed.into_cursor()
         }
-        BorrowedContinuingRuleAttemptTransition::Applied(_)
-        | BorrowedContinuingRuleAttemptTransition::Returned(_)
+        BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceRewritten(_)
+        | BorrowedContinuingRuleAttemptTransition::AlwaysReturned(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceReturned(_)
         | BorrowedContinuingRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message("expected consumed once rewrite miss"));
         }
@@ -926,10 +1087,12 @@ fn execution_rule_attempt_miss_shapes_are_typed() -> TestResult {
     match expect_final_rule_attempt_transition(execution.step())? {
         BorrowedFinalRuleAttemptTransition::Stable(stable) => ensure_eq!(
             rule_miss_signature(stable.final_miss()),
-            RuleMissSignature::StateMismatch { rule_position: 2 },
+            RuleMissSignature::AlwaysRewriteStateMismatch { rule_position: 2 },
         ),
-        BorrowedFinalRuleAttemptTransition::Applied(_)
-        | BorrowedFinalRuleAttemptTransition::Returned(_)
+        BorrowedFinalRuleAttemptTransition::AlwaysRewritten(_)
+        | BorrowedFinalRuleAttemptTransition::OnceRewritten(_)
+        | BorrowedFinalRuleAttemptTransition::AlwaysReturned(_)
+        | BorrowedFinalRuleAttemptTransition::OnceReturned(_)
         | BorrowedFinalRuleAttemptTransition::Failed(_) => {
             Err(TestFailure::message("expected always rule state mismatch"))
         }
@@ -953,9 +1116,11 @@ fn execution_rule_attempt_rewrite_reset_returns_typed_cursor() -> TestResult {
         ));
     };
     let cursor = match expect_final_rule_attempt_transition(execution.step())? {
-        BorrowedFinalRuleAttemptTransition::Applied(applied) => applied.into_cursor(),
+        BorrowedFinalRuleAttemptTransition::AlwaysRewritten(applied) => applied.into_cursor(),
         BorrowedFinalRuleAttemptTransition::Stable(_)
-        | BorrowedFinalRuleAttemptTransition::Returned(_)
+        | BorrowedFinalRuleAttemptTransition::OnceRewritten(_)
+        | BorrowedFinalRuleAttemptTransition::AlwaysReturned(_)
+        | BorrowedFinalRuleAttemptTransition::OnceReturned(_)
         | BorrowedFinalRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message("expected single-rule rewrite apply"));
         }
@@ -975,9 +1140,11 @@ fn execution_rule_attempt_rewrite_reset_returns_typed_cursor() -> TestResult {
         ));
     };
     let cursor = match expect_continuing_rule_attempt_transition(execution.step())? {
-        BorrowedContinuingRuleAttemptTransition::Applied(applied) => applied.into_cursor(),
+        BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(applied) => applied.into_cursor(),
         BorrowedContinuingRuleAttemptTransition::Missed(_)
-        | BorrowedContinuingRuleAttemptTransition::Returned(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceRewritten(_)
+        | BorrowedContinuingRuleAttemptTransition::AlwaysReturned(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceReturned(_)
         | BorrowedContinuingRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message("expected multi-rule rewrite apply"));
         }
@@ -1036,7 +1203,7 @@ fn execution_rule_attempt_once_state_is_run_local_for_reused_program() -> TestRe
         borrowed_stable!(
             5,
             2,
-            RuleMissSignature::StateMismatch { rule_position: 2 },
+            RuleMissSignature::AlwaysRewriteStateMismatch { rule_position: 2 },
             b"c",
         ),
     ];
@@ -1093,12 +1260,14 @@ fn execution_rule_attempt_limit_is_independent_from_step_limit() -> TestResult {
             ensure_eq!(missed.attempt().get(), 1)?;
             ensure_eq!(
                 rule_miss_signature(missed.miss()),
-                RuleMissSignature::StateMismatch { rule_position: 1 },
+                RuleMissSignature::AlwaysRewriteStateMismatch { rule_position: 1 },
             )?;
             missed.into_cursor()
         }
-        BorrowedContinuingRuleAttemptTransition::Applied(_)
-        | BorrowedContinuingRuleAttemptTransition::Returned(_)
+        BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceRewritten(_)
+        | BorrowedContinuingRuleAttemptTransition::AlwaysReturned(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceReturned(_)
         | BorrowedContinuingRuleAttemptTransition::Failed(_) => {
             return Err(TestFailure::message(
                 "expected miss despite zero execution-step limit",
@@ -1177,7 +1346,7 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
     )?;
 
     let execution = match expect_step_transition(execution.step())? {
-        BorrowedStepTransition::Applied(applied) => {
+        BorrowedStepTransition::AlwaysRewritten(applied) => {
             ensure_eq!(
                 runtime_view_bytes(applied.state())?.as_slice(),
                 b"b".as_slice()
@@ -1185,7 +1354,9 @@ fn execution_state_view_exposes_initial_and_current_state() -> TestResult {
             applied.into_session()
         }
         BorrowedStepTransition::Stable(_)
-        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::OnceRewritten(_)
+        | BorrowedStepTransition::AlwaysReturned(_)
+        | BorrowedStepTransition::OnceReturned(_)
         | BorrowedStepTransition::Failed(_) => {
             return Err(TestFailure::message("expected applied step"));
         }
@@ -1262,9 +1433,11 @@ fn execution_borrowed_terminals_keep_program_witness() -> TestResult {
     let stable_program = parse_program("a=b")?;
     let stable_session = stable_program.steps(runtime_input(b"a", limits)?)?;
     let stable_session = match stable_session.step() {
-        BorrowedStepTransition::Applied(applied) => applied.into_session(),
+        BorrowedStepTransition::AlwaysRewritten(applied) => applied.into_session(),
         BorrowedStepTransition::Stable(_)
-        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::OnceRewritten(_)
+        | BorrowedStepTransition::AlwaysReturned(_)
+        | BorrowedStepTransition::OnceReturned(_)
         | BorrowedStepTransition::Failed(_) => {
             return Err(TestFailure::message("expected applied borrowed step"));
         }
@@ -1273,8 +1446,10 @@ fn execution_borrowed_terminals_keep_program_witness() -> TestResult {
         BorrowedStepTransition::Stable(stable) => {
             ensure_eq!(stable.program().rule_count().get(), 1)?;
         }
-        BorrowedStepTransition::Applied(_)
-        | BorrowedStepTransition::Returned(_)
+        BorrowedStepTransition::AlwaysRewritten(_)
+        | BorrowedStepTransition::OnceRewritten(_)
+        | BorrowedStepTransition::AlwaysReturned(_)
+        | BorrowedStepTransition::OnceReturned(_)
         | BorrowedStepTransition::Failed(_) => {
             return Err(TestFailure::message("expected borrowed stable terminal"));
         }
@@ -1282,11 +1457,13 @@ fn execution_borrowed_terminals_keep_program_witness() -> TestResult {
 
     let returned_program = parse_program("a=(return)ok")?;
     match returned_program.steps(runtime_input(b"a", limits)?)?.step() {
-        BorrowedStepTransition::Returned(returned) => {
+        BorrowedStepTransition::AlwaysReturned(returned) => {
             ensure_eq!(returned.program().rule_count().get(), 1)?;
         }
-        BorrowedStepTransition::Applied(_)
+        BorrowedStepTransition::AlwaysRewritten(_)
+        | BorrowedStepTransition::OnceRewritten(_)
         | BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::OnceReturned(_)
         | BorrowedStepTransition::Failed(_) => {
             return Err(TestFailure::message("expected borrowed return terminal"));
         }
@@ -1299,9 +1476,11 @@ fn execution_borrowed_terminals_keep_program_witness() -> TestResult {
         .step()
     {
         BorrowedStepTransition::Failed(failed) => failed,
-        BorrowedStepTransition::Applied(_)
+        BorrowedStepTransition::AlwaysRewritten(_)
+        | BorrowedStepTransition::OnceRewritten(_)
         | BorrowedStepTransition::Stable(_)
-        | BorrowedStepTransition::Returned(_) => {
+        | BorrowedStepTransition::AlwaysReturned(_)
+        | BorrowedStepTransition::OnceReturned(_) => {
             return Err(TestFailure::message("expected borrowed failed terminal"));
         }
     };
@@ -1323,7 +1502,7 @@ fn execution_borrowed_transitions_retain_rule_views() -> TestResult {
     let program = parse_program("a=b\nb=(return)ok")?;
     let execution = program.steps(runtime_input(b"a", limits)?)?;
     let execution = match execution.step() {
-        BorrowedStepTransition::Applied(applied) => {
+        BorrowedStepTransition::AlwaysRewritten(applied) => {
             ensure_eq!(applied.step().get(), 1)?;
             ensure_borrowed_rewrite_rule_view(
                 applied.rule(),
@@ -1338,14 +1517,16 @@ fn execution_borrowed_transitions_retain_rule_views() -> TestResult {
             applied.into_session()
         }
         BorrowedStepTransition::Stable(_)
-        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::OnceRewritten(_)
+        | BorrowedStepTransition::AlwaysReturned(_)
+        | BorrowedStepTransition::OnceReturned(_)
         | BorrowedStepTransition::Failed(_) => {
             return Err(TestFailure::message("expected borrowed applied rule view"));
         }
     };
 
     match execution.step() {
-        BorrowedStepTransition::Returned(returned) => ensure_borrowed_return_rule_view(
+        BorrowedStepTransition::AlwaysReturned(returned) => ensure_borrowed_return_rule_view(
             returned.rule(),
             ExpectedBorrowedRuleView {
                 position: 2,
@@ -1355,8 +1536,10 @@ fn execution_borrowed_transitions_retain_rule_views() -> TestResult {
             },
             b"ok",
         ),
-        BorrowedStepTransition::Applied(_)
+        BorrowedStepTransition::AlwaysRewritten(_)
+        | BorrowedStepTransition::OnceRewritten(_)
         | BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::OnceReturned(_)
         | BorrowedStepTransition::Failed(_) => {
             Err(TestFailure::message("expected borrowed returned rule view"))
         }
@@ -1418,9 +1601,11 @@ fn execution_step_failure_preserves_current_progress() -> TestResult {
     let execution = program.steps(runtime_input(b"a", limits)?)?;
 
     let running = match expect_step_transition(execution.step())? {
-        BorrowedStepTransition::Applied(applied) => applied.into_session(),
+        BorrowedStepTransition::AlwaysRewritten(applied) => applied.into_session(),
         BorrowedStepTransition::Stable(_)
-        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::OnceRewritten(_)
+        | BorrowedStepTransition::AlwaysReturned(_)
+        | BorrowedStepTransition::OnceReturned(_)
         | BorrowedStepTransition::Failed(_) => {
             return Err(TestFailure::message("expected applied execution"));
         }

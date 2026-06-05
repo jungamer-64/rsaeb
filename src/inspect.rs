@@ -501,7 +501,7 @@ impl<'program> RuleView<'program> {
 
 /// Implements the shared read-only methods for concrete rewrite rule views.
 macro_rules! impl_rewrite_rule_view {
-    ($view:ident) => {
+    ($view:ident, $canonical_source:ident) => {
         impl<'program> $view<'program> {
             /// Borrows a stored rewrite rule with its topology-derived position.
             pub(crate) const fn new(position: RulePosition, rule: &'program RewriteRule) -> Self {
@@ -542,13 +542,26 @@ macro_rules! impl_rewrite_rule_view {
             pub fn rewrite_action(self) -> RewriteActionView<'program> {
                 self.rule.rewrite_action().view()
             }
+
+            /// Generates canonical executable source for diagnostics/display.
+            ///
+            /// # Errors
+            ///
+            /// Returns `AllocationError` if canonical source materialization fails.
+            pub fn canonical_source(self) -> Result<CanonicalRuleSource, AllocationError> {
+                Ok(CanonicalRuleSource {
+                    bytes: MaterializedBytes::from_canonical_source(
+                        crate::rule::$canonical_source(self.into_rule())?,
+                    ),
+                })
+            }
         }
     };
 }
 
 /// Implements the shared read-only methods for concrete return rule views.
 macro_rules! impl_return_rule_view {
-    ($view:ident) => {
+    ($view:ident, $canonical_source:ident) => {
         impl<'program> $view<'program> {
             /// Borrows a stored return rule with its topology-derived position.
             pub(crate) const fn new(position: RulePosition, rule: &'program ReturnRule) -> Self {
@@ -589,11 +602,24 @@ macro_rules! impl_return_rule_view {
             pub fn output(self) -> PayloadView<'program> {
                 PayloadView::new(self.rule.output())
             }
+
+            /// Generates canonical executable source for diagnostics/display.
+            ///
+            /// # Errors
+            ///
+            /// Returns `AllocationError` if canonical source materialization fails.
+            pub fn canonical_source(self) -> Result<CanonicalRuleSource, AllocationError> {
+                Ok(CanonicalRuleSource {
+                    bytes: MaterializedBytes::from_canonical_source(
+                        crate::rule::$canonical_source(self.into_rule())?,
+                    ),
+                })
+            }
         }
     };
 }
 
-impl_rewrite_rule_view!(AlwaysRewriteRuleView);
-impl_rewrite_rule_view!(OnceRewriteRuleView);
-impl_return_rule_view!(AlwaysReturnRuleView);
-impl_return_rule_view!(OnceReturnRuleView);
+impl_rewrite_rule_view!(AlwaysRewriteRuleView, canonical_always_rewrite_source);
+impl_rewrite_rule_view!(OnceRewriteRuleView, canonical_once_rewrite_source);
+impl_return_rule_view!(AlwaysReturnRuleView, canonical_always_return_source);
+impl_return_rule_view!(OnceReturnRuleView, canonical_once_return_source);

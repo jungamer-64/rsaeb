@@ -1,5 +1,7 @@
 use crate::error::{RuleAttemptStepError, RunFinishError, RunStepError};
-use crate::inspect::{ReturnRuleView, RewriteRuleView};
+use crate::inspect::{
+    AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView,
+};
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, ReturnOutput, RunResult};
@@ -11,25 +13,39 @@ use super::session::{BorrowedRuleAttemptCursor, BorrowedRunSession};
 
 /// Result of advancing a borrowed run session once.
 ///
-/// Only [`BorrowedStepTransition::Applied`] carries a continuation session. Stable,
-/// returned, and failed transitions are terminal.
+/// Only rewritten transitions carry a continuation session. Stable, returned,
+/// and failed transitions are terminal.
 pub enum BorrowedStepTransition<'program, E: ExecutionPolicy> {
-    /// One ordinary rewrite rule was applied and execution can continue.
-    Applied(BorrowedAppliedStep<'program, E>),
+    /// One reusable rewrite rule was applied and execution can continue.
+    AlwaysRewritten(BorrowedAlwaysRewriteStep<'program, E>),
+    /// One once-only rewrite rule was applied and execution can continue.
+    OnceRewritten(BorrowedOnceRewriteStep<'program, E>),
     /// No rule matched the final runtime state.
     Stable(BorrowedStableRun<'program>),
-    /// A matched rule executed `(return)`.
-    Returned(BorrowedReturnedRun<'program>),
+    /// A matched reusable rule executed `(return)`.
+    AlwaysReturned(BorrowedAlwaysReturnRun<'program>),
+    /// A matched once-only rule executed `(return)`.
+    OnceReturned(BorrowedOnceReturnRun<'program>),
     /// A matching rule failed before committing.
     Failed(BorrowedFailedRun<'program>),
 }
 
-/// One committed non-terminal rule application in a borrowed session.
-pub struct BorrowedAppliedStep<'program, E: ExecutionPolicy> {
+/// One committed reusable rewrite in a borrowed session.
+pub struct BorrowedAlwaysRewriteStep<'program, E: ExecutionPolicy> {
     /// Step number committed by this transition.
     pub(super) step: StepCount,
     /// Borrowed rewrite rule committed by this transition.
-    pub(super) rule: RewriteRuleView<'program>,
+    pub(super) rule: AlwaysRewriteRuleView<'program>,
+    /// Continuation session after the committed rule application.
+    pub(super) session: BorrowedRunSession<'program, E>,
+}
+
+/// One committed once-only rewrite in a borrowed session.
+pub struct BorrowedOnceRewriteStep<'program, E: ExecutionPolicy> {
+    /// Step number committed by this transition.
+    pub(super) step: StepCount,
+    /// Borrowed rewrite rule committed by this transition.
+    pub(super) rule: OnceRewriteRuleView<'program>,
     /// Continuation session after the committed rule application.
     pub(super) session: BorrowedRunSession<'program, E>,
 }
@@ -42,12 +58,24 @@ pub struct BorrowedStableRun<'program> {
     pub(super) core: TerminalRunCore,
 }
 
-/// Terminal borrowed run state reached by `(return)`.
-pub struct BorrowedReturnedRun<'program> {
+/// Terminal borrowed run state reached by a reusable `(return)` rule.
+pub struct BorrowedAlwaysReturnRun<'program> {
     /// Step number that executed the return action.
     pub(super) step: StepCount,
     /// Borrowed return rule committed by this transition.
-    pub(super) rule: ReturnRuleView<'program>,
+    pub(super) rule: AlwaysReturnRuleView<'program>,
+    /// Parsed program borrowed by the terminal state.
+    pub(super) program: &'program ExecutableProgram,
+    /// Materialized return output produced by the committed return rule.
+    pub(super) output: ReturnOutput,
+}
+
+/// Terminal borrowed run state reached by a once-only `(return)` rule.
+pub struct BorrowedOnceReturnRun<'program> {
+    /// Step number that executed the return action.
+    pub(super) step: StepCount,
+    /// Borrowed return rule committed by this transition.
+    pub(super) rule: OnceReturnRuleView<'program>,
     /// Parsed program borrowed by the terminal state.
     pub(super) program: &'program ExecutableProgram,
     /// Materialized return output produced by the committed return rule.
@@ -73,10 +101,14 @@ pub enum BorrowedContinuingRuleAttemptTransition<'program, E: ExecutionPolicy, A
 {
     /// One executable rule line was consumed without applying.
     Missed(BorrowedMissedRuleAttempt<'program, E, A>),
-    /// One ordinary rewrite rule was applied and execution can continue.
-    Applied(BorrowedRuleAttemptAppliedStep<'program, E, A>),
-    /// A matched rule executed `(return)`.
-    Returned(BorrowedRuleAttemptReturnedRun<'program>),
+    /// One reusable rewrite rule was applied and execution can continue.
+    AlwaysRewritten(BorrowedRuleAttemptAlwaysRewriteStep<'program, E, A>),
+    /// One once-only rewrite rule was applied and execution can continue.
+    OnceRewritten(BorrowedRuleAttemptOnceRewriteStep<'program, E, A>),
+    /// A matched reusable rule executed `(return)`.
+    AlwaysReturned(BorrowedRuleAttemptAlwaysReturnRun<'program>),
+    /// A matched once-only rule executed `(return)`.
+    OnceReturned(BorrowedRuleAttemptOnceReturnRun<'program>),
     /// A matching rule failed before committing runtime state.
     Failed(BorrowedRuleAttemptFailedRun<'program>),
 }
@@ -88,10 +120,14 @@ pub enum BorrowedContinuingRuleAttemptTransition<'program, E: ExecutionPolicy, A
 pub enum BorrowedFinalRuleAttemptTransition<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     /// The rule pass completed without a match.
     Stable(BorrowedRuleAttemptStableRun<'program>),
-    /// One ordinary rewrite rule was applied and execution can continue.
-    Applied(BorrowedRuleAttemptAppliedStep<'program, E, A>),
-    /// A matched rule executed `(return)`.
-    Returned(BorrowedRuleAttemptReturnedRun<'program>),
+    /// One reusable rewrite rule was applied and execution can continue.
+    AlwaysRewritten(BorrowedRuleAttemptAlwaysRewriteStep<'program, E, A>),
+    /// One once-only rewrite rule was applied and execution can continue.
+    OnceRewritten(BorrowedRuleAttemptOnceRewriteStep<'program, E, A>),
+    /// A matched reusable rule executed `(return)`.
+    AlwaysReturned(BorrowedRuleAttemptAlwaysReturnRun<'program>),
+    /// A matched once-only rule executed `(return)`.
+    OnceReturned(BorrowedRuleAttemptOnceReturnRun<'program>),
     /// A matching rule failed before committing runtime state.
     Failed(BorrowedRuleAttemptFailedRun<'program>),
 }
@@ -106,14 +142,27 @@ pub struct BorrowedMissedRuleAttempt<'program, E: ExecutionPolicy, A: RuleAttemp
     pub(super) cursor: BorrowedRuleAttemptCursor<'program, E, A>,
 }
 
-/// One committed non-terminal rule application in a borrowed rule-attempt session.
-pub struct BorrowedRuleAttemptAppliedStep<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
+/// One committed reusable rewrite in a borrowed rule-attempt session.
+pub struct BorrowedRuleAttemptAlwaysRewriteStep<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
+{
     /// Rule-attempt count committed by this transition.
     pub(super) attempt: RuleAttemptCount,
     /// Step number committed by this transition.
     pub(super) step: StepCount,
     /// Borrowed rewrite rule committed by this transition.
-    pub(super) rule: RewriteRuleView<'program>,
+    pub(super) rule: AlwaysRewriteRuleView<'program>,
+    /// Cursor after the committed rule application.
+    pub(super) cursor: BorrowedRuleAttemptCursor<'program, E, A>,
+}
+
+/// One committed once-only rewrite in a borrowed rule-attempt session.
+pub struct BorrowedRuleAttemptOnceRewriteStep<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Step number committed by this transition.
+    pub(super) step: StepCount,
+    /// Borrowed rewrite rule committed by this transition.
+    pub(super) rule: OnceRewriteRuleView<'program>,
     /// Cursor after the committed rule application.
     pub(super) cursor: BorrowedRuleAttemptCursor<'program, E, A>,
 }
@@ -130,14 +179,28 @@ pub struct BorrowedRuleAttemptStableRun<'program> {
     pub(super) core: TerminalRunCore,
 }
 
-/// Terminal borrowed rule-attempt run state reached by `(return)`.
-pub struct BorrowedRuleAttemptReturnedRun<'program> {
+/// Terminal borrowed rule-attempt run state reached by a reusable `(return)` rule.
+pub struct BorrowedRuleAttemptAlwaysReturnRun<'program> {
     /// Rule-attempt count committed by this transition.
     pub(super) attempt: RuleAttemptCount,
     /// Step number that executed the return action.
     pub(super) step: StepCount,
     /// Borrowed return rule committed by this transition.
-    pub(super) rule: ReturnRuleView<'program>,
+    pub(super) rule: AlwaysReturnRuleView<'program>,
+    /// Parsed program borrowed by the terminal state.
+    pub(super) program: &'program ExecutableProgram,
+    /// Materialized return output produced by the committed return rule.
+    pub(super) output: ReturnOutput,
+}
+
+/// Terminal borrowed rule-attempt run state reached by a once-only `(return)` rule.
+pub struct BorrowedRuleAttemptOnceReturnRun<'program> {
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Step number that executed the return action.
+    pub(super) step: StepCount,
+    /// Borrowed return rule committed by this transition.
+    pub(super) rule: OnceReturnRuleView<'program>,
     /// Parsed program borrowed by the terminal state.
     pub(super) program: &'program ExecutableProgram,
     /// Materialized return output produced by the committed return rule.
@@ -156,33 +219,41 @@ pub struct BorrowedRuleAttemptFailedRun<'program> {
     pub(super) core: TerminalRunCore,
 }
 
-impl<'program, E: ExecutionPolicy> BorrowedAppliedStep<'program, E> {
-    /// One-based applied step count.
-    #[must_use]
-    pub const fn step(&self) -> StepCount {
-        self.step
-    }
+/// Implements shared accessors for borrowed rewrite step witnesses.
+macro_rules! impl_borrowed_rewrite_step {
+    ($step:ident, $rule:ident) => {
+        impl<'program, E: ExecutionPolicy> $step<'program, E> {
+            /// One-based applied step count.
+            #[must_use]
+            pub const fn step(&self) -> StepCount {
+                self.step
+            }
 
-    /// Borrowed rule committed by this transition.
-    #[must_use]
-    pub const fn rule(&self) -> RewriteRuleView<'program> {
-        self.rule
-    }
+            /// Borrowed rule committed by this transition.
+            #[must_use]
+            pub const fn rule(&self) -> $rule<'program> {
+                self.rule
+            }
 
-    /// Runtime state after the applied step.
-    #[must_use]
-    pub fn state(&self) -> RuntimeStateView<'_> {
-        self.session.state()
-    }
+            /// Runtime state after the applied step.
+            #[must_use]
+            pub fn state(&self) -> RuntimeStateView<'_> {
+                self.session.state()
+            }
 
-    /// Continue running after observing this applied step.
-    ///
-    /// This is the only borrowed transition that can resume execution.
-    #[must_use]
-    pub fn into_session(self) -> BorrowedRunSession<'program, E> {
-        self.session
-    }
+            /// Continue running after observing this applied step.
+            ///
+            /// This is the only borrowed transition that can resume execution.
+            #[must_use]
+            pub fn into_session(self) -> BorrowedRunSession<'program, E> {
+                self.session
+            }
+        }
+    };
 }
+
+impl_borrowed_rewrite_step!(BorrowedAlwaysRewriteStep, AlwaysRewriteRuleView);
+impl_borrowed_rewrite_step!(BorrowedOnceRewriteStep, OnceRewriteRuleView);
 
 impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> BorrowedMissedRuleAttempt<'program, E, A> {
     /// One-based consumed rule-attempt count.
@@ -210,39 +281,48 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> BorrowedMissedRuleAttem
     }
 }
 
-impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
-    BorrowedRuleAttemptAppliedStep<'program, E, A>
-{
-    /// One-based consumed rule-attempt count.
-    #[must_use]
-    pub const fn attempt(&self) -> RuleAttemptCount {
-        self.attempt
-    }
+/// Implements shared accessors for borrowed rule-attempt rewrite witnesses.
+macro_rules! impl_borrowed_rule_attempt_rewrite_step {
+    ($step:ident, $rule:ident) => {
+        impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> $step<'program, E, A> {
+            /// One-based consumed rule-attempt count.
+            #[must_use]
+            pub const fn attempt(&self) -> RuleAttemptCount {
+                self.attempt
+            }
 
-    /// One-based applied step count.
-    #[must_use]
-    pub const fn step(&self) -> StepCount {
-        self.step
-    }
+            /// One-based applied step count.
+            #[must_use]
+            pub const fn step(&self) -> StepCount {
+                self.step
+            }
 
-    /// Borrowed rule committed by this rule-attempt transition.
-    #[must_use]
-    pub const fn rule(&self) -> RewriteRuleView<'program> {
-        self.rule
-    }
+            /// Borrowed rule committed by this rule-attempt transition.
+            #[must_use]
+            pub const fn rule(&self) -> $rule<'program> {
+                self.rule
+            }
 
-    /// Runtime state after the applied step.
-    #[must_use]
-    pub fn state(&self) -> RuntimeStateView<'_> {
-        self.cursor.state()
-    }
+            /// Runtime state after the applied step.
+            #[must_use]
+            pub fn state(&self) -> RuntimeStateView<'_> {
+                self.cursor.state()
+            }
 
-    /// Continue running after observing this applied rule attempt.
-    #[must_use]
-    pub fn into_cursor(self) -> BorrowedRuleAttemptCursor<'program, E, A> {
-        self.cursor
-    }
+            /// Continue running after observing this applied rule attempt.
+            #[must_use]
+            pub fn into_cursor(self) -> BorrowedRuleAttemptCursor<'program, E, A> {
+                self.cursor
+            }
+        }
+    };
 }
+
+impl_borrowed_rule_attempt_rewrite_step!(
+    BorrowedRuleAttemptAlwaysRewriteStep,
+    AlwaysRewriteRuleView
+);
+impl_borrowed_rule_attempt_rewrite_step!(BorrowedRuleAttemptOnceRewriteStep, OnceRewriteRuleView);
 
 impl<'program> BorrowedStableRun<'program> {
     /// Number of execution steps committed before reaching the stable state.
@@ -314,75 +394,90 @@ impl<'program> BorrowedRuleAttemptStableRun<'program> {
     }
 }
 
-impl<'program> BorrowedReturnedRun<'program> {
-    /// One-based applied step count for the return rule.
-    #[must_use]
-    pub const fn step(&self) -> StepCount {
-        self.step
-    }
+/// Implements shared accessors for borrowed return terminal witnesses.
+macro_rules! impl_borrowed_return_run {
+    ($run:ident, $rule:ident) => {
+        impl<'program> $run<'program> {
+            /// One-based applied step count for the return rule.
+            #[must_use]
+            pub const fn step(&self) -> StepCount {
+                self.step
+            }
 
-    /// Borrow the parsed program used by this terminal state.
-    #[must_use]
-    pub const fn program(&self) -> &'program ExecutableProgram {
-        self.program
-    }
+            /// Borrow the parsed program used by this terminal state.
+            #[must_use]
+            pub const fn program(&self) -> &'program ExecutableProgram {
+                self.program
+            }
 
-    /// Borrowed return rule committed by this terminal state.
-    #[must_use]
-    pub const fn rule(&self) -> ReturnRuleView<'program> {
-        self.rule
-    }
+            /// Borrowed return rule committed by this terminal state.
+            #[must_use]
+            pub const fn rule(&self) -> $rule<'program> {
+                self.rule
+            }
 
-    /// Materialized return output from runtime execution.
-    #[must_use]
-    pub const fn output(&self) -> &ReturnOutput {
-        &self.output
-    }
+            /// Materialized return output from runtime execution.
+            #[must_use]
+            pub const fn output(&self) -> &ReturnOutput {
+                &self.output
+            }
 
-    /// Materializes this returned run as a run result.
-    #[must_use]
-    pub fn into_result(self) -> RunResult {
-        RunResult::from_return(self.output, self.step)
-    }
+            /// Materializes this returned run as a run result.
+            #[must_use]
+            pub fn into_result(self) -> RunResult {
+                RunResult::from_return(self.output, self.step)
+            }
+        }
+    };
 }
 
-impl<'program> BorrowedRuleAttemptReturnedRun<'program> {
-    /// One-based consumed rule-attempt count.
-    #[must_use]
-    pub const fn attempt(&self) -> RuleAttemptCount {
-        self.attempt
-    }
+/// Implements shared accessors for borrowed rule-attempt return terminal witnesses.
+macro_rules! impl_borrowed_rule_attempt_return_run {
+    ($run:ident, $rule:ident) => {
+        impl<'program> $run<'program> {
+            /// One-based consumed rule-attempt count.
+            #[must_use]
+            pub const fn attempt(&self) -> RuleAttemptCount {
+                self.attempt
+            }
 
-    /// One-based applied step count for the return rule.
-    #[must_use]
-    pub const fn step(&self) -> StepCount {
-        self.step
-    }
+            /// One-based applied step count for the return rule.
+            #[must_use]
+            pub const fn step(&self) -> StepCount {
+                self.step
+            }
 
-    /// Borrow the parsed program used by this terminal state.
-    #[must_use]
-    pub const fn program(&self) -> &'program ExecutableProgram {
-        self.program
-    }
+            /// Borrow the parsed program used by this terminal state.
+            #[must_use]
+            pub const fn program(&self) -> &'program ExecutableProgram {
+                self.program
+            }
 
-    /// Borrowed return rule committed by this terminal state.
-    #[must_use]
-    pub const fn rule(&self) -> ReturnRuleView<'program> {
-        self.rule
-    }
+            /// Borrowed return rule committed by this terminal state.
+            #[must_use]
+            pub const fn rule(&self) -> $rule<'program> {
+                self.rule
+            }
 
-    /// Materialized return output from runtime execution.
-    #[must_use]
-    pub const fn output(&self) -> &ReturnOutput {
-        &self.output
-    }
+            /// Materialized return output from runtime execution.
+            #[must_use]
+            pub const fn output(&self) -> &ReturnOutput {
+                &self.output
+            }
 
-    /// Materializes this returned run as a run result.
-    #[must_use]
-    pub fn into_result(self) -> RunResult {
-        RunResult::from_return(self.output, self.step)
-    }
+            /// Materializes this returned run as a run result.
+            #[must_use]
+            pub fn into_result(self) -> RunResult {
+                RunResult::from_return(self.output, self.step)
+            }
+        }
+    };
 }
+
+impl_borrowed_return_run!(BorrowedAlwaysReturnRun, AlwaysReturnRuleView);
+impl_borrowed_return_run!(BorrowedOnceReturnRun, OnceReturnRuleView);
+impl_borrowed_rule_attempt_return_run!(BorrowedRuleAttemptAlwaysReturnRun, AlwaysReturnRuleView);
+impl_borrowed_rule_attempt_return_run!(BorrowedRuleAttemptOnceReturnRun, OnceReturnRuleView);
 
 impl<'program> BorrowedFailedRun<'program> {
     /// Captures a failed borrowed session without committing the attempted step.

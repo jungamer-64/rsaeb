@@ -2,7 +2,6 @@ use crate::bytes::ReturnOutputByteCount;
 use crate::error::RunStepError;
 use crate::inspect::{
     AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView,
-    ReturnRuleView, RewriteRuleView,
 };
 use crate::limits::StepCount;
 use crate::policy::ExecutionPolicy;
@@ -18,10 +17,14 @@ use super::state::State;
 /// Committed rule application reported back to the session layer.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum AppliedRule<'program> {
-    /// One rewrite rule committed and execution may continue.
-    Continued(CommittedRewriteRule<'program>),
-    /// One return rule committed and execution is terminal.
-    Terminal(CommittedReturnRule<'program>),
+    /// One reusable rewrite rule committed and execution may continue.
+    AlwaysRewritten(CommittedAlwaysRewriteRule<'program>),
+    /// One once-only rewrite rule committed and execution may continue.
+    OnceRewritten(CommittedOnceRewriteRule<'program>),
+    /// One reusable return rule committed and execution is terminal.
+    AlwaysReturned(CommittedAlwaysReturnRule<'program>),
+    /// One once-only return rule committed and execution is terminal.
+    OnceReturned(CommittedOnceReturnRule<'program>),
 }
 
 /// Prepared rule step after action-specific runtime preparation succeeds.
@@ -37,22 +40,44 @@ pub(crate) enum PreparedRuleStep<'program, 'once, 'budget, E: ExecutionPolicy> {
     OnceReturn(PreparedOnceReturnRule<'program, 'once, 'budget, E>),
 }
 
-/// Committed non-terminal rewrite rule.
+/// Committed reusable non-terminal rewrite rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CommittedRewriteRule<'program> {
+pub(crate) struct CommittedAlwaysRewriteRule<'program> {
     /// Step number assigned by the runtime budget.
     step: StepCount,
-    /// Exact rewrite rule whose action committed this step.
-    rule: RewriteRuleView<'program>,
+    /// Exact reusable rewrite rule whose action committed this step.
+    rule: AlwaysRewriteRuleView<'program>,
 }
 
-/// Committed terminal return rule.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct CommittedReturnRule<'program> {
+/// Committed once-only non-terminal rewrite rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CommittedOnceRewriteRule<'program> {
     /// Step number assigned by the runtime budget.
     step: StepCount,
-    /// Exact return rule whose action committed this step.
-    rule: ReturnRuleView<'program>,
+    /// Exact once-only rewrite rule whose action committed this step.
+    rule: OnceRewriteRuleView<'program>,
+}
+
+/// Committed reusable terminal return rule.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct CommittedAlwaysReturnRule<'program> {
+    /// Step number assigned by the runtime budget.
+    step: StepCount,
+    /// Exact reusable return rule whose action committed this step.
+    rule: AlwaysReturnRuleView<'program>,
+    /// Borrowed return output payload from the committed parsed rule.
+    output_view: ReturnOutputView<'program>,
+    /// Materialized return output produced before committing the terminal step.
+    output: ReturnOutput,
+}
+
+/// Committed once-only terminal return rule.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct CommittedOnceReturnRule<'program> {
+    /// Step number assigned by the runtime budget.
+    step: StepCount,
+    /// Exact once-only return rule whose action committed this step.
+    rule: OnceReturnRuleView<'program>,
     /// Borrowed return output payload from the committed parsed rule.
     output_view: ReturnOutputView<'program>,
     /// Materialized return output produced before committing the terminal step.
@@ -111,41 +136,56 @@ pub(crate) struct PreparedOnceReturnRule<'program, 'once, 'budget, E: ExecutionP
     output: ReturnOutput,
 }
 
-impl<'program> CommittedRewriteRule<'program> {
-    /// Step number assigned by the runtime budget.
-    pub(crate) const fn step(self) -> StepCount {
-        self.step
-    }
+/// Implements shared accessors for committed rewrite rules.
+macro_rules! impl_committed_rewrite_rule {
+    ($committed:ident, $rule:ident) => {
+        impl<'program> $committed<'program> {
+            /// Step number assigned by the runtime budget.
+            pub(crate) const fn step(self) -> StepCount {
+                self.step
+            }
 
-    /// Exact rewrite rule whose action committed this step.
-    pub(crate) const fn rule(self) -> RewriteRuleView<'program> {
-        self.rule
-    }
+            /// Exact rewrite rule whose action committed this step.
+            pub(crate) const fn rule(self) -> $rule<'program> {
+                self.rule
+            }
+        }
+    };
 }
 
-impl CommittedReturnRule<'_> {
-    /// Step number assigned by the runtime budget.
-    pub(crate) const fn step(&self) -> StepCount {
-        self.step
-    }
+/// Implements shared accessors for committed return rules.
+macro_rules! impl_committed_return_rule {
+    ($committed:ident, $rule:ident) => {
+        impl $committed<'_> {
+            /// Step number assigned by the runtime budget.
+            pub(crate) const fn step(&self) -> StepCount {
+                self.step
+            }
+        }
+
+        impl<'program> $committed<'program> {
+            /// Exact return rule whose action committed this step.
+            pub(crate) const fn rule(&self) -> $rule<'program> {
+                self.rule
+            }
+
+            /// Borrowed return output payload from the committed parsed rule.
+            pub(crate) const fn output_view(&self) -> ReturnOutputView<'program> {
+                self.output_view
+            }
+
+            /// Consumes this committed return rule into its materialized output.
+            pub(crate) fn into_output(self) -> ReturnOutput {
+                self.output
+            }
+        }
+    };
 }
 
-impl<'program> CommittedReturnRule<'program> {
-    /// Exact return rule whose action committed this step.
-    pub(crate) const fn rule(&self) -> ReturnRuleView<'program> {
-        self.rule
-    }
-
-    /// Borrowed return output payload from the committed parsed rule.
-    pub(crate) const fn output_view(&self) -> ReturnOutputView<'program> {
-        self.output_view
-    }
-
-    /// Consumes this committed return rule into its materialized output.
-    pub(crate) fn into_output(self) -> ReturnOutput {
-        self.output
-    }
-}
+impl_committed_rewrite_rule!(CommittedAlwaysRewriteRule, AlwaysRewriteRuleView);
+impl_committed_rewrite_rule!(CommittedOnceRewriteRule, OnceRewriteRuleView);
+impl_committed_return_rule!(CommittedAlwaysReturnRule, AlwaysReturnRuleView);
+impl_committed_return_rule!(CommittedOnceReturnRule, OnceReturnRuleView);
 
 impl<'program, E: ExecutionPolicy> PreparedRuleStep<'program, '_, '_, E> {
     /// Commits the prepared runtime side effects.
@@ -158,25 +198,25 @@ impl<'program, E: ExecutionPolicy> PreparedRuleStep<'program, '_, '_, E> {
             Self::AlwaysRewrite(prepared) => {
                 let step = prepared.step.commit();
                 state.commit_rewrite(prepared.rewrite, scratch);
-                AppliedRule::Continued(CommittedRewriteRule {
+                AppliedRule::AlwaysRewritten(CommittedAlwaysRewriteRule {
                     step,
-                    rule: RewriteRuleView::Always(prepared.rule),
+                    rule: prepared.rule,
                 })
             }
             Self::OnceRewrite(prepared) => {
                 prepared.once_commit.commit();
                 let step = prepared.step.commit();
                 state.commit_rewrite(prepared.rewrite, scratch);
-                AppliedRule::Continued(CommittedRewriteRule {
+                AppliedRule::OnceRewritten(CommittedOnceRewriteRule {
                     step,
-                    rule: RewriteRuleView::Once(prepared.rule),
+                    rule: prepared.rule,
                 })
             }
             Self::AlwaysReturn(prepared) => {
                 let step = prepared.step.commit();
-                AppliedRule::Terminal(CommittedReturnRule {
+                AppliedRule::AlwaysReturned(CommittedAlwaysReturnRule {
                     step,
-                    rule: ReturnRuleView::Always(prepared.rule),
+                    rule: prepared.rule,
                     output_view: prepared.output_view,
                     output: prepared.output,
                 })
@@ -184,9 +224,9 @@ impl<'program, E: ExecutionPolicy> PreparedRuleStep<'program, '_, '_, E> {
             Self::OnceReturn(prepared) => {
                 prepared.once_commit.commit();
                 let step = prepared.step.commit();
-                AppliedRule::Terminal(CommittedReturnRule {
+                AppliedRule::OnceReturned(CommittedOnceReturnRule {
                     step,
-                    rule: ReturnRuleView::Once(prepared.rule),
+                    rule: prepared.rule,
                     output_view: prepared.output_view,
                     output: prepared.output,
                 })
