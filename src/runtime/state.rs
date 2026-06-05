@@ -47,65 +47,6 @@ impl State {
         scratch.store_previous_state(previous_state);
     }
 
-    /// Finds a match at the start of the current state.
-    pub(crate) fn starts_with_payload(&self, payload: &Payload) -> Option<StateMatch<'_>> {
-        match payload.needle() {
-            PayloadNeedle::Empty(needle) => StateMatch::at_start(needle.byte_count(), &self.bytes),
-            PayloadNeedle::NonEmpty(needle) => self.matches_payload_at(StateIndex::start(), needle),
-        }
-    }
-
-    /// Finds a match at the end of the current state.
-    pub(crate) fn ends_with_payload(&self, payload: &Payload) -> Option<StateMatch<'_>> {
-        match payload.needle() {
-            PayloadNeedle::Empty(needle) => StateMatch::at_end(needle.byte_count(), &self.bytes),
-            PayloadNeedle::NonEmpty(needle) => {
-                let start = StateIndex::ending_match_start(self.byte_count(), needle.byte_count())?;
-                self.matches_payload_at(start, needle)
-            }
-        }
-    }
-
-    /// Finds the leftmost match in the current state.
-    pub(crate) fn find_payload(&self, payload: &Payload) -> Option<StateMatch<'_>> {
-        match payload.needle() {
-            PayloadNeedle::Empty(needle) => StateMatch::at_start(needle.byte_count(), &self.bytes),
-            PayloadNeedle::NonEmpty(needle) => {
-                let last_start =
-                    StateIndex::ending_match_start(self.byte_count(), needle.byte_count())?;
-
-                for position in StateSearchRange::from_start_to(last_start) {
-                    let first_byte_matches =
-                        self.bytes.get(position.get()).copied().is_some_and(|byte| {
-                            byte.projection().matches_program_byte(needle.first_byte())
-                        });
-                    if !first_byte_matches {
-                        continue;
-                    }
-
-                    if let Some(state_match) = self.matches_payload_at(position, needle) {
-                        return Some(state_match);
-                    }
-                }
-                None
-            }
-        }
-    }
-
-    /// Checks whether a non-empty payload matches at a concrete state index.
-    fn matches_payload_at(
-        &self,
-        position: StateIndex,
-        needle: NonEmptyPayloadNeedle<'_>,
-    ) -> Option<StateMatch<'_>> {
-        let state_match = StateMatch::at_position(position, needle.byte_count(), &self.bytes)?;
-        let matches = state_match
-            .matched_bytes()
-            .zip(needle.program_bytes().iter().copied())
-            .all(|(actual, expected)| actual.projection().matches_program_byte(expected));
-        matches.then_some(state_match)
-    }
-
     /// Materializes this state as a public runtime-state snapshot.
     ///
     /// # Errors

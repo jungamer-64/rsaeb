@@ -368,14 +368,6 @@ fn match_rule_state<'state>(pattern: &RulePattern, state: &'state State) -> Rule
     }
 }
 
-/// Finds a rule pattern's match span in the current state.
-pub(crate) fn match_rule_pattern<'state>(
-    pattern: &RulePattern,
-    state: &'state State,
-) -> Option<StateMatch<'state>> {
-    find_match(state, pattern)
-}
-
 /// Finds this rule pattern's match span in the current state.
 fn find_match<'state>(state: &'state State, pattern: &RulePattern) -> Option<StateMatch<'state>> {
     match pattern.anchor() {
