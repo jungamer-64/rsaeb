@@ -130,33 +130,6 @@ impl ExecutableRuleCount {
     }
 }
 
-/// Number of parsed `(once)` rules.
-///
-/// This count is produced by parsed repeat behavior and remains
-/// distinct from the total executable rule count.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct OnceRuleCount {
-    /// Parsed rules that require per-run once availability.
-    value: usize,
-}
-
-impl OnceRuleCount {
-    /// ZERO boundary value.
-    pub(crate) const ZERO: Self = Self { value: 0 };
-
-    /// Parsed `(once)` rule count as a primitive value.
-    #[must_use]
-    pub const fn get(self) -> usize {
-        self.value
-    }
-
-    /// Returns the checked next once-rule count.
-    pub(crate) fn checked_next(self) -> Option<Self> {
-        let value = self.value.checked_add(1)?;
-        Some(Self { value })
-    }
-}
-
 /// Program-local position of a parsed rule in execution order.
 ///
 /// Rule positions are assigned after parsing removes blank/comment-only lines.

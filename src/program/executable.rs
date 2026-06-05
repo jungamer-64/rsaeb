@@ -5,7 +5,7 @@ use crate::error::{
 };
 use crate::execution::{BorrowedRuleAttemptCursor, BorrowedRunSession};
 use crate::input::AdmittedRun;
-use crate::inspect::{ExecutableRuleCount, OnceRuleCount, RuleView};
+use crate::inspect::{ExecutableRuleCount, RuleView};
 use crate::limits::StepCount;
 use crate::parser::parse_rules_into;
 use crate::policy::{ExecutionPolicy, ParsePolicy, RuleAttemptPolicy};
@@ -69,11 +69,6 @@ impl EmptyProgram {
     /// Builds a typed empty-program value.
     const fn new() -> Self {
         Self
-    }
-
-    /// Iterates over structured parsed-rule views.
-    pub fn rules<'rule>(self) -> core::iter::Empty<RuleView<'rule>> {
-        core::iter::empty()
     }
 
     /// Stabilizes admitted input for an empty program as a zero-step result.
@@ -147,12 +142,6 @@ impl ExecutableProgram {
     #[must_use]
     pub fn rule_count(&self) -> ExecutableRuleCount {
         self.rule_set.rule_count()
-    }
-
-    /// Returns the number of parsed `(once)` rules.
-    #[must_use]
-    pub fn once_rule_count(&self) -> OnceRuleCount {
-        self.rule_set.once_rule_count()
     }
 
     /// Iterates over structured parsed-rule views in execution order.
@@ -233,7 +222,6 @@ impl fmt::Debug for ExecutableProgram {
         formatter
             .debug_struct("ExecutableProgram")
             .field("rule_count", &self.rule_count())
-            .field("once_rule_count", &self.once_rule_count())
             .finish()
     }
 }

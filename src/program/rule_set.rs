@@ -62,13 +62,6 @@ pub(crate) enum RuntimeStoredRule<'program> {
     OnceReturn(OnceReturnRuleView<'program>, OnceRuleSlot),
 }
 
-/// Runtime availability slot assigned to one parsed once-only rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct OnceRuleSlot {
-    /// Zero-based slot in the per-run once-state table.
-    zero_based: usize,
-}
-
 /// Stored reusable rewrite rule.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct StoredAlwaysRewriteRule {
@@ -432,20 +425,6 @@ fn assign_once_slot(
         .checked_next()
         .ok_or_else(|| once_rule_count_overflow(line_number))?;
     Ok((slot, next_count))
-}
-
-impl OnceRuleSlot {
-    /// Builds the next slot from the current accepted once-rule count.
-    const fn from_next_count(count: OnceRuleCount) -> Self {
-        Self {
-            zero_based: count.get(),
-        }
-    }
-
-    /// Zero-based slot in a per-run once-state table.
-    pub(crate) const fn index(self) -> usize {
-        self.zero_based
-    }
 }
 
 impl<'program> StoredRuleRef<'program> {

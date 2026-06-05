@@ -230,10 +230,6 @@ impl StepLimit {
         self.value
     }
 
-    /// Checks whether another step may be reserved after the completed count.
-    pub(crate) const fn allows_next_after(self, completed_steps: StepCount) -> bool {
-        completed_steps.get() < self.value
-    }
 }
 
 /// Maximum number of executable rule-line attempts allowed in rule-attempt execution.
@@ -259,10 +255,6 @@ impl RuleAttemptLimit {
         self.value
     }
 
-    /// Checks whether another rule attempt may be reserved after the completed count.
-    pub(crate) const fn allows_next_after(self, completed_attempts: RuleAttemptCount) -> bool {
-        completed_attempts.get() < self.value
-    }
 }
 
 /// Maximum runtime state length in bytes.
