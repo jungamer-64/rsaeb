@@ -7,10 +7,13 @@ use crate::inspect::{
     AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView,
 };
 use crate::program::{ExecutableProgram, RuleScan, RuntimeStoredRule, StoredRuleRef};
-use crate::runtime::matcher::{MatchedRuleApplication, RuleAttempt, RuleAttemptMiss};
+use crate::runtime::matcher::{
+    MatchedRuleApplication, RuleAttempt, RuleAttemptMiss, attempt_always_return_rule,
+    attempt_always_rewrite_rule, attempt_once_return_rule, attempt_once_rewrite_rule,
+};
 use crate::runtime::state::State;
 
-/// Per-run ordinary execution table with parsed rules and runtime availability paired.
+/// Per-run ordinary execution table with parsed rules and once-cell state.
 #[derive(Debug)]
 pub(crate) struct RuntimeRuleTable<'program> {
     /// First runtime rule cell, preserving executable non-emptiness.
@@ -24,7 +27,7 @@ pub(crate) struct RuntimeRuleTable<'program> {
 pub(crate) enum RuntimeRuleSearch<'program, 'state, 'once> {
     /// A rule matched and carries the commit permit needed after success.
     Matched(MatchedRuleApplication<'program, 'state, 'once>),
-    /// No currently available rule matched the runtime state.
+    /// No reusable or fresh once-only rule matched the runtime state.
     Stable,
 }
 
@@ -145,12 +148,16 @@ struct RuntimeRulePassParts<'program> {
 enum RuntimeRuleCell<'program> {
     /// Reusable non-terminal rewrite rule.
     AlwaysRewrite(AlwaysRewriteRuntimeRuleCell<'program>),
-    /// Once-only non-terminal rewrite rule.
-    OnceRewrite(OnceRewriteRuntimeRuleCell<'program>),
+    /// Fresh once-only non-terminal rewrite rule.
+    FreshOnceRewrite(FreshOnceRewriteRuntimeRuleCell<'program>),
+    /// Consumed once-only non-terminal rewrite rule.
+    ConsumedOnceRewrite(ConsumedOnceRewriteRuntimeRuleCell<'program>),
     /// Reusable terminal return rule.
     AlwaysReturn(AlwaysReturnRuntimeRuleCell<'program>),
-    /// Once-only terminal return rule.
-    OnceReturn(OnceReturnRuntimeRuleCell<'program>),
+    /// Fresh once-only terminal return rule.
+    FreshOnceReturn(FreshOnceReturnRuntimeRuleCell<'program>),
+    /// Consumed once-only terminal return rule.
+    ConsumedOnceReturn(ConsumedOnceReturnRuntimeRuleCell<'program>),
 }
 
 /// Runtime cell for a reusable rewrite rule.
@@ -160,12 +167,70 @@ struct AlwaysRewriteRuntimeRuleCell<'program> {
     rule: AlwaysRewriteRuleView<'program>,
 }
 
+/// Runtime cell for a fresh once-only rewrite rule.
+#[derive(Debug)]
+struct FreshOnceRewriteRuntimeRuleCell<'program> {
+    /// Position-bearing parsed executable rule.
+    rule: OnceRewriteRuleView<'program>,
+}
+
+/// Runtime cell for a consumed once-only rewrite rule.
+#[derive(Debug)]
+struct ConsumedOnceRewriteRuntimeRuleCell<'program> {
+    /// Position-bearing parsed executable rule.
+    rule: OnceRewriteRuleView<'program>,
+}
+
 /// Runtime cell for a reusable return rule.
 #[derive(Debug)]
 struct AlwaysReturnRuntimeRuleCell<'program> {
     /// Position-bearing parsed executable rule.
     rule: AlwaysReturnRuleView<'program>,
 }
+
+/// Runtime cell for a fresh once-only return rule.
+#[derive(Debug)]
+struct FreshOnceReturnRuntimeRuleCell<'program> {
+    /// Position-bearing parsed executable rule.
+    rule: OnceReturnRuleView<'program>,
+}
+
+/// Runtime cell for a consumed once-only return rule.
+#[derive(Debug)]
+struct ConsumedOnceReturnRuntimeRuleCell<'program> {
+    /// Position-bearing parsed executable rule.
+    rule: OnceReturnRuleView<'program>,
+}
+
+/// Linear commit permit for a matched fresh once-only rewrite rule.
+#[derive(Debug)]
+pub(crate) struct OnceRewriteCommitPermit<'program, 'once> {
+    /// Runtime cell to consume if the prepared rewrite commits.
+    cell: &'once mut RuntimeRuleCell<'program>,
+    /// Rule witness used to rebuild the consumed cell variant.
+    rule: OnceRewriteRuleView<'program>,
+    /// Non-copy token that keeps this permit linear.
+    linearity: OnceRewriteCommitLinearity,
+}
+
+/// Linear commit permit for a matched fresh once-only return rule.
+#[derive(Debug)]
+pub(crate) struct OnceReturnCommitPermit<'program, 'once> {
+    /// Runtime cell to consume if the prepared return commits.
+    cell: &'once mut RuntimeRuleCell<'program>,
+    /// Rule witness used to rebuild the consumed cell variant.
+    rule: OnceReturnRuleView<'program>,
+    /// Non-copy token that keeps this permit linear.
+    linearity: OnceReturnCommitLinearity,
+}
+
+/// Non-copy marker carried by once-rewrite commit permits.
+#[derive(Debug)]
+struct OnceRewriteCommitLinearity;
+
+/// Non-copy marker carried by once-return commit permits.
+#[derive(Debug)]
+struct OnceReturnCommitLinearity;
 
 impl<'program> pass_state::Sealed for FirstContinuingRulePass<'program> {}
 impl<'program> RuntimeRulePassState<'program> for FirstContinuingRulePass<'program> {}
@@ -227,7 +292,7 @@ impl<'program> RuntimeRuleTable<'program> {
         })
     }
 
-    /// Finds the first currently available rule that matches `state`.
+    /// Finds the first reusable or fresh once-only rule that matches `state`.
     pub(crate) fn find_next_match<'state, 'once>(
         &'once mut self,
         state: &'state State,
@@ -506,17 +571,15 @@ impl<'program> RuntimeRuleCell<'program> {
             RuntimeStoredRule::AlwaysRewrite(rule) => {
                 Self::AlwaysRewrite(AlwaysRewriteRuntimeRuleCell { rule })
             }
-            RuntimeStoredRule::OnceRewrite(rule) => Self::OnceRewrite(OnceRewriteRuntimeRuleCell {
-                rule,
-                availability: RuntimeOnceAvailability::Fresh,
-            }),
+            RuntimeStoredRule::OnceRewrite(rule) => {
+                Self::FreshOnceRewrite(FreshOnceRewriteRuntimeRuleCell { rule })
+            }
             RuntimeStoredRule::AlwaysReturn(rule) => {
                 Self::AlwaysReturn(AlwaysReturnRuntimeRuleCell { rule })
             }
-            RuntimeStoredRule::OnceReturn(rule) => Self::OnceReturn(OnceReturnRuntimeRuleCell {
-                rule,
-                availability: RuntimeOnceAvailability::Fresh,
-            }),
+            RuntimeStoredRule::OnceReturn(rule) => {
+                Self::FreshOnceReturn(FreshOnceReturnRuntimeRuleCell { rule })
+            }
         }
     }
 
@@ -525,50 +588,25 @@ impl<'program> RuntimeRuleCell<'program> {
         &'once mut self,
         state: &'state State,
     ) -> RuleAttempt<'program, 'state, 'once> {
-        match self.target() {
-            RuntimeRuleTarget::Available(target) => match attempt_available_rule(target, state) {
-                AvailableRuleAttempt::Matched(matched) => RuleAttempt::Matched(matched),
-                AvailableRuleAttempt::StateMismatch(miss) => RuleAttempt::Missed(miss),
-            },
-            RuntimeRuleTarget::Consumed(rule) => RuleAttempt::Missed(rule.into_miss()),
-        }
-    }
-
-    /// Classifies this cell before runtime-state matching.
-    fn target<'once>(&'once mut self) -> RuntimeRuleTarget<'program, 'once> {
         match self {
-            Self::AlwaysRewrite(cell) => {
-                RuntimeRuleTarget::Available(AvailableRuntimeRule::AlwaysRewrite(
-                    AvailableAlwaysRewriteRuntimeRule { rule: cell.rule },
-                ))
+            Self::AlwaysRewrite(cell) => attempt_always_rewrite_rule(cell.rule, state),
+            Self::FreshOnceRewrite(cell) => {
+                let rule = cell.rule;
+                let commit = OnceRewriteCommitPermit::new(self, rule);
+                attempt_once_rewrite_rule(rule, commit, state)
             }
-            Self::OnceRewrite(cell) => match cell.availability {
-                RuntimeOnceAvailability::Fresh => RuntimeRuleTarget::Available(
-                    AvailableRuntimeRule::OnceRewrite(AvailableOnceRewriteRuntimeRule {
-                        rule: cell.rule,
-                        commit: OnceMatchPermit::new(&mut cell.availability),
-                    }),
-                ),
-                RuntimeOnceAvailability::Committed => {
-                    RuntimeRuleTarget::Consumed(ConsumedRuntimeRule::OnceRewrite(cell.rule))
-                }
-            },
-            Self::AlwaysReturn(cell) => {
-                RuntimeRuleTarget::Available(AvailableRuntimeRule::AlwaysReturn(
-                    AvailableAlwaysReturnRuntimeRule { rule: cell.rule },
-                ))
+            Self::ConsumedOnceRewrite(cell) => {
+                RuleAttempt::Missed(RuleAttemptMiss::once_rewrite_consumed(cell.rule))
             }
-            Self::OnceReturn(cell) => match cell.availability {
-                RuntimeOnceAvailability::Fresh => RuntimeRuleTarget::Available(
-                    AvailableRuntimeRule::OnceReturn(AvailableOnceReturnRuntimeRule {
-                        rule: cell.rule,
-                        commit: OnceMatchPermit::new(&mut cell.availability),
-                    }),
-                ),
-                RuntimeOnceAvailability::Committed => {
-                    RuntimeRuleTarget::Consumed(ConsumedRuntimeRule::OnceReturn(cell.rule))
-                }
-            },
+            Self::AlwaysReturn(cell) => attempt_always_return_rule(cell.rule, state),
+            Self::FreshOnceReturn(cell) => {
+                let rule = cell.rule;
+                let commit = OnceReturnCommitPermit::new(self, rule);
+                attempt_once_return_rule(rule, commit, state)
+            }
+            Self::ConsumedOnceReturn(cell) => {
+                RuleAttempt::Missed(RuleAttemptMiss::once_return_consumed(cell.rule))
+            }
         }
     }
 
@@ -577,22 +615,9 @@ impl<'program> RuntimeRuleCell<'program> {
         &'once mut self,
         state: &'state State,
     ) -> Option<MatchedRuleApplication<'program, 'state, 'once>> {
-        match self.target() {
-            RuntimeRuleTarget::Available(target) => match attempt_available_rule(target, state) {
-                AvailableRuleAttempt::Matched(matched) => Some(matched),
-                AvailableRuleAttempt::StateMismatch(_) => None,
-            },
-            RuntimeRuleTarget::Consumed(_) => None,
-        }
-    }
-}
-
-impl<'program> ConsumedRuntimeRule<'program> {
-    /// Projects this consumed once-only rule into a non-applying attempt.
-    const fn into_miss(self) -> RuleAttemptMiss<'program> {
-        match self {
-            Self::OnceRewrite(rule) => RuleAttemptMiss::once_rewrite_consumed(rule),
-            Self::OnceReturn(rule) => RuleAttemptMiss::once_return_consumed(rule),
+        match self.attempt(state) {
+            RuleAttempt::Matched(matched) => Some(matched),
+            RuleAttempt::Missed(_) => None,
         }
     }
 }
@@ -622,51 +647,61 @@ fn try_reserve_rule_queue<T>(
         .map_err(|_| AllocationError::reservation_failed(context, total_capacity))
 }
 
-impl<'program> AvailableAlwaysRewriteRuntimeRule<'program> {
-    /// Parsed reusable rewrite rule selected with no once state.
-    pub(crate) const fn rule(&self) -> AlwaysRewriteRuleView<'program> {
-        self.rule
-    }
-}
-
-impl<'program, 'once> AvailableOnceRewriteRuntimeRule<'program, 'once> {
-    /// Splits this available once target into its rule and linear commit permit.
-    pub(crate) fn into_parts(self) -> (OnceRewriteRuleView<'program>, OnceMatchPermit<'once>) {
-        (self.rule, self.commit)
-    }
-}
-
-impl<'program> AvailableAlwaysReturnRuntimeRule<'program> {
-    /// Parsed reusable return rule selected with no once state.
-    pub(crate) const fn rule(&self) -> AlwaysReturnRuleView<'program> {
-        self.rule
-    }
-}
-
-impl<'program, 'once> AvailableOnceReturnRuntimeRule<'program, 'once> {
-    /// Splits this available once target into its rule and linear commit permit.
-    pub(crate) fn into_parts(self) -> (OnceReturnRuleView<'program>, OnceMatchPermit<'once>) {
-        (self.rule, self.commit)
-    }
-}
-
-impl<'state> OnceMatchPermit<'state> {
-    /// Creates the commit permit after availability has been checked.
-    fn new(state: &'state mut RuntimeOnceAvailability) -> Self {
+impl<'program, 'once> OnceRewriteCommitPermit<'program, 'once> {
+    /// Creates the commit permit for a fresh once-only rewrite cell.
+    fn new(
+        cell: &'once mut RuntimeRuleCell<'program>,
+        rule: OnceRewriteRuleView<'program>,
+    ) -> Self {
         Self {
-            state,
-            linearity: OnceMatchPermitLinearity::new(),
+            cell,
+            rule,
+            linearity: OnceRewriteCommitLinearity::new(),
         }
     }
-}
 
-impl OnceMatchPermit<'_> {
-    /// Consumes this permit and marks the owning once-rule state as consumed.
+    /// Consumes this permit and marks the owning once-rewrite cell as consumed.
     pub(crate) fn commit(self) {
         let Self {
-            state,
+            cell,
+            rule,
             linearity: _linearity,
         } = self;
-        *state = RuntimeOnceAvailability::Committed;
+        *cell = RuntimeRuleCell::ConsumedOnceRewrite(ConsumedOnceRewriteRuntimeRuleCell { rule });
+    }
+}
+
+impl<'program, 'once> OnceReturnCommitPermit<'program, 'once> {
+    /// Creates the commit permit for a fresh once-only return cell.
+    fn new(cell: &'once mut RuntimeRuleCell<'program>, rule: OnceReturnRuleView<'program>) -> Self {
+        Self {
+            cell,
+            rule,
+            linearity: OnceReturnCommitLinearity::new(),
+        }
+    }
+
+    /// Consumes this permit and marks the owning once-return cell as consumed.
+    pub(crate) fn commit(self) {
+        let Self {
+            cell,
+            rule,
+            linearity: _linearity,
+        } = self;
+        *cell = RuntimeRuleCell::ConsumedOnceReturn(ConsumedOnceReturnRuntimeRuleCell { rule });
+    }
+}
+
+impl OnceRewriteCommitLinearity {
+    /// Creates the non-copy marker for one once-rewrite permit.
+    const fn new() -> Self {
+        Self
+    }
+}
+
+impl OnceReturnCommitLinearity {
+    /// Creates the non-copy marker for one once-return permit.
+    const fn new() -> Self {
+        Self
     }
 }

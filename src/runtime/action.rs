@@ -10,7 +10,7 @@ use crate::program::{ReturnOutput, ReturnOutputView};
 
 use super::budget::{RuntimeBudgetState, StepReservation};
 use super::matcher::MatchedRuleApplication;
-use super::once::OnceMatchPermit;
+use super::once::{OnceReturnCommitPermit, OnceRewriteCommitPermit};
 use super::rewrite::{PreparedRewrite, RewriteScratch};
 use super::state::State;
 
@@ -100,8 +100,8 @@ pub(crate) struct PreparedAlwaysRewriteRule<'program, 'budget, E: ExecutionPolic
 pub(crate) struct PreparedOnceRewriteRule<'program, 'once, 'budget, E: ExecutionPolicy> {
     /// Matched once-only rewrite rule.
     rule: OnceRewriteRuleView<'program>,
-    /// Once-state commit permit owned only by this matched once rule.
-    once_commit: OnceMatchPermit<'once>,
+    /// Once-rewrite commit permit owned only by this matched rule.
+    once_commit: OnceRewriteCommitPermit<'program, 'once>,
     /// Step reservation required before this rewrite can commit.
     step: StepReservation<'budget, E>,
     /// Runtime bytes ready to become the next state.
@@ -126,8 +126,8 @@ pub(crate) struct PreparedAlwaysReturnRule<'program, 'budget, E: ExecutionPolicy
 pub(crate) struct PreparedOnceReturnRule<'program, 'once, 'budget, E: ExecutionPolicy> {
     /// Matched once-only return rule.
     rule: OnceReturnRuleView<'program>,
-    /// Once-state commit permit owned only by this matched once rule.
-    once_commit: OnceMatchPermit<'once>,
+    /// Once-return commit permit owned only by this matched rule.
+    once_commit: OnceReturnCommitPermit<'program, 'once>,
     /// Step reservation required before this return can commit.
     step: StepReservation<'budget, E>,
     /// Borrowed return output payload from the matched parsed rule.

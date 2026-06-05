@@ -26,7 +26,7 @@ pub(super) struct ActiveRunCore<'program, E: ExecutionPolicy> {
     pub(super) scratch: RewriteScratch,
     /// Runtime limits and completed-step count.
     pub(super) budget: RuntimeBudgetState<E>,
-    /// Per-run executable rules paired with their runtime availability states.
+    /// Per-run executable rules with fresh/consumed once-cell variants.
     runtime_rules: RuntimeRuleTable<'program>,
 }
 
@@ -317,7 +317,7 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
     /// Consumes this session and advances it by one ordinary execution step.
     ///
     /// This is the only ordinary execution path that combines the parsed
-    /// program scan with the run-local rule availability state.
+    /// program scan with run-local once-cell state.
     ///
     /// # Errors
     ///
