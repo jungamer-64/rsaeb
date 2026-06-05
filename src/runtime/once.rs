@@ -42,24 +42,6 @@ pub(crate) struct RuntimeRulePass<'program, History, Tail> {
     tail: Tail,
 }
 
-/// Rule-attempt pass at the start of a scan.
-#[derive(Debug)]
-pub(crate) enum StartedRuntimeRulePass<'program> {
-    /// Started with a current rule that has successors.
-    Continuing(FirstContinuingRulePass<'program>),
-    /// Started with the final rule in the pass.
-    Final(FirstFinalRulePass<'program>),
-}
-
-/// Rule-attempt pass after at least one miss has committed.
-#[derive(Debug)]
-pub(crate) enum AfterMissRuntimeRulePass<'program> {
-    /// Current rule has successors and at least one earlier miss exists.
-    Continuing(AfterMissContinuingRulePass<'program>),
-    /// Current rule exhausts the pass and at least one earlier miss exists.
-    Final(AfterMissFinalRulePass<'program>),
-}
-
 /// Newly started rule-attempt pass paired with its per-run once-state table.
 #[derive(Debug)]
 pub(crate) struct StartedRuntimeRuleTable<'program> {

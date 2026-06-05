@@ -83,30 +83,6 @@ pub(super) struct AttemptSession<
     pub(super) attempt_budget: RuleAttemptBudgetState<A>,
 }
 
-/// Newly started rule-attempt session classified by pass shape.
-pub(super) enum AttemptSessionCursor<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
-    /// Started with a current rule that has successors.
-    Continuing(ContinuingAttemptSession<'program, E, A>),
-    /// Started with the final rule in the pass.
-    Final(FinalAttemptSession<'program, E, A>),
-}
-
-/// Continuing rule-attempt session classified by miss history.
-pub(super) enum ContinuingAttemptSession<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
-    /// Continuing pass that has not missed any earlier rule in this scan.
-    First(AttemptSession<'program, E, A, FirstContinuingRulePass<'program>>),
-    /// Continuing pass after at least one miss.
-    AfterMiss(AttemptSession<'program, E, A, AfterMissContinuingRulePass<'program>>),
-}
-
-/// Final rule-attempt session classified by miss history.
-pub(super) enum FinalAttemptSession<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
-    /// Final pass that has not missed any earlier rule in this scan.
-    First(AttemptSession<'program, E, A, FirstFinalRulePass<'program>>),
-    /// Final pass after at least one miss.
-    AfterMiss(AttemptSession<'program, E, A, AfterMissFinalRulePass<'program>>),
-}
-
 /// Terminal rule-attempt state after the cursor can no longer resume.
 pub(super) struct TerminalAttemptSession<'program> {
     /// Borrowed parsed program.
