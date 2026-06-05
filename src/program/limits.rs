@@ -230,6 +230,29 @@ impl StepLimit {
         self.value
     }
 
+    /// Admits the next committed step after the supplied completed count.
+    pub(crate) fn admit_next_after(self, completed_steps: StepCount) -> Option<StepCountPermit> {
+        if completed_steps.get() >= self.value {
+            return None;
+        }
+        Some(StepCountPermit {
+            next_step: completed_steps.checked_next()?,
+        })
+    }
+}
+
+/// Permit proving a next committed step fits the execution budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StepCountPermit {
+    /// Step count admitted by the limit.
+    next_step: StepCount,
+}
+
+impl StepCountPermit {
+    /// Step count admitted by the execution limit.
+    pub(crate) const fn step(self) -> StepCount {
+        self.next_step
+    }
 }
 
 /// Maximum number of executable rule-line attempts allowed in rule-attempt execution.
@@ -255,6 +278,32 @@ impl RuleAttemptLimit {
         self.value
     }
 
+    /// Admits the next rule attempt after the supplied completed count.
+    pub(crate) fn admit_next_after(
+        self,
+        completed_attempts: RuleAttemptCount,
+    ) -> Option<RuleAttemptCountPermit> {
+        if completed_attempts.get() >= self.value {
+            return None;
+        }
+        Some(RuleAttemptCountPermit {
+            next_attempt: completed_attempts.checked_next()?,
+        })
+    }
+}
+
+/// Permit proving a next rule attempt fits the rule-attempt budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuleAttemptCountPermit {
+    /// Rule-attempt count admitted by the limit.
+    next_attempt: RuleAttemptCount,
+}
+
+impl RuleAttemptCountPermit {
+    /// Rule-attempt count admitted by the attempt limit.
+    pub(crate) const fn attempt(self) -> RuleAttemptCount {
+        self.next_attempt
+    }
 }
 
 /// Maximum runtime state length in bytes.

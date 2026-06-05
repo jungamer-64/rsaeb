@@ -8,8 +8,8 @@ use crate::runtime::action::{AppliedRule, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
 use crate::runtime::once::{
     AfterMissContinuingRulePass, AfterMissFinalRulePass, FirstContinuingRulePass,
-    FirstFinalRulePass, RuntimeOnceStates, RuntimeRulePassState, RuntimeRuleSearch,
-    RuntimeRuleTable, StartedRuntimeRulePass,
+    FirstFinalRulePass, RuntimeRulePassState, RuntimeRuleSearch, RuntimeRuleTable,
+    StartedRuntimeRulePass,
 };
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
@@ -39,8 +39,6 @@ pub(super) struct AttemptRunCore<E: ExecutionPolicy, Pass> {
     pub(super) budget: RuntimeBudgetState<E>,
     /// Rule-attempt pass that owns current target and remaining scan state.
     pub(super) runtime_rules: Pass,
-    /// Per-run once-rule availability states indexed by topology-assigned slots.
-    pub(super) once_states: RuntimeOnceStates,
 }
 
 /// Terminal runtime state after active execution can no longer resume.
@@ -192,7 +190,7 @@ impl<'program, E: ExecutionPolicy> ActiveRunCore<'program, E> {
 
 impl<E: ExecutionPolicy, Pass> AttemptRunCore<E, Pass> {
     /// Builds the mutable rule-attempt runtime core from a typed pass.
-    fn new(runtime_rules: Pass, once_states: RuntimeOnceStates, admitted: AdmittedRun<E>) -> Self {
+    fn new(runtime_rules: Pass, admitted: AdmittedRun<E>) -> Self {
         let (input, budget) = admitted.into_runtime_parts();
         let state = State::from_input(input);
         Self {
@@ -200,7 +198,6 @@ impl<E: ExecutionPolicy, Pass> AttemptRunCore<E, Pass> {
             scratch: RewriteScratch::new(),
             budget,
             runtime_rules,
-            once_states,
         }
     }
 
@@ -210,14 +207,12 @@ impl<E: ExecutionPolicy, Pass> AttemptRunCore<E, Pass> {
         scratch: RewriteScratch,
         budget: RuntimeBudgetState<E>,
         runtime_rules: Pass,
-        once_states: RuntimeOnceStates,
     ) -> Self {
         Self {
             state,
             scratch,
             budget,
             runtime_rules,
-            once_states,
         }
     }
 
@@ -424,11 +419,10 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy, Pass: RuntimeRulePassSt
         program: &'program ExecutableProgram,
         admitted: AdmittedRun<E>,
         pass: Pass,
-        once_states: RuntimeOnceStates,
     ) -> Self {
         Self {
             program,
-            core: AttemptRunCore::new(pass, once_states, admitted),
+            core: AttemptRunCore::new(pass, admitted),
             attempt_budget: RuleAttemptBudgetState::new(),
         }
     }
@@ -474,21 +468,14 @@ where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
-    let (runtime_rules, once_states) = runtime_rules.into_parts();
+    let runtime_rules = runtime_rules.into_pass();
     match runtime_rules {
-        StartedRuntimeRulePass::Continuing(pass) => {
-            AttemptSessionCursor::Continuing(ContinuingAttemptSession::First(
-                AttemptSession::from_pass(program, admitted, pass, once_states),
-            ))
-        }
-        StartedRuntimeRulePass::Final(pass) => {
-            AttemptSessionCursor::Final(FinalAttemptSession::First(AttemptSession::from_pass(
-                program,
-                admitted,
-                pass,
-                once_states,
-            )))
-        }
+        StartedRuntimeRulePass::Continuing(pass) => AttemptSessionCursor::Continuing(
+            ContinuingAttemptSession::First(AttemptSession::from_pass(program, admitted, pass)),
+        ),
+        StartedRuntimeRulePass::Final(pass) => AttemptSessionCursor::Final(
+            FinalAttemptSession::First(AttemptSession::from_pass(program, admitted, pass)),
+        ),
     }
 }
 

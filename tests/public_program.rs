@@ -6,7 +6,7 @@ mod support;
 
 use rsaeb::error::{EmptyProgramParseError, ExecutableProgramParseError};
 use rsaeb::input::AdmittedRun;
-use rsaeb::inspect::OnceRuleCount;
+use rsaeb::inspect::RuleView;
 use rsaeb::policy::{DefaultParsePolicy, ExecutionPolicy, StaticParsePolicy};
 use rsaeb::program::{EmptyProgram, ExecutableProgram, RunOutcome, RunResult};
 use runtime_support::{
@@ -120,13 +120,10 @@ fn construction_parse_policy_does_not_parameterize_program_values() -> TestResul
 
     let default: ExecutableProgram = ExecutableProgram::parse_text::<DefaultParsePolicy>("a=b")?;
     let tight: ExecutableProgram = ExecutableProgram::parse_text::<TightParse>("a=b")?;
-    let empty: EmptyProgram = EmptyProgram::parse_text::<TightParse>("# empty")?;
+    let _empty: EmptyProgram = EmptyProgram::parse_text::<TightParse>("# empty")?;
 
     ensure_eq!(default.rule_count(), tight.rule_count())?;
-    ensure_matches(
-        empty.rules().next().is_none(),
-        "expected no rules for empty program",
-    )
+    Ok(())
 }
 
 /// # Errors
@@ -184,8 +181,14 @@ fn program_values_are_reusable_across_runs() -> TestResult {
     expect_stable_bytes(&first, b"bc")?;
     expect_stable_bytes(&second, b"bc")?;
     ensure_eq!(program.rule_count().get(), 2)?;
-    let once_rules: OnceRuleCount = program.once_rule_count();
-    ensure_eq!(once_rules.get(), 1)
+    let first_rule = program
+        .rules()
+        .next()
+        .ok_or(TestFailure::message("expected first parsed rule"))?;
+    ensure_matches(
+        matches!(first_rule, RuleView::OnceRewrite(_)),
+        "expected once rewrite rule shape",
+    )
 }
 
 /// # Errors

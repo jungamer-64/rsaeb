@@ -10,7 +10,7 @@ use crate::error::{
 };
 use crate::inspect::{
     AlwaysReturnRuleView, AlwaysRewriteRuleView, ExecutableRuleCount, OnceReturnRuleView,
-    OnceRewriteRuleView, OnceRuleCount, RuleCount, RulePosition, RuleView,
+    OnceRewriteRuleView, RuleCount, RulePosition, RuleView,
 };
 use crate::limits::RuleLimit;
 use crate::rule::{ParsedRule, ReturnRule, RewriteRule};
@@ -25,8 +25,6 @@ pub(crate) struct ExecutableRuleSet {
     remaining: Vec<StoredRule>,
     /// Non-zero executable-rule count assigned by this topology.
     rule_count: ExecutableRuleCount,
-    /// Dense count of once-only executable rules assigned by this topology.
-    once_rule_count: OnceRuleCount,
 }
 
 /// Executable rule stored with topology-derived witnesses.
@@ -54,12 +52,12 @@ pub(crate) struct StoredRuleRef<'program> {
 pub(crate) enum RuntimeStoredRule<'program> {
     /// Reusable non-terminal rewrite rule.
     AlwaysRewrite(AlwaysRewriteRuleView<'program>),
-    /// Once-only non-terminal rewrite rule and its dense once slot.
-    OnceRewrite(OnceRewriteRuleView<'program>, OnceRuleSlot),
+    /// Once-only non-terminal rewrite rule.
+    OnceRewrite(OnceRewriteRuleView<'program>),
     /// Reusable terminal return rule.
     AlwaysReturn(AlwaysReturnRuleView<'program>),
-    /// Once-only terminal return rule and its dense once slot.
-    OnceReturn(OnceReturnRuleView<'program>, OnceRuleSlot),
+    /// Once-only terminal return rule.
+    OnceReturn(OnceReturnRuleView<'program>),
 }
 
 /// Stored reusable rewrite rule.
@@ -76,8 +74,6 @@ pub(crate) struct StoredAlwaysRewriteRule {
 pub(crate) struct StoredOnceRewriteRule {
     /// Execution-order position assigned by the executable topology.
     position: RulePosition,
-    /// Dense once-state slot assigned by the executable topology.
-    slot: OnceRuleSlot,
     /// Positionless parsed rule payload.
     rule: RewriteRule,
 }
@@ -96,18 +92,14 @@ pub(crate) struct StoredAlwaysReturnRule {
 pub(crate) struct StoredOnceReturnRule {
     /// Execution-order position assigned by the executable topology.
     position: RulePosition,
-    /// Dense once-state slot assigned by the executable topology.
-    slot: OnceRuleSlot,
     /// Positionless parsed rule payload.
     rule: ReturnRule,
 }
 
-/// Stored rule plus the next once-rule count after assignment.
+/// Stored rule with topology-derived witnesses.
 struct AssignedStoredRule {
     /// Stored executable rule with topology witnesses.
     rule: StoredRule,
-    /// Once-rule count after accepting this rule.
-    once_rule_count: OnceRuleCount,
 }
 
 /// Borrowed executable rule scan minted from one non-empty parsed rule table.
@@ -188,13 +180,11 @@ impl RuleSink for ExecutableRuleSetBuilder {
             Self::Empty => {
                 let attempted_count = RuleCount::new(1);
                 ensure_rule_limit(attempted_count, limit, line_number)?;
-                let assigned =
-                    StoredRule::assign_topology(rule, RulePosition::FIRST, OnceRuleCount::ZERO)?;
+                let assigned = StoredRule::assign_topology(rule, RulePosition::FIRST);
                 *self = Self::NonEmpty(ExecutableRuleSet {
                     first: assigned.rule,
                     remaining: Vec::new(),
                     rule_count: ExecutableRuleCount::ONE,
-                    once_rule_count: assigned.once_rule_count,
                 });
             }
             Self::NonEmpty(rule_set) => {
@@ -208,8 +198,7 @@ impl RuleSink for ExecutableRuleSetBuilder {
                 let assigned = StoredRule::assign_topology(
                     rule,
                     RulePosition::from_executable_count(executable_count),
-                    rule_set.once_rule_count,
-                )?;
+                );
                 let remaining_capacity = attempted_count
                     .get()
                     .checked_sub(1)
@@ -232,7 +221,6 @@ impl RuleSink for ExecutableRuleSetBuilder {
                     ParseError::at_line(line_number, ParseErrorKind::Allocation(error))
                 })?;
                 rule_set.rule_count = executable_count;
-                rule_set.once_rule_count = assigned.once_rule_count;
             }
         }
         Ok(())
@@ -276,14 +264,13 @@ fn ensure_rule_limit(
     limit: RuleLimit,
     line_number: SourceLineNumber,
 ) -> Result<(), ParseError> {
-    if limit.admit(attempted_count).is_some() {
-        Ok(())
-    } else {
-        Err(ParseError::at_line(
+    let _rule_count_permit = limit.admit(attempted_count).ok_or_else(|| {
+        ParseError::at_line(
             line_number,
             ParseErrorKind::Limit(ParseLimitError::rules(limit, attempted_count)),
-        ))
-    }
+        )
+    })?;
+    Ok(())
 }
 
 /// Reports that topology count growth exceeded the platform representation.
@@ -296,25 +283,10 @@ fn rule_count_overflow(line_number: SourceLineNumber) -> ParseError {
     )
 }
 
-/// Reports that dense once-slot growth exceeded the platform representation.
-fn once_rule_count_overflow(line_number: SourceLineNumber) -> ParseError {
-    ParseError::at_line(
-        line_number,
-        ParseErrorKind::Allocation(AllocationError::capacity_overflow(
-            AllocationContext::ProgramRuleTable,
-        )),
-    )
-}
-
 impl ExecutableRuleSet {
     /// Total executable rules derived from this non-empty table's topology.
     pub(crate) const fn rule_count(&self) -> ExecutableRuleCount {
         self.rule_count
-    }
-
-    /// Public count of parsed `(once)` rules derived from concrete variants.
-    pub(crate) const fn once_rule_count(&self) -> OnceRuleCount {
-        self.once_rule_count
     }
 
     /// Iterates executable rules in execution order.
@@ -333,48 +305,20 @@ impl ExecutableRuleSet {
 
 impl StoredRule {
     /// Assigns topology witnesses to one parser-produced rule.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ParseError` if assigning a dense once slot would exceed the
-    /// platform count representation.
-    fn assign_topology(
-        rule: ParsedRule,
-        position: RulePosition,
-        once_rule_count: OnceRuleCount,
-    ) -> Result<AssignedStoredRule, ParseError> {
-        let line_number = rule.line_number();
+    fn assign_topology(rule: ParsedRule, position: RulePosition) -> AssignedStoredRule {
         match rule {
-            ParsedRule::AlwaysRewrite(rule) => Ok(AssignedStoredRule {
+            ParsedRule::AlwaysRewrite(rule) => AssignedStoredRule {
                 rule: Self::AlwaysRewrite(StoredAlwaysRewriteRule { position, rule }),
-                once_rule_count,
-            }),
-            ParsedRule::OnceRewrite(rule) => {
-                let (slot, once_rule_count) = assign_once_slot(once_rule_count, line_number)?;
-                Ok(AssignedStoredRule {
-                    rule: Self::OnceRewrite(StoredOnceRewriteRule {
-                        position,
-                        slot,
-                        rule,
-                    }),
-                    once_rule_count,
-                })
-            }
-            ParsedRule::AlwaysReturn(rule) => Ok(AssignedStoredRule {
+            },
+            ParsedRule::OnceRewrite(rule) => AssignedStoredRule {
+                rule: Self::OnceRewrite(StoredOnceRewriteRule { position, rule }),
+            },
+            ParsedRule::AlwaysReturn(rule) => AssignedStoredRule {
                 rule: Self::AlwaysReturn(StoredAlwaysReturnRule { position, rule }),
-                once_rule_count,
-            }),
-            ParsedRule::OnceReturn(rule) => {
-                let (slot, once_rule_count) = assign_once_slot(once_rule_count, line_number)?;
-                Ok(AssignedStoredRule {
-                    rule: Self::OnceReturn(StoredOnceReturnRule {
-                        position,
-                        slot,
-                        rule,
-                    }),
-                    once_rule_count,
-                })
-            }
+            },
+            ParsedRule::OnceReturn(rule) => AssignedStoredRule {
+                rule: Self::OnceReturn(StoredOnceReturnRule { position, rule }),
+            },
         }
     }
 
@@ -394,37 +338,18 @@ impl StoredRule {
             Self::AlwaysRewrite(rule) => RuntimeStoredRule::AlwaysRewrite(
                 AlwaysRewriteRuleView::new(rule.position, &rule.rule),
             ),
-            Self::OnceRewrite(rule) => RuntimeStoredRule::OnceRewrite(
-                OnceRewriteRuleView::new(rule.position, &rule.rule),
-                rule.slot,
-            ),
+            Self::OnceRewrite(rule) => {
+                RuntimeStoredRule::OnceRewrite(OnceRewriteRuleView::new(rule.position, &rule.rule))
+            }
             Self::AlwaysReturn(rule) => RuntimeStoredRule::AlwaysReturn(AlwaysReturnRuleView::new(
                 rule.position,
                 &rule.rule,
             )),
-            Self::OnceReturn(rule) => RuntimeStoredRule::OnceReturn(
-                OnceReturnRuleView::new(rule.position, &rule.rule),
-                rule.slot,
-            ),
+            Self::OnceReturn(rule) => {
+                RuntimeStoredRule::OnceReturn(OnceReturnRuleView::new(rule.position, &rule.rule))
+            }
         }
     }
-}
-
-/// Assigns the next dense once slot and advances the count witness.
-///
-/// # Errors
-///
-/// Returns `ParseError` if advancing the once-rule count would exceed the
-/// platform count representation.
-fn assign_once_slot(
-    count: OnceRuleCount,
-    line_number: SourceLineNumber,
-) -> Result<(OnceRuleSlot, OnceRuleCount), ParseError> {
-    let slot = OnceRuleSlot::from_next_count(count);
-    let next_count = count
-        .checked_next()
-        .ok_or_else(|| once_rule_count_overflow(line_number))?;
-    Ok((slot, next_count))
 }
 
 impl<'program> StoredRuleRef<'program> {

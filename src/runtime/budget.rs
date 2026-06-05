@@ -5,7 +5,9 @@ use crate::error::{
 };
 use crate::limits::{RuleAttemptCount, RuleAttemptLimit, StepCount};
 use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
-use crate::program::limits::{ReturnOutputBytePermit, RuntimeStateBytePermit};
+use crate::program::limits::{
+    ReturnOutputBytePermit, RuleAttemptCountPermit, RuntimeStateBytePermit, StepCountPermit,
+};
 use core::marker::PhantomData;
 
 /// Execution budgets plus the number of committed execution steps.
@@ -31,8 +33,8 @@ pub(crate) struct RuleAttemptBudgetState<A: RuleAttemptPolicy> {
 pub(crate) struct StepReservation<'budget, E: ExecutionPolicy> {
     /// Budget state borrowed until the reservation is either committed or dropped.
     budget: &'budget mut RuntimeBudgetState<E>,
-    /// Step count to publish when the rule application commits.
-    next_step: StepCount,
+    /// Admitted step count to publish when the rule application commits.
+    permit: StepCountPermit,
 }
 
 /// Borrow-tied next rule-attempt reservation.
@@ -40,8 +42,8 @@ pub(crate) struct StepReservation<'budget, E: ExecutionPolicy> {
 pub(crate) struct RuleAttemptReservation<'budget, A: RuleAttemptPolicy> {
     /// Attempt budget borrowed until the reservation is either committed or dropped.
     budget: &'budget mut RuleAttemptBudgetState<A>,
-    /// Rule-attempt count to publish when the rule line is consumed.
-    next_attempt: RuleAttemptCount,
+    /// Admitted rule-attempt count to publish when the rule line is consumed.
+    permit: RuleAttemptCountPermit,
 }
 
 impl<E: ExecutionPolicy> RuntimeBudgetState<E> {
@@ -99,11 +101,11 @@ impl<E: ExecutionPolicy> RuntimeBudgetState<E> {
         state_len: RuntimeStateByteCount,
     ) -> Result<StepReservation<'_, E>, RunStepError> {
         let limit = E::STEP_LIMIT;
-        let next_step = reserve_next_step(limit, self.completed_steps, state_len)?;
+        let permit = reserve_next_step(limit, self.completed_steps, state_len)?;
 
         Ok(StepReservation {
             budget: self,
-            next_step,
+            permit,
         })
     }
 }
@@ -111,8 +113,9 @@ impl<E: ExecutionPolicy> RuntimeBudgetState<E> {
 impl<E: ExecutionPolicy> StepReservation<'_, E> {
     /// Publishes the reserved step count.
     pub(crate) fn commit(self) -> StepCount {
-        self.budget.completed_steps = self.next_step;
-        self.next_step
+        let step = self.permit.step();
+        self.budget.completed_steps = step;
+        step
     }
 }
 
@@ -140,12 +143,12 @@ impl<A: RuleAttemptPolicy> RuleAttemptBudgetState<A> {
         &mut self,
         state_len: RuntimeStateByteCount,
     ) -> Result<RuleAttemptReservation<'_, A>, RuleAttemptStepError> {
-        let next_attempt =
+        let permit =
             reserve_next_attempt(A::RULE_ATTEMPT_LIMIT, self.completed_attempts, state_len)?;
 
         Ok(RuleAttemptReservation {
             budget: self,
-            next_attempt,
+            permit,
         })
     }
 }
@@ -153,8 +156,9 @@ impl<A: RuleAttemptPolicy> RuleAttemptBudgetState<A> {
 impl<A: RuleAttemptPolicy> RuleAttemptReservation<'_, A> {
     /// Publishes the reserved rule-attempt count.
     pub(crate) fn commit(self) -> RuleAttemptCount {
-        self.budget.completed_attempts = self.next_attempt;
-        self.next_attempt
+        let attempt = self.permit.attempt();
+        self.budget.completed_attempts = attempt;
+        attempt
     }
 }
 
@@ -168,13 +172,9 @@ fn reserve_next_step(
     limit: crate::limits::StepLimit,
     completed_count: StepCount,
     state_len: RuntimeStateByteCount,
-) -> Result<StepCount, RunStepError> {
-    if !limit.allows_next_after(completed_count) {
-        return Err(StepLimitError::new(limit, completed_count, state_len).into());
-    }
-
-    completed_count
-        .checked_next()
+) -> Result<StepCountPermit, RunStepError> {
+    limit
+        .admit_next_after(completed_count)
         .ok_or_else(|| StepLimitError::new(limit, completed_count, state_len).into())
 }
 
@@ -188,12 +188,8 @@ fn reserve_next_attempt(
     limit: RuleAttemptLimit,
     completed_count: RuleAttemptCount,
     state_len: RuntimeStateByteCount,
-) -> Result<RuleAttemptCount, RuleAttemptStepError> {
-    if !limit.allows_next_after(completed_count) {
-        return Err(RuleAttemptLimitError::new(limit, completed_count, state_len).into());
-    }
-
-    completed_count
-        .checked_next()
+) -> Result<RuleAttemptCountPermit, RuleAttemptStepError> {
+    limit
+        .admit_next_after(completed_count)
         .ok_or_else(|| RuleAttemptLimitError::new(limit, completed_count, state_len).into())
 }

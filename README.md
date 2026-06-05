@@ -92,8 +92,8 @@ outside the interpreter and pass already-loaded bytes into typed boundaries.
 its resumable cursor is tied to the executable rule table. The rule-attempt
 cursor must be matched as continuing or final before stepping, so a final rule
 cannot be confused with a missed rule that still has a successor. `EmptyProgram`
-exposes only inspection and `.stabilize(admitted)`, which materializes the
-admitted input as a zero-step stable result.
+exposes only `.stabilize(admitted)`, which materializes the admitted input as a
+zero-step stable result.
 
 Successful rewrite outcomes expose `inspect::RewriteRuleView`, while successful
 return outcomes expose `inspect::ReturnRuleView`. General `inspect::RuleView`
@@ -102,9 +102,9 @@ action provenance of a committed outcome. Trace events carry the same boundary
 directly through `Initial`, `Rewritten`, and `Returned` variants.
 
 Executable rule counts are non-zero by type, and parsed rule positions are
-stored topology witnesses rather than iterator-derived numbers. `(once)` rules
-receive dense parser-assigned slots that each run consumes through its own
-runtime availability table.
+stored topology witnesses rather than iterator-derived numbers. `(once)` is
+represented by concrete rule variants, and each runtime rule cell owns the
+availability state for its parsed rule during one execution.
 
 The exact typestate names, transition variants, tracing events, and error variants
 are documented in rustdoc.
@@ -377,9 +377,9 @@ payload inspection materializes explicitly, and snapshot tracing has its own
 byte limit. During execution, the active state and rewrite scratch buffer remain
 separate typed buffers until a successful continuation step commits.
 
-`(once)` rules are recorded in the parsed rule table. Each execution allocates
-per-rule runtime state aligned with that table, and only a committed application
-can consume a rule's one-run availability.
+`(once)` rules are recorded as concrete parsed rule variants. Each execution
+builds runtime rule cells with rule-local availability, and only a committed
+application can consume a rule's one-run availability.
 
 ## `no_std + alloc` Boundary
 

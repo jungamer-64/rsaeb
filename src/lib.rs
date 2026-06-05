@@ -16,7 +16,7 @@
 //!
 //! - [`program::EmptyProgram::parse_text`] and
 //!   [`program::EmptyProgram::parse_bytes`] accept syntactically valid source only
-//!   when it contains no executable rules. Empty programs expose inspection and
+//!   when it contains no executable rules. Empty programs expose
 //!   [`program::EmptyProgram::stabilize`] only.
 //! - [`program::ExecutableProgram::parse_text`] and
 //!   [`program::ExecutableProgram::parse_bytes`] accept syntactically valid source
@@ -24,10 +24,10 @@
 //!   stepwise execution, and rule-attempt execution exist only on this type.
 //!
 //! `(once)` repeat intent and right-side action shape are parsed into the rule
-//! variant itself. Program topology assigns rule positions and dense once-rule
-//! slots once at parse time; every run builds its own slot-indexed availability
-//! table, so consumed once rules are filtered before matching and once-state
-//! mismatch is not a public runtime error class.
+//! variant itself. Program topology assigns rule positions, while each run owns
+//! rule-local `(once)` availability inside its runtime rule cells. Consumed once
+//! rules are filtered before ordinary matching and reported as typed rule-attempt
+//! misses, so once-state mismatch is not a public runtime error class.
 //!
 //! # API map
 //!
@@ -214,6 +214,23 @@
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let empty = EmptyProgram::parse_text::<DefaultParsePolicy>("# empty")?;
 //!     let _ = empty.rule_count();
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::OnceRuleCount;
+//!
+//! fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::policy::DefaultParsePolicy;
+//! use rsaeb::program::EmptyProgram;
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let empty = EmptyProgram::parse_text::<DefaultParsePolicy>("# empty")?;
+//!     let _ = empty.rules();
 //!     Ok(())
 //! }
 //! ```

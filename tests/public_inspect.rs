@@ -2,7 +2,7 @@
 
 mod support;
 
-use rsaeb::inspect::{ExecutableRuleCount, OnceRuleCount, RewriteActionView, RuleAnchor, RuleView};
+use rsaeb::inspect::{ExecutableRuleCount, RewriteActionView, RuleAnchor, RuleView};
 use rsaeb::policy::DefaultParsePolicy;
 use rsaeb::program::ExecutableProgram;
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
@@ -78,8 +78,11 @@ fn inspect_topology_derives_positions_and_counts_across_blank_lines() -> TestRes
         .ok_or(TestFailure::message("expected second topology rule"))?;
 
     ensure_eq!(inspected.rule_count().get(), 2)?;
-    ensure_eq!(inspected.once_rule_count().get(), 1)?;
     ensure_matches(rules.next().is_none(), "expected exactly two rules")?;
+    ensure_matches(
+        matches!(first, RuleView::OnceRewrite(_)),
+        "expected first rule to carry once rewrite shape",
+    )?;
     ensure_eq!(first.position().get(), 1)?;
     ensure_eq!(first.line_number().get(), 3)?;
     ensure_eq!(second.position().get(), 2)?;
@@ -107,7 +110,6 @@ fn inspect_all_repeat_and_action_rule_shapes() -> TestResult {
     let rules = inspected.rules().collect::<Vec<_>>();
 
     ensure_eq!(inspected.rule_count().get(), 4)?;
-    ensure_eq!(inspected.once_rule_count().get(), 2)?;
     ensure_eq!(rules.len(), 4)?;
 
     let always_rewrite = rules
@@ -218,8 +220,6 @@ fn inspect_canonical_source_reparses_to_same_public_rule_view() -> TestResult {
         .ok_or(TestFailure::message("expected reparsed rule"))?;
 
     ensure_eq!(reparsed.rule_count().get(), 1)?;
-    let once_rules: OnceRuleCount = reparsed.once_rule_count();
-    ensure_eq!(once_rules.get(), 1)?;
     ensure_eq!(reparsed_rule.anchor(), RuleAnchor::Start)?;
     ensure_eq!(
         reparsed_rule.lhs().materialize()?.as_slice(),

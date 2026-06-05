@@ -85,10 +85,6 @@ pub enum BorrowedContinuingRuleAttemptTransition<'program, E: ExecutionPolicy, A
 ///
 /// This transition type has no missed-continuation variant because a
 /// non-applying final rule exhausts the pass and terminates as stable.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "rule-attempt transitions own continuation typestates without hidden allocation"
-)]
 pub enum BorrowedFinalRuleAttemptTransition<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     /// The rule pass completed without a match.
     Stable(BorrowedRuleAttemptStableRun<'program>),

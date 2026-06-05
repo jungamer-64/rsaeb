@@ -65,14 +65,13 @@ impl<'code> PayloadSyntax<'code> {
             line_number,
             payload_kind,
         };
-        if limit.admit(syntax.byte_count()).is_some() {
-            return Ok(syntax);
-        }
-
-        Err(ParseError::at_line(
-            line_number,
-            ParseErrorKind::Limit(ParseLimitError::payload(limit, syntax.byte_count())),
-        ))
+        let _payload_permit = limit.admit(syntax.byte_count()).ok_or_else(|| {
+            ParseError::at_line(
+                line_number,
+                ParseErrorKind::Limit(ParseLimitError::payload(limit, syntax.byte_count())),
+            )
+        })?;
+        Ok(syntax)
     }
 
     /// Returns the typed byte count.

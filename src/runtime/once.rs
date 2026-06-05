@@ -9,9 +9,9 @@ use crate::inspect::{
 use crate::program::{ExecutableProgram, RuleScan, RuntimeStoredRule, StoredRuleRef};
 use crate::runtime::matcher::{
     AvailableRuleAttempt, MatchedRuleApplication, RuleAttempt, RuleAttemptMiss,
-    attempt_available_rule, match_rule_state,
+    attempt_available_rule,
 };
-use crate::runtime::state::{State, StatePayloadMatch};
+use crate::runtime::state::State;
 
 /// Per-run ordinary execution table with parsed rules and runtime availability paired.
 #[derive(Debug)]
@@ -20,8 +20,6 @@ pub(crate) struct RuntimeRuleTable<'program> {
     first: RuntimeRuleCell<'program>,
     /// Remaining runtime rule cells in parser execution order.
     remaining: Vec<RuntimeRuleCell<'program>>,
-    /// Per-run once-rule availability states indexed by topology-assigned slots.
-    once_states: RuntimeOnceStates,
 }
 
 /// Outcome of scanning the ordinary runtime rule table.
@@ -67,8 +65,6 @@ pub(crate) enum AfterMissRuntimeRulePass<'program> {
 pub(crate) struct StartedRuntimeRuleTable<'program> {
     /// Rule-attempt pass classified by current-tail shape.
     pass: StartedRuntimeRulePass<'program>,
-    /// Per-run once-rule availability states indexed by topology-assigned slots.
-    once_states: RuntimeOnceStates,
 }
 
 /// Continuing pass whose current target is still the first rule in the scan.
@@ -147,20 +143,6 @@ struct RuntimeRulePassParts<'program> {
     attempted: VecDeque<RuntimeRuleCell<'program>>,
 }
 
-/// Per-run once-rule availability table.
-#[derive(Debug)]
-pub(crate) struct RuntimeOnceStates {
-    /// Runtime availability states in dense parser-assigned slot order.
-    states: Vec<RuntimeOnceAvailability>,
-}
-
-/// Runtime-local once slot admitted from parser topology.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct RuntimeOnceSlot {
-    /// Zero-based slot in this run's once-state table.
-    index: usize,
-}
-
 /// One executable rule classified by its run-local availability shape.
 #[derive(Debug)]
 enum RuntimeRuleCell<'program> {
@@ -186,8 +168,8 @@ struct AlwaysRewriteRuntimeRuleCell<'program> {
 struct OnceRewriteRuntimeRuleCell<'program> {
     /// Position-bearing parsed executable rule.
     rule: OnceRewriteRuleView<'program>,
-    /// Runtime-local once-state slot for this rule.
-    slot: RuntimeOnceSlot,
+    /// Runtime-local availability for this parsed rule.
+    availability: RuntimeOnceAvailability,
 }
 
 /// Runtime cell for a reusable return rule.
@@ -202,8 +184,8 @@ struct AlwaysReturnRuntimeRuleCell<'program> {
 struct OnceReturnRuntimeRuleCell<'program> {
     /// Position-bearing parsed executable rule.
     rule: OnceReturnRuleView<'program>,
-    /// Runtime-local once-state slot for this rule.
-    slot: RuntimeOnceSlot,
+    /// Runtime-local availability for this parsed rule.
+    availability: RuntimeOnceAvailability,
 }
 
 /// Runtime availability state for one parsed `(once)` executable rule.
@@ -235,42 +217,6 @@ enum RuntimeRuleTarget<'program, 'once> {
     Available(AvailableRuntimeRule<'program, 'once>),
     /// The rule has already committed during this runtime invocation.
     Consumed(ConsumedRuntimeRule<'program>),
-}
-
-/// Rule observation before a once commit permit is minted.
-#[derive(Debug)]
-enum ObservedRuleAttempt<'program, 'state> {
-    /// The rule matched the current runtime state.
-    Matched(ObservedRuleMatch<'program, 'state>),
-    /// The rule did not apply.
-    Missed(RuleAttemptMiss<'program>),
-}
-
-/// Matched rule data before once side effects are reserved.
-#[derive(Debug)]
-enum ObservedRuleMatch<'program, 'state> {
-    /// Matched reusable rewrite rule.
-    AlwaysRewrite(
-        AlwaysRewriteRuleView<'program>,
-        crate::runtime::state::StateMatch<'state>,
-    ),
-    /// Matched once-only rewrite rule.
-    OnceRewrite(
-        OnceRewriteRuleView<'program>,
-        crate::runtime::state::StateMatch<'state>,
-        RuntimeOnceSlot,
-    ),
-    /// Matched reusable return rule.
-    AlwaysReturn(
-        AlwaysReturnRuleView<'program>,
-        crate::runtime::state::StateMatch<'state>,
-    ),
-    /// Matched once-only return rule.
-    OnceReturn(
-        OnceReturnRuleView<'program>,
-        crate::runtime::state::StateMatch<'state>,
-        RuntimeOnceSlot,
-    ),
 }
 
 impl<'program> pass_state::Sealed for FirstContinuingRulePass<'program> {}
@@ -347,93 +293,9 @@ impl OnceMatchPermitLinearity {
 }
 
 impl<'program> StartedRuntimeRuleTable<'program> {
-    /// Splits the started pass from its run-local once-state table.
-    pub(crate) fn into_parts(self) -> (StartedRuntimeRulePass<'program>, RuntimeOnceStates) {
-        (self.pass, self.once_states)
-    }
-}
-
-impl RuntimeOnceStates {
-    /// Builds fresh once-rule availability states for one runtime invocation.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AllocationError` if the once-state table cannot be allocated.
-    fn new(program: &ExecutableProgram) -> Result<Self, AllocationError> {
-        let count = program.once_rule_count();
-        let mut states = Vec::new();
-        try_reserve_total_exact(
-            &mut states,
-            RequestedCapacity::new(count.get()),
-            AllocationContext::RuntimeRuleCell,
-        )?;
-        for _ in 0..count.get() {
-            try_push(
-                &mut states,
-                RuntimeOnceAvailability::Fresh,
-                AllocationContext::RuntimeRuleCell,
-            )?;
-        }
-        Ok(Self { states })
-    }
-
-    /// Returns whether the slot is still fresh in this run.
-    fn is_fresh(&self, slot: RuntimeOnceSlot) -> bool {
-        self.states
-            .get(slot.index)
-            .is_some_and(|state| matches!(state, RuntimeOnceAvailability::Fresh))
-    }
-
-    /// Mints a commit permit for a fresh runtime-local once slot.
-    fn commit_permit(&mut self, slot: RuntimeOnceSlot) -> Option<OnceMatchPermit<'_>> {
-        let state = self.states.get_mut(slot.index)?;
-        if matches!(*state, RuntimeOnceAvailability::Fresh) {
-            Some(OnceMatchPermit::new(state))
-        } else {
-            None
-        }
-    }
-}
-
-impl RuntimeOnceSlot {
-    /// Binds a parser-assigned once slot to this run's once-state table.
-    const fn from_topology(slot: crate::program::OnceRuleSlot) -> Self {
-        Self {
-            index: slot.index(),
-        }
-    }
-}
-
-impl<'program, 'state> ObservedRuleMatch<'program, 'state> {
-    /// Converts an observed match into a prepared runtime application.
-    fn into_application<'once>(
-        self,
-        once_states: &'once mut RuntimeOnceStates,
-    ) -> Option<MatchedRuleApplication<'program, 'state, 'once>> {
-        match self {
-            Self::AlwaysRewrite(rule, state_match) => {
-                Some(MatchedRuleApplication::always_rewrite(rule, state_match))
-            }
-            Self::OnceRewrite(rule, state_match, slot) => {
-                let commit = once_states.commit_permit(slot)?;
-                Some(MatchedRuleApplication::once_rewrite(
-                    rule,
-                    state_match,
-                    commit,
-                ))
-            }
-            Self::AlwaysReturn(rule, state_match) => {
-                Some(MatchedRuleApplication::always_return(rule, state_match))
-            }
-            Self::OnceReturn(rule, state_match, slot) => {
-                let commit = once_states.commit_permit(slot)?;
-                Some(MatchedRuleApplication::once_return(
-                    rule,
-                    state_match,
-                    commit,
-                ))
-            }
-        }
+    /// Moves out the typed started pass.
+    pub(crate) fn into_pass(self) -> StartedRuntimeRulePass<'program> {
+        self.pass
     }
 }
 
@@ -447,7 +309,7 @@ impl<'program> RuntimeRuleTable<'program> {
     pub(crate) fn from_program(
         program: &'program ExecutableProgram,
     ) -> Result<Self, AllocationError> {
-        Self::from_rule_scan(program.rule_scan(), RuntimeOnceStates::new(program)?)
+        Self::from_rule_scan(program.rule_scan())
     }
 
     /// Builds a run-local ordinary execution table from the executable rule table.
@@ -456,10 +318,7 @@ impl<'program> RuntimeRuleTable<'program> {
     ///
     /// Returns `AllocationError` if the per-execution rule table cannot be
     /// allocated.
-    fn from_rule_scan(
-        rules: RuleScan<'program>,
-        once_states: RuntimeOnceStates,
-    ) -> Result<Self, AllocationError> {
+    fn from_rule_scan(rules: RuleScan<'program>) -> Result<Self, AllocationError> {
         let (first, remaining_rules) = rules.split_first();
         let mut remaining = Vec::new();
         try_reserve_total_exact(
@@ -478,7 +337,6 @@ impl<'program> RuntimeRuleTable<'program> {
         Ok(Self {
             first: RuntimeRuleCell::new(first),
             remaining,
-            once_states,
         })
     }
 
@@ -487,25 +345,13 @@ impl<'program> RuntimeRuleTable<'program> {
         &'once mut self,
         state: &'state State,
     ) -> RuntimeRuleSearch<'program, 'state, 'once> {
-        match self.first.observe(&self.once_states, state) {
-            ObservedRuleAttempt::Matched(matched) => {
-                return match matched.into_application(&mut self.once_states) {
-                    Some(matched) => RuntimeRuleSearch::Matched(matched),
-                    None => RuntimeRuleSearch::Stable,
-                };
-            }
-            ObservedRuleAttempt::Missed(_missed) => {}
+        if let Some(matched) = self.first.find_match(state) {
+            return RuntimeRuleSearch::Matched(matched);
         }
 
-        for cell in &self.remaining {
-            match cell.observe(&self.once_states, state) {
-                ObservedRuleAttempt::Matched(matched) => {
-                    return match matched.into_application(&mut self.once_states) {
-                        Some(matched) => RuntimeRuleSearch::Matched(matched),
-                        None => RuntimeRuleSearch::Stable,
-                    };
-                }
-                ObservedRuleAttempt::Missed(_missed) => {}
+        for cell in &mut self.remaining {
+            if let Some(matched) = cell.find_match(state) {
+                return RuntimeRuleSearch::Matched(matched);
             }
         }
 
@@ -523,10 +369,8 @@ impl<'program> StartedRuntimeRulePass<'program> {
     pub(crate) fn from_program(
         program: &'program ExecutableProgram,
     ) -> Result<StartedRuntimeRuleTable<'program>, AllocationError> {
-        let once_states = RuntimeOnceStates::new(program)?;
         Ok(StartedRuntimeRuleTable {
             pass: Self::from_rule_scan(program.rule_scan())?,
-            once_states,
         })
     }
 
@@ -567,10 +411,9 @@ impl<'program, History, Tail> RuntimeRulePass<'program, History, Tail> {
     /// Attempts the current target against the current runtime state.
     pub(crate) fn attempt_current<'state, 'once>(
         &'once mut self,
-        once_states: &'once mut RuntimeOnceStates,
         state: &'state State,
     ) -> RuleAttempt<'program, 'state, 'once> {
-        self.current.attempt(once_states, state)
+        self.current.attempt(state)
     }
 }
 
@@ -776,31 +619,26 @@ impl<'program> RuntimeRuleCell<'program> {
             RuntimeStoredRule::AlwaysRewrite(rule) => {
                 Self::AlwaysRewrite(AlwaysRewriteRuntimeRuleCell { rule })
             }
-            RuntimeStoredRule::OnceRewrite(rule, slot) => {
-                Self::OnceRewrite(OnceRewriteRuntimeRuleCell {
-                    rule,
-                    slot: RuntimeOnceSlot::from_topology(slot),
-                })
-            }
+            RuntimeStoredRule::OnceRewrite(rule) => Self::OnceRewrite(OnceRewriteRuntimeRuleCell {
+                rule,
+                availability: RuntimeOnceAvailability::Fresh,
+            }),
             RuntimeStoredRule::AlwaysReturn(rule) => {
                 Self::AlwaysReturn(AlwaysReturnRuntimeRuleCell { rule })
             }
-            RuntimeStoredRule::OnceReturn(rule, slot) => {
-                Self::OnceReturn(OnceReturnRuntimeRuleCell {
-                    rule,
-                    slot: RuntimeOnceSlot::from_topology(slot),
-                })
-            }
+            RuntimeStoredRule::OnceReturn(rule) => Self::OnceReturn(OnceReturnRuntimeRuleCell {
+                rule,
+                availability: RuntimeOnceAvailability::Fresh,
+            }),
         }
     }
 
     /// Attempts this rule cell against the current runtime state.
     fn attempt<'state, 'once>(
-        &self,
-        once_states: &'once mut RuntimeOnceStates,
+        &'once mut self,
         state: &'state State,
     ) -> RuleAttempt<'program, 'state, 'once> {
-        match self.target(once_states) {
+        match self.target() {
             RuntimeRuleTarget::Available(target) => match attempt_available_rule(target, state) {
                 AvailableRuleAttempt::Matched(matched) => RuleAttempt::Matched(matched),
                 AvailableRuleAttempt::StateMismatch(miss) => RuleAttempt::Missed(miss),
@@ -809,116 +647,55 @@ impl<'program> RuntimeRuleCell<'program> {
         }
     }
 
-    /// Observes this rule cell without minting a once commit permit.
-    fn observe<'state>(
-        &self,
-        once_states: &RuntimeOnceStates,
-        state: &'state State,
-    ) -> ObservedRuleAttempt<'program, 'state> {
-        match self {
-            Self::AlwaysRewrite(cell) => {
-                let rule = cell.rule;
-                match match_rule_state(rule.into_rule().pattern(), state) {
-                    StatePayloadMatch::Matched(state_match) => ObservedRuleAttempt::Matched(
-                        ObservedRuleMatch::AlwaysRewrite(rule, state_match),
-                    ),
-                    StatePayloadMatch::Mismatched => {
-                        ObservedRuleAttempt::Missed(RuleAttemptMiss::state_mismatch(
-                            crate::inspect::RuleView::AlwaysRewrite(rule),
-                        ))
-                    }
-                }
-            }
-            Self::OnceRewrite(cell) => {
-                let rule = cell.rule;
-                if !once_states.is_fresh(cell.slot) {
-                    return ObservedRuleAttempt::Missed(RuleAttemptMiss::once_rewrite_consumed(
-                        rule,
-                    ));
-                }
-                match match_rule_state(rule.into_rule().pattern(), state) {
-                    StatePayloadMatch::Matched(state_match) => ObservedRuleAttempt::Matched(
-                        ObservedRuleMatch::OnceRewrite(rule, state_match, cell.slot),
-                    ),
-                    StatePayloadMatch::Mismatched => {
-                        ObservedRuleAttempt::Missed(RuleAttemptMiss::state_mismatch(
-                            crate::inspect::RuleView::OnceRewrite(rule),
-                        ))
-                    }
-                }
-            }
-            Self::AlwaysReturn(cell) => {
-                let rule = cell.rule;
-                match match_rule_state(rule.into_rule().pattern(), state) {
-                    StatePayloadMatch::Matched(state_match) => ObservedRuleAttempt::Matched(
-                        ObservedRuleMatch::AlwaysReturn(rule, state_match),
-                    ),
-                    StatePayloadMatch::Mismatched => {
-                        ObservedRuleAttempt::Missed(RuleAttemptMiss::state_mismatch(
-                            crate::inspect::RuleView::AlwaysReturn(rule),
-                        ))
-                    }
-                }
-            }
-            Self::OnceReturn(cell) => {
-                let rule = cell.rule;
-                if !once_states.is_fresh(cell.slot) {
-                    return ObservedRuleAttempt::Missed(RuleAttemptMiss::once_return_consumed(
-                        rule,
-                    ));
-                }
-                match match_rule_state(rule.into_rule().pattern(), state) {
-                    StatePayloadMatch::Matched(state_match) => ObservedRuleAttempt::Matched(
-                        ObservedRuleMatch::OnceReturn(rule, state_match, cell.slot),
-                    ),
-                    StatePayloadMatch::Mismatched => ObservedRuleAttempt::Missed(
-                        RuleAttemptMiss::state_mismatch(crate::inspect::RuleView::OnceReturn(rule)),
-                    ),
-                }
-            }
-        }
-    }
-
     /// Classifies this cell before runtime-state matching.
-    fn target<'once>(
-        &self,
-        once_states: &'once mut RuntimeOnceStates,
-    ) -> RuntimeRuleTarget<'program, 'once> {
+    fn target<'once>(&'once mut self) -> RuntimeRuleTarget<'program, 'once> {
         match self {
             Self::AlwaysRewrite(cell) => {
                 RuntimeRuleTarget::Available(AvailableRuntimeRule::AlwaysRewrite(
                     AvailableAlwaysRewriteRuntimeRule { rule: cell.rule },
                 ))
             }
-            Self::OnceRewrite(cell) => {
-                if let Some(commit) = once_states.commit_permit(cell.slot) {
-                    RuntimeRuleTarget::Available(AvailableRuntimeRule::OnceRewrite(
-                        AvailableOnceRewriteRuntimeRule {
-                            rule: cell.rule,
-                            commit,
-                        },
-                    ))
-                } else {
+            Self::OnceRewrite(cell) => match cell.availability {
+                RuntimeOnceAvailability::Fresh => RuntimeRuleTarget::Available(
+                    AvailableRuntimeRule::OnceRewrite(AvailableOnceRewriteRuntimeRule {
+                        rule: cell.rule,
+                        commit: OnceMatchPermit::new(&mut cell.availability),
+                    }),
+                ),
+                RuntimeOnceAvailability::Committed => {
                     RuntimeRuleTarget::Consumed(ConsumedRuntimeRule::OnceRewrite(cell.rule))
                 }
-            }
+            },
             Self::AlwaysReturn(cell) => {
                 RuntimeRuleTarget::Available(AvailableRuntimeRule::AlwaysReturn(
                     AvailableAlwaysReturnRuntimeRule { rule: cell.rule },
                 ))
             }
-            Self::OnceReturn(cell) => {
-                if let Some(commit) = once_states.commit_permit(cell.slot) {
-                    RuntimeRuleTarget::Available(AvailableRuntimeRule::OnceReturn(
-                        AvailableOnceReturnRuntimeRule {
-                            rule: cell.rule,
-                            commit,
-                        },
-                    ))
-                } else {
+            Self::OnceReturn(cell) => match cell.availability {
+                RuntimeOnceAvailability::Fresh => RuntimeRuleTarget::Available(
+                    AvailableRuntimeRule::OnceReturn(AvailableOnceReturnRuntimeRule {
+                        rule: cell.rule,
+                        commit: OnceMatchPermit::new(&mut cell.availability),
+                    }),
+                ),
+                RuntimeOnceAvailability::Committed => {
                     RuntimeRuleTarget::Consumed(ConsumedRuntimeRule::OnceReturn(cell.rule))
                 }
-            }
+            },
+        }
+    }
+
+    /// Finds this rule as an ordinary execution match, skipping non-applying targets.
+    fn find_match<'state, 'once>(
+        &'once mut self,
+        state: &'state State,
+    ) -> Option<MatchedRuleApplication<'program, 'state, 'once>> {
+        match self.target() {
+            RuntimeRuleTarget::Available(target) => match attempt_available_rule(target, state) {
+                AvailableRuleAttempt::Matched(matched) => Some(matched),
+                AvailableRuleAttempt::StateMismatch(_) => None,
+            },
+            RuntimeRuleTarget::Consumed(_) => None,
         }
     }
 }

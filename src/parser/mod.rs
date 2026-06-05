@@ -64,12 +64,11 @@ fn ensure_source_within_limit<P: ParsePolicy>(
 ) -> Result<(), ParseError> {
     let attempted_len = SourceByteCount::new(source.as_bytes().len());
     let limit = P::SOURCE_BYTE_LIMIT;
-    if limit.admit(attempted_len).is_some() {
-        Ok(())
-    } else {
-        Err(ParseError::at_line(
+    let _source_permit = limit.admit(attempted_len).ok_or_else(|| {
+        ParseError::at_line(
             SourceLineNumber::ONE,
             ParseErrorKind::Limit(ParseLimitError::source(limit, attempted_len)),
-        ))
-    }
+        )
+    })?;
+    Ok(())
 }

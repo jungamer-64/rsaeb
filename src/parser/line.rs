@@ -47,15 +47,15 @@ impl<'source> RawSourceLine<'source> {
             .unwrap_or(self.bytes);
 
         let attempted_len = CodeLineByteCount::new(code_bytes.len());
-        if self.code_line_limit.admit(attempted_len).is_none() {
-            return Err(ParseError::at_line(
+        let _code_line_permit = self.code_line_limit.admit(attempted_len).ok_or_else(|| {
+            ParseError::at_line(
                 self.line_number,
                 ParseErrorKind::Limit(ParseLimitError::code_line(
                     self.code_line_limit,
                     attempted_len,
                 )),
-            ));
-        }
+            )
+        })?;
 
         if let Some((zero_based_column, rejected)) = code_bytes
             .iter()

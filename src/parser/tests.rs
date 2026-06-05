@@ -62,11 +62,8 @@ fn compacting_source_whitespace_and_comments_preserves_rule_domain() -> TestResu
 /// Returns `TestFailure` if empty code lines or comments become parsed rules.
 #[test]
 fn empty_code_lines_and_comments_do_not_become_rules() -> TestResult {
-    let program = parse_empty_program(" \t\r\n# comment\n")?;
-    ensure_matches(
-        program.rules().next().is_none(),
-        "expected no rules for empty program",
-    )
+    parse_empty_program(" \t\r\n# comment\n")?;
+    Ok(())
 }
 
 /// # Errors
