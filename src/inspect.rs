@@ -22,7 +22,9 @@
 //!     "(once)(start)a=(return)done",
 //! )?;
 //! let rule = executable.rules().next().ok_or("missing rule")?;
-//!
+//! let RuleView::OnceReturn(rule) = rule else {
+//!     return Err("expected once return rule".into());
+//! };
 //! if rule.position().get() != 1 {
 //!     return Err("unexpected rule position".into());
 //! }
@@ -32,15 +34,8 @@
 //! if rule.lhs().materialize()?.as_slice() != b"a" {
 //!     return Err("unexpected left side".into());
 //! }
-//! match rule {
-//!     RuleView::OnceReturn(return_rule) => {
-//!         if return_rule.output().materialize()?.as_slice() != b"done" {
-//!             return Err("unexpected return output".into());
-//!         }
-//!     }
-//!     RuleView::AlwaysRewrite(_)
-//!     | RuleView::OnceRewrite(_)
-//!     | RuleView::AlwaysReturn(_) => return Err("expected once return rule".into()),
+//! if rule.output().materialize()?.as_slice() != b"done" {
+//!     return Err("unexpected return output".into());
 //! }
 //! # Ok(())
 //! # }
@@ -133,8 +128,8 @@ impl ExecutableRuleCount {
 /// Program-local position of a parsed rule in execution order.
 ///
 /// Rule positions are assigned after parsing removes blank/comment-only lines.
-/// Use [`RuleView::line_number`] when diagnostics need the original source
-/// line instead.
+/// Use the concrete rule view's `line_number` method when diagnostics need the
+/// original source line instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RulePosition {
     /// One-based execution-order position.

@@ -1,7 +1,9 @@
 use crate::error::{
     LeftModifierKind, ParseErrorKind, ParseErrorLocation, PayloadKind, RightActionKind,
 };
-use crate::inspect::{RewriteActionView, RuleAnchor, RuleView};
+use crate::inspect::{
+    AlwaysRewriteRuleView, OnceRewriteRuleView, RewriteActionView, RuleAnchor, RuleView,
+};
 use crate::program::ExecutableProgram;
 use crate::test_support::{
     TestFailure, TestResult, ensure, ensure_eq, ensure_matches, expect_error_position,
@@ -24,6 +26,38 @@ fn expect_rule(
         .ok_or(TestFailure::message("expected parsed rule"))
 }
 
+/// Returns the expected reusable rewrite rule view.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if `rule` has another parsed rule shape.
+fn expect_always_rewrite_rule<'program>(
+    rule: RuleView<'program>,
+) -> Result<AlwaysRewriteRuleView<'program>, TestFailure> {
+    match rule {
+        RuleView::AlwaysRewrite(rule) => Ok(rule),
+        RuleView::OnceRewrite(_) | RuleView::AlwaysReturn(_) | RuleView::OnceReturn(_) => {
+            Err(TestFailure::message("expected always rewrite rule"))
+        }
+    }
+}
+
+/// Returns the expected once-only rewrite rule view.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if `rule` has another parsed rule shape.
+fn expect_once_rewrite_rule<'program>(
+    rule: RuleView<'program>,
+) -> Result<OnceRewriteRuleView<'program>, TestFailure> {
+    match rule {
+        RuleView::OnceRewrite(rule) => Ok(rule),
+        RuleView::AlwaysRewrite(_) | RuleView::AlwaysReturn(_) | RuleView::OnceReturn(_) => {
+            Err(TestFailure::message("expected once rewrite rule"))
+        }
+    }
+}
+
 /// Returns the parsed executable rule count.
 fn rule_count(program: &ExecutableProgram) -> usize {
     program.rule_count().get()
@@ -43,15 +77,21 @@ fn compacting_source_whitespace_and_comments_preserves_rule_domain() -> TestResu
 
     ensure_eq!(rule_count(&program), 3)?;
     ensure_eq!(
-        expect_rule(&program, 0)?.canonical_source()?.as_slice(),
+        expect_always_rewrite_rule(expect_rule(&program, 0)?)?
+            .canonical_source()?
+            .as_slice(),
         b"ab=bb".as_slice(),
     )?;
     ensure_eq!(
-        expect_rule(&program, 1)?.canonical_source()?.as_slice(),
+        expect_always_rewrite_rule(expect_rule(&program, 1)?)?
+            .canonical_source()?
+            .as_slice(),
         b"a=b".as_slice(),
     )?;
     ensure_eq!(
-        expect_rule(&program, 2)?.canonical_source()?.as_slice(),
+        expect_once_rewrite_rule(expect_rule(&program, 2)?)?
+            .canonical_source()?
+            .as_slice(),
         b"(once)(start)x=(end)y".as_slice(),
     )?;
     Ok(())
@@ -72,7 +112,7 @@ fn empty_code_lines_and_comments_do_not_become_rules() -> TestResult {
 #[test]
 fn comments_may_contain_non_utf8_bytes_because_source_is_byte_oriented() -> TestResult {
     let program = parse_program_bytes(b"a=b#\xff\xfe\n")?;
-    let rule = expect_rule(&program, 0)?;
+    let rule = expect_always_rewrite_rule(expect_rule(&program, 0)?)?;
 
     ensure_eq!(rule_count(&program), 1)?;
     ensure_eq!(rule.canonical_source()?.as_slice(), b"a=b".as_slice())
@@ -240,24 +280,19 @@ fn payload_and_left_modifier_errors_are_structured() -> TestResult {
 fn spaced_source_and_compact_source_parse_to_the_same_rule_view() -> TestResult {
     let compact = parse_program("(once)(start)a=(end)b")?;
     let spaced = parse_program("( once ) ( start ) a = ( end ) b # comment")?;
-    let compact_rule = expect_rule(&compact, 0)?;
-    let spaced_rule = expect_rule(&spaced, 0)?;
+    let compact_rule = expect_once_rewrite_rule(expect_rule(&compact, 0)?)?;
+    let spaced_rule = expect_once_rewrite_rule(expect_rule(&spaced, 0)?)?;
 
     ensure_eq!(rule_count(&compact), 1)?;
     ensure_eq!(rule_count(&spaced), 1)?;
     ensure_eq!(spaced_rule.anchor(), RuleAnchor::Start)?;
     ensure_eq!(spaced_rule.lhs().materialize()?.as_slice(), b"a".as_slice())?;
-    match spaced_rule {
-        RuleView::OnceRewrite(rewrite) => match rewrite.rewrite_action() {
-            RewriteActionView::MoveEnd(payload) => {
-                ensure_eq!(payload.materialize()?.as_slice(), b"b".as_slice())?;
-            }
-            RewriteActionView::Replace(_) | RewriteActionView::MoveStart(_) => {
-                return Err(TestFailure::message("expected move-end action"));
-            }
-        },
-        RuleView::AlwaysRewrite(_) | RuleView::AlwaysReturn(_) | RuleView::OnceReturn(_) => {
-            return Err(TestFailure::message("expected once rewrite rule"));
+    match spaced_rule.rewrite_action() {
+        RewriteActionView::MoveEnd(payload) => {
+            ensure_eq!(payload.materialize()?.as_slice(), b"b".as_slice())?;
+        }
+        RewriteActionView::Replace(_) | RewriteActionView::MoveStart(_) => {
+            return Err(TestFailure::message("expected move-end action"));
         }
     }
     ensure_eq!(

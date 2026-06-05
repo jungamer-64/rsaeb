@@ -197,11 +197,46 @@
 //! fn main() {}
 //! ```
 //!
+//! `RuleView` itself no longer exposes shape-neutral rule metadata. Match the
+//! concrete variant first, then use the concrete rule view:
+//!
 //! ```compile_fail
 //! use rsaeb::inspect::RuleView;
 //!
 //! fn invalid(rule: RuleView<'_>) {
-//!     let _ = rule.position().number();
+//!     let _ = rule.position();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleView;
+//!
+//! fn invalid(rule: RuleView<'_>) {
+//!     let _ = rule.line_number();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleView;
+//!
+//! fn invalid(rule: RuleView<'_>) {
+//!     let _ = rule.anchor();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleView;
+//!
+//! fn invalid(rule: RuleView<'_>) {
+//!     let _ = rule.lhs();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleView;
+//!
+//! fn invalid(rule: RuleView<'_>) {
+//!     let _ = rule.canonical_source();
 //! }
 //! ```
 //!
@@ -977,27 +1012,24 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>("( once ) ( start ) a = ( end ) b # comment")?;
 //! let rule = executable.rules().next().ok_or("missing parsed rule")?;
-//!
+//! let RuleView::OnceRewrite(rule) = rule else {
+//!     return Err("expected once rewrite rule".into());
+//! };
 //! if rule.anchor() != RuleAnchor::Start {
 //!     return Err("unexpected anchor".into());
 //! }
 //! if rule.lhs().materialize()?.as_slice() != b"a" {
 //!     return Err("unexpected left side".into());
 //! }
-//! match rule {
-//!     RuleView::OnceRewrite(rewrite) => match rewrite.rewrite_action() {
-//!         RewriteActionView::MoveEnd(payload) => {
-//!             if payload.materialize()?.as_slice() != b"b" {
-//!                 return Err("unexpected moved payload".into());
-//!             }
+//! match rule.rewrite_action() {
+//!     RewriteActionView::MoveEnd(payload) => {
+//!         if payload.materialize()?.as_slice() != b"b" {
+//!             return Err("unexpected moved payload".into());
 //!         }
-//!         RewriteActionView::Replace(_) | RewriteActionView::MoveStart(_) => {
-//!             return Err("expected move-end rewrite action".into());
-//!         }
-//!     },
-//!     RuleView::AlwaysRewrite(_)
-//!     | RuleView::AlwaysReturn(_)
-//!     | RuleView::OnceReturn(_) => return Err("expected once rewrite rule".into()),
+//!     }
+//!     RewriteActionView::Replace(_) | RewriteActionView::MoveStart(_) => {
+//!         return Err("expected move-end rewrite action".into());
+//!     }
 //! }
 //! # Ok(())
 //! # }

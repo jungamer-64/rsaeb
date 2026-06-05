@@ -4,7 +4,7 @@ use crate::error::{
 };
 use crate::execution::{BorrowedFailedRun, BorrowedStepTransition};
 use crate::input::{RuntimeInput, RuntimeInputSource};
-use crate::inspect::PayloadView;
+use crate::inspect::{PayloadView, RuleView};
 use crate::limits::{
     ReturnByteLimit, ReturnOutputByteCount, RuntimeInputByteCount, RuntimeInputByteLimit,
     RuntimeStateByteCount, RuntimeStateByteLimit, StepCount, StepLimit,
@@ -333,8 +333,11 @@ fn internal_code_and_runtime_bytes_are_distinct_domains() -> TestResult {
         .iter()
         .next()
         .ok_or(TestFailure::message("expected parsed rule"))?
-        .view()
-        .lhs();
+        .view();
+    let RuleView::AlwaysRewrite(rule) = payload else {
+        return Err(TestFailure::message("expected always rewrite rule"));
+    };
+    let payload = rule.lhs();
     let limits = DefaultInputRunPolicy::<10_000, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     let (input, _) = admitted_run(b"a=()# ", limits)?.into_runtime_parts();
     let state = State::from_input(input);

@@ -2,10 +2,77 @@
 
 mod support;
 
-use rsaeb::inspect::{ExecutableRuleCount, RewriteActionView, RuleAnchor, RuleView};
+use rsaeb::inspect::{
+    AlwaysReturnRuleView, AlwaysRewriteRuleView, ExecutableRuleCount, OnceReturnRuleView,
+    OnceRewriteRuleView, RewriteActionView, RuleAnchor, RuleView,
+};
 use rsaeb::policy::DefaultParsePolicy;
 use rsaeb::program::ExecutableProgram;
 use support::{TestFailure, TestResult, ensure_eq, ensure_matches, parse_program};
+
+/// Returns the expected reusable rewrite rule view.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if `rule` has another parsed rule shape.
+fn expect_always_rewrite_rule<'program>(
+    rule: RuleView<'program>,
+) -> Result<AlwaysRewriteRuleView<'program>, TestFailure> {
+    match rule {
+        RuleView::AlwaysRewrite(rule) => Ok(rule),
+        RuleView::OnceRewrite(_) | RuleView::AlwaysReturn(_) | RuleView::OnceReturn(_) => {
+            Err(TestFailure::message("expected always rewrite rule"))
+        }
+    }
+}
+
+/// Returns the expected once-only rewrite rule view.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if `rule` has another parsed rule shape.
+fn expect_once_rewrite_rule<'program>(
+    rule: RuleView<'program>,
+) -> Result<OnceRewriteRuleView<'program>, TestFailure> {
+    match rule {
+        RuleView::OnceRewrite(rule) => Ok(rule),
+        RuleView::AlwaysRewrite(_) | RuleView::AlwaysReturn(_) | RuleView::OnceReturn(_) => {
+            Err(TestFailure::message("expected once rewrite rule"))
+        }
+    }
+}
+
+/// Returns the expected reusable return rule view.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if `rule` has another parsed rule shape.
+fn expect_always_return_rule<'program>(
+    rule: RuleView<'program>,
+) -> Result<AlwaysReturnRuleView<'program>, TestFailure> {
+    match rule {
+        RuleView::AlwaysReturn(rule) => Ok(rule),
+        RuleView::AlwaysRewrite(_) | RuleView::OnceRewrite(_) | RuleView::OnceReturn(_) => {
+            Err(TestFailure::message("expected always return rule"))
+        }
+    }
+}
+
+/// Returns the expected once-only return rule view.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if `rule` has another parsed rule shape.
+fn expect_once_return_rule<'program>(
+    rule: RuleView<'program>,
+) -> Result<OnceReturnRuleView<'program>, TestFailure> {
+    match rule {
+        RuleView::OnceReturn(rule) => Ok(rule),
+        RuleView::AlwaysRewrite(_) | RuleView::OnceRewrite(_) | RuleView::AlwaysReturn(_) => {
+            Err(TestFailure::message("expected once return rule"))
+        }
+    }
+}
 
 /// # Errors
 ///
@@ -23,37 +90,29 @@ fn inspect_rule_views_expose_structured_public_data() -> TestResult {
     ensure_matches(rules.next().is_none(), "expected no extra rules")?;
 
     ensure_eq!(inspected.rule_count().get(), 2)?;
+    let first = expect_always_rewrite_rule(first)?;
     ensure_eq!(first.line_number().get(), 1)?;
     ensure_eq!(first.anchor(), RuleAnchor::Anywhere)?;
     ensure_eq!(first.lhs().materialize()?.as_slice(), b"a".as_slice())?;
-    match first {
-        RuleView::AlwaysRewrite(rewrite) => match rewrite.rewrite_action() {
-            RewriteActionView::Replace(payload) => {
-                ensure_eq!(payload.materialize()?.as_slice(), b"b".as_slice())?;
-            }
-            RewriteActionView::MoveStart(_) | RewriteActionView::MoveEnd(_) => {
-                return Err(TestFailure::message("expected replace action"));
-            }
-        },
-        RuleView::OnceRewrite(_) | RuleView::AlwaysReturn(_) | RuleView::OnceReturn(_) => {
-            return Err(TestFailure::message("expected always rewrite rule"));
+    match first.rewrite_action() {
+        RewriteActionView::Replace(payload) => {
+            ensure_eq!(payload.materialize()?.as_slice(), b"b".as_slice())?;
+        }
+        RewriteActionView::MoveStart(_) | RewriteActionView::MoveEnd(_) => {
+            return Err(TestFailure::message("expected replace action"));
         }
     }
     ensure_eq!(first.canonical_source()?.as_slice(), b"a=b".as_slice())?;
 
+    let second = expect_always_rewrite_rule(second)?;
     ensure_eq!(second.line_number().get(), 2)?;
     ensure_eq!(second.anchor(), RuleAnchor::Start)?;
-    match second {
-        RuleView::AlwaysRewrite(rewrite) => match rewrite.rewrite_action() {
-            RewriteActionView::MoveEnd(payload) => {
-                ensure_eq!(payload.materialize()?.as_slice(), b"d".as_slice())?;
-            }
-            RewriteActionView::Replace(_) | RewriteActionView::MoveStart(_) => {
-                return Err(TestFailure::message("expected move-end action"));
-            }
-        },
-        RuleView::OnceRewrite(_) | RuleView::AlwaysReturn(_) | RuleView::OnceReturn(_) => {
-            return Err(TestFailure::message("expected always rewrite rule"));
+    match second.rewrite_action() {
+        RewriteActionView::MoveEnd(payload) => {
+            ensure_eq!(payload.materialize()?.as_slice(), b"d".as_slice())?;
+        }
+        RewriteActionView::Replace(_) | RewriteActionView::MoveStart(_) => {
+            return Err(TestFailure::message("expected move-end action"));
         }
     }
     ensure_eq!(
@@ -79,10 +138,8 @@ fn inspect_topology_derives_positions_and_counts_across_blank_lines() -> TestRes
 
     ensure_eq!(inspected.rule_count().get(), 2)?;
     ensure_matches(rules.next().is_none(), "expected exactly two rules")?;
-    ensure_matches(
-        matches!(first, RuleView::OnceRewrite(_)),
-        "expected first rule to carry once rewrite shape",
-    )?;
+    let first = expect_once_rewrite_rule(first)?;
+    let second = expect_always_return_rule(second)?;
     ensure_eq!(first.position().get(), 1)?;
     ensure_eq!(first.line_number().get(), 3)?;
     ensure_eq!(second.position().get(), 2)?;
@@ -129,73 +186,53 @@ fn inspect_all_repeat_and_action_rule_shapes() -> TestResult {
         .copied()
         .ok_or(TestFailure::message("expected once return"))?;
 
+    let always_rewrite = expect_always_rewrite_rule(always_rewrite)?;
     ensure_eq!(
         always_rewrite.canonical_source()?.as_slice(),
         b"a=b".as_slice()
     )?;
-    match always_rewrite {
-        RuleView::AlwaysRewrite(rewrite) => match rewrite.rewrite_action() {
-            RewriteActionView::Replace(payload) => {
-                ensure_eq!(payload.materialize()?.as_slice(), b"b".as_slice())?;
-            }
-            RewriteActionView::MoveStart(_) | RewriteActionView::MoveEnd(_) => {
-                return Err(TestFailure::message("expected always rewrite"));
-            }
-        },
-        RuleView::OnceRewrite(_) | RuleView::AlwaysReturn(_) | RuleView::OnceReturn(_) => {
+    match always_rewrite.rewrite_action() {
+        RewriteActionView::Replace(payload) => {
+            ensure_eq!(payload.materialize()?.as_slice(), b"b".as_slice())?;
+        }
+        RewriteActionView::MoveStart(_) | RewriteActionView::MoveEnd(_) => {
             return Err(TestFailure::message("expected always rewrite"));
         }
     }
 
+    let once_rewrite = expect_once_rewrite_rule(once_rewrite)?;
     ensure_eq!(
         once_rewrite.canonical_source()?.as_slice(),
         b"(once)c=d".as_slice(),
     )?;
-    match once_rewrite {
-        RuleView::OnceRewrite(rewrite) => match rewrite.rewrite_action() {
-            RewriteActionView::Replace(payload) => {
-                ensure_eq!(payload.materialize()?.as_slice(), b"d".as_slice())?;
-            }
-            RewriteActionView::MoveStart(_) | RewriteActionView::MoveEnd(_) => {
-                return Err(TestFailure::message("expected once rewrite"));
-            }
-        },
-        RuleView::AlwaysRewrite(_) | RuleView::AlwaysReturn(_) | RuleView::OnceReturn(_) => {
+    match once_rewrite.rewrite_action() {
+        RewriteActionView::Replace(payload) => {
+            ensure_eq!(payload.materialize()?.as_slice(), b"d".as_slice())?;
+        }
+        RewriteActionView::MoveStart(_) | RewriteActionView::MoveEnd(_) => {
             return Err(TestFailure::message("expected once rewrite"));
         }
     }
 
+    let always_return = expect_always_return_rule(always_return)?;
     ensure_eq!(
         always_return.canonical_source()?.as_slice(),
         b"e=(return)ok".as_slice(),
     )?;
-    match always_return {
-        RuleView::AlwaysReturn(return_rule) => {
-            ensure_eq!(
-                return_rule.output().materialize()?.as_slice(),
-                b"ok".as_slice()
-            )?;
-        }
-        RuleView::AlwaysRewrite(_) | RuleView::OnceRewrite(_) | RuleView::OnceReturn(_) => {
-            return Err(TestFailure::message("expected always return"));
-        }
-    }
+    ensure_eq!(
+        always_return.output().materialize()?.as_slice(),
+        b"ok".as_slice()
+    )?;
 
+    let once_return = expect_once_return_rule(once_return)?;
     ensure_eq!(
         once_return.canonical_source()?.as_slice(),
         b"(once)f=(return)done".as_slice(),
     )?;
-    match once_return {
-        RuleView::OnceReturn(return_rule) => {
-            ensure_eq!(
-                return_rule.output().materialize()?.as_slice(),
-                b"done".as_slice()
-            )?;
-        }
-        RuleView::AlwaysRewrite(_) | RuleView::OnceRewrite(_) | RuleView::AlwaysReturn(_) => {
-            return Err(TestFailure::message("expected once return"));
-        }
-    }
+    ensure_eq!(
+        once_return.output().materialize()?.as_slice(),
+        b"done".as_slice()
+    )?;
 
     Ok(())
 }
@@ -211,6 +248,7 @@ fn inspect_canonical_source_reparses_to_same_public_rule_view() -> TestResult {
         .rules()
         .next()
         .ok_or(TestFailure::message("expected parsed rule"))?;
+    let rule = expect_once_rewrite_rule(rule)?;
     let canonical = rule.canonical_source()?;
 
     let reparsed = ExecutableProgram::parse_bytes::<DefaultParsePolicy>(canonical.as_slice())?;
@@ -218,6 +256,7 @@ fn inspect_canonical_source_reparses_to_same_public_rule_view() -> TestResult {
         .rules()
         .next()
         .ok_or(TestFailure::message("expected reparsed rule"))?;
+    let reparsed_rule = expect_once_rewrite_rule(reparsed_rule)?;
 
     ensure_eq!(reparsed.rule_count().get(), 1)?;
     ensure_eq!(reparsed_rule.anchor(), RuleAnchor::Start)?;
@@ -225,17 +264,12 @@ fn inspect_canonical_source_reparses_to_same_public_rule_view() -> TestResult {
         reparsed_rule.lhs().materialize()?.as_slice(),
         b"a".as_slice(),
     )?;
-    match reparsed_rule {
-        RuleView::OnceRewrite(rewrite) => match rewrite.rewrite_action() {
-            RewriteActionView::MoveEnd(payload) => {
-                ensure_eq!(payload.materialize()?.as_slice(), b"b".as_slice())?;
-            }
-            RewriteActionView::Replace(_) | RewriteActionView::MoveStart(_) => {
-                return Err(TestFailure::message("expected once move-end rewrite"));
-            }
-        },
-        RuleView::AlwaysRewrite(_) | RuleView::AlwaysReturn(_) | RuleView::OnceReturn(_) => {
-            return Err(TestFailure::message("expected once rewrite"));
+    match reparsed_rule.rewrite_action() {
+        RewriteActionView::MoveEnd(payload) => {
+            ensure_eq!(payload.materialize()?.as_slice(), b"b".as_slice())?;
+        }
+        RewriteActionView::Replace(_) | RewriteActionView::MoveStart(_) => {
+            return Err(TestFailure::message("expected once move-end rewrite"));
         }
     }
     ensure_eq!(
