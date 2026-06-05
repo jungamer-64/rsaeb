@@ -25,9 +25,10 @@
 //!
 //! `(once)` repeat intent and right-side action shape are parsed into the rule
 //! variant itself. Program topology assigns rule positions, while each run owns
-//! rule-local `(once)` availability inside its runtime rule cells. Consumed once
-//! rules are filtered before ordinary matching and reported as typed rule-attempt
-//! misses, so once-state mismatch is not a public runtime error class.
+//! fresh or consumed runtime rule cells for rule-local `(once)` availability.
+//! Consumed once rules are filtered before ordinary matching and reported as
+//! typed rule-attempt misses, so once-state mismatch is not a public runtime
+//! error class.
 //!
 //! # API map
 //!

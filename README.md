@@ -66,8 +66,8 @@ Empty-target parsing rejects the first fully parsed executable rule immediately.
 `RuntimeInputSource` and `RuntimeInput::validate` do the same for runtime input
 bytes. Reuse parsed executable programs freely: an `ExecutableProgram` is
 immutable, and `(once)` consumption is local to each execution. Runtime state
-uses one availability cell per executable rule, so `(once)` availability cannot
-become a parser-assigned lookup failure.
+encodes each `(once)` rule as a fresh or consumed runtime cell variant, so
+`(once)` availability cannot become a parser-assigned lookup failure.
 
 ## Execution Shape
 
@@ -104,8 +104,8 @@ boundary directly through exact rewritten/returned variants.
 
 Executable rule counts are non-zero by type, and parsed rule positions are
 stored topology witnesses rather than iterator-derived numbers. `(once)` is
-represented by concrete rule variants, and each runtime rule cell owns the
-availability state for its parsed rule during one execution.
+represented by concrete rule variants, and each execution moves matching
+once-only runtime cells from fresh variants to consumed variants.
 
 The exact typestate names, transition variants, tracing events, and error variants
 are documented in rustdoc.
@@ -379,8 +379,8 @@ byte limit. During execution, the active state and rewrite scratch buffer remain
 separate typed buffers until a successful continuation step commits.
 
 `(once)` rules are recorded as concrete parsed rule variants. Each execution
-builds runtime rule cells with rule-local availability, and only a committed
-application can consume a rule's one-run availability.
+builds fresh once-only runtime rule cells, and only a committed application can
+move the matched cell into its consumed variant.
 
 ## `no_std + alloc` Boundary
 
