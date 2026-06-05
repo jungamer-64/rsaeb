@@ -9,9 +9,9 @@ use crate::inspect::{
 use crate::program::{ExecutableProgram, RuleScan, RuntimeStoredRule, StoredRuleRef};
 use crate::runtime::matcher::{
     AvailableRuleAttempt, MatchedRuleApplication, RuleAttempt, RuleAttemptMiss,
-    attempt_available_rule, match_rule_pattern,
+    attempt_available_rule, match_rule_state,
 };
-use crate::runtime::state::State;
+use crate::runtime::state::{State, StatePayloadMatch};
 
 /// Per-run ordinary execution table with parsed rules and runtime availability paired.
 #[derive(Debug)]
@@ -818,13 +818,15 @@ impl<'program> RuntimeRuleCell<'program> {
         match self {
             Self::AlwaysRewrite(cell) => {
                 let rule = cell.rule;
-                match match_rule_pattern(rule.into_rule().pattern(), state) {
-                    Some(state_match) => ObservedRuleAttempt::Matched(
+                match match_rule_state(rule.into_rule().pattern(), state) {
+                    StatePayloadMatch::Matched(state_match) => ObservedRuleAttempt::Matched(
                         ObservedRuleMatch::AlwaysRewrite(rule, state_match),
                     ),
-                    None => ObservedRuleAttempt::Missed(RuleAttemptMiss::state_mismatch(
-                        crate::inspect::RuleView::AlwaysRewrite(rule),
-                    )),
+                    StatePayloadMatch::Mismatched => {
+                        ObservedRuleAttempt::Missed(RuleAttemptMiss::state_mismatch(
+                            crate::inspect::RuleView::AlwaysRewrite(rule),
+                        ))
+                    }
                 }
             }
             Self::OnceRewrite(cell) => {
@@ -834,24 +836,28 @@ impl<'program> RuntimeRuleCell<'program> {
                         rule,
                     ));
                 }
-                match match_rule_pattern(rule.into_rule().pattern(), state) {
-                    Some(state_match) => ObservedRuleAttempt::Matched(
+                match match_rule_state(rule.into_rule().pattern(), state) {
+                    StatePayloadMatch::Matched(state_match) => ObservedRuleAttempt::Matched(
                         ObservedRuleMatch::OnceRewrite(rule, state_match, cell.slot),
                     ),
-                    None => ObservedRuleAttempt::Missed(RuleAttemptMiss::state_mismatch(
-                        crate::inspect::RuleView::OnceRewrite(rule),
-                    )),
+                    StatePayloadMatch::Mismatched => {
+                        ObservedRuleAttempt::Missed(RuleAttemptMiss::state_mismatch(
+                            crate::inspect::RuleView::OnceRewrite(rule),
+                        ))
+                    }
                 }
             }
             Self::AlwaysReturn(cell) => {
                 let rule = cell.rule;
-                match match_rule_pattern(rule.into_rule().pattern(), state) {
-                    Some(state_match) => ObservedRuleAttempt::Matched(
+                match match_rule_state(rule.into_rule().pattern(), state) {
+                    StatePayloadMatch::Matched(state_match) => ObservedRuleAttempt::Matched(
                         ObservedRuleMatch::AlwaysReturn(rule, state_match),
                     ),
-                    None => ObservedRuleAttempt::Missed(RuleAttemptMiss::state_mismatch(
-                        crate::inspect::RuleView::AlwaysReturn(rule),
-                    )),
+                    StatePayloadMatch::Mismatched => {
+                        ObservedRuleAttempt::Missed(RuleAttemptMiss::state_mismatch(
+                            crate::inspect::RuleView::AlwaysReturn(rule),
+                        ))
+                    }
                 }
             }
             Self::OnceReturn(cell) => {
@@ -861,13 +867,13 @@ impl<'program> RuntimeRuleCell<'program> {
                         rule,
                     ));
                 }
-                match match_rule_pattern(rule.into_rule().pattern(), state) {
-                    Some(state_match) => ObservedRuleAttempt::Matched(
+                match match_rule_state(rule.into_rule().pattern(), state) {
+                    StatePayloadMatch::Matched(state_match) => ObservedRuleAttempt::Matched(
                         ObservedRuleMatch::OnceReturn(rule, state_match, cell.slot),
                     ),
-                    None => ObservedRuleAttempt::Missed(RuleAttemptMiss::state_mismatch(
-                        crate::inspect::RuleView::OnceReturn(rule),
-                    )),
+                    StatePayloadMatch::Mismatched => ObservedRuleAttempt::Missed(
+                        RuleAttemptMiss::state_mismatch(crate::inspect::RuleView::OnceReturn(rule)),
+                    ),
                 }
             }
         }

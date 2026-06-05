@@ -2,14 +2,14 @@ use super::budget::{RuntimeBudgetState, StepReservation};
 use super::rewrite::{PreparedRewrite, RewriteScratch};
 use crate::allocation::AllocationError;
 use crate::bytes::{
-    NonEmptyPayloadNeedle, Payload, PayloadByteCount, PayloadNeedle, RuntimeByte,
-    RuntimeStateByteCount,
+    EmptyPayloadNeedle, NonEmptyPayloadNeedle, Payload, PayloadByteCount, PayloadNeedle,
+    RuntimeByte, RuntimeStateByteCount,
 };
 use crate::error::{RewriteSizeError, RunStepError};
 use crate::input::InitialStateBytes;
 use crate::policy::ExecutionPolicy;
 use crate::program::RuntimeStateSnapshot;
-use crate::rule::RewriteAction;
+use crate::rule::{RewriteAction, RuleAnchorSyntax};
 use crate::trace::RuntimeStateView;
 use alloc::vec::Vec;
 
@@ -18,6 +18,15 @@ use alloc::vec::Vec;
 pub(crate) struct State {
     /// Current runtime-domain bytes.
     bytes: Vec<RuntimeByte>,
+}
+
+/// Result of comparing a parsed payload shape with runtime state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StatePayloadMatch<'state> {
+    /// The payload matched and carries the matched state span.
+    Matched(StateMatch<'state>),
+    /// The payload did not match the runtime state.
+    Mismatched,
 }
 
 impl State {
@@ -47,6 +56,111 @@ impl State {
         scratch.store_previous_state(previous_state);
     }
 
+    /// Compares a parsed payload with this runtime state under one rule anchor.
+    pub(crate) fn match_payload(
+        &self,
+        anchor: RuleAnchorSyntax,
+        payload: &Payload,
+    ) -> StatePayloadMatch<'_> {
+        match payload.needle() {
+            PayloadNeedle::Empty(needle) => self.match_empty_payload(anchor, needle),
+            PayloadNeedle::NonEmpty(needle) => self.match_non_empty_payload(anchor, needle),
+        }
+    }
+
+    /// Matches an empty payload with anchor-specific zero-length placement.
+    fn match_empty_payload(
+        &self,
+        anchor: RuleAnchorSyntax,
+        needle: EmptyPayloadNeedle<'_>,
+    ) -> StatePayloadMatch<'_> {
+        let range = match anchor {
+            RuleAnchorSyntax::Anywhere | RuleAnchorSyntax::Start => {
+                StateSpanRange::empty_at_start(needle.byte_count())
+            }
+            RuleAnchorSyntax::End => {
+                StateSpanRange::empty_at_end(needle.byte_count(), self.byte_count())
+            }
+        };
+        StatePayloadMatch::Matched(StateMatch::from_range(range, &self.bytes))
+    }
+
+    /// Matches a non-empty payload through checked candidate spans.
+    fn match_non_empty_payload(
+        &self,
+        anchor: RuleAnchorSyntax,
+        needle: NonEmptyPayloadNeedle<'_>,
+    ) -> StatePayloadMatch<'_> {
+        match anchor {
+            RuleAnchorSyntax::Anywhere => self.find_non_empty_payload(needle),
+            RuleAnchorSyntax::Start => self.match_non_empty_at(StateIndex::start(), needle),
+            RuleAnchorSyntax::End => {
+                match StateIndex::ending_match_start(self.byte_count(), needle.byte_count()) {
+                    CandidateStart::InBounds(start) => self.match_non_empty_at(start, needle),
+                    CandidateStart::OutOfBounds => StatePayloadMatch::Mismatched,
+                }
+            }
+        }
+    }
+
+    /// Finds the leftmost match for a non-empty payload.
+    fn find_non_empty_payload(&self, needle: NonEmptyPayloadNeedle<'_>) -> StatePayloadMatch<'_> {
+        let last_start =
+            match StateIndex::ending_match_start(self.byte_count(), needle.byte_count()) {
+                CandidateStart::InBounds(start) => start,
+                CandidateStart::OutOfBounds => return StatePayloadMatch::Mismatched,
+            };
+
+        for position in StateSearchRange::from_start_to(last_start) {
+            if let StatePayloadMatch::Matched(state_match) =
+                self.match_non_empty_at(position, needle)
+            {
+                return StatePayloadMatch::Matched(state_match);
+            }
+        }
+
+        StatePayloadMatch::Mismatched
+    }
+
+    /// Checks whether a non-empty payload matches at a candidate state index.
+    fn match_non_empty_at(
+        &self,
+        position: StateIndex,
+        needle: NonEmptyPayloadNeedle<'_>,
+    ) -> StatePayloadMatch<'_> {
+        match StateSpanRange::candidate_at(position, needle.byte_count(), self.byte_count()) {
+            StateSpanCandidate::InBounds(range) => self.match_candidate_range(range, needle),
+            StateSpanCandidate::OutOfBounds => StatePayloadMatch::Mismatched,
+        }
+    }
+
+    /// Compares bytes within a candidate span that is already proven in-bounds.
+    fn match_candidate_range(
+        &self,
+        range: StateSpanRange,
+        needle: NonEmptyPayloadNeedle<'_>,
+    ) -> StatePayloadMatch<'_> {
+        let state_match = StateMatch::from_range(range, &self.bytes);
+        let first_byte_matches = state_match.matched_bytes().next().is_some_and(|actual| {
+            actual
+                .projection()
+                .matches_program_byte(needle.first_byte())
+        });
+        if !first_byte_matches {
+            return StatePayloadMatch::Mismatched;
+        }
+
+        let matches = state_match
+            .matched_bytes()
+            .zip(needle.program_bytes().iter().copied())
+            .all(|(actual, expected)| actual.projection().matches_program_byte(expected));
+        if matches {
+            StatePayloadMatch::Matched(state_match)
+        } else {
+            StatePayloadMatch::Mismatched
+        }
+    }
+
     /// Materializes this state as a public runtime-state snapshot.
     ///
     /// # Errors
@@ -64,6 +178,15 @@ struct StateIndex {
     zero_based: usize,
 }
 
+/// Result of deriving a state index for a candidate match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CandidateStart {
+    /// The candidate start is in the runtime state's addressable range.
+    InBounds(StateIndex),
+    /// The payload cannot fit at the requested anchor.
+    OutOfBounds,
+}
+
 impl StateIndex {
     /// Returns the first runtime-state index.
     const fn start() -> Self {
@@ -79,9 +202,11 @@ impl StateIndex {
     fn ending_match_start(
         state_len: RuntimeStateByteCount,
         matched_len: PayloadByteCount,
-    ) -> Option<Self> {
-        let start = state_len.get().checked_sub(matched_len.get())?;
-        Some(Self::from_zero_based(start))
+    ) -> CandidateStart {
+        match state_len.get().checked_sub(matched_len.get()) {
+            Some(start) => CandidateStart::InBounds(Self::from_zero_based(start)),
+            None => CandidateStart::OutOfBounds,
+        }
     }
 
     /// Returns the checked add count result.
@@ -165,19 +290,55 @@ struct StateSpanRange {
     matched_len: PayloadByteCount,
 }
 
+/// Candidate runtime span derived before byte comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StateSpanCandidate {
+    /// Candidate span is fully inside the runtime state.
+    InBounds(StateSpanRange),
+    /// Candidate span would point outside the runtime state.
+    OutOfBounds,
+}
+
 impl StateSpanRange {
-    /// Builds a match span at a candidate position.
-    fn at_position(
+    /// Builds a zero-length start-anchored match span.
+    fn empty_at_start(matched_len: PayloadByteCount) -> Self {
+        debug_assert!(matched_len.is_zero());
+        Self {
+            start: StateIndex::start(),
+            end: StateIndex::start(),
+            matched_len,
+        }
+    }
+
+    /// Builds a zero-length end-anchored match span.
+    fn empty_at_end(matched_len: PayloadByteCount, state_len: RuntimeStateByteCount) -> Self {
+        debug_assert!(matched_len.is_zero());
+        let end = StateIndex::from_zero_based(state_len.get());
+        Self {
+            start: end,
+            end,
+            matched_len,
+        }
+    }
+
+    /// Classifies a candidate match span at a concrete position.
+    fn candidate_at(
         start: StateIndex,
         matched_len: PayloadByteCount,
         state_len: RuntimeStateByteCount,
-    ) -> Option<Self> {
-        let end = start.checked_add_count(matched_len)?;
-        (start.get() <= state_len.get() && end.get() <= state_len.get()).then_some(Self {
-            start,
-            end,
-            matched_len,
-        })
+    ) -> StateSpanCandidate {
+        let Some(end) = start.checked_add_count(matched_len) else {
+            return StateSpanCandidate::OutOfBounds;
+        };
+        if start.get() <= state_len.get() && end.get() <= state_len.get() {
+            StateSpanCandidate::InBounds(Self {
+                start,
+                end,
+                matched_len,
+            })
+        } else {
+            StateSpanCandidate::OutOfBounds
+        }
     }
 
     /// Returns the inclusive start offset.
@@ -206,27 +367,9 @@ pub(crate) struct StateMatch<'state> {
 }
 
 impl<'state> StateMatch<'state> {
-    /// Builds a start-anchored match span.
-    fn at_start(matched_len: PayloadByteCount, bytes: &'state [RuntimeByte]) -> Option<Self> {
-        Self::at_position(StateIndex::start(), matched_len, bytes)
-    }
-
-    /// Builds an end-anchored match span.
-    fn at_end(matched_len: PayloadByteCount, bytes: &'state [RuntimeByte]) -> Option<Self> {
-        let state_len = RuntimeStateByteCount::new(bytes.len());
-        let start = state_len.get().checked_sub(matched_len.get())?;
-        Self::at_position(StateIndex::from_zero_based(start), matched_len, bytes)
-    }
-
-    /// Builds a match span at a candidate position.
-    fn at_position(
-        start: StateIndex,
-        matched_len: PayloadByteCount,
-        bytes: &'state [RuntimeByte],
-    ) -> Option<Self> {
-        let state_len = RuntimeStateByteCount::new(bytes.len());
-        let range = StateSpanRange::at_position(start, matched_len, state_len)?;
-        Some(Self { range, bytes })
+    /// Builds a matched-state witness from a validated runtime span.
+    fn from_range(range: StateSpanRange, bytes: &'state [RuntimeByte]) -> Self {
+        Self { range, bytes }
     }
 
     /// Iterates over bytes covered by this freshly built match witness.

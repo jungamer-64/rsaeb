@@ -1,10 +1,10 @@
 use super::once::{AvailableRuntimeRule, OnceMatchPermit};
-use super::state::{State, StateMatch};
+use super::state::{State, StateMatch, StatePayloadMatch};
 use crate::bytes::Payload;
 use crate::inspect::{
     AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView, RuleView,
 };
-use crate::rule::{RewriteAction, RuleAnchorSyntax, RulePattern};
+use crate::rule::{RewriteAction, RulePattern};
 
 /// Outcome of evaluating one executable rule line against the current state.
 #[derive(Debug)]
@@ -86,14 +86,6 @@ pub(crate) enum RuleAttemptMiss<'program> {
     OnceRewriteConsumed(OnceRewriteRuleView<'program>),
     /// Once-only return rule had already committed in this run.
     OnceReturnConsumed(OnceReturnRuleView<'program>),
-}
-
-/// Domain result of comparing one rule's left side with the runtime state.
-enum RuleStateMatch<'state> {
-    /// Rule left side matched and carries the matched state span.
-    Matched(StateMatch<'state>),
-    /// Rule left side did not match the runtime state.
-    Mismatched,
 }
 
 impl<'program> RuleAttemptMiss<'program> {
@@ -280,8 +272,8 @@ fn attempt_always_rewrite_rule<'program, 'state, 'once>(
     state: &'state State,
 ) -> AvailableRuleAttempt<'program, 'state, 'once> {
     let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
-        RuleStateMatch::Matched(state_match) => state_match,
-        RuleStateMatch::Mismatched => {
+        StatePayloadMatch::Matched(state_match) => state_match,
+        StatePayloadMatch::Mismatched => {
             return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::state_mismatch(
                 RuleView::AlwaysRewrite(rule),
             ));
@@ -300,8 +292,8 @@ fn attempt_once_rewrite_rule<'program, 'state, 'once>(
     state: &'state State,
 ) -> AvailableRuleAttempt<'program, 'state, 'once> {
     let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
-        RuleStateMatch::Matched(state_match) => state_match,
-        RuleStateMatch::Mismatched => {
+        StatePayloadMatch::Matched(state_match) => state_match,
+        StatePayloadMatch::Mismatched => {
             return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::state_mismatch(
                 RuleView::OnceRewrite(rule),
             ));
@@ -323,8 +315,8 @@ fn attempt_always_return_rule<'program, 'state, 'once>(
     state: &'state State,
 ) -> AvailableRuleAttempt<'program, 'state, 'once> {
     let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
-        RuleStateMatch::Matched(state_match) => state_match,
-        RuleStateMatch::Mismatched => {
+        StatePayloadMatch::Matched(state_match) => state_match,
+        StatePayloadMatch::Mismatched => {
             return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::state_mismatch(
                 RuleView::AlwaysReturn(rule),
             ));
@@ -343,8 +335,8 @@ fn attempt_once_return_rule<'program, 'state, 'once>(
     state: &'state State,
 ) -> AvailableRuleAttempt<'program, 'state, 'once> {
     let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
-        RuleStateMatch::Matched(state_match) => state_match,
-        RuleStateMatch::Mismatched => {
+        StatePayloadMatch::Matched(state_match) => state_match,
+        StatePayloadMatch::Mismatched => {
             return AvailableRuleAttempt::StateMismatch(RuleAttemptMiss::state_mismatch(
                 RuleView::OnceReturn(rule),
             ));
@@ -361,18 +353,9 @@ fn attempt_once_return_rule<'program, 'state, 'once>(
 }
 
 /// Compares a single parsed rule pattern with the current runtime state.
-fn match_rule_state<'state>(pattern: &RulePattern, state: &'state State) -> RuleStateMatch<'state> {
-    match find_match(state, pattern) {
-        Some(state_match) => RuleStateMatch::Matched(state_match),
-        None => RuleStateMatch::Mismatched,
-    }
-}
-
-/// Finds this rule pattern's match span in the current state.
-fn find_match<'state>(state: &'state State, pattern: &RulePattern) -> Option<StateMatch<'state>> {
-    match pattern.anchor() {
-        RuleAnchorSyntax::Anywhere => state.find_payload(pattern.lhs()),
-        RuleAnchorSyntax::Start => state.starts_with_payload(pattern.lhs()),
-        RuleAnchorSyntax::End => state.ends_with_payload(pattern.lhs()),
-    }
+pub(crate) fn match_rule_state<'state>(
+    pattern: &RulePattern,
+    state: &'state State,
+) -> StatePayloadMatch<'state> {
+    state.match_payload(pattern.anchor(), pattern.lhs())
 }

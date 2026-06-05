@@ -422,3 +422,49 @@ fn empty_payload_matches_keep_anchor_specific_span_placement() -> TestResult {
 
     Ok(())
 }
+
+/// # Errors
+///
+/// Returns `TestFailure` if an oversized non-empty payload is treated as
+/// anything other than a normal state mismatch.
+#[test]
+fn non_empty_payload_longer_than_state_is_a_mismatch() -> TestResult {
+    for source in ["abc=x", "(start)abc=x", "(end)abc=x"] {
+        let program = parse_program(source)?;
+        let limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
+        let result = execute_program(&program, admitted_run(b"ab", limits)?)?;
+
+        ensure_eq!(result.steps(), StepCount::ZERO)?;
+        ensure_matches(
+            matches!(
+                result.outcome(),
+                RunOutcome::Stable(output) if output.as_slice() == b"ab"
+            ),
+            "expected oversized non-empty payload to miss",
+        )?;
+    }
+
+    Ok(())
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if anywhere matching skips the first valid candidate.
+#[test]
+fn anywhere_non_empty_search_keeps_leftmost_match() -> TestResult {
+    let program = parse_program("b=x")?;
+    let limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
+    let session = program.steps(admitted_run(b"abab", limits)?)?;
+
+    match expect_step_transition(session.step())? {
+        BorrowedStepTransition::Applied(applied) => {
+            ensure_eq!(applied.step().get(), 1)?;
+            ensure_eq!(runtime_view_bytes(applied.state()).as_slice(), b"axab")
+        }
+        BorrowedStepTransition::Stable(_)
+        | BorrowedStepTransition::Returned(_)
+        | BorrowedStepTransition::Failed(_) => {
+            Err(TestFailure::message("expected leftmost anywhere rewrite"))
+        }
+    }
+}

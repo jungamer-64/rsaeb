@@ -19,7 +19,9 @@ pub use count::{
     PayloadByteCount, ReturnOutputByteCount, RuntimeInputByteCount, RuntimeStateByteCount,
     TraceSnapshotByteCount,
 };
-pub(crate) use payload::{NonEmptyPayloadNeedle, Payload, PayloadNeedle, PayloadSyntax};
+pub(crate) use payload::{
+    EmptyPayloadNeedle, NonEmptyPayloadNeedle, Payload, PayloadNeedle, PayloadSyntax,
+};
 pub use rejection::{
     NonAsciiCodeByte, NonAsciiInputByte, NonPrintableCodeByte, ReservedSyntaxByte,
 };
