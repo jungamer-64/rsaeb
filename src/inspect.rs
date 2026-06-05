@@ -23,7 +23,7 @@
 //! )?;
 //! let rule = executable.rules().next().ok_or("missing rule")?;
 //!
-//! if rule.position().number().get() != 1 {
+//! if rule.position().get() != 1 {
 //!     return Err("unexpected rule position".into());
 //! }
 //! if rule.anchor() != RuleAnchor::Start {
@@ -106,28 +106,6 @@ impl OnceRuleCount {
     }
 }
 
-/// One-based rule number for public diagnostics and display.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RuleNumber {
-    /// One-based value exposed to diagnostics and callers.
-    one_based: usize,
-}
-
-impl RuleNumber {
-    /// Builds an index from a zero-based offset.
-    const fn from_zero_based(zero_based: usize) -> Self {
-        Self {
-            one_based: zero_based.saturating_add(1),
-        }
-    }
-
-    /// One-based rule number as a primitive value.
-    #[must_use]
-    pub const fn get(self) -> usize {
-        self.one_based
-    }
-}
-
 /// Program-local position of a parsed rule in execution order.
 ///
 /// Rule positions are assigned after parsing removes blank/comment-only lines.
@@ -135,22 +113,22 @@ impl RuleNumber {
 /// line instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RulePosition {
-    /// One-based public number for this execution-order position.
-    number: RuleNumber,
+    /// One-based execution-order position.
+    one_based: usize,
 }
 
 impl RulePosition {
     /// Builds an index from a zero-based offset.
     pub(crate) const fn from_zero_based(zero_based: usize) -> Self {
         Self {
-            number: RuleNumber::from_zero_based(zero_based),
+            one_based: zero_based.saturating_add(1),
         }
     }
 
-    /// One-based rule number for display.
+    /// One-based rule position as a primitive value.
     #[must_use]
-    pub const fn number(self) -> RuleNumber {
-        self.number
+    pub const fn get(self) -> usize {
+        self.one_based
     }
 }
 

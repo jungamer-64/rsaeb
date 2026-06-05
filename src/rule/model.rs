@@ -225,8 +225,4 @@ impl Rule {
         self.pattern().line_number()
     }
 
-    /// Returns whether this rule has once-only runtime availability.
-    pub(crate) const fn is_once(&self) -> bool {
-        matches!(self, Self::OnceRewrite(_) | Self::OnceReturn(_))
-    }
 }

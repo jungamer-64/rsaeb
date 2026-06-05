@@ -71,18 +71,6 @@ impl EmptyProgram {
         Self
     }
 
-    /// Returns the number of executable rules in this empty program.
-    #[must_use]
-    pub const fn rule_count(self) -> RuleCount {
-        RuleCount::new(0)
-    }
-
-    /// Returns the number of parsed `(once)` rules in this empty program.
-    #[must_use]
-    pub const fn once_rule_count(self) -> OnceRuleCount {
-        OnceRuleCount::ZERO
-    }
-
     /// Iterates over structured parsed-rule views.
     pub fn rules<'rule>(self) -> core::iter::Empty<RuleView<'rule>> {
         core::iter::empty()
@@ -104,11 +92,7 @@ impl EmptyProgram {
 
 impl fmt::Debug for EmptyProgram {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("EmptyProgram")
-            .field("rule_count", &self.rule_count())
-            .field("once_rule_count", &self.once_rule_count())
-            .finish()
+        formatter.debug_struct("EmptyProgram").finish()
     }
 }
 
