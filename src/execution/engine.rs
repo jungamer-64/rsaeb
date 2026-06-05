@@ -211,18 +211,12 @@ impl<E: ExecutionPolicy, A: RuleAttemptPolicy, Pass> AttemptRunCore<E, A, Pass> 
     }
 
     /// Rebuilds the mutable rule-attempt runtime core from its typed parts.
-    pub(super) fn from_parts(
-        state: State,
-        scratch: RewriteScratch,
-        budget: RuntimeBudgetState<E>,
-        attempt_budget: RuleAttemptBudgetState<A>,
-        runtime_rules: Pass,
-    ) -> Self {
+    pub(super) fn from_parts(parts: AttemptRunCoreParts<E, A>, runtime_rules: Pass) -> Self {
         Self {
-            state,
-            scratch,
-            budget,
-            attempt_budget,
+            state: parts.state,
+            scratch: parts.scratch,
+            budget: parts.budget,
+            attempt_budget: parts.attempt_budget,
             runtime_rules,
         }
     }
@@ -275,13 +269,7 @@ impl<E: ExecutionPolicy, A: RuleAttemptPolicy, Pass> AttemptRunCore<E, A, Pass> 
 impl<E: ExecutionPolicy, A: RuleAttemptPolicy> AttemptRunCoreParts<E, A> {
     /// Reattaches a typed pass to these active runtime parts.
     pub(super) fn with_pass<Pass>(self, runtime_rules: Pass) -> AttemptRunCore<E, A, Pass> {
-        AttemptRunCore::from_parts(
-            self.state,
-            self.scratch,
-            self.budget,
-            self.attempt_budget,
-            runtime_rules,
-        )
+        AttemptRunCore::from_parts(self, runtime_rules)
     }
 }
 
