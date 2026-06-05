@@ -91,6 +91,95 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Compile-time guards
+//!
+//! Caller-selected generic trace event enums are intentionally absent; callers
+//! receive concrete domain events:
+//!
+//! ```compile_fail
+//! fn main() {
+//!     let _event: rsaeb::trace::TraceEvent<'static, Vec<u8>, Vec<u8>>;
+//! }
+//! ```
+//!
+//! Old trace effect types and shape-erased `Step` variants have been deleted:
+//!
+//! ```compile_fail
+//! use rsaeb::trace::BorrowedTraceEffect;
+//!
+//! fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::trace::TraceSnapshotEffect;
+//!
+//! fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::trace::BorrowedTraceEvent;
+//!
+//! fn old_step(event: BorrowedTraceEvent<'_, '_>) {
+//!     match event {
+//!         BorrowedTraceEvent::Step { .. } => {}
+//!         _ => {}
+//!     }
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::trace::TraceSnapshotEvent;
+//!
+//! fn old_step(event: TraceSnapshotEvent<'_>) {
+//!     match event {
+//!         TraceSnapshotEvent::Step { .. } => {}
+//!         _ => {}
+//!     }
+//! }
+//! ```
+//!
+//! Old shape-erased trace success variants have been deleted:
+//!
+//! ```compile_fail
+//! use rsaeb::trace::BorrowedTraceEvent;
+//!
+//! fn invalid(event: BorrowedTraceEvent<'static, 'static>) {
+//!     match event {
+//!         BorrowedTraceEvent::Rewritten { .. } => {}
+//!         _ => {}
+//!     }
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::trace::{BorrowedTraceEvent, TraceSnapshotEvent};
+//!
+//! fn invalid_borrowed(event: BorrowedTraceEvent<'static, 'static>) {
+//!     match event {
+//!         BorrowedTraceEvent::Returned { .. } => {}
+//!         _ => {}
+//!     }
+//! }
+//!
+//! fn invalid_snapshot(event: TraceSnapshotEvent<'static>) {
+//!     match event {
+//!         TraceSnapshotEvent::Rewritten { .. } => {}
+//!         _ => {}
+//!     }
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::trace::TraceSnapshotEvent;
+//!
+//! fn invalid(event: TraceSnapshotEvent<'static>) {
+//!     match event {
+//!         TraceSnapshotEvent::Returned { .. } => {}
+//!         _ => {}
+//!     }
+//! }
+//! ```
 
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,

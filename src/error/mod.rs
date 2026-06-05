@@ -53,6 +53,48 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Compile-time guards
+//!
+//! Rule topology no longer fails through parser representation variants, and
+//! empty-target parsing no longer reports a completed rule count:
+//!
+//! ```compile_fail
+//! use rsaeb::error::{EmptyProgramParseError, ParseRepresentationError};
+//!
+//! fn old_diagnostics(error: EmptyProgramParseError) {
+//!     let _ = ParseRepresentationError::RulePosition;
+//!     let _ = ParseRepresentationError::RuleCount;
+//!     if let EmptyProgramParseError::ExecutableRules { .. } = error {}
+//! }
+//! ```
+//!
+//! Once-state mismatch is no longer a reportable execution error:
+//!
+//! ```compile_fail
+//! use rsaeb::error::OnceRuleStateError;
+//!
+//! fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::error::RunStepError;
+//!
+//! fn main() {
+//!     let _ = |error: RunStepError| match error {
+//!         RunStepError::OnceRuleState(_) => true,
+//!         _ => false,
+//!     };
+//! }
+//! ```
+//!
+//! Owned stepwise execution and its owned error surface have been deleted:
+//!
+//! ```compile_fail
+//! use rsaeb::error::OwnedRunStepError;
+//!
+//! fn main() {}
+//! ```
 
 /// Display implementations for public error domains.
 mod fmt;

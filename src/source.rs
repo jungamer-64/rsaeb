@@ -8,6 +8,24 @@
 //! Comments may contain arbitrary bytes, while executable source code is
 //! validated by the parser and runtime input is validated by the runtime-input
 //! boundary.
+//!
+//! # Compile-time guards
+//!
+//! The shape-neutral public `ProgramSource` boundary has been deleted:
+//!
+//! ```compile_fail
+//! use rsaeb::source::ProgramSource;
+//!
+//! fn main() {}
+//! ```
+//!
+//! Public source-shape marker types have been deleted:
+//!
+//! ```compile_fail
+//! use rsaeb::source::{EmptyProgramSource, ExecutableProgramSource};
+//!
+//! fn main() {}
+//! ```
 
 /// Private raw source carrier used by the parser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

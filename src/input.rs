@@ -45,6 +45,33 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Compile-time guards
+//!
+//! Construction policies no longer parameterize stored input values:
+//!
+//! ```compile_fail
+//! use rsaeb::input::RuntimeInput;
+//! use rsaeb::policy::DefaultRuntimeInputPolicy;
+//!
+//! fn old_shape(_input: RuntimeInput<DefaultRuntimeInputPolicy>) {}
+//! ```
+//!
+//! Execution entrypoints require admitted input. Validated input cannot be run
+//! directly:
+//!
+//! ```compile_fail
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::{DefaultParsePolicy, DefaultRuntimeInputPolicy};
+//! use rsaeb::program::ExecutableProgram;
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let executable = ExecutableProgram::parse_text::<DefaultParsePolicy>("a=b")?;
+//!     let input = RuntimeInput::validate::<DefaultRuntimeInputPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
+//!     let _ = executable.execute(input)?;
+//!     Ok(())
+//! }
+//! ```
 
 use alloc::vec::Vec;
 use core::fmt;

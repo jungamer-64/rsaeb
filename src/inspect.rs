@@ -40,6 +40,130 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Compile-time guards
+//!
+//! Flat rule repeat/action inspection and nested repeat/action inspection have
+//! been deleted. Each [`RuleView`] variant now names the complete rule shape:
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::{RepeatRuleView, RuleActionView, RuleRepeat};
+//!
+//! fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleView;
+//!
+//! fn main() {
+//!     let _ = |rule: RuleView<'_>| rule.repeat();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleView;
+//!
+//! fn main() {
+//!     let _ = |rule: RuleView<'_>| rule.action();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleView;
+//!
+//! fn main() {
+//!     let _ = |rule: RuleView<'_>| matches!(rule, RuleView::Always(_));
+//! }
+//! ```
+//!
+//! Rule topology no longer exposes a separate `RuleNumber` wrapper. A
+//! [`RulePosition`] is already the one-based topology witness:
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleNumber;
+//!
+//! fn main() {}
+//! ```
+//!
+//! The old once-rule count is absent. Empty topology is represented by
+//! [`crate::program::EmptyProgram`], and executable topology exposes
+//! [`ExecutableRuleCount`]:
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::OnceRuleCount;
+//!
+//! fn main() {}
+//! ```
+//!
+//! `RuleView` itself no longer exposes shape-neutral rule metadata. Match the
+//! concrete variant first, then use the concrete rule view:
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleView;
+//!
+//! fn invalid(rule: RuleView<'_>) {
+//!     let _ = rule.position();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleView;
+//!
+//! fn invalid(rule: RuleView<'_>) {
+//!     let _ = rule.line_number();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleView;
+//!
+//! fn invalid(rule: RuleView<'_>) {
+//!     let _ = rule.anchor();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleView;
+//!
+//! fn invalid(rule: RuleView<'_>) {
+//!     let _ = rule.lhs();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RuleView;
+//!
+//! fn invalid(rule: RuleView<'_>) {
+//!     let _ = rule.canonical_source();
+//! }
+//! ```
+//!
+//! Caller-selected generic action enums are intentionally absent; callers
+//! receive concrete domain views:
+//!
+//! ```compile_fail
+//! fn main() {
+//!     let _action: rsaeb::inspect::RuleAction<Vec<u8>>;
+//! }
+//! ```
+//!
+//! Action-specific success witnesses expose only their valid action accessor:
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::RewriteRuleView;
+//!
+//! fn invalid(rule: RewriteRuleView<'_>) {
+//!     let _ = rule.output();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::inspect::ReturnRuleView;
+//!
+//! fn invalid(rule: ReturnRuleView<'_>) {
+//!     let _ = rule.rewrite_action();
+//! }
+//! ```
 
 use alloc::vec::Vec;
 use core::fmt;

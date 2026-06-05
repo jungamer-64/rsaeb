@@ -24,6 +24,18 @@
 //! let _input = RuntimeInput::validate::<ParseOnly>(RuntimeInputSource::from_bytes(b"a"));
 //! ```
 //!
+//! The execution default cannot be used to validate runtime input:
+//!
+//! ```compile_fail
+//! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
+//! use rsaeb::policy::DefaultExecutionPolicy;
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let _ = RuntimeInput::validate::<DefaultExecutionPolicy>(RuntimeInputSource::from_bytes(b"a"))?;
+//!     Ok(())
+//! }
+//! ```
+//!
 //! The execution default cannot be used to parse programs:
 //!
 //! ```compile_fail
