@@ -46,8 +46,25 @@ pub(crate) struct RuntimeRulePass<'program, History, Tail> {
 #[derive(Debug)]
 pub(crate) struct StartedRuntimeRuleTable<'program> {
     /// Rule-attempt pass classified by current-tail shape.
-    pass: StartedRuntimeRulePass<'program>,
+    pass: FirstRuntimeRulePassCursor<'program>,
 }
+
+/// Runtime pass classified only by whether the current target has a successor.
+#[derive(Debug)]
+pub(crate) enum RuntimeRulePassCursor<'program, History> {
+    /// Current rule has at least one successor in this pass.
+    Continuing(RuntimeRulePass<'program, History, ContinuingRuleTail<'program>>),
+    /// Current rule exhausts this pass.
+    Final(RuntimeRulePass<'program, History, FinalRuleTail<'program>>),
+}
+
+/// Rule-attempt pass at the start of a scan.
+pub(crate) type FirstRuntimeRulePassCursor<'program> =
+    RuntimeRulePassCursor<'program, NoMissedRules<'program>>;
+
+/// Rule-attempt pass after the history has become non-empty.
+pub(crate) type MissedRuntimeRulePassCursor<'program> =
+    RuntimeRulePassCursor<'program, MissedRuntimeRules<'program>>;
 
 /// Continuing pass whose current target is still the first rule in the scan.
 pub(crate) type FirstContinuingRulePass<'program> =
@@ -228,7 +245,7 @@ impl<'program> RuntimeRulePassState<'program> for AfterMissFinalRulePass<'progra
 
 impl<'program> StartedRuntimeRuleTable<'program> {
     /// Moves out the typed started pass.
-    pub(crate) fn into_pass(self) -> StartedRuntimeRulePass<'program> {
+    pub(crate) fn into_pass_cursor(self) -> FirstRuntimeRulePassCursor<'program> {
         self.pass
     }
 }
@@ -293,7 +310,7 @@ impl<'program> RuntimeRuleTable<'program> {
     }
 }
 
-impl<'program> StartedRuntimeRulePass<'program> {
+impl<'program> StartedRuntimeRuleTable<'program> {
     /// Builds a rule-attempt pass from an executable program.
     ///
     /// # Errors
@@ -304,17 +321,21 @@ impl<'program> StartedRuntimeRulePass<'program> {
         program: &'program ExecutableProgram,
     ) -> Result<StartedRuntimeRuleTable<'program>, AllocationError> {
         Ok(StartedRuntimeRuleTable {
-            pass: Self::from_rule_scan(program.rule_scan())?,
+            pass: RuntimeRulePassParts::from_rule_scan(program.rule_scan())?,
         })
     }
+}
 
+impl<'program> RuntimeRulePassParts<'program> {
     /// Builds a rule-attempt pass from the executable rule table.
     ///
     /// # Errors
     ///
     /// Returns `AllocationError` if the per-execution rule-attempt table cannot
     /// be allocated.
-    fn from_rule_scan(rules: RuleScan<'program>) -> Result<Self, AllocationError> {
+    fn from_rule_scan(
+        rules: RuleScan<'program>,
+    ) -> Result<FirstRuntimeRulePassCursor<'program>, AllocationError> {
         let (first, remaining_rules) = rules.split_first();
         let mut remaining = VecDeque::new();
         let remaining_capacity = RequestedCapacity::new(remaining_rules.len());
@@ -337,7 +358,7 @@ impl<'program> StartedRuntimeRulePass<'program> {
             remaining,
             attempted,
         }
-        .into_started_pass())
+        .into_first_pass_cursor())
     }
 }
 
@@ -353,7 +374,7 @@ impl<'program, History, Tail> RuntimeRulePass<'program, History, Tail> {
 
 impl<'program> RuntimeRulePass<'program, NoMissedRules<'program>, ContinuingRuleTail<'program>> {
     /// Commits the first miss in a continuing pass.
-    pub(crate) fn commit_miss(self) -> AfterMissRuntimeRulePass<'program> {
+    pub(crate) fn commit_miss(self) -> MissedRuntimeRulePassCursor<'program> {
         let Self {
             current,
             history,
@@ -364,8 +385,8 @@ impl<'program> RuntimeRulePass<'program, NoMissedRules<'program>, ContinuingRule
     }
 
     /// Resets a first-rule continuing pass after a rewrite.
-    pub(crate) fn reset_after_rewrite(self) -> StartedRuntimeRulePass<'program> {
-        StartedRuntimeRulePass::Continuing(self)
+    pub(crate) fn reset_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program> {
+        RuntimeRulePassCursor::Continuing(self)
     }
 }
 
@@ -373,7 +394,7 @@ impl<'program>
     RuntimeRulePass<'program, MissedRuntimeRules<'program>, ContinuingRuleTail<'program>>
 {
     /// Commits another miss in a continuing pass.
-    pub(crate) fn commit_miss(self) -> AfterMissRuntimeRulePass<'program> {
+    pub(crate) fn commit_miss(self) -> MissedRuntimeRulePassCursor<'program> {
         let Self {
             current,
             history,
@@ -384,7 +405,7 @@ impl<'program>
     }
 
     /// Resets a continuing pass with non-empty miss history after a rewrite.
-    pub(crate) fn reset_after_rewrite(self) -> StartedRuntimeRulePass<'program> {
+    pub(crate) fn reset_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program> {
         let Self {
             current,
             history,
@@ -398,20 +419,20 @@ impl<'program>
             remaining,
             attempted,
         }
-        .into_started_pass()
+        .into_first_pass_cursor()
     }
 }
 
 impl<'program> RuntimeRulePass<'program, NoMissedRules<'program>, FinalRuleTail<'program>> {
     /// Resets a first-rule final pass after a rewrite.
-    pub(crate) fn reset_after_rewrite(self) -> StartedRuntimeRulePass<'program> {
-        StartedRuntimeRulePass::Final(self)
+    pub(crate) fn reset_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program> {
+        RuntimeRulePassCursor::Final(self)
     }
 }
 
 impl<'program> RuntimeRulePass<'program, MissedRuntimeRules<'program>, FinalRuleTail<'program>> {
     /// Resets a final pass with non-empty miss history after a rewrite.
-    pub(crate) fn reset_after_rewrite(self) -> StartedRuntimeRulePass<'program> {
+    pub(crate) fn reset_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program> {
         let Self {
             current,
             history,
@@ -424,7 +445,7 @@ impl<'program> RuntimeRulePass<'program, MissedRuntimeRules<'program>, FinalRule
             remaining,
             attempted: tail.into_spare(),
         }
-        .into_started_pass()
+        .into_first_pass_cursor()
     }
 }
 
@@ -505,15 +526,15 @@ impl<'program> FinalRuleTail<'program> {
 
 impl<'program> RuntimeRulePassParts<'program> {
     /// Classifies the current target by whether the ordered tail is empty.
-    fn into_started_pass(mut self) -> StartedRuntimeRulePass<'program> {
+    fn into_first_pass_cursor(mut self) -> FirstRuntimeRulePassCursor<'program> {
         let history = NoMissedRules::new(self.attempted);
         match self.remaining.pop_front() {
-            Some(next) => StartedRuntimeRulePass::Continuing(RuntimeRulePass {
+            Some(next) => RuntimeRulePassCursor::Continuing(RuntimeRulePass {
                 current: self.current,
                 history,
                 tail: ContinuingRuleTail::new(next, self.remaining),
             }),
-            None => StartedRuntimeRulePass::Final(RuntimeRulePass {
+            None => RuntimeRulePassCursor::Final(RuntimeRulePass {
                 current: self.current,
                 history,
                 tail: FinalRuleTail {
@@ -528,17 +549,15 @@ impl<'program> RuntimeRulePassParts<'program> {
 fn advance_after_miss<'program>(
     history: MissedRuntimeRules<'program>,
     tail: ContinuingRuleTail<'program>,
-) -> AfterMissRuntimeRulePass<'program> {
+) -> MissedRuntimeRulePassCursor<'program> {
     let (current, tail) = tail.advance();
     match tail {
-        AdvancedRuleTail::Continuing(tail) => {
-            AfterMissRuntimeRulePass::Continuing(RuntimeRulePass {
-                current,
-                history,
-                tail,
-            })
-        }
-        AdvancedRuleTail::Final(tail) => AfterMissRuntimeRulePass::Final(RuntimeRulePass {
+        AdvancedRuleTail::Continuing(tail) => RuntimeRulePassCursor::Continuing(RuntimeRulePass {
+            current,
+            history,
+            tail,
+        }),
+        AdvancedRuleTail::Final(tail) => RuntimeRulePassCursor::Final(RuntimeRulePass {
             current,
             history,
             tail,

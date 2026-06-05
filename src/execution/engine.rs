@@ -8,11 +8,7 @@ use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, ReturnOutput, ReturnOutputView, RunResult};
 use crate::runtime::action::{AppliedRule, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
-use crate::runtime::once::{
-    AfterMissContinuingRulePass, AfterMissFinalRulePass, FirstContinuingRulePass,
-    FirstFinalRulePass, RuntimeRulePassState, RuntimeRuleSearch, RuntimeRuleTable,
-    StartedRuntimeRulePass,
-};
+use crate::runtime::once::{RuntimeRulePassState, RuntimeRuleSearch, RuntimeRuleTable};
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
 use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
@@ -32,15 +28,29 @@ pub(super) struct ActiveRunCore<'program, E: ExecutionPolicy> {
 
 /// Active mutable rule-attempt runtime state tied to one pass shape.
 #[derive(Debug)]
-pub(super) struct AttemptRunCore<E: ExecutionPolicy, Pass> {
+pub(super) struct AttemptRunCore<E: ExecutionPolicy, A: RuleAttemptPolicy, Pass> {
     /// Current runtime byte state.
     pub(super) state: State,
     /// Reusable buffer for candidate rewrites.
     pub(super) scratch: RewriteScratch,
     /// Runtime limits and completed-step count.
     pub(super) budget: RuntimeBudgetState<E>,
+    /// Rule-attempt limits and completed-attempt count.
+    pub(super) attempt_budget: RuleAttemptBudgetState<A>,
     /// Rule-attempt pass that owns current target and remaining scan state.
     pub(super) runtime_rules: Pass,
+}
+
+/// Active rule-attempt runtime state without a selected pass.
+pub(super) struct AttemptRunCoreParts<E: ExecutionPolicy, A: RuleAttemptPolicy> {
+    /// Current runtime byte state.
+    pub(super) state: State,
+    /// Reusable buffer for candidate rewrites.
+    pub(super) scratch: RewriteScratch,
+    /// Runtime limits and completed-step count.
+    pub(super) budget: RuntimeBudgetState<E>,
+    /// Rule-attempt limits and completed-attempt count.
+    pub(super) attempt_budget: RuleAttemptBudgetState<A>,
 }
 
 /// Terminal runtime state after active execution can no longer resume.
@@ -78,9 +88,7 @@ pub(super) struct AttemptSession<
     /// Borrowed parsed program.
     pub(super) program: &'program ExecutableProgram,
     /// Mutable execution state.
-    pub(super) core: AttemptRunCore<E, Pass>,
-    /// Rule-attempt budget and consumed-attempt count.
-    pub(super) attempt_budget: RuleAttemptBudgetState<A>,
+    pub(super) core: AttemptRunCore<E, A, Pass>,
 }
 
 /// Terminal rule-attempt state after the cursor can no longer resume.
@@ -188,7 +196,7 @@ impl<'program, E: ExecutionPolicy> ActiveRunCore<'program, E> {
     }
 }
 
-impl<E: ExecutionPolicy, Pass> AttemptRunCore<E, Pass> {
+impl<E: ExecutionPolicy, A: RuleAttemptPolicy, Pass> AttemptRunCore<E, A, Pass> {
     /// Builds the mutable rule-attempt runtime core from a typed pass.
     fn new(runtime_rules: Pass, admitted: AdmittedRun<E>) -> Self {
         let (input, budget) = admitted.into_runtime_parts();
@@ -197,6 +205,7 @@ impl<E: ExecutionPolicy, Pass> AttemptRunCore<E, Pass> {
             state,
             scratch: RewriteScratch::new(),
             budget,
+            attempt_budget: RuleAttemptBudgetState::new(),
             runtime_rules,
         }
     }
@@ -206,19 +215,46 @@ impl<E: ExecutionPolicy, Pass> AttemptRunCore<E, Pass> {
         state: State,
         scratch: RewriteScratch,
         budget: RuntimeBudgetState<E>,
+        attempt_budget: RuleAttemptBudgetState<A>,
         runtime_rules: Pass,
     ) -> Self {
         Self {
             state,
             scratch,
             budget,
+            attempt_budget,
             runtime_rules,
         }
+    }
+
+    /// Splits this core into pass-independent runtime state and the selected pass.
+    pub(super) fn into_parts(self) -> (AttemptRunCoreParts<E, A>, Pass) {
+        let Self {
+            state,
+            scratch,
+            budget,
+            attempt_budget,
+            runtime_rules,
+        } = self;
+        (
+            AttemptRunCoreParts {
+                state,
+                scratch,
+                budget,
+                attempt_budget,
+            },
+            runtime_rules,
+        )
     }
 
     /// Number of steps already committed in this core.
     pub(super) const fn completed_steps(&self) -> StepCount {
         self.budget.completed_steps()
+    }
+
+    /// Number of rule attempts already consumed in this core.
+    pub(super) const fn completed_attempts(&self) -> RuleAttemptCount {
+        self.attempt_budget.completed_attempts()
     }
 
     /// Borrows the current runtime state.
@@ -233,6 +269,19 @@ impl<E: ExecutionPolicy, Pass> AttemptRunCore<E, Pass> {
             state: self.state,
             steps,
         }
+    }
+}
+
+impl<E: ExecutionPolicy, A: RuleAttemptPolicy> AttemptRunCoreParts<E, A> {
+    /// Reattaches a typed pass to these active runtime parts.
+    pub(super) fn with_pass<Pass>(self, runtime_rules: Pass) -> AttemptRunCore<E, A, Pass> {
+        AttemptRunCore::from_parts(
+            self.state,
+            self.scratch,
+            self.budget,
+            self.attempt_budget,
+            runtime_rules,
+        )
     }
 }
 
@@ -454,7 +503,7 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy, Pass: RuntimeRulePassSt
     /// # Errors
     ///
     /// Returns `RunStartError` if admitted runtime state cannot be initialized.
-    fn from_pass(
+    pub(super) fn from_pass(
         program: &'program ExecutableProgram,
         admitted: AdmittedRun<E>,
         pass: Pass,
@@ -462,7 +511,6 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy, Pass: RuntimeRulePassSt
         Self {
             program,
             core: AttemptRunCore::new(pass, admitted),
-            attempt_budget: RuleAttemptBudgetState::new(),
         }
     }
 
@@ -473,48 +521,12 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy, Pass: RuntimeRulePassSt
 
     /// Number of executable rule-line attempts consumed so far.
     pub(super) const fn completed_attempts(&self) -> RuleAttemptCount {
-        self.attempt_budget.completed_attempts()
+        self.core.completed_attempts()
     }
 
     /// Borrow the current runtime state.
     pub(super) fn state(&self) -> RuntimeStateView<'_> {
         self.core.state()
-    }
-}
-
-impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> AttemptSessionCursor<'program, E, A> {
-    /// Starts active rule-attempt execution from an executable program witness.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunStartError` if allocating per-run rule-attempt state fails.
-    pub(super) fn new(
-        program: &'program ExecutableProgram,
-        admitted: AdmittedRun<E>,
-    ) -> Result<Self, RunStartError> {
-        let runtime_rules = StartedRuntimeRulePass::from_program(program)?;
-        Ok(started_session_from_pass(program, admitted, runtime_rules))
-    }
-}
-
-/// Builds the private session classifier for a newly started rule-attempt pass.
-fn started_session_from_pass<'program, E, A>(
-    program: &'program ExecutableProgram,
-    admitted: AdmittedRun<E>,
-    runtime_rules: crate::runtime::once::StartedRuntimeRuleTable<'program>,
-) -> AttemptSessionCursor<'program, E, A>
-where
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-{
-    let runtime_rules = runtime_rules.into_pass();
-    match runtime_rules {
-        StartedRuntimeRulePass::Continuing(pass) => AttemptSessionCursor::Continuing(
-            ContinuingAttemptSession::First(AttemptSession::from_pass(program, admitted, pass)),
-        ),
-        StartedRuntimeRulePass::Final(pass) => AttemptSessionCursor::Final(
-            FinalAttemptSession::First(AttemptSession::from_pass(program, admitted, pass)),
-        ),
     }
 }
 

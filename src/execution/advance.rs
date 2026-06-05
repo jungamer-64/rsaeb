@@ -7,23 +7,24 @@ use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, ReturnOutput};
 use crate::runtime::action::{AppliedRule, PreparedRuleStep, prepare_matched_rule};
-use crate::runtime::budget::{RuleAttemptBudgetState, RuleAttemptReservation, RuntimeBudgetState};
+use crate::runtime::budget::{RuleAttemptReservation, RuntimeBudgetState};
 use crate::runtime::matcher::{MatchedRuleApplication, RuleAttempt, RuleAttemptMiss};
 use crate::runtime::once::{
-    AfterMissContinuingRulePass, AfterMissFinalRulePass, AfterMissRuntimeRulePass,
-    FirstContinuingRulePass, FirstFinalRulePass, RuntimeRulePassState, StartedRuntimeRulePass,
+    AfterMissContinuingRulePass, AfterMissFinalRulePass, FirstContinuingRulePass,
+    FirstFinalRulePass, FirstRuntimeRulePassCursor, MissedRuntimeRulePassCursor,
+    RuntimeRulePassState,
 };
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
 
 use super::attempt::RuleMiss;
-use super::engine::{
-    AttemptRunCore, AttemptSession, AttemptSessionCursor, ContinuingAttemptSession,
-    FinalAttemptSession, TerminalAttemptSession,
-};
+use super::engine::{AttemptRunCore, AttemptSession, TerminalAttemptSession};
+use super::session::BorrowedRuleAttemptCursor;
 
 /// Continuing rule-attempt pass behavior shared by first and after-miss states.
-trait ContinuingRuleAttemptPass<'program>: RuntimeRulePassState<'program> + Sized {
+pub(super) trait ContinuingRuleAttemptPass<'program>:
+    RuntimeRulePassState<'program> + Sized
+{
     /// Attempts this pass's current target.
     fn attempt_current_rule<'state, 'once>(
         &'once mut self,
@@ -31,14 +32,16 @@ trait ContinuingRuleAttemptPass<'program>: RuntimeRulePassState<'program> + Size
     ) -> RuleAttempt<'program, 'state, 'once>;
 
     /// Commits a miss and advances to the next typed pass.
-    fn commit_attempt_miss(self) -> AfterMissRuntimeRulePass<'program>;
+    fn commit_attempt_miss(self) -> MissedRuntimeRulePassCursor<'program>;
 
     /// Resets this pass after a committed rewrite.
-    fn reset_attempt_after_rewrite(self) -> StartedRuntimeRulePass<'program>;
+    fn reset_attempt_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program>;
 }
 
 /// Final rule-attempt pass behavior shared by first and after-miss states.
-trait FinalRuleAttemptPass<'program>: RuntimeRulePassState<'program> + Sized {
+pub(super) trait FinalRuleAttemptPass<'program>:
+    RuntimeRulePassState<'program> + Sized
+{
     /// Attempts this pass's current target.
     fn attempt_current_rule<'state, 'once>(
         &'once mut self,
@@ -46,7 +49,7 @@ trait FinalRuleAttemptPass<'program>: RuntimeRulePassState<'program> + Sized {
     ) -> RuleAttempt<'program, 'state, 'once>;
 
     /// Resets this pass after a committed rewrite.
-    fn reset_attempt_after_rewrite(self) -> StartedRuntimeRulePass<'program>;
+    fn reset_attempt_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program>;
 }
 
 /// Program-bound result of consuming one continuing rule-attempt session step.
@@ -58,7 +61,7 @@ pub(super) enum CoreContinuingRuleAttemptStep<'program, E: ExecutionPolicy, A: R
         /// Non-applying rule information.
         miss: RuleMiss<'program>,
         /// Continuation session with the returned next cursor.
-        continuation: AttemptSessionCursor<'program, E, A>,
+        continuation: BorrowedRuleAttemptCursor<'program, E, A>,
     },
     /// A reusable rewrite committed and the rule-attempt run can continue.
     AlwaysRewritten {
@@ -69,7 +72,7 @@ pub(super) enum CoreContinuingRuleAttemptStep<'program, E: ExecutionPolicy, A: R
         /// Rule witness paired with the committed rewrite.
         rule: AlwaysRewriteRuleView<'program>,
         /// Continuation session with a fresh cursor.
-        continuation: AttemptSessionCursor<'program, E, A>,
+        continuation: BorrowedRuleAttemptCursor<'program, E, A>,
     },
     /// A once-only rewrite committed and the rule-attempt run can continue.
     OnceRewritten {
@@ -80,7 +83,7 @@ pub(super) enum CoreContinuingRuleAttemptStep<'program, E: ExecutionPolicy, A: R
         /// Rule witness paired with the committed rewrite.
         rule: OnceRewriteRuleView<'program>,
         /// Continuation session with a fresh cursor.
-        continuation: AttemptSessionCursor<'program, E, A>,
+        continuation: BorrowedRuleAttemptCursor<'program, E, A>,
     },
     /// A reusable return rule committed and the run is terminal.
     AlwaysReturned {
@@ -128,7 +131,7 @@ pub(super) enum CoreFinalRuleAttemptStep<'program, E: ExecutionPolicy, A: RuleAt
         /// Rule witness paired with the committed rewrite.
         rule: AlwaysRewriteRuleView<'program>,
         /// Continuation session with a fresh cursor.
-        continuation: AttemptSessionCursor<'program, E, A>,
+        continuation: BorrowedRuleAttemptCursor<'program, E, A>,
     },
     /// A once-only rewrite committed and the rule-attempt run can continue.
     OnceRewritten {
@@ -139,7 +142,7 @@ pub(super) enum CoreFinalRuleAttemptStep<'program, E: ExecutionPolicy, A: RuleAt
         /// Rule witness paired with the committed rewrite.
         rule: OnceRewriteRuleView<'program>,
         /// Continuation session with a fresh cursor.
-        continuation: AttemptSessionCursor<'program, E, A>,
+        continuation: BorrowedRuleAttemptCursor<'program, E, A>,
     },
     /// A reusable return rule committed and the run is terminal.
     AlwaysReturned {
@@ -193,11 +196,11 @@ impl<'program> ContinuingRuleAttemptPass<'program> for FirstContinuingRulePass<'
         self.attempt_current(state)
     }
 
-    fn commit_attempt_miss(self) -> AfterMissRuntimeRulePass<'program> {
+    fn commit_attempt_miss(self) -> MissedRuntimeRulePassCursor<'program> {
         self.commit_miss()
     }
 
-    fn reset_attempt_after_rewrite(self) -> StartedRuntimeRulePass<'program> {
+    fn reset_attempt_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program> {
         self.reset_after_rewrite()
     }
 }
@@ -210,11 +213,11 @@ impl<'program> ContinuingRuleAttemptPass<'program> for AfterMissContinuingRulePa
         self.attempt_current(state)
     }
 
-    fn commit_attempt_miss(self) -> AfterMissRuntimeRulePass<'program> {
+    fn commit_attempt_miss(self) -> MissedRuntimeRulePassCursor<'program> {
         self.commit_miss()
     }
 
-    fn reset_attempt_after_rewrite(self) -> StartedRuntimeRulePass<'program> {
+    fn reset_attempt_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program> {
         self.reset_after_rewrite()
     }
 }
@@ -227,7 +230,7 @@ impl<'program> FinalRuleAttemptPass<'program> for FirstFinalRulePass<'program> {
         self.attempt_current(state)
     }
 
-    fn reset_attempt_after_rewrite(self) -> StartedRuntimeRulePass<'program> {
+    fn reset_attempt_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program> {
         self.reset_after_rewrite()
     }
 }
@@ -240,37 +243,33 @@ impl<'program> FinalRuleAttemptPass<'program> for AfterMissFinalRulePass<'progra
         self.attempt_current(state)
     }
 
-    fn reset_attempt_after_rewrite(self) -> StartedRuntimeRulePass<'program> {
+    fn reset_attempt_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program> {
         self.reset_after_rewrite()
     }
 }
 
 /// Advances a borrowed rule-attempt session whose current rule has successors.
-pub(super) fn advance_continuing_borrowed_rule_attempt<'program, E, A>(
-    session: ContinuingAttemptSession<'program, E, A>,
+pub(super) fn advance_continuing_borrowed_rule_attempt<'program, E, A, Pass>(
+    session: AttemptSession<'program, E, A, Pass>,
 ) -> CoreContinuingRuleAttemptStep<'program, E, A>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
+    Pass: ContinuingRuleAttemptPass<'program>,
 {
-    match session {
-        ContinuingAttemptSession::First(session) => advance_continuing_rule_attempt(session),
-        ContinuingAttemptSession::AfterMiss(session) => advance_continuing_rule_attempt(session),
-    }
+    advance_continuing_rule_attempt(session)
 }
 
 /// Advances a borrowed rule-attempt session whose current rule exhausts the pass.
-pub(super) fn advance_final_borrowed_rule_attempt<'program, E, A>(
-    session: FinalAttemptSession<'program, E, A>,
+pub(super) fn advance_final_borrowed_rule_attempt<'program, E, A, Pass>(
+    session: AttemptSession<'program, E, A, Pass>,
 ) -> CoreFinalRuleAttemptStep<'program, E, A>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
+    Pass: FinalRuleAttemptPass<'program>,
 {
-    match session {
-        FinalAttemptSession::First(session) => advance_final_rule_attempt(session),
-        FinalAttemptSession::AfterMiss(session) => advance_final_rule_attempt(session),
-    }
+    advance_final_rule_attempt(session)
 }
 
 /// Advances a rule-attempt step whose selected rule is not final in the pass.
@@ -282,39 +281,27 @@ where
     A: RuleAttemptPolicy,
     Pass: ContinuingRuleAttemptPass<'program>,
 {
-    let AttemptSession {
-        program,
-        core,
-        mut attempt_budget,
-    } = session;
-    let AttemptRunCore {
-        mut state,
-        mut scratch,
-        mut budget,
-        runtime_rules: mut pass,
-    } = core;
+    let AttemptSession { program, core } = session;
+    let (mut parts, mut pass) = core.into_parts();
 
-    let reservation = match attempt_budget.reserve_next_attempt(state.byte_count()) {
+    let reservation = match parts
+        .attempt_budget
+        .reserve_next_attempt(parts.state.byte_count())
+    {
         Ok(reservation) => reservation,
         Err(error) => {
-            let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
-            return failed_continuing_rule_attempt(program, core, &attempt_budget, error);
+            let core = parts.with_pass(pass);
+            return failed_continuing_rule_attempt(program, core, error);
         }
     };
 
-    match pass.attempt_current_rule(&state) {
+    match pass.attempt_current_rule(&parts.state) {
         RuleAttempt::Missed(missed) => {
             let miss = public_rule_miss(missed);
             let attempt = reservation.commit();
             let runtime_rules = pass.commit_attempt_miss();
-            let continuation = session_start_from_after_miss_pass(
-                program,
-                state,
-                scratch,
-                budget,
-                runtime_rules,
-                attempt_budget,
-            );
+            let continuation =
+                BorrowedRuleAttemptCursor::from_after_miss_parts(program, parts, runtime_rules);
             CoreContinuingRuleAttemptStep::Missed {
                 attempt,
                 miss,
@@ -322,29 +309,23 @@ where
             }
         }
         RuleAttempt::Matched(matched) => {
-            let state_len = state.byte_count();
+            let state_len = parts.state.byte_count();
             let (attempt, prepared) = match prepare_attempt_application(
-                &mut scratch,
-                &mut budget,
+                &mut parts.scratch,
+                &mut parts.budget,
                 state_len,
                 reservation,
                 matched,
             ) {
                 Ok(committed) => committed,
                 Err(error) => {
-                    let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
-                    return failed_continuing_rule_attempt(program, core, &attempt_budget, error);
+                    let core = parts.with_pass(pass);
+                    return failed_continuing_rule_attempt(program, core, error);
                 }
             };
-            let applied = prepared.commit(&mut state, &mut scratch);
-            let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
-            committed_continuing_rule_attempt_application(
-                program,
-                core,
-                attempt_budget,
-                attempt,
-                applied,
-            )
+            let applied = prepared.commit(&mut parts.state, &mut parts.scratch);
+            let core = parts.with_pass(pass);
+            committed_continuing_rule_attempt_application(program, core, attempt, applied)
         }
     }
 }
@@ -358,31 +339,25 @@ where
     A: RuleAttemptPolicy,
     Pass: FinalRuleAttemptPass<'program>,
 {
-    let AttemptSession {
-        program,
-        core,
-        mut attempt_budget,
-    } = session;
-    let AttemptRunCore {
-        mut state,
-        mut scratch,
-        mut budget,
-        runtime_rules: mut pass,
-    } = core;
+    let AttemptSession { program, core } = session;
+    let (mut parts, mut pass) = core.into_parts();
 
-    let reservation = match attempt_budget.reserve_next_attempt(state.byte_count()) {
+    let reservation = match parts
+        .attempt_budget
+        .reserve_next_attempt(parts.state.byte_count())
+    {
         Ok(reservation) => reservation,
         Err(error) => {
-            let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
-            return failed_final_rule_attempt(program, core, &attempt_budget, error);
+            let core = parts.with_pass(pass);
+            return failed_final_rule_attempt(program, core, error);
         }
     };
 
-    match pass.attempt_current_rule(&state) {
+    match pass.attempt_current_rule(&parts.state) {
         RuleAttempt::Missed(missed) => {
             let miss = public_rule_miss(missed);
             let attempt = reservation.commit();
-            let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
+            let core = parts.with_pass(pass);
             let attempts = attempt;
             let terminal = TerminalAttemptSession {
                 program,
@@ -396,29 +371,23 @@ where
             }
         }
         RuleAttempt::Matched(matched) => {
-            let state_len = state.byte_count();
+            let state_len = parts.state.byte_count();
             let (attempt, prepared) = match prepare_attempt_application(
-                &mut scratch,
-                &mut budget,
+                &mut parts.scratch,
+                &mut parts.budget,
                 state_len,
                 reservation,
                 matched,
             ) {
                 Ok(committed) => committed,
                 Err(error) => {
-                    let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
-                    return failed_final_rule_attempt(program, core, &attempt_budget, error);
+                    let core = parts.with_pass(pass);
+                    return failed_final_rule_attempt(program, core, error);
                 }
             };
-            let applied = prepared.commit(&mut state, &mut scratch);
-            let core = AttemptRunCore::from_parts(state, scratch, budget, pass);
-            committed_final_rule_attempt_application(
-                program,
-                core,
-                attempt_budget,
-                attempt,
-                applied,
-            )
+            let applied = prepared.commit(&mut parts.state, &mut parts.scratch);
+            let core = parts.with_pass(pass);
+            committed_final_rule_attempt_application(program, core, attempt, applied)
         }
     }
 }
@@ -426,20 +395,20 @@ where
 /// Reports a continuing-pass rule-attempt failure with the uncommitted runtime state.
 fn failed_continuing_rule_attempt<'program, E, A, Pass>(
     program: &'program ExecutableProgram,
-    core: AttemptRunCore<E, Pass>,
-    attempt_budget: &RuleAttemptBudgetState<A>,
+    core: AttemptRunCore<E, A, Pass>,
     error: RuleAttemptStepError,
 ) -> CoreContinuingRuleAttemptStep<'program, E, A>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
+    let attempts = core.completed_attempts();
     CoreContinuingRuleAttemptStep::Failed {
         error,
         terminal: TerminalAttemptSession {
             program,
             core: core.into_terminal(),
-            attempts: attempt_budget.completed_attempts(),
+            attempts,
         },
     }
 }
@@ -447,20 +416,20 @@ where
 /// Reports a final-pass rule-attempt failure with the uncommitted runtime state.
 fn failed_final_rule_attempt<'program, E, A, Pass>(
     program: &'program ExecutableProgram,
-    core: AttemptRunCore<E, Pass>,
-    attempt_budget: &RuleAttemptBudgetState<A>,
+    core: AttemptRunCore<E, A, Pass>,
     error: RuleAttemptStepError,
 ) -> CoreFinalRuleAttemptStep<'program, E, A>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
+    let attempts = core.completed_attempts();
     CoreFinalRuleAttemptStep::Failed {
         error,
         terminal: TerminalAttemptSession {
             program,
             core: core.into_terminal(),
-            attempts: attempt_budget.completed_attempts(),
+            attempts,
         },
     }
 }
@@ -468,8 +437,7 @@ where
 /// Projects a continuing-pass committed rule application into the next rule-attempt state.
 fn committed_continuing_rule_attempt_application<'program, E, A, Pass>(
     program: &'program ExecutableProgram,
-    core: AttemptRunCore<E, Pass>,
-    attempt_budget: RuleAttemptBudgetState<A>,
+    core: AttemptRunCore<E, A, Pass>,
     attempt: RuleAttemptCount,
     applied: AppliedRule<'program>,
 ) -> CoreContinuingRuleAttemptStep<'program, E, A>
@@ -482,19 +450,11 @@ where
         AppliedRule::AlwaysRewritten(committed) => {
             let step = committed.step();
             let rule = committed.rule();
-            let AttemptRunCore {
-                state,
-                scratch,
-                budget,
-                runtime_rules,
-            } = core;
-            let continuation = session_start_from_started_pass(
+            let (parts, runtime_rules) = core.into_parts();
+            let continuation = BorrowedRuleAttemptCursor::from_first_parts(
                 program,
-                state,
-                scratch,
-                budget,
+                parts,
                 runtime_rules.reset_attempt_after_rewrite(),
-                attempt_budget,
             );
             CoreContinuingRuleAttemptStep::AlwaysRewritten {
                 attempt,
@@ -506,19 +466,11 @@ where
         AppliedRule::OnceRewritten(committed) => {
             let step = committed.step();
             let rule = committed.rule();
-            let AttemptRunCore {
-                state,
-                scratch,
-                budget,
-                runtime_rules,
-            } = core;
-            let continuation = session_start_from_started_pass(
+            let (parts, runtime_rules) = core.into_parts();
+            let continuation = BorrowedRuleAttemptCursor::from_first_parts(
                 program,
-                state,
-                scratch,
-                budget,
+                parts,
                 runtime_rules.reset_attempt_after_rewrite(),
-                attempt_budget,
             );
             CoreContinuingRuleAttemptStep::OnceRewritten {
                 attempt,
@@ -531,6 +483,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let output = committed.into_output();
+            let attempts = core.completed_attempts();
             CoreContinuingRuleAttemptStep::AlwaysReturned {
                 attempt,
                 step,
@@ -539,7 +492,7 @@ where
                 terminal: TerminalAttemptSession {
                     program,
                     core: core.into_terminal(),
-                    attempts: attempt_budget.completed_attempts(),
+                    attempts,
                 },
             }
         }
@@ -547,6 +500,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let output = committed.into_output();
+            let attempts = core.completed_attempts();
             CoreContinuingRuleAttemptStep::OnceReturned {
                 attempt,
                 step,
@@ -555,7 +509,7 @@ where
                 terminal: TerminalAttemptSession {
                     program,
                     core: core.into_terminal(),
-                    attempts: attempt_budget.completed_attempts(),
+                    attempts,
                 },
             }
         }
@@ -565,8 +519,7 @@ where
 /// Projects a final-pass committed rule application into the next rule-attempt state.
 fn committed_final_rule_attempt_application<'program, E, A, Pass>(
     program: &'program ExecutableProgram,
-    core: AttemptRunCore<E, Pass>,
-    attempt_budget: RuleAttemptBudgetState<A>,
+    core: AttemptRunCore<E, A, Pass>,
     attempt: RuleAttemptCount,
     applied: AppliedRule<'program>,
 ) -> CoreFinalRuleAttemptStep<'program, E, A>
@@ -579,19 +532,11 @@ where
         AppliedRule::AlwaysRewritten(committed) => {
             let step = committed.step();
             let rule = committed.rule();
-            let AttemptRunCore {
-                state,
-                scratch,
-                budget,
-                runtime_rules,
-            } = core;
-            let continuation = session_start_from_started_pass(
+            let (parts, runtime_rules) = core.into_parts();
+            let continuation = BorrowedRuleAttemptCursor::from_first_parts(
                 program,
-                state,
-                scratch,
-                budget,
+                parts,
                 runtime_rules.reset_attempt_after_rewrite(),
-                attempt_budget,
             );
             CoreFinalRuleAttemptStep::AlwaysRewritten {
                 attempt,
@@ -603,19 +548,11 @@ where
         AppliedRule::OnceRewritten(committed) => {
             let step = committed.step();
             let rule = committed.rule();
-            let AttemptRunCore {
-                state,
-                scratch,
-                budget,
-                runtime_rules,
-            } = core;
-            let continuation = session_start_from_started_pass(
+            let (parts, runtime_rules) = core.into_parts();
+            let continuation = BorrowedRuleAttemptCursor::from_first_parts(
                 program,
-                state,
-                scratch,
-                budget,
+                parts,
                 runtime_rules.reset_attempt_after_rewrite(),
-                attempt_budget,
             );
             CoreFinalRuleAttemptStep::OnceRewritten {
                 attempt,
@@ -628,6 +565,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let output = committed.into_output();
+            let attempts = core.completed_attempts();
             CoreFinalRuleAttemptStep::AlwaysReturned {
                 attempt,
                 step,
@@ -636,7 +574,7 @@ where
                 terminal: TerminalAttemptSession {
                     program,
                     core: core.into_terminal(),
-                    attempts: attempt_budget.completed_attempts(),
+                    attempts,
                 },
             }
         }
@@ -644,6 +582,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let output = committed.into_output();
+            let attempts = core.completed_attempts();
             CoreFinalRuleAttemptStep::OnceReturned {
                 attempt,
                 step,
@@ -652,71 +591,9 @@ where
                 terminal: TerminalAttemptSession {
                     program,
                     core: core.into_terminal(),
-                    attempts: attempt_budget.completed_attempts(),
+                    attempts,
                 },
             }
-        }
-    }
-}
-
-/// Rebuilds a typed continuation session from a reset or newly started pass.
-fn session_start_from_started_pass<'program, E, A>(
-    program: &'program ExecutableProgram,
-    state: State,
-    scratch: RewriteScratch,
-    budget: RuntimeBudgetState<E>,
-    runtime_rules: StartedRuntimeRulePass<'program>,
-    attempt_budget: RuleAttemptBudgetState<A>,
-) -> AttemptSessionCursor<'program, E, A>
-where
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-{
-    match runtime_rules {
-        StartedRuntimeRulePass::Continuing(pass) => {
-            AttemptSessionCursor::Continuing(ContinuingAttemptSession::First(AttemptSession {
-                program,
-                core: AttemptRunCore::from_parts(state, scratch, budget, pass),
-                attempt_budget,
-            }))
-        }
-        StartedRuntimeRulePass::Final(pass) => {
-            AttemptSessionCursor::Final(FinalAttemptSession::First(AttemptSession {
-                program,
-                core: AttemptRunCore::from_parts(state, scratch, budget, pass),
-                attempt_budget,
-            }))
-        }
-    }
-}
-
-/// Rebuilds a typed continuation session after a committed miss.
-fn session_start_from_after_miss_pass<'program, E, A>(
-    program: &'program ExecutableProgram,
-    state: State,
-    scratch: RewriteScratch,
-    budget: RuntimeBudgetState<E>,
-    runtime_rules: AfterMissRuntimeRulePass<'program>,
-    attempt_budget: RuleAttemptBudgetState<A>,
-) -> AttemptSessionCursor<'program, E, A>
-where
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-{
-    match runtime_rules {
-        AfterMissRuntimeRulePass::Continuing(pass) => {
-            AttemptSessionCursor::Continuing(ContinuingAttemptSession::AfterMiss(AttemptSession {
-                program,
-                core: AttemptRunCore::from_parts(state, scratch, budget, pass),
-                attempt_budget,
-            }))
-        }
-        AfterMissRuntimeRulePass::Final(pass) => {
-            AttemptSessionCursor::Final(FinalAttemptSession::AfterMiss(AttemptSession {
-                program,
-                core: AttemptRunCore::from_parts(state, scratch, budget, pass),
-                attempt_budget,
-            }))
         }
     }
 }

@@ -3,6 +3,11 @@ use crate::input::AdmittedRun;
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, RunResult};
+use crate::runtime::once::{
+    AfterMissContinuingRulePass, AfterMissFinalRulePass, FirstContinuingRulePass,
+    FirstFinalRulePass, FirstRuntimeRulePassCursor, MissedRuntimeRulePassCursor,
+    RuntimeRulePassCursor, StartedRuntimeRuleTable,
+};
 use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
 
 use super::advance::{
@@ -10,8 +15,8 @@ use super::advance::{
     advance_continuing_borrowed_rule_attempt, advance_final_borrowed_rule_attempt,
 };
 use super::engine::{
-    AttemptSessionCursor, ContinuingAttemptSession, CoreRunTransition, FinalAttemptSession,
-    Session, TerminalAttemptSession, TerminalRunCore,
+    AttemptRunCoreParts, AttemptSession, CoreRunTransition, Session, TerminalAttemptSession,
+    TerminalRunCore,
 };
 use super::transition::{
     BorrowedAlwaysReturnRun, BorrowedAlwaysRewriteStep, BorrowedContinuingRuleAttemptTransition,
@@ -49,13 +54,29 @@ pub enum BorrowedRuleAttemptCursor<'program, E: ExecutionPolicy, A: RuleAttemptP
 pub struct BorrowedContinuingRuleAttemptSession<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
 {
     /// Internal rule-attempt session pinned to a continuing pass shape.
-    pub(super) session: ContinuingAttemptSession<'program, E, A>,
+    session: ContinuingRuleAttemptSession<'program, E, A>,
 }
 
 /// Borrowed rule-attempt session whose current target exhausts the pass.
 pub struct BorrowedFinalRuleAttemptSession<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     /// Internal rule-attempt session pinned to a final pass shape.
-    pub(super) session: FinalAttemptSession<'program, E, A>,
+    session: FinalRuleAttemptSession<'program, E, A>,
+}
+
+/// Continuing borrowed rule-attempt session classified by miss history.
+enum ContinuingRuleAttemptSession<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
+    /// Continuing pass that has not missed any earlier rule in this scan.
+    First(AttemptSession<'program, E, A, FirstContinuingRulePass<'program>>),
+    /// Continuing pass after at least one miss.
+    AfterMiss(AttemptSession<'program, E, A, AfterMissContinuingRulePass<'program>>),
+}
+
+/// Final borrowed rule-attempt session classified by miss history.
+enum FinalRuleAttemptSession<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
+    /// Final pass that has not missed any earlier rule in this scan.
+    First(AttemptSession<'program, E, A, FirstFinalRulePass<'program>>),
+    /// Final pass after at least one miss.
+    AfterMiss(AttemptSession<'program, E, A, AfterMissFinalRulePass<'program>>),
 }
 
 /// Terminal data split out of a borrowed rule-attempt run session.
@@ -175,18 +196,81 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> BorrowedRuleAttemptCurs
         program: &'program ExecutableProgram,
         admitted: AdmittedRun<E>,
     ) -> Result<Self, RunStartError> {
-        AttemptSessionCursor::new(program, admitted).map(Self::from_cursor)
+        let runtime_rules = StartedRuntimeRuleTable::from_program(program)?;
+        Ok(Self::from_first_pass_cursor(
+            program,
+            admitted,
+            runtime_rules.into_pass_cursor(),
+        ))
     }
 
-    /// Projects the private session classifier into the public cursor.
-    pub(super) fn from_cursor(cursor: AttemptSessionCursor<'program, E, A>) -> Self {
+    /// Projects a newly started typed pass into the public cursor.
+    fn from_first_pass_cursor(
+        program: &'program ExecutableProgram,
+        admitted: AdmittedRun<E>,
+        cursor: FirstRuntimeRulePassCursor<'program>,
+    ) -> Self {
         match cursor {
-            AttemptSessionCursor::Continuing(session) => {
-                Self::Continuing(BorrowedContinuingRuleAttemptSession { session })
+            RuntimeRulePassCursor::Continuing(pass) => {
+                Self::Continuing(BorrowedContinuingRuleAttemptSession {
+                    session: ContinuingRuleAttemptSession::First(AttemptSession::from_pass(
+                        program, admitted, pass,
+                    )),
+                })
             }
-            AttemptSessionCursor::Final(session) => {
-                Self::Final(BorrowedFinalRuleAttemptSession { session })
+            RuntimeRulePassCursor::Final(pass) => Self::Final(BorrowedFinalRuleAttemptSession {
+                session: FinalRuleAttemptSession::First(AttemptSession::from_pass(
+                    program, admitted, pass,
+                )),
+            }),
+        }
+    }
+
+    /// Projects reset rule-attempt core parts into the public cursor.
+    pub(super) fn from_first_parts(
+        program: &'program ExecutableProgram,
+        parts: AttemptRunCoreParts<E, A>,
+        cursor: FirstRuntimeRulePassCursor<'program>,
+    ) -> Self {
+        match cursor {
+            RuntimeRulePassCursor::Continuing(pass) => {
+                Self::Continuing(BorrowedContinuingRuleAttemptSession {
+                    session: ContinuingRuleAttemptSession::First(AttemptSession {
+                        program,
+                        core: parts.with_pass(pass),
+                    }),
+                })
             }
+            RuntimeRulePassCursor::Final(pass) => Self::Final(BorrowedFinalRuleAttemptSession {
+                session: FinalRuleAttemptSession::First(AttemptSession {
+                    program,
+                    core: parts.with_pass(pass),
+                }),
+            }),
+        }
+    }
+
+    /// Projects after-miss rule-attempt core parts into the public cursor.
+    pub(super) fn from_after_miss_parts(
+        program: &'program ExecutableProgram,
+        parts: AttemptRunCoreParts<E, A>,
+        cursor: MissedRuntimeRulePassCursor<'program>,
+    ) -> Self {
+        match cursor {
+            RuntimeRulePassCursor::Continuing(pass) => {
+                Self::Continuing(BorrowedContinuingRuleAttemptSession {
+                    session: ContinuingRuleAttemptSession::AfterMiss(AttemptSession {
+                        program,
+                        core: parts.with_pass(pass),
+                    }),
+                })
+            }
+            RuntimeRulePassCursor::Final(pass) => Self::Final(BorrowedFinalRuleAttemptSession {
+                session: FinalRuleAttemptSession::AfterMiss(AttemptSession {
+                    program,
+                    core: parts.with_pass(pass),
+                }),
+            }),
         }
     }
 
@@ -237,8 +321,8 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
     #[must_use]
     pub const fn completed_steps(&self) -> StepCount {
         match &self.session {
-            ContinuingAttemptSession::First(session) => session.completed_steps(),
-            ContinuingAttemptSession::AfterMiss(session) => session.completed_steps(),
+            ContinuingRuleAttemptSession::First(session) => session.completed_steps(),
+            ContinuingRuleAttemptSession::AfterMiss(session) => session.completed_steps(),
         }
     }
 
@@ -246,8 +330,8 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
     #[must_use]
     pub const fn completed_attempts(&self) -> RuleAttemptCount {
         match &self.session {
-            ContinuingAttemptSession::First(session) => session.completed_attempts(),
-            ContinuingAttemptSession::AfterMiss(session) => session.completed_attempts(),
+            ContinuingRuleAttemptSession::First(session) => session.completed_attempts(),
+            ContinuingRuleAttemptSession::AfterMiss(session) => session.completed_attempts(),
         }
     }
 
@@ -255,8 +339,8 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
     #[must_use]
     pub const fn program(&self) -> &'program ExecutableProgram {
         match &self.session {
-            ContinuingAttemptSession::First(session) => session.program,
-            ContinuingAttemptSession::AfterMiss(session) => session.program,
+            ContinuingRuleAttemptSession::First(session) => session.program,
+            ContinuingRuleAttemptSession::AfterMiss(session) => session.program,
         }
     }
 
@@ -264,15 +348,24 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
         match &self.session {
-            ContinuingAttemptSession::First(session) => session.state(),
-            ContinuingAttemptSession::AfterMiss(session) => session.state(),
+            ContinuingRuleAttemptSession::First(session) => session.state(),
+            ContinuingRuleAttemptSession::AfterMiss(session) => session.state(),
         }
     }
 
     /// Advances a continuing rule-attempt session by exactly one executable rule line.
     #[must_use]
     pub fn step(self) -> BorrowedContinuingRuleAttemptTransition<'program, E, A> {
-        project_continuing_rule_attempt_step(advance_continuing_borrowed_rule_attempt(self.session))
+        match self.session {
+            ContinuingRuleAttemptSession::First(session) => project_continuing_rule_attempt_step(
+                advance_continuing_borrowed_rule_attempt(session),
+            ),
+            ContinuingRuleAttemptSession::AfterMiss(session) => {
+                project_continuing_rule_attempt_step(advance_continuing_borrowed_rule_attempt(
+                    session,
+                ))
+            }
+        }
     }
 }
 
@@ -283,8 +376,8 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
     #[must_use]
     pub const fn completed_steps(&self) -> StepCount {
         match &self.session {
-            FinalAttemptSession::First(session) => session.completed_steps(),
-            FinalAttemptSession::AfterMiss(session) => session.completed_steps(),
+            FinalRuleAttemptSession::First(session) => session.completed_steps(),
+            FinalRuleAttemptSession::AfterMiss(session) => session.completed_steps(),
         }
     }
 
@@ -292,8 +385,8 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
     #[must_use]
     pub const fn completed_attempts(&self) -> RuleAttemptCount {
         match &self.session {
-            FinalAttemptSession::First(session) => session.completed_attempts(),
-            FinalAttemptSession::AfterMiss(session) => session.completed_attempts(),
+            FinalRuleAttemptSession::First(session) => session.completed_attempts(),
+            FinalRuleAttemptSession::AfterMiss(session) => session.completed_attempts(),
         }
     }
 
@@ -301,8 +394,8 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
     #[must_use]
     pub const fn program(&self) -> &'program ExecutableProgram {
         match &self.session {
-            FinalAttemptSession::First(session) => session.program,
-            FinalAttemptSession::AfterMiss(session) => session.program,
+            FinalRuleAttemptSession::First(session) => session.program,
+            FinalRuleAttemptSession::AfterMiss(session) => session.program,
         }
     }
 
@@ -310,15 +403,22 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
     #[must_use]
     pub fn state(&self) -> RuntimeStateView<'_> {
         match &self.session {
-            FinalAttemptSession::First(session) => session.state(),
-            FinalAttemptSession::AfterMiss(session) => session.state(),
+            FinalRuleAttemptSession::First(session) => session.state(),
+            FinalRuleAttemptSession::AfterMiss(session) => session.state(),
         }
     }
 
     /// Advances a final rule-attempt session by exactly one executable rule line.
     #[must_use]
     pub fn step(self) -> BorrowedFinalRuleAttemptTransition<'program, E, A> {
-        project_final_rule_attempt_step(advance_final_borrowed_rule_attempt(self.session))
+        match self.session {
+            FinalRuleAttemptSession::First(session) => {
+                project_final_rule_attempt_step(advance_final_borrowed_rule_attempt(session))
+            }
+            FinalRuleAttemptSession::AfterMiss(session) => {
+                project_final_rule_attempt_step(advance_final_borrowed_rule_attempt(session))
+            }
+        }
     }
 }
 
@@ -413,7 +513,7 @@ fn project_continuing_rule_attempt_step<'program, E: ExecutionPolicy, A: RuleAtt
         } => BorrowedContinuingRuleAttemptTransition::Missed(BorrowedMissedRuleAttempt {
             attempt,
             miss,
-            cursor: BorrowedRuleAttemptCursor::from_cursor(continuation),
+            cursor: continuation,
         }),
         CoreContinuingRuleAttemptStep::AlwaysRewritten {
             attempt,
@@ -425,7 +525,7 @@ fn project_continuing_rule_attempt_step<'program, E: ExecutionPolicy, A: RuleAtt
                 attempt,
                 step,
                 rule,
-                cursor: BorrowedRuleAttemptCursor::from_cursor(continuation),
+                cursor: continuation,
             },
         ),
         CoreContinuingRuleAttemptStep::OnceRewritten {
@@ -438,7 +538,7 @@ fn project_continuing_rule_attempt_step<'program, E: ExecutionPolicy, A: RuleAtt
                 attempt,
                 step,
                 rule,
-                cursor: BorrowedRuleAttemptCursor::from_cursor(continuation),
+                cursor: continuation,
             },
         ),
         CoreContinuingRuleAttemptStep::AlwaysReturned {
@@ -504,7 +604,7 @@ fn project_final_rule_attempt_step<'program, E: ExecutionPolicy, A: RuleAttemptP
                 attempt,
                 step,
                 rule,
-                cursor: BorrowedRuleAttemptCursor::from_cursor(continuation),
+                cursor: continuation,
             },
         ),
         CoreFinalRuleAttemptStep::OnceRewritten {
@@ -517,7 +617,7 @@ fn project_final_rule_attempt_step<'program, E: ExecutionPolicy, A: RuleAttemptP
                 attempt,
                 step,
                 rule,
-                cursor: BorrowedRuleAttemptCursor::from_cursor(continuation),
+                cursor: continuation,
             })
         }
         CoreFinalRuleAttemptStep::AlwaysReturned {
