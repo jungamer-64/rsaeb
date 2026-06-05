@@ -7,10 +7,7 @@ use crate::inspect::{
     AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView,
 };
 use crate::program::{ExecutableProgram, RuleScan, RuntimeStoredRule, StoredRuleRef};
-use crate::runtime::matcher::{
-    AvailableRuleAttempt, MatchedRuleApplication, RuleAttempt, RuleAttemptMiss,
-    attempt_available_rule,
-};
+use crate::runtime::matcher::{MatchedRuleApplication, RuleAttempt, RuleAttemptMiss};
 use crate::runtime::state::State;
 
 /// Per-run ordinary execution table with parsed rules and runtime availability paired.
@@ -163,60 +160,11 @@ struct AlwaysRewriteRuntimeRuleCell<'program> {
     rule: AlwaysRewriteRuleView<'program>,
 }
 
-/// Runtime cell for a once-only rewrite rule.
-#[derive(Debug)]
-struct OnceRewriteRuntimeRuleCell<'program> {
-    /// Position-bearing parsed executable rule.
-    rule: OnceRewriteRuleView<'program>,
-    /// Runtime-local availability for this parsed rule.
-    availability: RuntimeOnceAvailability,
-}
-
 /// Runtime cell for a reusable return rule.
 #[derive(Debug)]
 struct AlwaysReturnRuntimeRuleCell<'program> {
     /// Position-bearing parsed executable rule.
     rule: AlwaysReturnRuleView<'program>,
-}
-
-/// Runtime cell for a once-only return rule.
-#[derive(Debug)]
-struct OnceReturnRuntimeRuleCell<'program> {
-    /// Position-bearing parsed executable rule.
-    rule: OnceReturnRuleView<'program>,
-    /// Runtime-local availability for this parsed rule.
-    availability: RuntimeOnceAvailability,
-}
-
-/// Runtime availability state for one parsed `(once)` executable rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeOnceAvailability {
-    /// Rule has not committed during this run.
-    Fresh,
-    /// Rule has already committed during this run.
-    Committed,
-}
-
-/// Private permit that consumes one fresh once-rule state on commit.
-#[derive(Debug)]
-pub(crate) struct OnceMatchPermit<'state> {
-    /// Fresh per-rule state reserved for the matched rule.
-    state: &'state mut RuntimeOnceAvailability,
-    /// Non-copy token that keeps the permit linear even though its witnesses are copyable.
-    linearity: OnceMatchPermitLinearity,
-}
-
-/// Non-copy marker carried by once-rule commit permits.
-#[derive(Debug)]
-struct OnceMatchPermitLinearity;
-
-/// Runtime cell classification before state matching.
-#[derive(Debug)]
-enum RuntimeRuleTarget<'program, 'once> {
-    /// The rule can be evaluated against the current runtime state.
-    Available(AvailableRuntimeRule<'program, 'once>),
-    /// The rule has already committed during this runtime invocation.
-    Consumed(ConsumedRuntimeRule<'program>),
 }
 
 impl<'program> pass_state::Sealed for FirstContinuingRulePass<'program> {}
@@ -230,67 +178,6 @@ impl<'program> RuntimeRulePassState<'program> for FirstFinalRulePass<'program> {
 
 impl<'program> pass_state::Sealed for AfterMissFinalRulePass<'program> {}
 impl<'program> RuntimeRulePassState<'program> for AfterMissFinalRulePass<'program> {}
-
-/// Parsed once-only rule that is already consumed in the current run.
-#[derive(Debug)]
-enum ConsumedRuntimeRule<'program> {
-    /// Consumed once-only rewrite rule.
-    OnceRewrite(OnceRewriteRuleView<'program>),
-    /// Consumed once-only return rule.
-    OnceReturn(OnceReturnRuleView<'program>),
-}
-
-/// Parsed rule proven available for runtime-state matching.
-#[derive(Debug)]
-pub(crate) enum AvailableRuntimeRule<'program, 'once> {
-    /// Reusable rewrite rule.
-    AlwaysRewrite(AvailableAlwaysRewriteRuntimeRule<'program>),
-    /// Fresh once-only rewrite rule paired with its linear commit permit.
-    OnceRewrite(AvailableOnceRewriteRuntimeRule<'program, 'once>),
-    /// Reusable return rule.
-    AlwaysReturn(AvailableAlwaysReturnRuntimeRule<'program>),
-    /// Fresh once-only return rule paired with its linear commit permit.
-    OnceReturn(AvailableOnceReturnRuntimeRule<'program, 'once>),
-}
-
-/// Reusable rewrite rule proven available for runtime-state matching.
-#[derive(Debug)]
-pub(crate) struct AvailableAlwaysRewriteRuntimeRule<'program> {
-    /// Position-bearing parsed executable rule.
-    rule: AlwaysRewriteRuleView<'program>,
-}
-
-/// Fresh once-only rewrite rule paired with the permit that can consume it after a match commits.
-#[derive(Debug)]
-pub(crate) struct AvailableOnceRewriteRuntimeRule<'program, 'once> {
-    /// Position-bearing parsed executable rule.
-    rule: OnceRewriteRuleView<'program>,
-    /// Linear once-state commit permit.
-    commit: OnceMatchPermit<'once>,
-}
-
-/// Reusable return rule proven available for runtime-state matching.
-#[derive(Debug)]
-pub(crate) struct AvailableAlwaysReturnRuntimeRule<'program> {
-    /// Position-bearing parsed executable rule.
-    rule: AlwaysReturnRuleView<'program>,
-}
-
-/// Fresh once-only return rule paired with the permit that can consume it after a match commits.
-#[derive(Debug)]
-pub(crate) struct AvailableOnceReturnRuntimeRule<'program, 'once> {
-    /// Position-bearing parsed executable rule.
-    rule: OnceReturnRuleView<'program>,
-    /// Linear once-state commit permit.
-    commit: OnceMatchPermit<'once>,
-}
-
-impl OnceMatchPermitLinearity {
-    /// Creates the linearity marker for one permit.
-    const fn new() -> Self {
-        Self
-    }
-}
 
 impl<'program> StartedRuntimeRuleTable<'program> {
     /// Moves out the typed started pass.
