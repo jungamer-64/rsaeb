@@ -22,15 +22,6 @@ pub(crate) struct RuntimeRuleTable<'program> {
     remaining: Vec<RuntimeRuleCell<'program>>,
 }
 
-/// Outcome of scanning the ordinary runtime rule table.
-#[derive(Debug)]
-pub(crate) enum RuntimeRuleSearch<'program, 'state, 'once> {
-    /// A rule matched and carries the commit permit needed after success.
-    Matched(MatchedRuleApplication<'program, 'state, 'once>),
-    /// No reusable or fresh once-only rule matched the runtime state.
-    Stable,
-}
-
 /// Rule-attempt pass whose history and tail shape are selected by type.
 #[derive(Debug)]
 pub(crate) struct RuntimeRulePass<'program, History, Tail> {
@@ -291,23 +282,6 @@ impl<'program> RuntimeRuleTable<'program> {
         })
     }
 
-    /// Finds the first reusable or fresh once-only rule that matches `state`.
-    pub(crate) fn find_next_match<'state, 'once>(
-        &'once mut self,
-        state: &'state State,
-    ) -> RuntimeRuleSearch<'program, 'state, 'once> {
-        if let Some(matched) = self.first.find_match(state) {
-            return RuntimeRuleSearch::Matched(matched);
-        }
-
-        for cell in &mut self.remaining {
-            if let Some(matched) = cell.find_match(state) {
-                return RuntimeRuleSearch::Matched(matched);
-            }
-        }
-
-        RuntimeRuleSearch::Stable
-    }
 }
 
 impl<'program> StartedRuntimeRuleTable<'program> {
@@ -611,16 +585,6 @@ impl<'program> RuntimeRuleCell<'program> {
         }
     }
 
-    /// Finds this rule as an ordinary execution match, skipping non-applying targets.
-    fn find_match<'state, 'once>(
-        &'once mut self,
-        state: &'state State,
-    ) -> Option<MatchedRuleApplication<'program, 'state, 'once>> {
-        match self.attempt(state) {
-            RuleAttempt::Matched(matched) => Some(matched),
-            RuleAttempt::Missed(_) => None,
-        }
-    }
 }
 
 /// Reserves a rule queue through the runtime-rule allocation boundary.
