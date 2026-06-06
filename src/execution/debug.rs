@@ -8,14 +8,13 @@ use super::transition::{
     BorrowedAlwaysReturnRun, BorrowedAlwaysReturnStateMismatchRuleAttempt,
     BorrowedAlwaysRewriteStateMismatchRuleAttempt, BorrowedAlwaysRewriteStep,
     BorrowedContinuingRuleAttemptTransition, BorrowedFailedRun, BorrowedFinalRuleAttemptTransition,
-    BorrowedOnceReturnConsumedRuleAttempt, BorrowedOnceReturnRun,
+    BorrowedOnceReturnRun,
     BorrowedOnceReturnStateMismatchRuleAttempt, BorrowedOnceRewriteConsumedRuleAttempt,
     BorrowedOnceRewriteStateMismatchRuleAttempt, BorrowedOnceRewriteStep,
     BorrowedRuleAttemptAlwaysReturnRun, BorrowedRuleAttemptAlwaysRewriteStep,
     BorrowedRuleAttemptFailedRun, BorrowedRuleAttemptOnceReturnRun,
     BorrowedRuleAttemptOnceRewriteStep, BorrowedRuleAttemptStableAfterAlwaysReturnStateMismatch,
     BorrowedRuleAttemptStableAfterAlwaysRewriteStateMismatch,
-    BorrowedRuleAttemptStableAfterOnceReturnConsumed,
     BorrowedRuleAttemptStableAfterOnceReturnStateMismatch,
     BorrowedRuleAttemptStableAfterOnceRewriteConsumed,
     BorrowedRuleAttemptStableAfterOnceRewriteStateMismatch, BorrowedStableRun,
@@ -121,10 +120,6 @@ impl<E: ExecutionPolicy, A: RuleAttemptPolicy> core::fmt::Debug
                 .debug_tuple("OnceRewriteConsumed")
                 .field(missed)
                 .finish(),
-            Self::OnceReturnConsumed(missed) => formatter
-                .debug_tuple("OnceReturnConsumed")
-                .field(missed)
-                .finish(),
             Self::AlwaysRewritten(applied) => formatter
                 .debug_tuple("AlwaysRewritten")
                 .field(applied)
@@ -169,10 +164,6 @@ impl<E: ExecutionPolicy, A: RuleAttemptPolicy> core::fmt::Debug
                 .finish(),
             Self::StableAfterOnceRewriteConsumed(stable) => formatter
                 .debug_tuple("StableAfterOnceRewriteConsumed")
-                .field(stable)
-                .finish(),
-            Self::StableAfterOnceReturnConsumed(stable) => formatter
-                .debug_tuple("StableAfterOnceReturnConsumed")
                 .field(stable)
                 .finish(),
             Self::AlwaysRewritten(applied) => formatter
@@ -251,10 +242,6 @@ impl_rule_attempt_miss_debug!(
     BorrowedOnceRewriteConsumedRuleAttempt,
     "BorrowedOnceRewriteConsumedRuleAttempt"
 );
-impl_rule_attempt_miss_debug!(
-    BorrowedOnceReturnConsumedRuleAttempt,
-    "BorrowedOnceReturnConsumedRuleAttempt"
-);
 
 impl core::fmt::Debug for BorrowedStableRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -328,10 +315,6 @@ impl_rule_attempt_stable_miss_debug!(
 impl_rule_attempt_stable_miss_debug!(
     BorrowedRuleAttemptStableAfterOnceRewriteConsumed,
     "BorrowedRuleAttemptStableAfterOnceRewriteConsumed"
-);
-impl_rule_attempt_stable_miss_debug!(
-    BorrowedRuleAttemptStableAfterOnceReturnConsumed,
-    "BorrowedRuleAttemptStableAfterOnceReturnConsumed"
 );
 
 /// Implements debug output for borrowed return terminal witnesses.

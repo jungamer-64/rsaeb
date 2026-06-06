@@ -19,14 +19,13 @@ use super::session::BorrowedRuleAttemptCursor;
 use super::transition::{
     BorrowedAlwaysReturnStateMismatchRuleAttempt,
     BorrowedAlwaysRewriteStateMismatchRuleAttempt, BorrowedContinuingRuleAttemptTransition,
-    BorrowedFinalRuleAttemptTransition, BorrowedOnceReturnConsumedRuleAttempt,
-    BorrowedOnceReturnStateMismatchRuleAttempt, BorrowedOnceRewriteConsumedRuleAttempt,
+    BorrowedFinalRuleAttemptTransition, BorrowedOnceReturnStateMismatchRuleAttempt,
+    BorrowedOnceRewriteConsumedRuleAttempt,
     BorrowedOnceRewriteStateMismatchRuleAttempt, BorrowedRuleAttemptAlwaysReturnRun,
     BorrowedRuleAttemptAlwaysRewriteStep, BorrowedRuleAttemptFailedRun,
     BorrowedRuleAttemptOnceReturnRun, BorrowedRuleAttemptOnceRewriteStep,
     BorrowedRuleAttemptStableAfterAlwaysReturnStateMismatch,
     BorrowedRuleAttemptStableAfterAlwaysRewriteStateMismatch,
-    BorrowedRuleAttemptStableAfterOnceReturnConsumed,
     BorrowedRuleAttemptStableAfterOnceReturnStateMismatch,
     BorrowedRuleAttemptStableAfterOnceRewriteConsumed,
     BorrowedRuleAttemptStableAfterOnceRewriteStateMismatch,
@@ -321,15 +320,6 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
                     },
                 )
             }
-            EvaluatedRuleMiss::OnceReturnConsumed(rule) => {
-                BorrowedContinuingRuleAttemptTransition::OnceReturnConsumed(
-                    BorrowedOnceReturnConsumedRuleAttempt {
-                        attempt,
-                        rule,
-                        cursor,
-                    },
-                )
-            }
         }
     }
 }
@@ -391,16 +381,6 @@ impl<'program> CommittedFinalRuleAttemptMiss<'program> {
             EvaluatedRuleMiss::OnceRewriteConsumed(rule) => {
                 BorrowedFinalRuleAttemptTransition::StableAfterOnceRewriteConsumed(
                     BorrowedRuleAttemptStableAfterOnceRewriteConsumed {
-                        attempts,
-                        rule,
-                        program,
-                        core,
-                    },
-                )
-            }
-            EvaluatedRuleMiss::OnceReturnConsumed(rule) => {
-                BorrowedFinalRuleAttemptTransition::StableAfterOnceReturnConsumed(
-                    BorrowedRuleAttemptStableAfterOnceReturnConsumed {
                         attempts,
                         rule,
                         program,

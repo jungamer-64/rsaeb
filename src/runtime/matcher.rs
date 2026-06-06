@@ -28,8 +28,6 @@ pub(crate) enum EvaluatedRuleMiss<'program> {
     OnceReturnStateMismatch(OnceReturnRuleView<'program>),
     /// Once-only rewrite rule had already committed in this run.
     OnceRewriteConsumed(OnceRewriteRuleView<'program>),
-    /// Once-only return rule had already committed in this run.
-    OnceReturnConsumed(OnceReturnRuleView<'program>),
 }
 
 /// Matched rule plus the state range and action-specific commit data.

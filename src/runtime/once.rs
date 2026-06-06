@@ -1,4 +1,5 @@
 use alloc::{collections::VecDeque, vec::Vec};
+use core::marker::PhantomData;
 
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
@@ -178,8 +179,6 @@ enum RuntimeRuleCell<'program> {
     AlwaysReturn(AlwaysReturnRuntimeRuleCell<'program>),
     /// Fresh once-only terminal return rule.
     FreshOnceReturn(FreshOnceReturnRuntimeRuleCell<'program>),
-    /// Consumed once-only terminal return rule.
-    ConsumedOnceReturn(ConsumedOnceReturnRuntimeRuleCell<'program>),
 }
 
 /// Runtime cell for a reusable rewrite rule.
@@ -217,13 +216,6 @@ struct FreshOnceReturnRuntimeRuleCell<'program> {
     rule: OnceReturnRuleView<'program>,
 }
 
-/// Runtime cell for a consumed once-only return rule.
-#[derive(Debug)]
-struct ConsumedOnceReturnRuntimeRuleCell<'program> {
-    /// Position-bearing parsed executable rule.
-    rule: OnceReturnRuleView<'program>,
-}
-
 /// Linear commit permit for a matched fresh once-only rewrite rule.
 #[derive(Debug)]
 pub(crate) struct OnceRewriteCommitPermit<'program, 'once> {
@@ -238,10 +230,8 @@ pub(crate) struct OnceRewriteCommitPermit<'program, 'once> {
 /// Linear commit permit for a matched fresh once-only return rule.
 #[derive(Debug)]
 pub(crate) struct OnceReturnCommitPermit<'program, 'once> {
-    /// Runtime cell to consume if the prepared return commits.
-    cell: &'once mut RuntimeRuleCell<'program>,
-    /// Rule witness used to rebuild the consumed cell variant.
-    rule: OnceReturnRuleView<'program>,
+    /// Fresh once-return cell borrowed until the terminal commit boundary.
+    cell: PhantomData<&'once mut RuntimeRuleCell<'program>>,
     /// Non-copy token that keeps this permit linear.
     linearity: OnceReturnCommitLinearity,
 }
@@ -645,11 +635,8 @@ impl<'program> RuntimeRuleCell<'program> {
             Self::AlwaysReturn(cell) => attempt_always_return_rule(cell.rule, state),
             Self::FreshOnceReturn(cell) => {
                 let rule = cell.rule;
-                let commit = OnceReturnCommitPermit::new(self, rule);
+                let commit = OnceReturnCommitPermit::new(self);
                 attempt_once_return_rule(rule, commit, state)
-            }
-            Self::ConsumedOnceReturn(cell) => {
-                RuleAttemptEvaluation::Miss(EvaluatedRuleMiss::OnceReturnConsumed(cell.rule))
             }
         }
     }
@@ -706,22 +693,19 @@ impl<'program, 'once> OnceRewriteCommitPermit<'program, 'once> {
 
 impl<'program, 'once> OnceReturnCommitPermit<'program, 'once> {
     /// Creates the commit permit for a fresh once-only return cell.
-    fn new(cell: &'once mut RuntimeRuleCell<'program>, rule: OnceReturnRuleView<'program>) -> Self {
+    fn new(_cell: &'once mut RuntimeRuleCell<'program>) -> Self {
         Self {
-            cell,
-            rule,
+            cell: PhantomData,
             linearity: OnceReturnCommitLinearity::new(),
         }
     }
 
-    /// Consumes this permit and marks the owning once-return cell as consumed.
+    /// Consumes this permit at the terminal once-return commit boundary.
     pub(crate) fn commit(self) {
         let Self {
-            cell,
-            rule,
+            cell: _cell,
             linearity: _linearity,
         } = self;
-        *cell = RuntimeRuleCell::ConsumedOnceReturn(ConsumedOnceReturnRuntimeRuleCell { rule });
     }
 }
 
