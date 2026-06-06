@@ -415,24 +415,6 @@ impl<'program>
         let history = history.push_missed(current);
         advance_after_miss(history, tail)
     }
-
-    /// Resets a continuing pass with non-empty miss history after a rewrite.
-    pub(crate) fn reset_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program> {
-        let Self {
-            current,
-            history,
-            tail,
-        } = self;
-        let (first, mut remaining) = history.into_parts();
-        remaining.push_back(current);
-        let attempted = tail.append_to(&mut remaining);
-        RuntimeRulePassParts {
-            current: first,
-            remaining,
-            attempted,
-        }
-        .into_first_pass_cursor()
-    }
 }
 
 impl<'program> RuntimeRulePass<'program, NoMissedRules<'program>, FinalRuleTail<'program>> {
@@ -442,24 +424,6 @@ impl<'program> RuntimeRulePass<'program, NoMissedRules<'program>, FinalRuleTail<
     }
 }
 
-impl<'program> RuntimeRulePass<'program, MissedRuntimeRules<'program>, FinalRuleTail<'program>> {
-    /// Resets a final pass with non-empty miss history after a rewrite.
-    pub(crate) fn reset_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program> {
-        let Self {
-            current,
-            history,
-            tail,
-        } = self;
-        let (first, mut remaining) = history.into_parts();
-        remaining.push_back(current);
-        RuntimeRulePassParts {
-            current: first,
-            remaining,
-            attempted: tail.into_spare(),
-        }
-        .into_first_pass_cursor()
-    }
-}
 
 impl<'program> NoMissedRules<'program> {
     /// Builds empty pass history from a pre-reserved attempted-rule buffer.
