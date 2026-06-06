@@ -101,69 +101,6 @@ pub(super) struct TerminalAttemptSession<'program> {
     pub(super) attempts: RuleAttemptCount,
 }
 
-/// Result of consuming one active ordinary run session.
-pub(super) enum CoreRunTransition<'program, E>
-where
-    E: ExecutionPolicy,
-{
-    /// One reusable rewrite rule committed and execution can continue.
-    AlwaysRewritten {
-        /// Committed step count.
-        step: StepCount,
-        /// Rule witness paired with the committed rewrite.
-        rule: AlwaysRewriteRuleView<'program>,
-        /// Continuation session after the committed rewrite.
-        continuation: Session<'program, E>,
-    },
-    /// One once-only rewrite rule committed and execution can continue.
-    OnceRewritten {
-        /// Committed step count.
-        step: StepCount,
-        /// Rule witness paired with the committed rewrite.
-        rule: OnceRewriteRuleView<'program>,
-        /// Continuation session after the committed rewrite.
-        continuation: Session<'program, E>,
-    },
-    /// One reusable return rule committed and the run is terminal.
-    AlwaysReturned {
-        /// Committed return step count.
-        step: StepCount,
-        /// Rule witness paired with the committed return.
-        rule: AlwaysReturnRuleView<'program>,
-        /// Borrowed return-output view for trace callbacks.
-        output_view: ReturnOutputView<'program>,
-        /// Materialized return output.
-        output: ReturnOutput,
-        /// Terminal run session.
-        terminal: TerminalSession<'program>,
-    },
-    /// One once-only return rule committed and the run is terminal.
-    OnceReturned {
-        /// Committed return step count.
-        step: StepCount,
-        /// Rule witness paired with the committed return.
-        rule: OnceReturnRuleView<'program>,
-        /// Borrowed return-output view for trace callbacks.
-        output_view: ReturnOutputView<'program>,
-        /// Materialized return output.
-        output: ReturnOutput,
-        /// Terminal run session.
-        terminal: TerminalSession<'program>,
-    },
-    /// No rule matched the current runtime state.
-    Stable {
-        /// Terminal run session.
-        terminal: TerminalSession<'program>,
-    },
-    /// A candidate step failed before committing runtime state.
-    Failed {
-        /// Error that prevented commit.
-        error: RunStepError,
-        /// Terminal run session preserving uncommitted state.
-        terminal: TerminalSession<'program>,
-    },
-}
-
 impl<'program, E: ExecutionPolicy> ActiveRunCore<'program, E> {
     /// Builds the mutable runtime core for one execution.
     ///
