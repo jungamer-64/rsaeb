@@ -8,8 +8,9 @@ use crate::inspect::{
 };
 use crate::program::{ExecutableProgram, RuleScan, RuntimeStoredRule, StoredRuleRef};
 use crate::runtime::matcher::{
-    MatchedRuleApplication, RuleAttempt, attempt_always_return_rule, attempt_always_rewrite_rule,
-    attempt_once_return_rule, attempt_once_rewrite_rule,
+    EvaluatedRuleMiss, MatchedRuleApplication, RuleAttemptEvaluation,
+    attempt_always_return_rule, attempt_always_rewrite_rule, attempt_once_return_rule,
+    attempt_once_rewrite_rule,
 };
 use crate::runtime::state::State;
 
@@ -344,24 +345,16 @@ impl<'program> RuntimeRuleTable<'program> {
         state: &'state State,
     ) -> RuntimeRuleScan<'program, 'state, 'once> {
         match self.first.attempt(state) {
-            RuleAttempt::Matched(matched) => return RuntimeRuleScan::Matched(matched),
-            RuleAttempt::AlwaysRewriteStateMismatch(_)
-            | RuleAttempt::OnceRewriteStateMismatch(_)
-            | RuleAttempt::AlwaysReturnStateMismatch(_)
-            | RuleAttempt::OnceReturnStateMismatch(_)
-            | RuleAttempt::OnceRewriteConsumed(_)
-            | RuleAttempt::OnceReturnConsumed(_) => {}
+            RuleAttemptEvaluation::Matched(matched) => return RuntimeRuleScan::Matched(matched),
+            RuleAttemptEvaluation::Miss(_) => {}
         };
 
         for cell in &mut self.remaining {
             match cell.attempt(state) {
-                RuleAttempt::Matched(matched) => return RuntimeRuleScan::Matched(matched),
-                RuleAttempt::AlwaysRewriteStateMismatch(_)
-                | RuleAttempt::OnceRewriteStateMismatch(_)
-                | RuleAttempt::AlwaysReturnStateMismatch(_)
-                | RuleAttempt::OnceReturnStateMismatch(_)
-                | RuleAttempt::OnceRewriteConsumed(_)
-                | RuleAttempt::OnceReturnConsumed(_) => {}
+                RuleAttemptEvaluation::Matched(matched) => {
+                    return RuntimeRuleScan::Matched(matched);
+                }
+                RuleAttemptEvaluation::Miss(_) => {}
             }
         }
 
@@ -426,7 +419,7 @@ impl<'program, History, Tail> RuntimeRulePass<'program, History, Tail> {
     pub(crate) fn attempt_current<'state, 'once>(
         &'once mut self,
         state: &'state State,
-    ) -> RuleAttempt<'program, 'state, 'once> {
+    ) -> RuleAttemptEvaluation<'program, 'state, 'once> {
         self.current.attempt(state)
     }
 }
@@ -638,7 +631,7 @@ impl<'program> RuntimeRuleCell<'program> {
     fn attempt<'state, 'once>(
         &'once mut self,
         state: &'state State,
-    ) -> RuleAttempt<'program, 'state, 'once> {
+    ) -> RuleAttemptEvaluation<'program, 'state, 'once> {
         match self {
             Self::AlwaysRewrite(cell) => attempt_always_rewrite_rule(cell.rule, state),
             Self::FreshOnceRewrite(cell) => {
@@ -646,14 +639,18 @@ impl<'program> RuntimeRuleCell<'program> {
                 let commit = OnceRewriteCommitPermit::new(self, rule);
                 attempt_once_rewrite_rule(rule, commit, state)
             }
-            Self::ConsumedOnceRewrite(cell) => RuleAttempt::OnceRewriteConsumed(cell.rule),
+            Self::ConsumedOnceRewrite(cell) => {
+                RuleAttemptEvaluation::Miss(EvaluatedRuleMiss::OnceRewriteConsumed(cell.rule))
+            }
             Self::AlwaysReturn(cell) => attempt_always_return_rule(cell.rule, state),
             Self::FreshOnceReturn(cell) => {
                 let rule = cell.rule;
                 let commit = OnceReturnCommitPermit::new(self, rule);
                 attempt_once_return_rule(rule, commit, state)
             }
-            Self::ConsumedOnceReturn(cell) => RuleAttempt::OnceReturnConsumed(cell.rule),
+            Self::ConsumedOnceReturn(cell) => {
+                RuleAttemptEvaluation::Miss(EvaluatedRuleMiss::OnceReturnConsumed(cell.rule))
+            }
         }
     }
 }

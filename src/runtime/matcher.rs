@@ -8,9 +8,16 @@ use crate::rule::{RewriteAction, RulePattern};
 
 /// Outcome of evaluating one executable rule line against the current state.
 #[derive(Debug)]
-pub(crate) enum RuleAttempt<'program, 'state, 'once> {
+pub(crate) enum RuleAttemptEvaluation<'program, 'state, 'once> {
     /// The rule matched and carries the commit permit needed after success.
     Matched(MatchedRuleApplication<'program, 'state, 'once>),
+    /// The rule did not apply and carries the exact miss shape.
+    Miss(EvaluatedRuleMiss<'program>),
+}
+
+/// Exact non-applying result of evaluating one executable rule line.
+#[derive(Debug)]
+pub(crate) enum EvaluatedRuleMiss<'program> {
     /// Available reusable rewrite rule did not match the current runtime state.
     AlwaysRewriteStateMismatch(AlwaysRewriteRuleView<'program>),
     /// Available once-only rewrite rule did not match the current runtime state.
@@ -140,15 +147,17 @@ impl<'program, 'state, 'once> MatchedOnceReturnApplication<'program, 'state, 'on
 pub(crate) fn attempt_always_rewrite_rule<'program, 'state, 'once>(
     rule: AlwaysRewriteRuleView<'program>,
     state: &'state State,
-) -> RuleAttempt<'program, 'state, 'once> {
+) -> RuleAttemptEvaluation<'program, 'state, 'once> {
     let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
         StatePayloadMatch::Matched(state_match) => state_match,
         StatePayloadMatch::Mismatched => {
-            return RuleAttempt::AlwaysRewriteStateMismatch(rule);
+            return RuleAttemptEvaluation::Miss(EvaluatedRuleMiss::AlwaysRewriteStateMismatch(
+                rule,
+            ));
         }
     };
 
-    RuleAttempt::Matched(MatchedRuleApplication::AlwaysRewrite(
+    RuleAttemptEvaluation::Matched(MatchedRuleApplication::AlwaysRewrite(
         MatchedAlwaysRewriteApplication { rule, state_match },
     ))
 }
@@ -158,15 +167,17 @@ pub(crate) fn attempt_once_rewrite_rule<'program, 'state, 'once>(
     rule: OnceRewriteRuleView<'program>,
     commit: OnceRewriteCommitPermit<'program, 'once>,
     state: &'state State,
-) -> RuleAttempt<'program, 'state, 'once> {
+) -> RuleAttemptEvaluation<'program, 'state, 'once> {
     let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
         StatePayloadMatch::Matched(state_match) => state_match,
         StatePayloadMatch::Mismatched => {
-            return RuleAttempt::OnceRewriteStateMismatch(rule);
+            return RuleAttemptEvaluation::Miss(EvaluatedRuleMiss::OnceRewriteStateMismatch(
+                rule,
+            ));
         }
     };
 
-    RuleAttempt::Matched(MatchedRuleApplication::OnceRewrite(
+    RuleAttemptEvaluation::Matched(MatchedRuleApplication::OnceRewrite(
         MatchedOnceRewriteApplication {
             rule,
             state_match,
@@ -179,15 +190,17 @@ pub(crate) fn attempt_once_rewrite_rule<'program, 'state, 'once>(
 pub(crate) fn attempt_always_return_rule<'program, 'state, 'once>(
     rule: AlwaysReturnRuleView<'program>,
     state: &'state State,
-) -> RuleAttempt<'program, 'state, 'once> {
+) -> RuleAttemptEvaluation<'program, 'state, 'once> {
     let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
         StatePayloadMatch::Matched(state_match) => state_match,
         StatePayloadMatch::Mismatched => {
-            return RuleAttempt::AlwaysReturnStateMismatch(rule);
+            return RuleAttemptEvaluation::Miss(EvaluatedRuleMiss::AlwaysReturnStateMismatch(
+                rule,
+            ));
         }
     };
 
-    RuleAttempt::Matched(MatchedRuleApplication::AlwaysReturn(
+    RuleAttemptEvaluation::Matched(MatchedRuleApplication::AlwaysReturn(
         MatchedAlwaysReturnApplication { rule, state_match },
     ))
 }
@@ -197,15 +210,17 @@ pub(crate) fn attempt_once_return_rule<'program, 'state, 'once>(
     rule: OnceReturnRuleView<'program>,
     commit: OnceReturnCommitPermit<'program, 'once>,
     state: &'state State,
-) -> RuleAttempt<'program, 'state, 'once> {
+) -> RuleAttemptEvaluation<'program, 'state, 'once> {
     let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
         StatePayloadMatch::Matched(state_match) => state_match,
         StatePayloadMatch::Mismatched => {
-            return RuleAttempt::OnceReturnStateMismatch(rule);
+            return RuleAttemptEvaluation::Miss(EvaluatedRuleMiss::OnceReturnStateMismatch(
+                rule,
+            ));
         }
     };
 
-    RuleAttempt::Matched(MatchedRuleApplication::OnceReturn(
+    RuleAttemptEvaluation::Matched(MatchedRuleApplication::OnceReturn(
         MatchedOnceReturnApplication {
             rule,
             state_match,

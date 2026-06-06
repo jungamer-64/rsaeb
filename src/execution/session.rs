@@ -11,29 +11,15 @@ use crate::runtime::once::{
 use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
 
 use super::advance::{
-    CoreContinuingRuleAttemptStep, CoreFinalRuleAttemptStep,
     advance_continuing_borrowed_rule_attempt, advance_final_borrowed_rule_attempt,
 };
 use super::engine::{
     AttemptRunCoreParts, AttemptSession, RunAdvance, RunReturn, RunRewrite, Session,
-    TerminalAttemptSession, TerminalRunCore,
 };
 use super::transition::{
-    BorrowedAlwaysReturnRun, BorrowedAlwaysReturnStateMismatchRuleAttempt,
-    BorrowedAlwaysRewriteStateMismatchRuleAttempt, BorrowedAlwaysRewriteStep,
+    BorrowedAlwaysReturnRun, BorrowedAlwaysRewriteStep,
     BorrowedContinuingRuleAttemptTransition, BorrowedFailedRun, BorrowedFinalRuleAttemptTransition,
-    BorrowedOnceReturnConsumedRuleAttempt, BorrowedOnceReturnRun,
-    BorrowedOnceReturnStateMismatchRuleAttempt, BorrowedOnceRewriteConsumedRuleAttempt,
-    BorrowedOnceRewriteStateMismatchRuleAttempt, BorrowedOnceRewriteStep,
-    BorrowedRuleAttemptAlwaysReturnRun, BorrowedRuleAttemptAlwaysRewriteStep,
-    BorrowedRuleAttemptFailedRun, BorrowedRuleAttemptOnceReturnRun,
-    BorrowedRuleAttemptOnceRewriteStep, BorrowedRuleAttemptStableAfterAlwaysReturnStateMismatch,
-    BorrowedRuleAttemptStableAfterAlwaysRewriteStateMismatch,
-    BorrowedRuleAttemptStableAfterOnceReturnConsumed,
-    BorrowedRuleAttemptStableAfterOnceReturnStateMismatch,
-    BorrowedRuleAttemptStableAfterOnceRewriteConsumed,
-    BorrowedRuleAttemptStableAfterOnceRewriteStateMismatch, BorrowedStableRun,
-    BorrowedStepTransition,
+    BorrowedOnceReturnRun, BorrowedOnceRewriteStep, BorrowedStableRun, BorrowedStepTransition,
 };
 
 /// Stateful run session that borrows a reusable parsed program.
@@ -86,16 +72,6 @@ enum FinalRuleAttemptSession<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
     First(AttemptSession<'program, E, A, FirstFinalRulePass<'program>>),
     /// Final pass after at least one miss.
     AfterMiss(AttemptSession<'program, E, A, AfterMissFinalRulePass<'program>>),
-}
-
-/// Terminal data split out of a borrowed rule-attempt run session.
-struct BorrowedRuleAttemptTerminal<'program> {
-    /// Parsed program borrowed by the terminal state.
-    program: &'program ExecutableProgram,
-    /// Runtime core retained for terminal state observation or materialization.
-    core: TerminalRunCore,
-    /// Rule attempts consumed before the terminal boundary was reached.
-    attempts: RuleAttemptCount,
 }
 
 /// Runs a borrowed program to completion.
@@ -366,13 +342,11 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
     #[must_use]
     pub fn step(self) -> BorrowedContinuingRuleAttemptTransition<'program, E, A> {
         match self.session {
-            ContinuingRuleAttemptSession::First(session) => project_continuing_rule_attempt_step(
-                advance_continuing_borrowed_rule_attempt(session),
-            ),
+            ContinuingRuleAttemptSession::First(session) => {
+                advance_continuing_borrowed_rule_attempt(session)
+            }
             ContinuingRuleAttemptSession::AfterMiss(session) => {
-                project_continuing_rule_attempt_step(advance_continuing_borrowed_rule_attempt(
-                    session,
-                ))
+                advance_continuing_borrowed_rule_attempt(session)
             }
         }
     }
@@ -421,28 +395,10 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
     #[must_use]
     pub fn step(self) -> BorrowedFinalRuleAttemptTransition<'program, E, A> {
         match self.session {
-            FinalRuleAttemptSession::First(session) => {
-                project_final_rule_attempt_step(advance_final_borrowed_rule_attempt(session))
-            }
+            FinalRuleAttemptSession::First(session) => advance_final_borrowed_rule_attempt(session),
             FinalRuleAttemptSession::AfterMiss(session) => {
-                project_final_rule_attempt_step(advance_final_borrowed_rule_attempt(session))
+                advance_final_borrowed_rule_attempt(session)
             }
-        }
-    }
-}
-
-impl<'program> BorrowedRuleAttemptTerminal<'program> {
-    /// Projects terminal borrowed rule-attempt state into public terminal data.
-    fn from_terminal(terminal: TerminalAttemptSession<'program>) -> Self {
-        let TerminalAttemptSession {
-            program,
-            core,
-            attempts,
-        } = terminal;
-        Self {
-            program,
-            core,
-            attempts,
         }
     }
 }
