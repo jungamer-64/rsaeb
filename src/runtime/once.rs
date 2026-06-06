@@ -9,9 +9,8 @@ use crate::inspect::{
 };
 use crate::program::{ExecutableProgram, RuleScan, RuntimeStoredRule, StoredRuleRef};
 use crate::runtime::matcher::{
-    EvaluatedRuleMiss, MatchedRuleApplication, RuleAttemptEvaluation,
-    attempt_always_return_rule, attempt_always_rewrite_rule, attempt_once_return_rule,
-    attempt_once_rewrite_rule,
+    EvaluatedRuleMiss, MatchedRuleApplication, RuleAttemptEvaluation, attempt_always_return_rule,
+    attempt_always_rewrite_rule, attempt_once_return_rule, attempt_once_rewrite_rule,
 };
 use crate::runtime::state::State;
 

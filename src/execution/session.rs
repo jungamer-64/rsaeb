@@ -17,9 +17,9 @@ use super::engine::{
     AttemptRunCoreParts, AttemptSession, RunAdvance, RunReturn, RunRewrite, Session,
 };
 use super::transition::{
-    BorrowedAlwaysReturnRun, BorrowedAlwaysRewriteStep,
-    BorrowedContinuingRuleAttemptTransition, BorrowedFailedRun, BorrowedFinalRuleAttemptTransition,
-    BorrowedOnceReturnRun, BorrowedOnceRewriteStep, BorrowedStableRun, BorrowedStepTransition,
+    BorrowedAlwaysReturnRun, BorrowedAlwaysRewriteStep, BorrowedContinuingRuleAttemptTransition,
+    BorrowedFailedRun, BorrowedFinalRuleAttemptTransition, BorrowedOnceReturnRun,
+    BorrowedOnceRewriteStep, BorrowedStableRun, BorrowedStepTransition,
 };
 
 /// Stateful run session that borrows a reusable parsed program.

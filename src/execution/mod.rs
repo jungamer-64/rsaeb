@@ -340,6 +340,61 @@
 //!     }
 //! }
 //! ```
+//!
+//! Once-return consumed rule-attempt states are intentionally absent. A
+//! successful once-only `(return)` rule terminates the run, so there is no later
+//! cursor that could observe the rule as consumed:
+//!
+//! ```compile_fail
+//! use rsaeb::execution::{
+//!     BorrowedOnceReturnConsumedRuleAttempt,
+//!     BorrowedRuleAttemptStableAfterOnceReturnConsumed,
+//! };
+//!
+//! fn main() {
+//!     let _ = core::mem::size_of::<BorrowedOnceReturnConsumedRuleAttempt<
+//!         'static,
+//!         rsaeb::policy::DefaultExecutionPolicy,
+//!         rsaeb::policy::DefaultRuleAttemptPolicy,
+//!     >>();
+//!     let _ = core::mem::size_of::<
+//!         BorrowedRuleAttemptStableAfterOnceReturnConsumed<'static>,
+//!     >();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! use rsaeb::execution::{
+//!     BorrowedContinuingRuleAttemptTransition, BorrowedFinalRuleAttemptTransition,
+//! };
+//! use rsaeb::policy::{DefaultExecutionPolicy, DefaultRuleAttemptPolicy};
+//!
+//! fn invalid_continuing(
+//!     transition: BorrowedContinuingRuleAttemptTransition<
+//!         'static,
+//!         DefaultExecutionPolicy,
+//!         DefaultRuleAttemptPolicy,
+//!     >,
+//! ) {
+//!     match transition {
+//!         BorrowedContinuingRuleAttemptTransition::OnceReturnConsumed(_) => {}
+//!         _ => {}
+//!     }
+//! }
+//!
+//! fn invalid_final(
+//!     transition: BorrowedFinalRuleAttemptTransition<
+//!         'static,
+//!         DefaultExecutionPolicy,
+//!         DefaultRuleAttemptPolicy,
+//!     >,
+//! ) {
+//!     match transition {
+//!         BorrowedFinalRuleAttemptTransition::StableAfterOnceReturnConsumed(_) => {}
+//!         _ => {}
+//!     }
+//! }
+//! ```
 
 /// Type-selected execution advance kernel.
 mod advance;
@@ -359,12 +414,12 @@ pub use transition::{
     BorrowedAlwaysReturnRun, BorrowedAlwaysReturnStateMismatchRuleAttempt,
     BorrowedAlwaysRewriteStateMismatchRuleAttempt, BorrowedAlwaysRewriteStep,
     BorrowedContinuingRuleAttemptTransition, BorrowedFailedRun, BorrowedFinalRuleAttemptTransition,
-    BorrowedOnceReturnRun,
-    BorrowedOnceReturnStateMismatchRuleAttempt, BorrowedOnceRewriteConsumedRuleAttempt,
-    BorrowedOnceRewriteStateMismatchRuleAttempt, BorrowedOnceRewriteStep,
-    BorrowedRuleAttemptAlwaysReturnRun, BorrowedRuleAttemptAlwaysRewriteStep,
-    BorrowedRuleAttemptFailedRun, BorrowedRuleAttemptOnceReturnRun,
-    BorrowedRuleAttemptOnceRewriteStep, BorrowedRuleAttemptStableAfterAlwaysReturnStateMismatch,
+    BorrowedOnceReturnRun, BorrowedOnceReturnStateMismatchRuleAttempt,
+    BorrowedOnceRewriteConsumedRuleAttempt, BorrowedOnceRewriteStateMismatchRuleAttempt,
+    BorrowedOnceRewriteStep, BorrowedRuleAttemptAlwaysReturnRun,
+    BorrowedRuleAttemptAlwaysRewriteStep, BorrowedRuleAttemptFailedRun,
+    BorrowedRuleAttemptOnceReturnRun, BorrowedRuleAttemptOnceRewriteStep,
+    BorrowedRuleAttemptStableAfterAlwaysReturnStateMismatch,
     BorrowedRuleAttemptStableAfterAlwaysRewriteStateMismatch,
     BorrowedRuleAttemptStableAfterOnceReturnStateMismatch,
     BorrowedRuleAttemptStableAfterOnceRewriteConsumed,

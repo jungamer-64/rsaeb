@@ -169,9 +169,7 @@ pub(crate) fn attempt_once_rewrite_rule<'program, 'state, 'once>(
     let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
         StatePayloadMatch::Matched(state_match) => state_match,
         StatePayloadMatch::Mismatched => {
-            return RuleAttemptEvaluation::Miss(EvaluatedRuleMiss::OnceRewriteStateMismatch(
-                rule,
-            ));
+            return RuleAttemptEvaluation::Miss(EvaluatedRuleMiss::OnceRewriteStateMismatch(rule));
         }
     };
 
@@ -192,9 +190,7 @@ pub(crate) fn attempt_always_return_rule<'program, 'state, 'once>(
     let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
         StatePayloadMatch::Matched(state_match) => state_match,
         StatePayloadMatch::Mismatched => {
-            return RuleAttemptEvaluation::Miss(EvaluatedRuleMiss::AlwaysReturnStateMismatch(
-                rule,
-            ));
+            return RuleAttemptEvaluation::Miss(EvaluatedRuleMiss::AlwaysReturnStateMismatch(rule));
         }
     };
 
@@ -212,9 +208,7 @@ pub(crate) fn attempt_once_return_rule<'program, 'state, 'once>(
     let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
         StatePayloadMatch::Matched(state_match) => state_match,
         StatePayloadMatch::Mismatched => {
-            return RuleAttemptEvaluation::Miss(EvaluatedRuleMiss::OnceReturnStateMismatch(
-                rule,
-            ));
+            return RuleAttemptEvaluation::Miss(EvaluatedRuleMiss::OnceReturnStateMismatch(rule));
         }
     };
 
