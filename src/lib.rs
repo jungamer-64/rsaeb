@@ -255,7 +255,7 @@
 //! ```
 //! use rsaeb::execution::{
 //!     BorrowedContinuingRuleAttemptTransition, BorrowedFinalRuleAttemptTransition,
-//!     BorrowedRuleAttemptCursor, RuleMiss,
+//!     BorrowedRuleAttemptCursor,
 //! };
 //! use rsaeb::input::{RuntimeInput, RuntimeInputSource};
 //! use rsaeb::policy::{
@@ -277,17 +277,13 @@
 //!     return Err("expected first rule to have a successor".into());
 //! };
 //! let execution = match execution.step() {
-//!     BorrowedContinuingRuleAttemptTransition::Missed(missed) => {
-//!         if !matches!(missed.miss(), RuleMiss::AlwaysRewriteStateMismatch(_)) {
+//!     BorrowedContinuingRuleAttemptTransition::AlwaysRewriteStateMismatch(missed) => {
+//!         if missed.rule().position().get() != 1 {
 //!             return Err("unexpected miss shape".into());
 //!         }
 //!         missed.into_cursor()
 //!     }
-//!     BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(_)
-//!     | BorrowedContinuingRuleAttemptTransition::OnceRewritten(_)
-//!     | BorrowedContinuingRuleAttemptTransition::AlwaysReturned(_)
-//!     | BorrowedContinuingRuleAttemptTransition::OnceReturned(_)
-//!     | BorrowedContinuingRuleAttemptTransition::Failed(_) => return Err("expected first rule to miss".into()),
+//!     _ => return Err("expected first rule to miss".into()),
 //! };
 //!
 //! let BorrowedRuleAttemptCursor::Final(execution) = execution else {
@@ -299,11 +295,7 @@
 //!             return Err("unexpected applied rule attempt".into());
 //!         }
 //!     }
-//!     BorrowedFinalRuleAttemptTransition::Stable(_)
-//!     | BorrowedFinalRuleAttemptTransition::OnceRewritten(_)
-//!     | BorrowedFinalRuleAttemptTransition::AlwaysReturned(_)
-//!     | BorrowedFinalRuleAttemptTransition::OnceReturned(_)
-//!     | BorrowedFinalRuleAttemptTransition::Failed(_) => return Err("expected second rule to apply".into()),
+//!     _ => return Err("expected second rule to apply".into()),
 //! }
 //! # Ok(())
 //! # }

@@ -8,7 +8,7 @@ use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, ReturnOutput};
 use crate::runtime::action::{AppliedRule, PreparedRuleStep, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptReservation, RuntimeBudgetState};
-use crate::runtime::matcher::{MatchedRuleApplication, RuleAttempt, RuleAttemptMiss};
+use crate::runtime::matcher::{MatchedRuleApplication, RuleAttempt};
 use crate::runtime::once::{
     AfterMissContinuingRulePass, AfterMissFinalRulePass, FirstContinuingRulePass,
     FirstFinalRulePass, FirstRuntimeRulePassCursor, MissedRuntimeRulePassCursor,
@@ -17,8 +17,7 @@ use crate::runtime::once::{
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
 
-use super::attempt::RuleMiss;
-use super::engine::{AttemptRunCore, AttemptSession, TerminalAttemptSession};
+use super::engine::{AttemptRunCore, AttemptRunCoreParts, AttemptSession, TerminalAttemptSession};
 use super::session::BorrowedRuleAttemptCursor;
 
 /// Continuing rule-attempt pass behavior shared by first and after-miss states.
@@ -54,12 +53,57 @@ pub(super) trait FinalRuleAttemptPass<'program>:
 
 /// Program-bound result of consuming one continuing rule-attempt session step.
 pub(super) enum CoreContinuingRuleAttemptStep<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
-    /// A non-applying rule line was consumed and the run can continue.
-    Missed {
+    /// A reusable rewrite rule did not match and the run can continue.
+    AlwaysRewriteStateMismatch {
         /// Rule-attempt count committed by this transition.
         attempt: RuleAttemptCount,
-        /// Non-applying rule information.
-        miss: RuleMiss<'program>,
+        /// Non-applying rule.
+        rule: AlwaysRewriteRuleView<'program>,
+        /// Continuation session with the returned next cursor.
+        continuation: BorrowedRuleAttemptCursor<'program, E, A>,
+    },
+    /// A once-only rewrite rule did not match and the run can continue.
+    OnceRewriteStateMismatch {
+        /// Rule-attempt count committed by this transition.
+        attempt: RuleAttemptCount,
+        /// Non-applying rule.
+        rule: OnceRewriteRuleView<'program>,
+        /// Continuation session with the returned next cursor.
+        continuation: BorrowedRuleAttemptCursor<'program, E, A>,
+    },
+    /// A reusable return rule did not match and the run can continue.
+    AlwaysReturnStateMismatch {
+        /// Rule-attempt count committed by this transition.
+        attempt: RuleAttemptCount,
+        /// Non-applying rule.
+        rule: AlwaysReturnRuleView<'program>,
+        /// Continuation session with the returned next cursor.
+        continuation: BorrowedRuleAttemptCursor<'program, E, A>,
+    },
+    /// A once-only return rule did not match and the run can continue.
+    OnceReturnStateMismatch {
+        /// Rule-attempt count committed by this transition.
+        attempt: RuleAttemptCount,
+        /// Non-applying rule.
+        rule: OnceReturnRuleView<'program>,
+        /// Continuation session with the returned next cursor.
+        continuation: BorrowedRuleAttemptCursor<'program, E, A>,
+    },
+    /// A consumed once-only rewrite rule was attempted and the run can continue.
+    OnceRewriteConsumed {
+        /// Rule-attempt count committed by this transition.
+        attempt: RuleAttemptCount,
+        /// Consumed once-only rule.
+        rule: OnceRewriteRuleView<'program>,
+        /// Continuation session with the returned next cursor.
+        continuation: BorrowedRuleAttemptCursor<'program, E, A>,
+    },
+    /// A consumed once-only return rule was attempted and the run can continue.
+    OnceReturnConsumed {
+        /// Rule-attempt count committed by this transition.
+        attempt: RuleAttemptCount,
+        /// Consumed once-only rule.
+        rule: OnceReturnRuleView<'program>,
         /// Continuation session with the returned next cursor.
         continuation: BorrowedRuleAttemptCursor<'program, E, A>,
     },
@@ -170,12 +214,57 @@ pub(super) enum CoreFinalRuleAttemptStep<'program, E: ExecutionPolicy, A: RuleAt
         /// Terminal session with no resumable cursor.
         terminal: TerminalAttemptSession<'program>,
     },
-    /// No rule in the current pass matched the current runtime state.
-    Stable {
+    /// The pass ended after a reusable rewrite state mismatch.
+    StableAfterAlwaysRewriteStateMismatch {
         /// Rule attempts consumed before stability.
         attempts: RuleAttemptCount,
-        /// Final non-applying rule that exhausted the current pass.
-        final_miss: RuleMiss<'program>,
+        /// Final non-applying rule.
+        rule: AlwaysRewriteRuleView<'program>,
+        /// Terminal session with no resumable cursor.
+        terminal: TerminalAttemptSession<'program>,
+    },
+    /// The pass ended after a once-only rewrite state mismatch.
+    StableAfterOnceRewriteStateMismatch {
+        /// Rule attempts consumed before stability.
+        attempts: RuleAttemptCount,
+        /// Final non-applying rule.
+        rule: OnceRewriteRuleView<'program>,
+        /// Terminal session with no resumable cursor.
+        terminal: TerminalAttemptSession<'program>,
+    },
+    /// The pass ended after a reusable return state mismatch.
+    StableAfterAlwaysReturnStateMismatch {
+        /// Rule attempts consumed before stability.
+        attempts: RuleAttemptCount,
+        /// Final non-applying rule.
+        rule: AlwaysReturnRuleView<'program>,
+        /// Terminal session with no resumable cursor.
+        terminal: TerminalAttemptSession<'program>,
+    },
+    /// The pass ended after a once-only return state mismatch.
+    StableAfterOnceReturnStateMismatch {
+        /// Rule attempts consumed before stability.
+        attempts: RuleAttemptCount,
+        /// Final non-applying rule.
+        rule: OnceReturnRuleView<'program>,
+        /// Terminal session with no resumable cursor.
+        terminal: TerminalAttemptSession<'program>,
+    },
+    /// The pass ended after a consumed once-only rewrite rule.
+    StableAfterOnceRewriteConsumed {
+        /// Rule attempts consumed before stability.
+        attempts: RuleAttemptCount,
+        /// Final consumed once-only rule.
+        rule: OnceRewriteRuleView<'program>,
+        /// Terminal session with no resumable cursor.
+        terminal: TerminalAttemptSession<'program>,
+    },
+    /// The pass ended after a consumed once-only return rule.
+    StableAfterOnceReturnConsumed {
+        /// Rule attempts consumed before stability.
+        attempts: RuleAttemptCount,
+        /// Final consumed once-only rule.
+        rule: OnceReturnRuleView<'program>,
         /// Terminal session with no resumable cursor.
         terminal: TerminalAttemptSession<'program>,
     },
@@ -296,15 +385,57 @@ where
     };
 
     match pass.attempt_current_rule(&parts.state) {
-        RuleAttempt::Missed(missed) => {
-            let miss = public_rule_miss(missed);
+        RuleAttempt::AlwaysRewriteStateMismatch(rule) => {
             let attempt = reservation.commit();
-            let runtime_rules = pass.commit_attempt_miss();
-            let continuation =
-                BorrowedRuleAttemptCursor::from_after_miss_parts(program, parts, runtime_rules);
-            CoreContinuingRuleAttemptStep::Missed {
+            let continuation = commit_continuing_miss(program, parts, pass);
+            CoreContinuingRuleAttemptStep::AlwaysRewriteStateMismatch {
                 attempt,
-                miss,
+                rule,
+                continuation,
+            }
+        }
+        RuleAttempt::OnceRewriteStateMismatch(rule) => {
+            let attempt = reservation.commit();
+            let continuation = commit_continuing_miss(program, parts, pass);
+            CoreContinuingRuleAttemptStep::OnceRewriteStateMismatch {
+                attempt,
+                rule,
+                continuation,
+            }
+        }
+        RuleAttempt::AlwaysReturnStateMismatch(rule) => {
+            let attempt = reservation.commit();
+            let continuation = commit_continuing_miss(program, parts, pass);
+            CoreContinuingRuleAttemptStep::AlwaysReturnStateMismatch {
+                attempt,
+                rule,
+                continuation,
+            }
+        }
+        RuleAttempt::OnceReturnStateMismatch(rule) => {
+            let attempt = reservation.commit();
+            let continuation = commit_continuing_miss(program, parts, pass);
+            CoreContinuingRuleAttemptStep::OnceReturnStateMismatch {
+                attempt,
+                rule,
+                continuation,
+            }
+        }
+        RuleAttempt::OnceRewriteConsumed(rule) => {
+            let attempt = reservation.commit();
+            let continuation = commit_continuing_miss(program, parts, pass);
+            CoreContinuingRuleAttemptStep::OnceRewriteConsumed {
+                attempt,
+                rule,
+                continuation,
+            }
+        }
+        RuleAttempt::OnceReturnConsumed(rule) => {
+            let attempt = reservation.commit();
+            let continuation = commit_continuing_miss(program, parts, pass);
+            CoreContinuingRuleAttemptStep::OnceReturnConsumed {
+                attempt,
+                rule,
                 continuation,
             }
         }
@@ -354,19 +485,57 @@ where
     };
 
     match pass.attempt_current_rule(&parts.state) {
-        RuleAttempt::Missed(missed) => {
-            let miss = public_rule_miss(missed);
-            let attempt = reservation.commit();
-            let core = parts.with_pass(pass);
-            let attempts = attempt;
-            let terminal = TerminalAttemptSession {
-                program,
-                core: core.into_terminal(),
+        RuleAttempt::AlwaysRewriteStateMismatch(rule) => {
+            let attempts = reservation.commit();
+            let terminal = commit_final_miss(program, parts, pass, attempts);
+            CoreFinalRuleAttemptStep::StableAfterAlwaysRewriteStateMismatch {
                 attempts,
-            };
-            CoreFinalRuleAttemptStep::Stable {
+                rule,
+                terminal,
+            }
+        }
+        RuleAttempt::OnceRewriteStateMismatch(rule) => {
+            let attempts = reservation.commit();
+            let terminal = commit_final_miss(program, parts, pass, attempts);
+            CoreFinalRuleAttemptStep::StableAfterOnceRewriteStateMismatch {
                 attempts,
-                final_miss: miss,
+                rule,
+                terminal,
+            }
+        }
+        RuleAttempt::AlwaysReturnStateMismatch(rule) => {
+            let attempts = reservation.commit();
+            let terminal = commit_final_miss(program, parts, pass, attempts);
+            CoreFinalRuleAttemptStep::StableAfterAlwaysReturnStateMismatch {
+                attempts,
+                rule,
+                terminal,
+            }
+        }
+        RuleAttempt::OnceReturnStateMismatch(rule) => {
+            let attempts = reservation.commit();
+            let terminal = commit_final_miss(program, parts, pass, attempts);
+            CoreFinalRuleAttemptStep::StableAfterOnceReturnStateMismatch {
+                attempts,
+                rule,
+                terminal,
+            }
+        }
+        RuleAttempt::OnceRewriteConsumed(rule) => {
+            let attempts = reservation.commit();
+            let terminal = commit_final_miss(program, parts, pass, attempts);
+            CoreFinalRuleAttemptStep::StableAfterOnceRewriteConsumed {
+                attempts,
+                rule,
+                terminal,
+            }
+        }
+        RuleAttempt::OnceReturnConsumed(rule) => {
+            let attempts = reservation.commit();
+            let terminal = commit_final_miss(program, parts, pass, attempts);
+            CoreFinalRuleAttemptStep::StableAfterOnceReturnConsumed {
+                attempts,
+                rule,
                 terminal,
             }
         }
@@ -431,6 +600,41 @@ where
             core: core.into_terminal(),
             attempts,
         },
+    }
+}
+
+/// Commits a non-final rule-attempt miss and returns the next typed cursor.
+fn commit_continuing_miss<'program, E, A, Pass>(
+    program: &'program ExecutableProgram,
+    parts: AttemptRunCoreParts<E, A>,
+    pass: Pass,
+) -> BorrowedRuleAttemptCursor<'program, E, A>
+where
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+    Pass: ContinuingRuleAttemptPass<'program>,
+{
+    let runtime_rules = pass.commit_attempt_miss();
+    BorrowedRuleAttemptCursor::from_after_miss_parts(program, parts, runtime_rules)
+}
+
+/// Commits a final rule-attempt miss and returns its terminal run state.
+fn commit_final_miss<'program, E, A, Pass>(
+    program: &'program ExecutableProgram,
+    parts: AttemptRunCoreParts<E, A>,
+    pass: Pass,
+    attempts: RuleAttemptCount,
+) -> TerminalAttemptSession<'program>
+where
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+    Pass: FinalRuleAttemptPass<'program>,
+{
+    let core = parts.with_pass(pass);
+    TerminalAttemptSession {
+        program,
+        core: core.into_terminal(),
+        attempts,
     }
 }
 
@@ -595,26 +799,6 @@ where
                 },
             }
         }
-    }
-}
-
-/// Projects runtime miss shapes into the public typed miss API.
-fn public_rule_miss<'program>(miss: RuleAttemptMiss<'program>) -> RuleMiss<'program> {
-    match miss {
-        RuleAttemptMiss::AlwaysRewriteStateMismatch(rule) => {
-            RuleMiss::always_rewrite_state_mismatch(rule)
-        }
-        RuleAttemptMiss::OnceRewriteStateMismatch(rule) => {
-            RuleMiss::once_rewrite_state_mismatch(rule)
-        }
-        RuleAttemptMiss::AlwaysReturnStateMismatch(rule) => {
-            RuleMiss::always_return_state_mismatch(rule)
-        }
-        RuleAttemptMiss::OnceReturnStateMismatch(rule) => {
-            RuleMiss::once_return_state_mismatch(rule)
-        }
-        RuleAttemptMiss::OnceRewriteConsumed(rule) => RuleMiss::once_rewrite_consumed(rule),
-        RuleAttemptMiss::OnceReturnConsumed(rule) => RuleMiss::once_return_consumed(rule),
     }
 }
 

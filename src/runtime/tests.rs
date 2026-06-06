@@ -1,4 +1,3 @@
-use super::matcher::RuleAttemptMiss;
 use super::once::{RuntimeRuleScan, RuntimeRuleTable};
 use super::state::State;
 use crate::error::{
@@ -186,31 +185,21 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if the ordinary runtime scan erases the final typed
-/// rule miss before reporting stability to the execution layer.
+/// Returns `TestFailure` if the ordinary runtime scan reports extra typed miss
+/// data instead of only the unmatched stability boundary.
 #[test]
-fn ordinary_runtime_scan_unmatched_preserves_final_typed_miss() -> TestResult {
+fn ordinary_runtime_scan_unmatched_reports_stability_only() -> TestResult {
     let program = parse_program("z=x\n(once)y=(return)done")?;
     let mut runtime_rules = RuntimeRuleTable::from_program(&program)?;
     let limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
     let (input, _) = admitted_run(b"a", limits)?.into_runtime_parts();
     let state = State::from_input(input);
 
-    let RuntimeRuleScan::Unmatched(unmatched) = runtime_rules.scan_for_match(&state) else {
+    let RuntimeRuleScan::Unmatched = runtime_rules.scan_for_match(&state) else {
         return Err(TestFailure::message("expected unmatched runtime scan"));
     };
 
-    match unmatched.into_final_miss() {
-        RuleAttemptMiss::OnceReturnStateMismatch(rule) if rule.position().get() == 2 => Ok(()),
-        RuleAttemptMiss::AlwaysRewriteStateMismatch(_)
-        | RuleAttemptMiss::OnceRewriteStateMismatch(_)
-        | RuleAttemptMiss::AlwaysReturnStateMismatch(_)
-        | RuleAttemptMiss::OnceReturnStateMismatch(_)
-        | RuleAttemptMiss::OnceRewriteConsumed(_)
-        | RuleAttemptMiss::OnceReturnConsumed(_) => {
-            Err(TestFailure::message("unexpected final runtime scan miss"))
-        }
-    }
+    Ok(())
 }
 
 /// # Errors

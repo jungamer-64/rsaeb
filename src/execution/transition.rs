@@ -98,6 +98,18 @@ pub struct BorrowedFailedRun<'program> {
 /// typed pass state.
 pub enum BorrowedContinuingRuleAttemptTransition<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
 {
+    /// A reusable rewrite rule was available but did not match the current state.
+    AlwaysRewriteStateMismatch(BorrowedAlwaysRewriteStateMismatchRuleAttempt<'program, E, A>),
+    /// A once-only rewrite rule was available but did not match the current state.
+    OnceRewriteStateMismatch(BorrowedOnceRewriteStateMismatchRuleAttempt<'program, E, A>),
+    /// A reusable return rule was available but did not match the current state.
+    AlwaysReturnStateMismatch(BorrowedAlwaysReturnStateMismatchRuleAttempt<'program, E, A>),
+    /// A once-only return rule was available but did not match the current state.
+    OnceReturnStateMismatch(BorrowedOnceReturnStateMismatchRuleAttempt<'program, E, A>),
+    /// A once-only rewrite rule had already committed in this run.
+    OnceRewriteConsumed(BorrowedOnceRewriteConsumedRuleAttempt<'program, E, A>),
+    /// A once-only return rule had already committed in this run.
+    OnceReturnConsumed(BorrowedOnceReturnConsumedRuleAttempt<'program, E, A>),
     /// One reusable rewrite rule was applied and execution can continue.
     AlwaysRewritten(BorrowedRuleAttemptAlwaysRewriteStep<'program, E, A>),
     /// One once-only rewrite rule was applied and execution can continue.
@@ -115,6 +127,26 @@ pub enum BorrowedContinuingRuleAttemptTransition<'program, E: ExecutionPolicy, A
 /// This transition type has no missed-continuation variant because a
 /// non-applying final rule exhausts the pass and terminates as stable.
 pub enum BorrowedFinalRuleAttemptTransition<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
+    /// The pass ended after a reusable rewrite rule did not match the current state.
+    StableAfterAlwaysRewriteStateMismatch(
+        BorrowedRuleAttemptStableAfterAlwaysRewriteStateMismatch<'program>,
+    ),
+    /// The pass ended after a once-only rewrite rule did not match the current state.
+    StableAfterOnceRewriteStateMismatch(
+        BorrowedRuleAttemptStableAfterOnceRewriteStateMismatch<'program>,
+    ),
+    /// The pass ended after a reusable return rule did not match the current state.
+    StableAfterAlwaysReturnStateMismatch(
+        BorrowedRuleAttemptStableAfterAlwaysReturnStateMismatch<'program>,
+    ),
+    /// The pass ended after a once-only return rule did not match the current state.
+    StableAfterOnceReturnStateMismatch(
+        BorrowedRuleAttemptStableAfterOnceReturnStateMismatch<'program>,
+    ),
+    /// The pass ended after a consumed once-only rewrite rule.
+    StableAfterOnceRewriteConsumed(BorrowedRuleAttemptStableAfterOnceRewriteConsumed<'program>),
+    /// The pass ended after a consumed once-only return rule.
+    StableAfterOnceReturnConsumed(BorrowedRuleAttemptStableAfterOnceReturnConsumed<'program>),
     /// One reusable rewrite rule was applied and execution can continue.
     AlwaysRewritten(BorrowedRuleAttemptAlwaysRewriteStep<'program, E, A>),
     /// One once-only rewrite rule was applied and execution can continue.
@@ -125,6 +157,159 @@ pub enum BorrowedFinalRuleAttemptTransition<'program, E: ExecutionPolicy, A: Rul
     OnceReturned(BorrowedRuleAttemptOnceReturnRun<'program>),
     /// A matching rule failed before committing runtime state.
     Failed(BorrowedRuleAttemptFailedRun<'program>),
+}
+
+/// Continuing rule-attempt miss for a reusable rewrite state mismatch.
+pub struct BorrowedAlwaysRewriteStateMismatchRuleAttempt<
+    'program,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+> {
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Non-applying rule.
+    pub(super) rule: AlwaysRewriteRuleView<'program>,
+    /// Cursor after consuming the rule line.
+    pub(super) cursor: BorrowedRuleAttemptCursor<'program, E, A>,
+}
+
+/// Continuing rule-attempt miss for a once-only rewrite state mismatch.
+pub struct BorrowedOnceRewriteStateMismatchRuleAttempt<
+    'program,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+> {
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Non-applying rule.
+    pub(super) rule: OnceRewriteRuleView<'program>,
+    /// Cursor after consuming the rule line.
+    pub(super) cursor: BorrowedRuleAttemptCursor<'program, E, A>,
+}
+
+/// Continuing rule-attempt miss for a reusable return state mismatch.
+pub struct BorrowedAlwaysReturnStateMismatchRuleAttempt<
+    'program,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+> {
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Non-applying rule.
+    pub(super) rule: AlwaysReturnRuleView<'program>,
+    /// Cursor after consuming the rule line.
+    pub(super) cursor: BorrowedRuleAttemptCursor<'program, E, A>,
+}
+
+/// Continuing rule-attempt miss for a once-only return state mismatch.
+pub struct BorrowedOnceReturnStateMismatchRuleAttempt<
+    'program,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+> {
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Non-applying rule.
+    pub(super) rule: OnceReturnRuleView<'program>,
+    /// Cursor after consuming the rule line.
+    pub(super) cursor: BorrowedRuleAttemptCursor<'program, E, A>,
+}
+
+/// Continuing rule-attempt miss for a consumed once-only rewrite rule.
+pub struct BorrowedOnceRewriteConsumedRuleAttempt<
+    'program,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+> {
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Consumed once-only rule.
+    pub(super) rule: OnceRewriteRuleView<'program>,
+    /// Cursor after consuming the rule line.
+    pub(super) cursor: BorrowedRuleAttemptCursor<'program, E, A>,
+}
+
+/// Continuing rule-attempt miss for a consumed once-only return rule.
+pub struct BorrowedOnceReturnConsumedRuleAttempt<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
+{
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Consumed once-only rule.
+    pub(super) rule: OnceReturnRuleView<'program>,
+    /// Cursor after consuming the rule line.
+    pub(super) cursor: BorrowedRuleAttemptCursor<'program, E, A>,
+}
+
+/// Terminal rule-attempt state after a reusable rewrite state mismatch.
+pub struct BorrowedRuleAttemptStableAfterAlwaysRewriteStateMismatch<'program> {
+    /// Rule attempts consumed before stability.
+    pub(super) attempts: RuleAttemptCount,
+    /// Final non-applying rule.
+    pub(super) rule: AlwaysRewriteRuleView<'program>,
+    /// Parsed program borrowed by the terminal state.
+    pub(super) program: &'program ExecutableProgram,
+    /// Terminal runtime core containing the stable state.
+    pub(super) core: TerminalRunCore,
+}
+
+/// Terminal rule-attempt state after a once-only rewrite state mismatch.
+pub struct BorrowedRuleAttemptStableAfterOnceRewriteStateMismatch<'program> {
+    /// Rule attempts consumed before stability.
+    pub(super) attempts: RuleAttemptCount,
+    /// Final non-applying rule.
+    pub(super) rule: OnceRewriteRuleView<'program>,
+    /// Parsed program borrowed by the terminal state.
+    pub(super) program: &'program ExecutableProgram,
+    /// Terminal runtime core containing the stable state.
+    pub(super) core: TerminalRunCore,
+}
+
+/// Terminal rule-attempt state after a reusable return state mismatch.
+pub struct BorrowedRuleAttemptStableAfterAlwaysReturnStateMismatch<'program> {
+    /// Rule attempts consumed before stability.
+    pub(super) attempts: RuleAttemptCount,
+    /// Final non-applying rule.
+    pub(super) rule: AlwaysReturnRuleView<'program>,
+    /// Parsed program borrowed by the terminal state.
+    pub(super) program: &'program ExecutableProgram,
+    /// Terminal runtime core containing the stable state.
+    pub(super) core: TerminalRunCore,
+}
+
+/// Terminal rule-attempt state after a once-only return state mismatch.
+pub struct BorrowedRuleAttemptStableAfterOnceReturnStateMismatch<'program> {
+    /// Rule attempts consumed before stability.
+    pub(super) attempts: RuleAttemptCount,
+    /// Final non-applying rule.
+    pub(super) rule: OnceReturnRuleView<'program>,
+    /// Parsed program borrowed by the terminal state.
+    pub(super) program: &'program ExecutableProgram,
+    /// Terminal runtime core containing the stable state.
+    pub(super) core: TerminalRunCore,
+}
+
+/// Terminal rule-attempt state after a consumed once-only rewrite rule.
+pub struct BorrowedRuleAttemptStableAfterOnceRewriteConsumed<'program> {
+    /// Rule attempts consumed before stability.
+    pub(super) attempts: RuleAttemptCount,
+    /// Final consumed once-only rule.
+    pub(super) rule: OnceRewriteRuleView<'program>,
+    /// Parsed program borrowed by the terminal state.
+    pub(super) program: &'program ExecutableProgram,
+    /// Terminal runtime core containing the stable state.
+    pub(super) core: TerminalRunCore,
+}
+
+/// Terminal rule-attempt state after a consumed once-only return rule.
+pub struct BorrowedRuleAttemptStableAfterOnceReturnConsumed<'program> {
+    /// Rule attempts consumed before stability.
+    pub(super) attempts: RuleAttemptCount,
+    /// Final consumed once-only rule.
+    pub(super) rule: OnceReturnRuleView<'program>,
+    /// Parsed program borrowed by the terminal state.
+    pub(super) program: &'program ExecutableProgram,
+    /// Terminal runtime core containing the stable state.
+    pub(super) core: TerminalRunCore,
 }
 
 /// One committed reusable rewrite in a borrowed rule-attempt session.
@@ -228,6 +413,56 @@ macro_rules! impl_borrowed_rewrite_step {
 impl_borrowed_rewrite_step!(BorrowedAlwaysRewriteStep, AlwaysRewriteRuleView);
 impl_borrowed_rewrite_step!(BorrowedOnceRewriteStep, OnceRewriteRuleView);
 
+/// Implements shared accessors for continuing rule-attempt misses.
+macro_rules! impl_borrowed_rule_attempt_miss {
+    ($miss:ident, $rule:ident) => {
+        impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> $miss<'program, E, A> {
+            /// One-based consumed rule-attempt count.
+            #[must_use]
+            pub const fn attempt(&self) -> RuleAttemptCount {
+                self.attempt
+            }
+
+            /// Non-applying rule consumed by this rule attempt.
+            #[must_use]
+            pub const fn rule(&self) -> $rule<'program> {
+                self.rule
+            }
+
+            /// Runtime state after the non-applying rule attempt.
+            #[must_use]
+            pub fn state(&self) -> RuntimeStateView<'_> {
+                self.cursor.state()
+            }
+
+            /// Continue running after observing this non-applying rule attempt.
+            #[must_use]
+            pub fn into_cursor(self) -> BorrowedRuleAttemptCursor<'program, E, A> {
+                self.cursor
+            }
+        }
+    };
+}
+
+impl_borrowed_rule_attempt_miss!(
+    BorrowedAlwaysRewriteStateMismatchRuleAttempt,
+    AlwaysRewriteRuleView
+);
+impl_borrowed_rule_attempt_miss!(
+    BorrowedOnceRewriteStateMismatchRuleAttempt,
+    OnceRewriteRuleView
+);
+impl_borrowed_rule_attempt_miss!(
+    BorrowedAlwaysReturnStateMismatchRuleAttempt,
+    AlwaysReturnRuleView
+);
+impl_borrowed_rule_attempt_miss!(
+    BorrowedOnceReturnStateMismatchRuleAttempt,
+    OnceReturnRuleView
+);
+impl_borrowed_rule_attempt_miss!(BorrowedOnceRewriteConsumedRuleAttempt, OnceRewriteRuleView);
+impl_borrowed_rule_attempt_miss!(BorrowedOnceReturnConsumedRuleAttempt, OnceReturnRuleView);
+
 /// Implements shared accessors for borrowed rule-attempt rewrite witnesses.
 macro_rules! impl_borrowed_rule_attempt_rewrite_step {
     ($step:ident, $rule:ident) => {
@@ -299,6 +534,77 @@ impl<'program> BorrowedStableRun<'program> {
         self.core.into_stable_result()
     }
 }
+
+/// Implements shared accessors for exact stable rule-attempt terminals.
+macro_rules! impl_borrowed_rule_attempt_stable_miss {
+    ($run:ident, $rule:ident) => {
+        impl<'program> $run<'program> {
+            /// Number of rule attempts consumed before reaching the stable state.
+            #[must_use]
+            pub const fn attempts(&self) -> RuleAttemptCount {
+                self.attempts
+            }
+
+            /// Number of execution steps committed before reaching the stable state.
+            #[must_use]
+            pub const fn steps(&self) -> StepCount {
+                self.core.completed_steps()
+            }
+
+            /// Final non-applying rule that exhausted this rule-attempt pass.
+            #[must_use]
+            pub const fn rule(&self) -> $rule<'program> {
+                self.rule
+            }
+
+            /// Borrow the parsed program used by this terminal state.
+            #[must_use]
+            pub const fn program(&self) -> &'program ExecutableProgram {
+                self.program
+            }
+
+            /// Borrowed final runtime state.
+            #[must_use]
+            pub fn state(&self) -> RuntimeStateView<'_> {
+                self.core.state()
+            }
+
+            /// Materializes this stable run as a run result.
+            ///
+            /// # Errors
+            ///
+            /// Returns `RunFinishError` if final state materialization cannot allocate.
+            pub fn into_result(self) -> Result<RunResult, RunFinishError> {
+                self.core.into_stable_result()
+            }
+        }
+    };
+}
+
+impl_borrowed_rule_attempt_stable_miss!(
+    BorrowedRuleAttemptStableAfterAlwaysRewriteStateMismatch,
+    AlwaysRewriteRuleView
+);
+impl_borrowed_rule_attempt_stable_miss!(
+    BorrowedRuleAttemptStableAfterOnceRewriteStateMismatch,
+    OnceRewriteRuleView
+);
+impl_borrowed_rule_attempt_stable_miss!(
+    BorrowedRuleAttemptStableAfterAlwaysReturnStateMismatch,
+    AlwaysReturnRuleView
+);
+impl_borrowed_rule_attempt_stable_miss!(
+    BorrowedRuleAttemptStableAfterOnceReturnStateMismatch,
+    OnceReturnRuleView
+);
+impl_borrowed_rule_attempt_stable_miss!(
+    BorrowedRuleAttemptStableAfterOnceRewriteConsumed,
+    OnceRewriteRuleView
+);
+impl_borrowed_rule_attempt_stable_miss!(
+    BorrowedRuleAttemptStableAfterOnceReturnConsumed,
+    OnceReturnRuleView
+);
 
 /// Implements shared accessors for borrowed return terminal witnesses.
 macro_rules! impl_borrowed_return_run {

@@ -8,8 +8,8 @@ use crate::inspect::{
 };
 use crate::program::{ExecutableProgram, RuleScan, RuntimeStoredRule, StoredRuleRef};
 use crate::runtime::matcher::{
-    MatchedRuleApplication, RuleAttempt, RuleAttemptMiss, attempt_always_return_rule,
-    attempt_always_rewrite_rule, attempt_once_return_rule, attempt_once_rewrite_rule,
+    MatchedRuleApplication, RuleAttempt, attempt_always_return_rule, attempt_always_rewrite_rule,
+    attempt_once_return_rule, attempt_once_rewrite_rule,
 };
 use crate::runtime::state::State;
 
@@ -27,15 +27,8 @@ pub(crate) struct RuntimeRuleTable<'program> {
 pub(crate) enum RuntimeRuleScan<'program, 'state, 'once> {
     /// A rule matched and carries the commit permit needed after success.
     Matched(MatchedRuleApplication<'program, 'state, 'once>),
-    /// All rules were consumed as typed misses.
-    Unmatched(UnmatchedRuntimeRuleScan<'program>),
-}
-
-/// Ordinary runtime scan that exhausted every executable rule as a typed miss.
-#[derive(Debug)]
-pub(crate) struct UnmatchedRuntimeRuleScan<'program> {
-    /// Last miss observed before the executable scan became stable.
-    final_miss: RuleAttemptMiss<'program>,
+    /// No executable rule matched the current runtime state.
+    Unmatched,
 }
 
 /// Rule-attempt pass whose history and tail shape are selected by type.
@@ -303,26 +296,29 @@ impl<'program> RuntimeRuleTable<'program> {
         &'once mut self,
         state: &'state State,
     ) -> RuntimeRuleScan<'program, 'state, 'once> {
-        let mut final_miss = match self.first.attempt(state) {
+        match self.first.attempt(state) {
             RuleAttempt::Matched(matched) => return RuntimeRuleScan::Matched(matched),
-            RuleAttempt::Missed(miss) => miss,
+            RuleAttempt::AlwaysRewriteStateMismatch(_)
+            | RuleAttempt::OnceRewriteStateMismatch(_)
+            | RuleAttempt::AlwaysReturnStateMismatch(_)
+            | RuleAttempt::OnceReturnStateMismatch(_)
+            | RuleAttempt::OnceRewriteConsumed(_)
+            | RuleAttempt::OnceReturnConsumed(_) => {}
         };
 
         for cell in &mut self.remaining {
             match cell.attempt(state) {
                 RuleAttempt::Matched(matched) => return RuntimeRuleScan::Matched(matched),
-                RuleAttempt::Missed(miss) => final_miss = miss,
+                RuleAttempt::AlwaysRewriteStateMismatch(_)
+                | RuleAttempt::OnceRewriteStateMismatch(_)
+                | RuleAttempt::AlwaysReturnStateMismatch(_)
+                | RuleAttempt::OnceReturnStateMismatch(_)
+                | RuleAttempt::OnceRewriteConsumed(_)
+                | RuleAttempt::OnceReturnConsumed(_) => {}
             }
         }
 
-        RuntimeRuleScan::Unmatched(UnmatchedRuntimeRuleScan { final_miss })
-    }
-}
-
-impl<'program> UnmatchedRuntimeRuleScan<'program> {
-    /// Consumes the exhausted scan into the last typed rule miss.
-    pub(crate) const fn into_final_miss(self) -> RuleAttemptMiss<'program> {
-        self.final_miss
+        RuntimeRuleScan::Unmatched
     }
 }
 
@@ -612,18 +608,14 @@ impl<'program> RuntimeRuleCell<'program> {
                 let commit = OnceRewriteCommitPermit::new(self, rule);
                 attempt_once_rewrite_rule(rule, commit, state)
             }
-            Self::ConsumedOnceRewrite(cell) => {
-                RuleAttempt::Missed(RuleAttemptMiss::once_rewrite_consumed(cell.rule))
-            }
+            Self::ConsumedOnceRewrite(cell) => RuleAttempt::OnceRewriteConsumed(cell.rule),
             Self::AlwaysReturn(cell) => attempt_always_return_rule(cell.rule, state),
             Self::FreshOnceReturn(cell) => {
                 let rule = cell.rule;
                 let commit = OnceReturnCommitPermit::new(self, rule);
                 attempt_once_return_rule(rule, commit, state)
             }
-            Self::ConsumedOnceReturn(cell) => {
-                RuleAttempt::Missed(RuleAttemptMiss::once_return_consumed(cell.rule))
-            }
+            Self::ConsumedOnceReturn(cell) => RuleAttempt::OnceReturnConsumed(cell.rule),
         }
     }
 }

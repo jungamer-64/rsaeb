@@ -5,11 +5,20 @@ use super::session::{
     BorrowedRuleAttemptCursor, BorrowedRunSession,
 };
 use super::transition::{
-    BorrowedAlwaysReturnRun, BorrowedAlwaysRewriteStep, BorrowedContinuingRuleAttemptTransition,
-    BorrowedFailedRun, BorrowedFinalRuleAttemptTransition, BorrowedOnceReturnRun,
-    BorrowedOnceRewriteStep, BorrowedRuleAttemptAlwaysReturnRun,
-    BorrowedRuleAttemptAlwaysRewriteStep, BorrowedRuleAttemptFailedRun,
-    BorrowedRuleAttemptOnceReturnRun, BorrowedRuleAttemptOnceRewriteStep, BorrowedStableRun,
+    BorrowedAlwaysReturnRun, BorrowedAlwaysReturnStateMismatchRuleAttempt,
+    BorrowedAlwaysRewriteStateMismatchRuleAttempt, BorrowedAlwaysRewriteStep,
+    BorrowedContinuingRuleAttemptTransition, BorrowedFailedRun, BorrowedFinalRuleAttemptTransition,
+    BorrowedOnceReturnConsumedRuleAttempt, BorrowedOnceReturnRun,
+    BorrowedOnceReturnStateMismatchRuleAttempt, BorrowedOnceRewriteConsumedRuleAttempt,
+    BorrowedOnceRewriteStateMismatchRuleAttempt, BorrowedOnceRewriteStep,
+    BorrowedRuleAttemptAlwaysReturnRun, BorrowedRuleAttemptAlwaysRewriteStep,
+    BorrowedRuleAttemptFailedRun, BorrowedRuleAttemptOnceReturnRun,
+    BorrowedRuleAttemptOnceRewriteStep, BorrowedRuleAttemptStableAfterAlwaysReturnStateMismatch,
+    BorrowedRuleAttemptStableAfterAlwaysRewriteStateMismatch,
+    BorrowedRuleAttemptStableAfterOnceReturnConsumed,
+    BorrowedRuleAttemptStableAfterOnceReturnStateMismatch,
+    BorrowedRuleAttemptStableAfterOnceRewriteConsumed,
+    BorrowedRuleAttemptStableAfterOnceRewriteStateMismatch, BorrowedStableRun,
     BorrowedStepTransition,
 };
 
@@ -92,6 +101,30 @@ impl<E: ExecutionPolicy, A: RuleAttemptPolicy> core::fmt::Debug
 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::AlwaysRewriteStateMismatch(missed) => formatter
+                .debug_tuple("AlwaysRewriteStateMismatch")
+                .field(missed)
+                .finish(),
+            Self::OnceRewriteStateMismatch(missed) => formatter
+                .debug_tuple("OnceRewriteStateMismatch")
+                .field(missed)
+                .finish(),
+            Self::AlwaysReturnStateMismatch(missed) => formatter
+                .debug_tuple("AlwaysReturnStateMismatch")
+                .field(missed)
+                .finish(),
+            Self::OnceReturnStateMismatch(missed) => formatter
+                .debug_tuple("OnceReturnStateMismatch")
+                .field(missed)
+                .finish(),
+            Self::OnceRewriteConsumed(missed) => formatter
+                .debug_tuple("OnceRewriteConsumed")
+                .field(missed)
+                .finish(),
+            Self::OnceReturnConsumed(missed) => formatter
+                .debug_tuple("OnceReturnConsumed")
+                .field(missed)
+                .finish(),
             Self::AlwaysRewritten(applied) => formatter
                 .debug_tuple("AlwaysRewritten")
                 .field(applied)
@@ -118,6 +151,30 @@ impl<E: ExecutionPolicy, A: RuleAttemptPolicy> core::fmt::Debug
 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::StableAfterAlwaysRewriteStateMismatch(stable) => formatter
+                .debug_tuple("StableAfterAlwaysRewriteStateMismatch")
+                .field(stable)
+                .finish(),
+            Self::StableAfterOnceRewriteStateMismatch(stable) => formatter
+                .debug_tuple("StableAfterOnceRewriteStateMismatch")
+                .field(stable)
+                .finish(),
+            Self::StableAfterAlwaysReturnStateMismatch(stable) => formatter
+                .debug_tuple("StableAfterAlwaysReturnStateMismatch")
+                .field(stable)
+                .finish(),
+            Self::StableAfterOnceReturnStateMismatch(stable) => formatter
+                .debug_tuple("StableAfterOnceReturnStateMismatch")
+                .field(stable)
+                .finish(),
+            Self::StableAfterOnceRewriteConsumed(stable) => formatter
+                .debug_tuple("StableAfterOnceRewriteConsumed")
+                .field(stable)
+                .finish(),
+            Self::StableAfterOnceReturnConsumed(stable) => formatter
+                .debug_tuple("StableAfterOnceReturnConsumed")
+                .field(stable)
+                .finish(),
             Self::AlwaysRewritten(applied) => formatter
                 .debug_tuple("AlwaysRewritten")
                 .field(applied)
@@ -158,6 +215,47 @@ macro_rules! impl_rewrite_step_debug {
 impl_rewrite_step_debug!(BorrowedAlwaysRewriteStep, "BorrowedAlwaysRewriteStep");
 impl_rewrite_step_debug!(BorrowedOnceRewriteStep, "BorrowedOnceRewriteStep");
 
+/// Implements debug output for exact continuing rule-attempt misses.
+macro_rules! impl_rule_attempt_miss_debug {
+    ($miss:ident, $name:literal) => {
+        impl<E: ExecutionPolicy, A: RuleAttemptPolicy> core::fmt::Debug for $miss<'_, E, A> {
+            fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                formatter
+                    .debug_struct($name)
+                    .field("attempt", &self.attempt())
+                    .field("rule", &self.rule())
+                    .field("state", &self.state())
+                    .finish()
+            }
+        }
+    };
+}
+
+impl_rule_attempt_miss_debug!(
+    BorrowedAlwaysRewriteStateMismatchRuleAttempt,
+    "BorrowedAlwaysRewriteStateMismatchRuleAttempt"
+);
+impl_rule_attempt_miss_debug!(
+    BorrowedOnceRewriteStateMismatchRuleAttempt,
+    "BorrowedOnceRewriteStateMismatchRuleAttempt"
+);
+impl_rule_attempt_miss_debug!(
+    BorrowedAlwaysReturnStateMismatchRuleAttempt,
+    "BorrowedAlwaysReturnStateMismatchRuleAttempt"
+);
+impl_rule_attempt_miss_debug!(
+    BorrowedOnceReturnStateMismatchRuleAttempt,
+    "BorrowedOnceReturnStateMismatchRuleAttempt"
+);
+impl_rule_attempt_miss_debug!(
+    BorrowedOnceRewriteConsumedRuleAttempt,
+    "BorrowedOnceRewriteConsumedRuleAttempt"
+);
+impl_rule_attempt_miss_debug!(
+    BorrowedOnceReturnConsumedRuleAttempt,
+    "BorrowedOnceReturnConsumedRuleAttempt"
+);
+
 impl core::fmt::Debug for BorrowedStableRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -192,6 +290,48 @@ impl_rule_attempt_rewrite_step_debug!(
 impl_rule_attempt_rewrite_step_debug!(
     BorrowedRuleAttemptOnceRewriteStep,
     "BorrowedRuleAttemptOnceRewriteStep"
+);
+
+/// Implements debug output for exact stable rule-attempt terminals.
+macro_rules! impl_rule_attempt_stable_miss_debug {
+    ($run:ident, $name:literal) => {
+        impl core::fmt::Debug for $run<'_> {
+            fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                formatter
+                    .debug_struct($name)
+                    .field("attempts", &self.attempts())
+                    .field("steps", &self.steps())
+                    .field("rule", &self.rule())
+                    .field("state", &self.state())
+                    .finish()
+            }
+        }
+    };
+}
+
+impl_rule_attempt_stable_miss_debug!(
+    BorrowedRuleAttemptStableAfterAlwaysRewriteStateMismatch,
+    "BorrowedRuleAttemptStableAfterAlwaysRewriteStateMismatch"
+);
+impl_rule_attempt_stable_miss_debug!(
+    BorrowedRuleAttemptStableAfterOnceRewriteStateMismatch,
+    "BorrowedRuleAttemptStableAfterOnceRewriteStateMismatch"
+);
+impl_rule_attempt_stable_miss_debug!(
+    BorrowedRuleAttemptStableAfterAlwaysReturnStateMismatch,
+    "BorrowedRuleAttemptStableAfterAlwaysReturnStateMismatch"
+);
+impl_rule_attempt_stable_miss_debug!(
+    BorrowedRuleAttemptStableAfterOnceReturnStateMismatch,
+    "BorrowedRuleAttemptStableAfterOnceReturnStateMismatch"
+);
+impl_rule_attempt_stable_miss_debug!(
+    BorrowedRuleAttemptStableAfterOnceRewriteConsumed,
+    "BorrowedRuleAttemptStableAfterOnceRewriteConsumed"
+);
+impl_rule_attempt_stable_miss_debug!(
+    BorrowedRuleAttemptStableAfterOnceReturnConsumed,
+    "BorrowedRuleAttemptStableAfterOnceReturnConsumed"
 );
 
 /// Implements debug output for borrowed return terminal witnesses.

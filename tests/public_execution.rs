@@ -8,7 +8,7 @@ use rsaeb::error::{RuleAttemptStepError, RunStepError};
 use rsaeb::execution::{
     BorrowedContinuingRuleAttemptTransition, BorrowedFailedRun, BorrowedFinalRuleAttemptTransition,
     BorrowedRuleAttemptCursor, BorrowedRuleAttemptFailedRun, BorrowedRunSession, BorrowedStableRun,
-    BorrowedStepTransition, RuleMiss,
+    BorrowedStepTransition,
 };
 use rsaeb::input::AdmittedRun;
 use rsaeb::inspect::{
@@ -65,9 +65,34 @@ enum StepSignature {
 
 #[derive(Debug, PartialEq, Eq)]
 enum BorrowedRuleAttemptSignature {
-    Missed {
+    AlwaysRewriteStateMismatch {
         attempt: usize,
-        miss: RuleMissSignature,
+        rule_position: usize,
+        state: Vec<u8>,
+    },
+    OnceRewriteStateMismatch {
+        attempt: usize,
+        rule_position: usize,
+        state: Vec<u8>,
+    },
+    AlwaysReturnStateMismatch {
+        attempt: usize,
+        rule_position: usize,
+        state: Vec<u8>,
+    },
+    OnceReturnStateMismatch {
+        attempt: usize,
+        rule_position: usize,
+        state: Vec<u8>,
+    },
+    OnceRewriteConsumed {
+        attempt: usize,
+        rule_position: usize,
+        state: Vec<u8>,
+    },
+    OnceReturnConsumed {
+        attempt: usize,
+        rule_position: usize,
         state: Vec<u8>,
     },
     Applied {
@@ -76,10 +101,40 @@ enum BorrowedRuleAttemptSignature {
         rule_position: usize,
         state: Vec<u8>,
     },
-    Stable {
+    StableAfterAlwaysRewriteStateMismatch {
         attempts: usize,
         steps: usize,
-        final_miss: RuleMissSignature,
+        rule_position: usize,
+        state: Vec<u8>,
+    },
+    StableAfterOnceRewriteStateMismatch {
+        attempts: usize,
+        steps: usize,
+        rule_position: usize,
+        state: Vec<u8>,
+    },
+    StableAfterAlwaysReturnStateMismatch {
+        attempts: usize,
+        steps: usize,
+        rule_position: usize,
+        state: Vec<u8>,
+    },
+    StableAfterOnceReturnStateMismatch {
+        attempts: usize,
+        steps: usize,
+        rule_position: usize,
+        state: Vec<u8>,
+    },
+    StableAfterOnceRewriteConsumed {
+        attempts: usize,
+        steps: usize,
+        rule_position: usize,
+        state: Vec<u8>,
+    },
+    StableAfterOnceReturnConsumed {
+        attempts: usize,
+        steps: usize,
+        rule_position: usize,
         state: Vec<u8>,
     },
     Return {
@@ -90,23 +145,11 @@ enum BorrowedRuleAttemptSignature {
     },
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum RuleMissSignature {
-    AlwaysRewriteStateMismatch { rule_position: usize },
-    OnceRewriteStateMismatch { rule_position: usize },
-    AlwaysReturnStateMismatch { rule_position: usize },
-    OnceReturnStateMismatch { rule_position: usize },
-    OnceRewriteConsumed { rule_position: usize },
-    OnceReturnConsumed { rule_position: usize },
-}
-
 macro_rules! borrowed_state_mismatch {
     ($attempt:expr, $rule_position:expr, $state:expr) => {
-        BorrowedRuleAttemptSignature::Missed {
+        BorrowedRuleAttemptSignature::AlwaysRewriteStateMismatch {
             attempt: $attempt,
-            miss: RuleMissSignature::AlwaysRewriteStateMismatch {
-                rule_position: $rule_position,
-            },
+            rule_position: $rule_position,
             state: $state.to_vec(),
         }
     };
@@ -114,11 +157,9 @@ macro_rules! borrowed_state_mismatch {
 
 macro_rules! borrowed_once_rewrite_consumed {
     ($attempt:expr, $rule_position:expr, $state:expr) => {
-        BorrowedRuleAttemptSignature::Missed {
+        BorrowedRuleAttemptSignature::OnceRewriteConsumed {
             attempt: $attempt,
-            miss: RuleMissSignature::OnceRewriteConsumed {
-                rule_position: $rule_position,
-            },
+            rule_position: $rule_position,
             state: $state.to_vec(),
         }
     };
@@ -135,12 +176,23 @@ macro_rules! borrowed_apply {
     };
 }
 
-macro_rules! borrowed_stable {
-    ($attempts:expr, $steps:expr, $final_miss:expr, $state:expr $(,)?) => {
-        BorrowedRuleAttemptSignature::Stable {
+macro_rules! borrowed_stable_after_always_rewrite_state_mismatch {
+    ($attempts:expr, $steps:expr, $rule_position:expr, $state:expr $(,)?) => {
+        BorrowedRuleAttemptSignature::StableAfterAlwaysRewriteStateMismatch {
             attempts: $attempts,
             steps: $steps,
-            final_miss: $final_miss,
+            rule_position: $rule_position,
+            state: $state.to_vec(),
+        }
+    };
+}
+
+macro_rules! borrowed_stable_after_once_rewrite_consumed {
+    ($attempts:expr, $steps:expr, $rule_position:expr, $state:expr $(,)?) => {
+        BorrowedRuleAttemptSignature::StableAfterOnceRewriteConsumed {
+            attempts: $attempts,
+            steps: $steps,
+            rule_position: $rule_position,
             state: $state.to_vec(),
         }
     };
@@ -163,10 +215,50 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
             match cursor {
                 BorrowedRuleAttemptCursor::Continuing(execution) => {
                     match expect_continuing_rule_attempt_transition(execution.step())? {
-                        BorrowedContinuingRuleAttemptTransition::Missed(missed) => {
-                            signatures.push(BorrowedRuleAttemptSignature::Missed {
+                        BorrowedContinuingRuleAttemptTransition::AlwaysRewriteStateMismatch(missed) => {
+                            signatures.push(BorrowedRuleAttemptSignature::AlwaysRewriteStateMismatch {
                                 attempt: missed.attempt().get(),
-                                miss: rule_miss_signature(missed.miss()),
+                                rule_position: missed.rule().position().get(),
+                                state: runtime_view_bytes(missed.state())?,
+                            });
+                            cursor = missed.into_cursor();
+                        }
+                        BorrowedContinuingRuleAttemptTransition::OnceRewriteStateMismatch(missed) => {
+                            signatures.push(BorrowedRuleAttemptSignature::OnceRewriteStateMismatch {
+                                attempt: missed.attempt().get(),
+                                rule_position: missed.rule().position().get(),
+                                state: runtime_view_bytes(missed.state())?,
+                            });
+                            cursor = missed.into_cursor();
+                        }
+                        BorrowedContinuingRuleAttemptTransition::AlwaysReturnStateMismatch(missed) => {
+                            signatures.push(BorrowedRuleAttemptSignature::AlwaysReturnStateMismatch {
+                                attempt: missed.attempt().get(),
+                                rule_position: missed.rule().position().get(),
+                                state: runtime_view_bytes(missed.state())?,
+                            });
+                            cursor = missed.into_cursor();
+                        }
+                        BorrowedContinuingRuleAttemptTransition::OnceReturnStateMismatch(missed) => {
+                            signatures.push(BorrowedRuleAttemptSignature::OnceReturnStateMismatch {
+                                attempt: missed.attempt().get(),
+                                rule_position: missed.rule().position().get(),
+                                state: runtime_view_bytes(missed.state())?,
+                            });
+                            cursor = missed.into_cursor();
+                        }
+                        BorrowedContinuingRuleAttemptTransition::OnceRewriteConsumed(missed) => {
+                            signatures.push(BorrowedRuleAttemptSignature::OnceRewriteConsumed {
+                                attempt: missed.attempt().get(),
+                                rule_position: missed.rule().position().get(),
+                                state: runtime_view_bytes(missed.state())?,
+                            });
+                            cursor = missed.into_cursor();
+                        }
+                        BorrowedContinuingRuleAttemptTransition::OnceReturnConsumed(missed) => {
+                            signatures.push(BorrowedRuleAttemptSignature::OnceReturnConsumed {
+                                attempt: missed.attempt().get(),
+                                rule_position: missed.rule().position().get(),
                                 state: runtime_view_bytes(missed.state())?,
                             });
                             cursor = missed.into_cursor();
@@ -214,11 +306,56 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
                 }
                 BorrowedRuleAttemptCursor::Final(execution) => {
                     match expect_final_rule_attempt_transition(execution.step())? {
-                        BorrowedFinalRuleAttemptTransition::Stable(stable) => {
-                            signatures.push(BorrowedRuleAttemptSignature::Stable {
+                        BorrowedFinalRuleAttemptTransition::StableAfterAlwaysRewriteStateMismatch(stable) => {
+                            signatures.push(BorrowedRuleAttemptSignature::StableAfterAlwaysRewriteStateMismatch {
                                 attempts: stable.attempts().get(),
                                 steps: stable.steps().get(),
-                                final_miss: rule_miss_signature(stable.final_miss()),
+                                rule_position: stable.rule().position().get(),
+                                state: runtime_view_bytes(stable.state())?,
+                            });
+                            return Ok(signatures);
+                        }
+                        BorrowedFinalRuleAttemptTransition::StableAfterOnceRewriteStateMismatch(stable) => {
+                            signatures.push(BorrowedRuleAttemptSignature::StableAfterOnceRewriteStateMismatch {
+                                attempts: stable.attempts().get(),
+                                steps: stable.steps().get(),
+                                rule_position: stable.rule().position().get(),
+                                state: runtime_view_bytes(stable.state())?,
+                            });
+                            return Ok(signatures);
+                        }
+                        BorrowedFinalRuleAttemptTransition::StableAfterAlwaysReturnStateMismatch(stable) => {
+                            signatures.push(BorrowedRuleAttemptSignature::StableAfterAlwaysReturnStateMismatch {
+                                attempts: stable.attempts().get(),
+                                steps: stable.steps().get(),
+                                rule_position: stable.rule().position().get(),
+                                state: runtime_view_bytes(stable.state())?,
+                            });
+                            return Ok(signatures);
+                        }
+                        BorrowedFinalRuleAttemptTransition::StableAfterOnceReturnStateMismatch(stable) => {
+                            signatures.push(BorrowedRuleAttemptSignature::StableAfterOnceReturnStateMismatch {
+                                attempts: stable.attempts().get(),
+                                steps: stable.steps().get(),
+                                rule_position: stable.rule().position().get(),
+                                state: runtime_view_bytes(stable.state())?,
+                            });
+                            return Ok(signatures);
+                        }
+                        BorrowedFinalRuleAttemptTransition::StableAfterOnceRewriteConsumed(stable) => {
+                            signatures.push(BorrowedRuleAttemptSignature::StableAfterOnceRewriteConsumed {
+                                attempts: stable.attempts().get(),
+                                steps: stable.steps().get(),
+                                rule_position: stable.rule().position().get(),
+                                state: runtime_view_bytes(stable.state())?,
+                            });
+                            return Ok(signatures);
+                        }
+                        BorrowedFinalRuleAttemptTransition::StableAfterOnceReturnConsumed(stable) => {
+                            signatures.push(BorrowedRuleAttemptSignature::StableAfterOnceReturnConsumed {
+                                attempts: stable.attempts().get(),
+                                steps: stable.steps().get(),
+                                rule_position: stable.rule().position().get(),
                                 state: runtime_view_bytes(stable.state())?,
                             });
                             return Ok(signatures);
@@ -505,12 +642,19 @@ fn ensure_rule_attempt_rewrite_rule_shape(source: &str, expected_once: bool) -> 
         | BorrowedFinalRuleAttemptTransition::OnceRewritten(_) => Err(TestFailure::message(
             "unexpected committed rewrite rule shape",
         )),
-        BorrowedFinalRuleAttemptTransition::Stable(_)
-        | BorrowedFinalRuleAttemptTransition::AlwaysReturned(_)
+        BorrowedFinalRuleAttemptTransition::AlwaysReturned(_)
         | BorrowedFinalRuleAttemptTransition::OnceReturned(_)
         | BorrowedFinalRuleAttemptTransition::Failed(_) => Err(TestFailure::message(
             "expected rule-attempt rewrite outcome",
         )),
+        BorrowedFinalRuleAttemptTransition::StableAfterAlwaysRewriteStateMismatch(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceRewriteStateMismatch(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterAlwaysReturnStateMismatch(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceReturnStateMismatch(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceRewriteConsumed(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceReturnConsumed(_) => Err(
+            TestFailure::message("expected rule-attempt rewrite outcome"),
+        ),
     }
 }
 
@@ -537,35 +681,17 @@ fn ensure_rule_attempt_return_rule_shape(source: &str, expected_once: bool) -> T
         )),
         BorrowedFinalRuleAttemptTransition::AlwaysRewritten(_)
         | BorrowedFinalRuleAttemptTransition::OnceRewritten(_)
-        | BorrowedFinalRuleAttemptTransition::Stable(_)
         | BorrowedFinalRuleAttemptTransition::Failed(_) => {
             Err(TestFailure::message("expected rule-attempt return outcome"))
         }
-    }
-}
-
-fn rule_miss_signature(miss: &RuleMiss<'_>) -> RuleMissSignature {
-    match *miss {
-        RuleMiss::AlwaysRewriteStateMismatch(rule) => {
-            RuleMissSignature::AlwaysRewriteStateMismatch {
-                rule_position: rule.position().get(),
-            }
+        BorrowedFinalRuleAttemptTransition::StableAfterAlwaysRewriteStateMismatch(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceRewriteStateMismatch(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterAlwaysReturnStateMismatch(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceReturnStateMismatch(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceRewriteConsumed(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceReturnConsumed(_) => {
+            Err(TestFailure::message("expected rule-attempt return outcome"))
         }
-        RuleMiss::OnceRewriteStateMismatch(rule) => RuleMissSignature::OnceRewriteStateMismatch {
-            rule_position: rule.position().get(),
-        },
-        RuleMiss::AlwaysReturnStateMismatch(rule) => RuleMissSignature::AlwaysReturnStateMismatch {
-            rule_position: rule.position().get(),
-        },
-        RuleMiss::OnceReturnStateMismatch(rule) => RuleMissSignature::OnceReturnStateMismatch {
-            rule_position: rule.position().get(),
-        },
-        RuleMiss::OnceRewriteConsumed(rule) => RuleMissSignature::OnceRewriteConsumed {
-            rule_position: rule.position().get(),
-        },
-        RuleMiss::OnceReturnConsumed(rule) => RuleMissSignature::OnceReturnConsumed {
-            rule_position: rule.position().get(),
-        },
     }
 }
 
@@ -773,13 +899,7 @@ where
 {
     match result {
         BorrowedContinuingRuleAttemptTransition::Failed(failed) => Ok(failed),
-        BorrowedContinuingRuleAttemptTransition::Missed(_)
-        | BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(_)
-        | BorrowedContinuingRuleAttemptTransition::OnceRewritten(_)
-        | BorrowedContinuingRuleAttemptTransition::AlwaysReturned(_)
-        | BorrowedContinuingRuleAttemptTransition::OnceReturned(_) => {
-            Err(TestFailure::message("expected failed rule attempt"))
-        }
+        _ => Err(TestFailure::message("expected failed rule attempt")),
     }
 }
 
@@ -797,13 +917,7 @@ where
 {
     match result {
         BorrowedFinalRuleAttemptTransition::Failed(failed) => Ok(failed),
-        BorrowedFinalRuleAttemptTransition::Stable(_)
-        | BorrowedFinalRuleAttemptTransition::AlwaysRewritten(_)
-        | BorrowedFinalRuleAttemptTransition::OnceRewritten(_)
-        | BorrowedFinalRuleAttemptTransition::AlwaysReturned(_)
-        | BorrowedFinalRuleAttemptTransition::OnceReturned(_) => {
-            Err(TestFailure::message("expected failed rule attempt"))
-        }
+        _ => Err(TestFailure::message("expected failed rule attempt")),
     }
 }
 
@@ -927,12 +1041,7 @@ fn execution_rule_attempt_surface_reports_misses_and_resets_after_apply() -> Tes
             borrowed_apply!(5, 2, 3, b"c"),
             borrowed_state_mismatch!(6, 1, b"c"),
             borrowed_state_mismatch!(7, 2, b"c"),
-            borrowed_stable!(
-                8,
-                2,
-                RuleMissSignature::AlwaysRewriteStateMismatch { rule_position: 3 },
-                b"c",
-            ),
+            borrowed_stable_after_always_rewrite_state_mismatch!(8, 2, 3, b"c",),
         ],
     )
 }
@@ -947,9 +1056,9 @@ fn execution_rule_attempt_surface_reports_misses_resets_and_returns() -> TestRes
     ensure_eq!(
         borrowed_rule_attempt_signatures::<20>(&program, b"a")?,
         [
-            BorrowedRuleAttemptSignature::Missed {
+            BorrowedRuleAttemptSignature::AlwaysRewriteStateMismatch {
                 attempt: 1,
-                miss: RuleMissSignature::AlwaysRewriteStateMismatch { rule_position: 1 },
+                rule_position: 1,
                 state: b"a".to_vec(),
             },
             BorrowedRuleAttemptSignature::Applied {
@@ -958,14 +1067,14 @@ fn execution_rule_attempt_surface_reports_misses_resets_and_returns() -> TestRes
                 rule_position: 2,
                 state: b"b".to_vec(),
             },
-            BorrowedRuleAttemptSignature::Missed {
+            BorrowedRuleAttemptSignature::AlwaysRewriteStateMismatch {
                 attempt: 3,
-                miss: RuleMissSignature::AlwaysRewriteStateMismatch { rule_position: 1 },
+                rule_position: 1,
                 state: b"b".to_vec(),
             },
-            BorrowedRuleAttemptSignature::Missed {
+            BorrowedRuleAttemptSignature::AlwaysRewriteStateMismatch {
                 attempt: 4,
-                miss: RuleMissSignature::AlwaysRewriteStateMismatch { rule_position: 2 },
+                rule_position: 2,
                 state: b"b".to_vec(),
             },
             BorrowedRuleAttemptSignature::Return {
@@ -995,14 +1104,10 @@ fn execution_rule_attempt_start_and_final_miss_are_typed() -> TestResult {
         ));
     };
     match expect_final_rule_attempt_transition(execution.step())? {
-        BorrowedFinalRuleAttemptTransition::Stable(stable) => {
+        BorrowedFinalRuleAttemptTransition::StableAfterAlwaysRewriteStateMismatch(stable) => {
             ensure_eq!(stable.attempts().get(), 1)?;
             ensure_eq!(stable.steps().get(), 0)?;
-            let final_miss = stable.final_miss();
-            ensure_eq!(
-                rule_miss_signature(final_miss),
-                RuleMissSignature::AlwaysRewriteStateMismatch { rule_position: 1 },
-            )?;
+            ensure_eq!(stable.rule().position().get(), 1,)?;
             ensure_eq!(
                 runtime_view_bytes(stable.state())?.as_slice(),
                 b"z".as_slice(),
@@ -1012,7 +1117,12 @@ fn execution_rule_attempt_start_and_final_miss_are_typed() -> TestResult {
         | BorrowedFinalRuleAttemptTransition::OnceRewritten(_)
         | BorrowedFinalRuleAttemptTransition::AlwaysReturned(_)
         | BorrowedFinalRuleAttemptTransition::OnceReturned(_)
-        | BorrowedFinalRuleAttemptTransition::Failed(_) => {
+        | BorrowedFinalRuleAttemptTransition::Failed(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceRewriteStateMismatch(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterAlwaysReturnStateMismatch(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceReturnStateMismatch(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceRewriteConsumed(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceReturnConsumed(_) => {
             return Err(TestFailure::message("expected immediate stable terminal"));
         }
     }
@@ -1048,11 +1158,16 @@ fn execution_rule_attempt_miss_shapes_are_typed() -> TestResult {
     };
     let cursor = match expect_continuing_rule_attempt_transition(execution.step())? {
         BorrowedContinuingRuleAttemptTransition::OnceRewritten(applied) => applied.into_cursor(),
-        BorrowedContinuingRuleAttemptTransition::Missed(_)
-        | BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(_)
+        BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(_)
         | BorrowedContinuingRuleAttemptTransition::AlwaysReturned(_)
         | BorrowedContinuingRuleAttemptTransition::OnceReturned(_)
-        | BorrowedContinuingRuleAttemptTransition::Failed(_) => {
+        | BorrowedContinuingRuleAttemptTransition::Failed(_)
+        | BorrowedContinuingRuleAttemptTransition::AlwaysRewriteStateMismatch(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceRewriteStateMismatch(_)
+        | BorrowedContinuingRuleAttemptTransition::AlwaysReturnStateMismatch(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceReturnStateMismatch(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceRewriteConsumed(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceReturnConsumed(_) => {
             return Err(TestFailure::message("expected first once rewrite to apply"));
         }
     };
@@ -1063,18 +1178,20 @@ fn execution_rule_attempt_miss_shapes_are_typed() -> TestResult {
         ));
     };
     let cursor = match expect_continuing_rule_attempt_transition(execution.step())? {
-        BorrowedContinuingRuleAttemptTransition::Missed(missed) => {
-            ensure_eq!(
-                rule_miss_signature(missed.miss()),
-                RuleMissSignature::OnceRewriteConsumed { rule_position: 1 },
-            )?;
+        BorrowedContinuingRuleAttemptTransition::OnceRewriteConsumed(missed) => {
+            ensure_eq!(missed.rule().position().get(), 1,)?;
             missed.into_cursor()
         }
         BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(_)
         | BorrowedContinuingRuleAttemptTransition::OnceRewritten(_)
         | BorrowedContinuingRuleAttemptTransition::AlwaysReturned(_)
         | BorrowedContinuingRuleAttemptTransition::OnceReturned(_)
-        | BorrowedContinuingRuleAttemptTransition::Failed(_) => {
+        | BorrowedContinuingRuleAttemptTransition::Failed(_)
+        | BorrowedContinuingRuleAttemptTransition::AlwaysRewriteStateMismatch(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceRewriteStateMismatch(_)
+        | BorrowedContinuingRuleAttemptTransition::AlwaysReturnStateMismatch(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceReturnStateMismatch(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceReturnConsumed(_) => {
             return Err(TestFailure::message("expected consumed once rewrite miss"));
         }
     };
@@ -1085,15 +1202,19 @@ fn execution_rule_attempt_miss_shapes_are_typed() -> TestResult {
         ));
     };
     match expect_final_rule_attempt_transition(execution.step())? {
-        BorrowedFinalRuleAttemptTransition::Stable(stable) => ensure_eq!(
-            rule_miss_signature(stable.final_miss()),
-            RuleMissSignature::AlwaysRewriteStateMismatch { rule_position: 2 },
-        ),
+        BorrowedFinalRuleAttemptTransition::StableAfterAlwaysRewriteStateMismatch(stable) => {
+            ensure_eq!(stable.rule().position().get(), 2,)
+        }
         BorrowedFinalRuleAttemptTransition::AlwaysRewritten(_)
         | BorrowedFinalRuleAttemptTransition::OnceRewritten(_)
         | BorrowedFinalRuleAttemptTransition::AlwaysReturned(_)
         | BorrowedFinalRuleAttemptTransition::OnceReturned(_)
-        | BorrowedFinalRuleAttemptTransition::Failed(_) => {
+        | BorrowedFinalRuleAttemptTransition::Failed(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceRewriteStateMismatch(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterAlwaysReturnStateMismatch(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceReturnStateMismatch(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceRewriteConsumed(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceReturnConsumed(_) => {
             Err(TestFailure::message("expected always rule state mismatch"))
         }
     }
@@ -1117,11 +1238,16 @@ fn execution_rule_attempt_rewrite_reset_returns_typed_cursor() -> TestResult {
     };
     let cursor = match expect_final_rule_attempt_transition(execution.step())? {
         BorrowedFinalRuleAttemptTransition::AlwaysRewritten(applied) => applied.into_cursor(),
-        BorrowedFinalRuleAttemptTransition::Stable(_)
-        | BorrowedFinalRuleAttemptTransition::OnceRewritten(_)
+        BorrowedFinalRuleAttemptTransition::OnceRewritten(_)
         | BorrowedFinalRuleAttemptTransition::AlwaysReturned(_)
         | BorrowedFinalRuleAttemptTransition::OnceReturned(_)
-        | BorrowedFinalRuleAttemptTransition::Failed(_) => {
+        | BorrowedFinalRuleAttemptTransition::Failed(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterAlwaysRewriteStateMismatch(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceRewriteStateMismatch(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterAlwaysReturnStateMismatch(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceReturnStateMismatch(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceRewriteConsumed(_)
+        | BorrowedFinalRuleAttemptTransition::StableAfterOnceReturnConsumed(_) => {
             return Err(TestFailure::message("expected single-rule rewrite apply"));
         }
     };
@@ -1141,11 +1267,16 @@ fn execution_rule_attempt_rewrite_reset_returns_typed_cursor() -> TestResult {
     };
     let cursor = match expect_continuing_rule_attempt_transition(execution.step())? {
         BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(applied) => applied.into_cursor(),
-        BorrowedContinuingRuleAttemptTransition::Missed(_)
-        | BorrowedContinuingRuleAttemptTransition::OnceRewritten(_)
+        BorrowedContinuingRuleAttemptTransition::OnceRewritten(_)
         | BorrowedContinuingRuleAttemptTransition::AlwaysReturned(_)
         | BorrowedContinuingRuleAttemptTransition::OnceReturned(_)
-        | BorrowedContinuingRuleAttemptTransition::Failed(_) => {
+        | BorrowedContinuingRuleAttemptTransition::Failed(_)
+        | BorrowedContinuingRuleAttemptTransition::AlwaysRewriteStateMismatch(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceRewriteStateMismatch(_)
+        | BorrowedContinuingRuleAttemptTransition::AlwaysReturnStateMismatch(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceReturnStateMismatch(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceRewriteConsumed(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceReturnConsumed(_) => {
             return Err(TestFailure::message("expected multi-rule rewrite apply"));
         }
     };
@@ -1178,12 +1309,7 @@ fn execution_rule_attempt_preserves_interleaved_once_state() -> TestResult {
             borrowed_apply!(4, 2, 3, b"c"),
             borrowed_once_rewrite_consumed!(5, 1, b"c"),
             borrowed_state_mismatch!(6, 2, b"c"),
-            borrowed_stable!(
-                7,
-                2,
-                RuleMissSignature::OnceRewriteConsumed { rule_position: 3 },
-                b"c",
-            ),
+            borrowed_stable_after_once_rewrite_consumed!(7, 2, 3, b"c",),
         ],
     )
 }
@@ -1200,12 +1326,7 @@ fn execution_rule_attempt_once_state_is_run_local_for_reused_program() -> TestRe
         borrowed_once_rewrite_consumed!(2, 1, b"b"),
         borrowed_apply!(3, 2, 2, b"c"),
         borrowed_once_rewrite_consumed!(4, 1, b"c"),
-        borrowed_stable!(
-            5,
-            2,
-            RuleMissSignature::AlwaysRewriteStateMismatch { rule_position: 2 },
-            b"c",
-        ),
+        borrowed_stable_after_always_rewrite_state_mismatch!(5, 2, 2, b"c",),
     ];
 
     ensure_eq!(
@@ -1256,19 +1377,21 @@ fn execution_rule_attempt_limit_is_independent_from_step_limit() -> TestResult {
     };
 
     let cursor = match expect_continuing_rule_attempt_transition(execution.step())? {
-        BorrowedContinuingRuleAttemptTransition::Missed(missed) => {
+        BorrowedContinuingRuleAttemptTransition::AlwaysRewriteStateMismatch(missed) => {
             ensure_eq!(missed.attempt().get(), 1)?;
-            ensure_eq!(
-                rule_miss_signature(missed.miss()),
-                RuleMissSignature::AlwaysRewriteStateMismatch { rule_position: 1 },
-            )?;
+            ensure_eq!(missed.rule().position().get(), 1)?;
             missed.into_cursor()
         }
         BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(_)
         | BorrowedContinuingRuleAttemptTransition::OnceRewritten(_)
         | BorrowedContinuingRuleAttemptTransition::AlwaysReturned(_)
         | BorrowedContinuingRuleAttemptTransition::OnceReturned(_)
-        | BorrowedContinuingRuleAttemptTransition::Failed(_) => {
+        | BorrowedContinuingRuleAttemptTransition::Failed(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceRewriteStateMismatch(_)
+        | BorrowedContinuingRuleAttemptTransition::AlwaysReturnStateMismatch(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceReturnStateMismatch(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceRewriteConsumed(_)
+        | BorrowedContinuingRuleAttemptTransition::OnceReturnConsumed(_) => {
             return Err(TestFailure::message(
                 "expected miss despite zero execution-step limit",
             ));

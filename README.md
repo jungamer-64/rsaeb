@@ -99,9 +99,10 @@ Successful outcomes expose the exact concrete rule view that committed:
 `AlwaysRewriteRuleView`, `OnceRewriteRuleView`, `AlwaysReturnRuleView`, or
 `OnceReturnRuleView`. General `inspect::RuleView` remains only the
 program-inspection classification surface; callers match it into a concrete rule
-view before reading rule metadata. Committed successes and rule misses do not
-erase their repeat/action provenance back into it. Trace events carry the same
-boundary directly through exact rewritten/returned variants.
+view before reading rule metadata. Committed successes, continuing rule-attempt
+misses, and final stable-after-miss terminals all keep repeat/action provenance
+on exact transition variants. Trace events carry the same boundary directly
+through exact rewritten/returned variants.
 
 Executable rule counts are non-zero by type, and parsed rule positions are
 stored topology witnesses rather than iterator-derived numbers. `(once)` is

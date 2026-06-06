@@ -12,10 +12,10 @@
 //! into its [`RunStepError`](crate::error::RunStepError).
 //! Rule-attempt execution starts as a cursor that must be matched into a
 //! continuing or final session before stepping. Continuing transitions can miss
-//! and keep running; final transitions can stabilize. The two impossible
-//! outcomes are absent from their transition types. Rule-attempt transitions
-//! additionally expose typed miss variants through [`RuleMiss`]. Stable
-//! rule-attempt terminals carry the final non-applying rule directly.
+//! and keep running through exact non-applying variants; final transitions can
+//! stabilize through exact stable-after-miss variants. The impossible
+//! shape-erased missed and stable outcomes are absent from their transition
+//! types.
 //!
 //! ```
 //! use rsaeb::error::RunStepError;
@@ -54,7 +54,8 @@
 //!
 //! # Compile-time guards
 //!
-//! Rule-attempt misses no longer expose a loosely paired reason enum:
+//! Rule-attempt misses no longer expose a loosely paired reason enum or a
+//! reusable miss carrier:
 //!
 //! ```compile_fail
 //! use rsaeb::execution::RuleMissReason;
@@ -65,9 +66,7 @@
 //! ```compile_fail
 //! use rsaeb::execution::RuleMiss;
 //!
-//! fn main() {
-//!     let _ = |miss: RuleMiss<'_>| miss.reason();
-//! }
+//! fn main() {}
 //! ```
 //!
 //! Runtime execution mode selectors and old method-shaped entrypoints are not
@@ -357,11 +356,20 @@ pub use session::{
     BorrowedRuleAttemptCursor, BorrowedRunSession,
 };
 pub use transition::{
-    BorrowedAlwaysReturnRun, BorrowedAlwaysRewriteStep, BorrowedContinuingRuleAttemptTransition,
-    BorrowedFailedRun, BorrowedFinalRuleAttemptTransition, BorrowedOnceReturnRun,
-    BorrowedOnceRewriteStep, BorrowedRuleAttemptAlwaysReturnRun,
-    BorrowedRuleAttemptAlwaysRewriteStep, BorrowedRuleAttemptFailedRun,
-    BorrowedRuleAttemptOnceReturnRun, BorrowedRuleAttemptOnceRewriteStep, BorrowedStableRun,
+    BorrowedAlwaysReturnRun, BorrowedAlwaysReturnStateMismatchRuleAttempt,
+    BorrowedAlwaysRewriteStateMismatchRuleAttempt, BorrowedAlwaysRewriteStep,
+    BorrowedContinuingRuleAttemptTransition, BorrowedFailedRun, BorrowedFinalRuleAttemptTransition,
+    BorrowedOnceReturnConsumedRuleAttempt, BorrowedOnceReturnRun,
+    BorrowedOnceReturnStateMismatchRuleAttempt, BorrowedOnceRewriteConsumedRuleAttempt,
+    BorrowedOnceRewriteStateMismatchRuleAttempt, BorrowedOnceRewriteStep,
+    BorrowedRuleAttemptAlwaysReturnRun, BorrowedRuleAttemptAlwaysRewriteStep,
+    BorrowedRuleAttemptFailedRun, BorrowedRuleAttemptOnceReturnRun,
+    BorrowedRuleAttemptOnceRewriteStep, BorrowedRuleAttemptStableAfterAlwaysReturnStateMismatch,
+    BorrowedRuleAttemptStableAfterAlwaysRewriteStateMismatch,
+    BorrowedRuleAttemptStableAfterOnceReturnConsumed,
+    BorrowedRuleAttemptStableAfterOnceReturnStateMismatch,
+    BorrowedRuleAttemptStableAfterOnceRewriteConsumed,
+    BorrowedRuleAttemptStableAfterOnceRewriteStateMismatch, BorrowedStableRun,
     BorrowedStepTransition,
 };
 

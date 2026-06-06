@@ -367,8 +367,7 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
 
         let matched = match runtime_rules.scan_for_match(&state) {
             RuntimeRuleScan::Matched(matched) => matched,
-            RuntimeRuleScan::Unmatched(unmatched) => {
-                let _final_miss = unmatched.into_final_miss();
+            RuntimeRuleScan::Unmatched => {
                 return RunAdvance::Stable(TerminalSession {
                     program,
                     core: TerminalRunCore {

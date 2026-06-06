@@ -19,12 +19,21 @@ use super::engine::{
     TerminalAttemptSession, TerminalRunCore,
 };
 use super::transition::{
-    BorrowedAlwaysReturnRun, BorrowedAlwaysRewriteStep, BorrowedContinuingRuleAttemptTransition,
-    BorrowedFailedRun, BorrowedFinalRuleAttemptTransition, BorrowedMissedRuleAttempt,
-    BorrowedOnceReturnRun, BorrowedOnceRewriteStep, BorrowedRuleAttemptAlwaysReturnRun,
-    BorrowedRuleAttemptAlwaysRewriteStep, BorrowedRuleAttemptFailedRun,
-    BorrowedRuleAttemptOnceReturnRun, BorrowedRuleAttemptOnceRewriteStep,
-    BorrowedRuleAttemptStableRun, BorrowedStableRun, BorrowedStepTransition,
+    BorrowedAlwaysReturnRun, BorrowedAlwaysReturnStateMismatchRuleAttempt,
+    BorrowedAlwaysRewriteStateMismatchRuleAttempt, BorrowedAlwaysRewriteStep,
+    BorrowedContinuingRuleAttemptTransition, BorrowedFailedRun, BorrowedFinalRuleAttemptTransition,
+    BorrowedOnceReturnConsumedRuleAttempt, BorrowedOnceReturnRun,
+    BorrowedOnceReturnStateMismatchRuleAttempt, BorrowedOnceRewriteConsumedRuleAttempt,
+    BorrowedOnceRewriteStateMismatchRuleAttempt, BorrowedOnceRewriteStep,
+    BorrowedRuleAttemptAlwaysReturnRun, BorrowedRuleAttemptAlwaysRewriteStep,
+    BorrowedRuleAttemptFailedRun, BorrowedRuleAttemptOnceReturnRun,
+    BorrowedRuleAttemptOnceRewriteStep, BorrowedRuleAttemptStableAfterAlwaysReturnStateMismatch,
+    BorrowedRuleAttemptStableAfterAlwaysRewriteStateMismatch,
+    BorrowedRuleAttemptStableAfterOnceReturnConsumed,
+    BorrowedRuleAttemptStableAfterOnceReturnStateMismatch,
+    BorrowedRuleAttemptStableAfterOnceRewriteConsumed,
+    BorrowedRuleAttemptStableAfterOnceRewriteStateMismatch, BorrowedStableRun,
+    BorrowedStepTransition,
 };
 
 /// Stateful run session that borrows a reusable parsed program.
@@ -524,15 +533,72 @@ fn project_continuing_rule_attempt_step<'program, E: ExecutionPolicy, A: RuleAtt
     step: CoreContinuingRuleAttemptStep<'program, E, A>,
 ) -> BorrowedContinuingRuleAttemptTransition<'program, E, A> {
     match step {
-        CoreContinuingRuleAttemptStep::Missed {
+        CoreContinuingRuleAttemptStep::AlwaysRewriteStateMismatch {
             attempt,
-            miss,
+            rule,
             continuation,
-        } => BorrowedContinuingRuleAttemptTransition::Missed(BorrowedMissedRuleAttempt {
+        } => BorrowedContinuingRuleAttemptTransition::AlwaysRewriteStateMismatch(
+            BorrowedAlwaysRewriteStateMismatchRuleAttempt {
+                attempt,
+                rule,
+                cursor: continuation,
+            },
+        ),
+        CoreContinuingRuleAttemptStep::OnceRewriteStateMismatch {
             attempt,
-            miss,
-            cursor: continuation,
-        }),
+            rule,
+            continuation,
+        } => BorrowedContinuingRuleAttemptTransition::OnceRewriteStateMismatch(
+            BorrowedOnceRewriteStateMismatchRuleAttempt {
+                attempt,
+                rule,
+                cursor: continuation,
+            },
+        ),
+        CoreContinuingRuleAttemptStep::AlwaysReturnStateMismatch {
+            attempt,
+            rule,
+            continuation,
+        } => BorrowedContinuingRuleAttemptTransition::AlwaysReturnStateMismatch(
+            BorrowedAlwaysReturnStateMismatchRuleAttempt {
+                attempt,
+                rule,
+                cursor: continuation,
+            },
+        ),
+        CoreContinuingRuleAttemptStep::OnceReturnStateMismatch {
+            attempt,
+            rule,
+            continuation,
+        } => BorrowedContinuingRuleAttemptTransition::OnceReturnStateMismatch(
+            BorrowedOnceReturnStateMismatchRuleAttempt {
+                attempt,
+                rule,
+                cursor: continuation,
+            },
+        ),
+        CoreContinuingRuleAttemptStep::OnceRewriteConsumed {
+            attempt,
+            rule,
+            continuation,
+        } => BorrowedContinuingRuleAttemptTransition::OnceRewriteConsumed(
+            BorrowedOnceRewriteConsumedRuleAttempt {
+                attempt,
+                rule,
+                cursor: continuation,
+            },
+        ),
+        CoreContinuingRuleAttemptStep::OnceReturnConsumed {
+            attempt,
+            rule,
+            continuation,
+        } => BorrowedContinuingRuleAttemptTransition::OnceReturnConsumed(
+            BorrowedOnceReturnConsumedRuleAttempt {
+                attempt,
+                rule,
+                cursor: continuation,
+            },
+        ),
         CoreContinuingRuleAttemptStep::AlwaysRewritten {
             attempt,
             step,
@@ -670,18 +736,95 @@ fn project_final_rule_attempt_step<'program, E: ExecutionPolicy, A: RuleAttemptP
                 output,
             })
         }
-        CoreFinalRuleAttemptStep::Stable {
+        CoreFinalRuleAttemptStep::StableAfterAlwaysRewriteStateMismatch {
             attempts,
-            final_miss,
+            rule,
             terminal,
         } => {
             let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
-            BorrowedFinalRuleAttemptTransition::Stable(BorrowedRuleAttemptStableRun {
-                attempts,
-                final_miss,
-                program: terminal.program,
-                core: terminal.core,
-            })
+            BorrowedFinalRuleAttemptTransition::StableAfterAlwaysRewriteStateMismatch(
+                BorrowedRuleAttemptStableAfterAlwaysRewriteStateMismatch {
+                    attempts,
+                    rule,
+                    program: terminal.program,
+                    core: terminal.core,
+                },
+            )
+        }
+        CoreFinalRuleAttemptStep::StableAfterOnceRewriteStateMismatch {
+            attempts,
+            rule,
+            terminal,
+        } => {
+            let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
+            BorrowedFinalRuleAttemptTransition::StableAfterOnceRewriteStateMismatch(
+                BorrowedRuleAttemptStableAfterOnceRewriteStateMismatch {
+                    attempts,
+                    rule,
+                    program: terminal.program,
+                    core: terminal.core,
+                },
+            )
+        }
+        CoreFinalRuleAttemptStep::StableAfterAlwaysReturnStateMismatch {
+            attempts,
+            rule,
+            terminal,
+        } => {
+            let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
+            BorrowedFinalRuleAttemptTransition::StableAfterAlwaysReturnStateMismatch(
+                BorrowedRuleAttemptStableAfterAlwaysReturnStateMismatch {
+                    attempts,
+                    rule,
+                    program: terminal.program,
+                    core: terminal.core,
+                },
+            )
+        }
+        CoreFinalRuleAttemptStep::StableAfterOnceReturnStateMismatch {
+            attempts,
+            rule,
+            terminal,
+        } => {
+            let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
+            BorrowedFinalRuleAttemptTransition::StableAfterOnceReturnStateMismatch(
+                BorrowedRuleAttemptStableAfterOnceReturnStateMismatch {
+                    attempts,
+                    rule,
+                    program: terminal.program,
+                    core: terminal.core,
+                },
+            )
+        }
+        CoreFinalRuleAttemptStep::StableAfterOnceRewriteConsumed {
+            attempts,
+            rule,
+            terminal,
+        } => {
+            let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
+            BorrowedFinalRuleAttemptTransition::StableAfterOnceRewriteConsumed(
+                BorrowedRuleAttemptStableAfterOnceRewriteConsumed {
+                    attempts,
+                    rule,
+                    program: terminal.program,
+                    core: terminal.core,
+                },
+            )
+        }
+        CoreFinalRuleAttemptStep::StableAfterOnceReturnConsumed {
+            attempts,
+            rule,
+            terminal,
+        } => {
+            let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
+            BorrowedFinalRuleAttemptTransition::StableAfterOnceReturnConsumed(
+                BorrowedRuleAttemptStableAfterOnceReturnConsumed {
+                    attempts,
+                    rule,
+                    program: terminal.program,
+                    core: terminal.core,
+                },
+            )
         }
         CoreFinalRuleAttemptStep::Failed { error, terminal } => {
             let terminal = BorrowedRuleAttemptTerminal::from_terminal(terminal);
