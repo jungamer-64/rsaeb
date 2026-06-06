@@ -15,8 +15,8 @@ use super::advance::{
     advance_continuing_borrowed_rule_attempt, advance_final_borrowed_rule_attempt,
 };
 use super::engine::{
-    AttemptRunCoreParts, AttemptSession, CoreRunTransition, Session, TerminalAttemptSession,
-    TerminalRunCore,
+    AttemptRunCoreParts, AttemptSession, RunAdvance, RunReturn, RunRewrite, Session,
+    TerminalAttemptSession, TerminalRunCore,
 };
 use super::transition::{
     BorrowedAlwaysReturnRun, BorrowedAlwaysRewriteStep, BorrowedContinuingRuleAttemptTransition,
@@ -443,7 +443,26 @@ fn step_borrowed_run<'program, E: ExecutionPolicy>(
     session: BorrowedRunSession<'program, E>,
 ) -> BorrowedStepTransition<'program, E> {
     match session.session.advance_run_step() {
-        CoreRunTransition::AlwaysRewritten {
+        RunAdvance::Rewritten(rewrite) => project_run_rewrite(rewrite),
+        RunAdvance::Returned(returned) => project_run_return(returned),
+        RunAdvance::Stable(terminal) => BorrowedStepTransition::Stable(BorrowedStableRun {
+            program: terminal.program,
+            core: terminal.core,
+        }),
+        RunAdvance::Failed(failure) => BorrowedStepTransition::Failed(BorrowedFailedRun::new(
+            failure.error,
+            failure.terminal.program,
+            failure.terminal.core,
+        )),
+    }
+}
+
+/// Projects an exact private rewrite payload into the public stepwise transition.
+fn project_run_rewrite<'program, E: ExecutionPolicy>(
+    rewrite: RunRewrite<'program, E>,
+) -> BorrowedStepTransition<'program, E> {
+    match rewrite {
+        RunRewrite::Always {
             step,
             rule,
             continuation,
@@ -454,7 +473,7 @@ fn step_borrowed_run<'program, E: ExecutionPolicy>(
                 session: continuation,
             },
         }),
-        CoreRunTransition::OnceRewritten {
+        RunRewrite::Once {
             step,
             rule,
             continuation,
@@ -465,7 +484,15 @@ fn step_borrowed_run<'program, E: ExecutionPolicy>(
                 session: continuation,
             },
         }),
-        CoreRunTransition::AlwaysReturned {
+    }
+}
+
+/// Projects an exact private return payload into the public stepwise transition.
+fn project_run_return<'program, E: ExecutionPolicy>(
+    returned: RunReturn<'program>,
+) -> BorrowedStepTransition<'program, E> {
+    match returned {
+        RunReturn::Always {
             step,
             rule,
             output_view: _,
@@ -477,7 +504,7 @@ fn step_borrowed_run<'program, E: ExecutionPolicy>(
             program: terminal.program,
             output,
         }),
-        CoreRunTransition::OnceReturned {
+        RunReturn::Once {
             step,
             rule,
             output_view: _,
@@ -489,15 +516,6 @@ fn step_borrowed_run<'program, E: ExecutionPolicy>(
             program: terminal.program,
             output,
         }),
-        CoreRunTransition::Stable { terminal } => {
-            BorrowedStepTransition::Stable(BorrowedStableRun {
-                program: terminal.program,
-                core: terminal.core,
-            })
-        }
-        CoreRunTransition::Failed { error, terminal } => BorrowedStepTransition::Failed(
-            BorrowedFailedRun::new(error, terminal.program, terminal.core),
-        ),
     }
 }
 

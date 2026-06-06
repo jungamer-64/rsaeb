@@ -73,11 +73,13 @@ fn traced_test_failure(error: TracedRunError<TestFailure>) -> TestFailure {
 #[derive(Debug, PartialEq, Eq)]
 enum CommittedStepSignature {
     Continue {
+        shape: OutcomeRuleShape,
         step: usize,
         rule_position: usize,
         state: Vec<u8>,
     },
     Return {
+        shape: OutcomeRuleShape,
         step: usize,
         rule_position: usize,
         output: Vec<u8>,
@@ -167,6 +169,7 @@ fn borrowed_trace_step_signatures(
                     BorrowedTraceEvent::Initial { .. } => {}
                     BorrowedTraceEvent::AlwaysRewritten { step, rule, state } => {
                         signatures.push(CommittedStepSignature::Continue {
+                            shape: OutcomeRuleShape::AlwaysRewrite,
                             step: step.get(),
                             rule_position: rule.position().get(),
                             state: state.materialize()?.into_raw_bytes(),
@@ -174,6 +177,7 @@ fn borrowed_trace_step_signatures(
                     }
                     BorrowedTraceEvent::OnceRewritten { step, rule, state } => {
                         signatures.push(CommittedStepSignature::Continue {
+                            shape: OutcomeRuleShape::OnceRewrite,
                             step: step.get(),
                             rule_position: rule.position().get(),
                             state: state.materialize()?.into_raw_bytes(),
@@ -181,6 +185,7 @@ fn borrowed_trace_step_signatures(
                     }
                     BorrowedTraceEvent::AlwaysReturned { step, rule, output } => {
                         signatures.push(CommittedStepSignature::Return {
+                            shape: OutcomeRuleShape::AlwaysReturn,
                             step: step.get(),
                             rule_position: rule.position().get(),
                             output: output.materialize()?.into_raw_bytes(),
@@ -188,6 +193,7 @@ fn borrowed_trace_step_signatures(
                     }
                     BorrowedTraceEvent::OnceReturned { step, rule, output } => {
                         signatures.push(CommittedStepSignature::Return {
+                            shape: OutcomeRuleShape::OnceReturn,
                             step: step.get(),
                             rule_position: rule.position().get(),
                             output: output.materialize()?.into_raw_bytes(),
@@ -216,6 +222,7 @@ fn borrowed_step_signatures(
         match session.step() {
             BorrowedStepTransition::AlwaysRewritten(applied) => {
                 signatures.push(CommittedStepSignature::Continue {
+                    shape: OutcomeRuleShape::AlwaysRewrite,
                     step: applied.step().get(),
                     rule_position: applied.rule().position().get(),
                     state: applied.state().materialize()?.into_raw_bytes(),
@@ -224,6 +231,7 @@ fn borrowed_step_signatures(
             }
             BorrowedStepTransition::OnceRewritten(applied) => {
                 signatures.push(CommittedStepSignature::Continue {
+                    shape: OutcomeRuleShape::OnceRewrite,
                     step: applied.step().get(),
                     rule_position: applied.rule().position().get(),
                     state: applied.state().materialize()?.into_raw_bytes(),
@@ -232,6 +240,7 @@ fn borrowed_step_signatures(
             }
             BorrowedStepTransition::AlwaysReturned(returned) => {
                 signatures.push(CommittedStepSignature::Return {
+                    shape: OutcomeRuleShape::AlwaysReturn,
                     step: returned.step().get(),
                     rule_position: returned.rule().position().get(),
                     output: returned.output().as_slice().to_vec(),
@@ -240,6 +249,7 @@ fn borrowed_step_signatures(
             }
             BorrowedStepTransition::OnceReturned(returned) => {
                 signatures.push(CommittedStepSignature::Return {
+                    shape: OutcomeRuleShape::OnceReturn,
                     step: returned.step().get(),
                     rule_position: returned.rule().position().get(),
                     output: returned.output().as_slice().to_vec(),
@@ -301,14 +311,23 @@ fn trace_events_are_emitted_without_snapshots() -> TestResult {
 /// different committed outcomes.
 #[test]
 fn borrowed_trace_steps_match_borrowed_stepwise_commits() -> TestResult {
-    let source = "(once)a=b\nb=(return)ok";
     let limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
 
-    let program = parse_program(source)?;
-    let trace_steps = borrowed_trace_step_signatures(&program, runtime_input(b"a", limits)?)?;
-    let stepwise_steps = borrowed_step_signatures(&program, runtime_input(b"a", limits)?)?;
+    for source in [
+        "a=b",
+        "(once)a=b",
+        "a=(return)ok",
+        "(once)a=(return)ok",
+        "(once)a=b\nb=(return)ok",
+    ] {
+        let program = parse_program(source)?;
+        let trace_steps = borrowed_trace_step_signatures(&program, runtime_input(b"a", limits)?)?;
+        let stepwise_steps = borrowed_step_signatures(&program, runtime_input(b"a", limits)?)?;
 
-    ensure_eq!(trace_steps, stepwise_steps)
+        ensure_eq!(trace_steps, stepwise_steps)?;
+    }
+
+    Ok(())
 }
 
 /// # Errors

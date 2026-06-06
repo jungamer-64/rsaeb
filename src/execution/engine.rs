@@ -101,6 +101,81 @@ pub(super) struct TerminalAttemptSession<'program> {
     pub(super) attempts: RuleAttemptCount,
 }
 
+/// Control-axis result of consuming one active ordinary run session.
+pub(super) enum RunAdvance<'program, E>
+where
+    E: ExecutionPolicy,
+{
+    /// A rewrite committed and ordinary execution may continue.
+    Rewritten(RunRewrite<'program, E>),
+    /// A return committed and ordinary execution is terminal.
+    Returned(RunReturn<'program>),
+    /// No rule matched the current runtime state.
+    Stable(TerminalSession<'program>),
+    /// A candidate step failed before committing runtime state.
+    Failed(RunFailure<'program>),
+}
+
+/// Exact committed rewrite payload for ordinary execution.
+pub(super) enum RunRewrite<'program, E: ExecutionPolicy> {
+    /// One reusable rewrite rule committed.
+    Always {
+        /// Committed step count.
+        step: StepCount,
+        /// Rule witness paired with the committed rewrite.
+        rule: AlwaysRewriteRuleView<'program>,
+        /// Continuation session after the committed rewrite.
+        continuation: Session<'program, E>,
+    },
+    /// One once-only rewrite rule committed.
+    Once {
+        /// Committed step count.
+        step: StepCount,
+        /// Rule witness paired with the committed rewrite.
+        rule: OnceRewriteRuleView<'program>,
+        /// Continuation session after the committed rewrite.
+        continuation: Session<'program, E>,
+    },
+}
+
+/// Exact committed return payload for ordinary execution.
+pub(super) enum RunReturn<'program> {
+    /// One reusable return rule committed.
+    Always {
+        /// Committed return step count.
+        step: StepCount,
+        /// Rule witness paired with the committed return.
+        rule: AlwaysReturnRuleView<'program>,
+        /// Borrowed return-output view for trace callbacks.
+        output_view: ReturnOutputView<'program>,
+        /// Materialized return output.
+        output: ReturnOutput,
+        /// Terminal run session.
+        terminal: TerminalSession<'program>,
+    },
+    /// One once-only return rule committed.
+    Once {
+        /// Committed return step count.
+        step: StepCount,
+        /// Rule witness paired with the committed return.
+        rule: OnceReturnRuleView<'program>,
+        /// Borrowed return-output view for trace callbacks.
+        output_view: ReturnOutputView<'program>,
+        /// Materialized return output.
+        output: ReturnOutput,
+        /// Terminal run session.
+        terminal: TerminalSession<'program>,
+    },
+}
+
+/// Runtime failure that preserves the uncommitted terminal state.
+pub(super) struct RunFailure<'program> {
+    /// Error that prevented commit.
+    pub(super) error: RunStepError,
+    /// Terminal run session preserving uncommitted state.
+    pub(super) terminal: TerminalSession<'program>,
+}
+
 impl<'program, E: ExecutionPolicy> ActiveRunCore<'program, E> {
     /// Builds the mutable runtime core for one execution.
     ///
@@ -130,6 +205,14 @@ impl<'program, E: ExecutionPolicy> ActiveRunCore<'program, E> {
     /// Borrows the current runtime state.
     pub(super) fn state(&self) -> RuntimeStateView<'_> {
         self.state.view()
+    }
+
+    /// Converts active runtime state into terminal runtime state.
+    fn into_terminal(self) -> TerminalRunCore {
+        TerminalRunCore {
+            steps: self.budget.completed_steps(),
+            state: self.state,
+        }
     }
 }
 
@@ -273,7 +356,7 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
     ///
     /// Failed preparation returns a terminal transition that preserves
     /// uncommitted runtime state.
-    pub(super) fn advance_run_step(self) -> CoreRunTransition<'program, E> {
+    pub(super) fn advance_run_step(self) -> RunAdvance<'program, E> {
         let Session { program, core } = self;
         let ActiveRunCore {
             mut state,
@@ -285,22 +368,20 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
         let matched = match runtime_rules.find_next_match(&state) {
             RuntimeRuleSearch::Matched(matched) => matched,
             RuntimeRuleSearch::Stable => {
-                return CoreRunTransition::Stable {
-                    terminal: TerminalSession {
-                        program,
-                        core: TerminalRunCore {
-                            state,
-                            steps: budget.completed_steps(),
-                        },
+                return RunAdvance::Stable(TerminalSession {
+                    program,
+                    core: TerminalRunCore {
+                        state,
+                        steps: budget.completed_steps(),
                     },
-                };
+                });
             }
         };
         let state_len = state.byte_count();
         let prepared = match prepare_matched_rule(&mut scratch, &mut budget, state_len, matched) {
             Ok(prepared) => prepared,
             Err(error) => {
-                return CoreRunTransition::Failed {
+                return RunAdvance::Failed(RunFailure {
                     error,
                     terminal: TerminalSession {
                         program,
@@ -309,76 +390,17 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
                             steps: budget.completed_steps(),
                         },
                     },
-                };
+                });
             }
         };
         let applied = prepared.commit(&mut state, &mut scratch);
-        match applied {
-            AppliedRule::AlwaysRewritten(committed) => CoreRunTransition::AlwaysRewritten {
-                step: committed.step(),
-                rule: committed.rule(),
-                continuation: Session {
-                    program,
-                    core: ActiveRunCore {
-                        state,
-                        scratch,
-                        budget,
-                        runtime_rules,
-                    },
-                },
-            },
-            AppliedRule::OnceRewritten(committed) => CoreRunTransition::OnceRewritten {
-                step: committed.step(),
-                rule: committed.rule(),
-                continuation: Session {
-                    program,
-                    core: ActiveRunCore {
-                        state,
-                        scratch,
-                        budget,
-                        runtime_rules,
-                    },
-                },
-            },
-            AppliedRule::AlwaysReturned(committed) => {
-                let step = committed.step();
-                let rule = committed.rule();
-                let output_view = committed.output_view();
-                let output = committed.into_output();
-                CoreRunTransition::AlwaysReturned {
-                    step,
-                    rule,
-                    output_view,
-                    output,
-                    terminal: TerminalSession {
-                        program,
-                        core: TerminalRunCore {
-                            state,
-                            steps: budget.completed_steps(),
-                        },
-                    },
-                }
-            }
-            AppliedRule::OnceReturned(committed) => {
-                let step = committed.step();
-                let rule = committed.rule();
-                let output_view = committed.output_view();
-                let output = committed.into_output();
-                CoreRunTransition::OnceReturned {
-                    step,
-                    rule,
-                    output_view,
-                    output,
-                    terminal: TerminalSession {
-                        program,
-                        core: TerminalRunCore {
-                            state,
-                            steps: budget.completed_steps(),
-                        },
-                    },
-                }
-            }
-        }
+        let core = ActiveRunCore {
+            state,
+            scratch,
+            budget,
+            runtime_rules,
+        };
+        run_advance_from_applied(program, core, applied)
     }
 
     /// Runs this session to completion.
@@ -391,30 +413,12 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
         let mut session = self;
         loop {
             match session.advance_run_step() {
-                CoreRunTransition::AlwaysRewritten { continuation, .. }
-                | CoreRunTransition::OnceRewritten { continuation, .. } => {
-                    session = continuation;
-                }
-                CoreRunTransition::AlwaysReturned {
-                    step,
-                    output_view: _,
-                    output,
-                    ..
-                }
-                | CoreRunTransition::OnceReturned {
-                    step,
-                    output_view: _,
-                    output,
-                    ..
-                } => {
-                    return Ok(RunResult::from_return(output, step));
-                }
-                CoreRunTransition::Stable { terminal } => {
+                RunAdvance::Rewritten(rewrite) => session = rewrite.into_continuation(),
+                RunAdvance::Returned(returned) => return Ok(returned.into_result()),
+                RunAdvance::Stable(terminal) => {
                     return terminal.core.into_stable_result();
                 }
-                CoreRunTransition::Failed { error, .. } => {
-                    return Err(RunFinishError::from(error));
-                }
+                RunAdvance::Failed(failure) => return Err(failure.into_finish_error()),
             }
         }
     }
@@ -477,75 +481,185 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
         let mut session = self;
         loop {
             match session.advance_run_step() {
-                CoreRunTransition::AlwaysRewritten {
-                    step,
-                    rule,
-                    continuation,
-                } => {
-                    trace(BorrowedTraceEvent::AlwaysRewritten {
-                        step,
-                        rule,
-                        state: continuation.state(),
-                    })
-                    .map_err(TracedRunError::Trace)?;
-                    session = continuation;
+                RunAdvance::Rewritten(rewrite) => {
+                    session = rewrite.trace(&mut trace).map_err(TracedRunError::Trace)?;
                 }
-                CoreRunTransition::OnceRewritten {
-                    step,
-                    rule,
-                    continuation,
-                } => {
-                    trace(BorrowedTraceEvent::OnceRewritten {
-                        step,
-                        rule,
-                        state: continuation.state(),
-                    })
-                    .map_err(TracedRunError::Trace)?;
-                    session = continuation;
+                RunAdvance::Returned(returned) => {
+                    return returned.trace(&mut trace).map_err(TracedRunError::Trace);
                 }
-                CoreRunTransition::AlwaysReturned {
-                    step,
-                    rule,
-                    output_view,
-                    output,
-                    ..
-                } => {
-                    trace(BorrowedTraceEvent::AlwaysReturned {
-                        step,
-                        rule,
-                        output: output_view,
-                    })
-                    .map_err(TracedRunError::Trace)?;
-                    return Ok(RunResult::from_return(output, step));
-                }
-                CoreRunTransition::OnceReturned {
-                    step,
-                    rule,
-                    output_view,
-                    output,
-                    ..
-                } => {
-                    trace(BorrowedTraceEvent::OnceReturned {
-                        step,
-                        rule,
-                        output: output_view,
-                    })
-                    .map_err(TracedRunError::Trace)?;
-                    return Ok(RunResult::from_return(output, step));
-                }
-                CoreRunTransition::Stable { terminal } => {
+                RunAdvance::Stable(terminal) => {
                     return terminal
                         .core
                         .into_stable_result()
                         .map_err(RunError::from)
                         .map_err(TracedRunError::Run);
                 }
-                CoreRunTransition::Failed { error, .. } => {
-                    return Err(TracedRunError::Run(RunError::from(RunFinishError::from(
-                        error,
-                    ))));
+                RunAdvance::Failed(failure) => {
+                    return Err(TracedRunError::Run(RunError::from(
+                        failure.into_finish_error(),
+                    )));
                 }
             }
+        }
+    }
+}
+
+impl<'program, E: ExecutionPolicy> RunRewrite<'program, E> {
+    /// Consumes this rewrite payload into its continuation session.
+    pub(super) fn into_continuation(self) -> Session<'program, E> {
+        match self {
+            Self::Always { continuation, .. } | Self::Once { continuation, .. } => continuation,
+        }
+    }
+
+    /// Emits the exact borrowed trace event for this rewrite and returns its continuation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TraceError` if the trace sink rejects the emitted rewrite event.
+    fn trace<F, TraceError>(self, trace: &mut F) -> Result<Session<'program, E>, TraceError>
+    where
+        F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), TraceError>,
+    {
+        match self {
+            Self::Always {
+                step,
+                rule,
+                continuation,
+            } => {
+                trace(BorrowedTraceEvent::AlwaysRewritten {
+                    step,
+                    rule,
+                    state: continuation.state(),
+                })?;
+                Ok(continuation)
+            }
+            Self::Once {
+                step,
+                rule,
+                continuation,
+            } => {
+                trace(BorrowedTraceEvent::OnceRewritten {
+                    step,
+                    rule,
+                    state: continuation.state(),
+                })?;
+                Ok(continuation)
+            }
+        }
+    }
+}
+
+impl<'program> RunReturn<'program> {
+    /// Materializes this return payload as a completed run result.
+    pub(super) fn into_result(self) -> RunResult {
+        match self {
+            Self::Always { step, output, .. } | Self::Once { step, output, .. } => {
+                RunResult::from_return(output, step)
+            }
+        }
+    }
+
+    /// Emits the exact borrowed trace event for this return and returns the completed result.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TraceError` if the trace sink rejects the emitted return event.
+    fn trace<F, TraceError>(self, trace: &mut F) -> Result<RunResult, TraceError>
+    where
+        F: for<'run> FnMut(BorrowedTraceEvent<'program, 'run>) -> Result<(), TraceError>,
+    {
+        match self {
+            Self::Always {
+                step,
+                rule,
+                output_view,
+                output,
+                terminal: _,
+            } => {
+                trace(BorrowedTraceEvent::AlwaysReturned {
+                    step,
+                    rule,
+                    output: output_view,
+                })?;
+                Ok(RunResult::from_return(output, step))
+            }
+            Self::Once {
+                step,
+                rule,
+                output_view,
+                output,
+                terminal: _,
+            } => {
+                trace(BorrowedTraceEvent::OnceReturned {
+                    step,
+                    rule,
+                    output: output_view,
+                })?;
+                Ok(RunResult::from_return(output, step))
+            }
+        }
+    }
+}
+
+impl RunFailure<'_> {
+    /// Converts this failed step into the finish-layer error surface.
+    fn into_finish_error(self) -> RunFinishError {
+        RunFinishError::from(self.error)
+    }
+}
+
+/// Projects the single committed runtime action into the ordinary execution control axis.
+fn run_advance_from_applied<'program, E>(
+    program: &'program ExecutableProgram,
+    core: ActiveRunCore<'program, E>,
+    applied: AppliedRule<'program>,
+) -> RunAdvance<'program, E>
+where
+    E: ExecutionPolicy,
+{
+    match applied {
+        AppliedRule::AlwaysRewritten(committed) => RunAdvance::Rewritten(RunRewrite::Always {
+            step: committed.step(),
+            rule: committed.rule(),
+            continuation: Session { program, core },
+        }),
+        AppliedRule::OnceRewritten(committed) => RunAdvance::Rewritten(RunRewrite::Once {
+            step: committed.step(),
+            rule: committed.rule(),
+            continuation: Session { program, core },
+        }),
+        AppliedRule::AlwaysReturned(committed) => {
+            let step = committed.step();
+            let rule = committed.rule();
+            let output_view = committed.output_view();
+            let output = committed.into_output();
+            RunAdvance::Returned(RunReturn::Always {
+                step,
+                rule,
+                output_view,
+                output,
+                terminal: TerminalSession {
+                    program,
+                    core: core.into_terminal(),
+                },
+            })
+        }
+        AppliedRule::OnceReturned(committed) => {
+            let step = committed.step();
+            let rule = committed.rule();
+            let output_view = committed.output_view();
+            let output = committed.into_output();
+            RunAdvance::Returned(RunReturn::Once {
+                step,
+                rule,
+                output_view,
+                output,
+                terminal: TerminalSession {
+                    program,
+                    core: core.into_terminal(),
+                },
+            })
         }
     }
 }
