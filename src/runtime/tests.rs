@@ -1,3 +1,5 @@
+use super::matcher::RuleAttemptMiss;
+use super::once::{RuntimeRuleScan, RuntimeRuleTable};
 use super::state::State;
 use crate::error::{
     ReturnOutputLimitError, RunStepError, RuntimeInputError, RuntimeStateLimitError, StepLimitError,
@@ -180,6 +182,63 @@ fn execution_step_limit_failure_preserves_uncommitted_state() -> TestResult {
             RuntimeStateByteCount::new(1),
         ),
     )
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if the ordinary runtime scan erases the final typed
+/// rule miss before reporting stability to the execution layer.
+#[test]
+fn ordinary_runtime_scan_unmatched_preserves_final_typed_miss() -> TestResult {
+    let program = parse_program("z=x\n(once)y=(return)done")?;
+    let mut runtime_rules = RuntimeRuleTable::from_program(&program)?;
+    let limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
+    let (input, _) = admitted_run(b"a", limits)?.into_runtime_parts();
+    let state = State::from_input(input);
+
+    let RuntimeRuleScan::Unmatched(unmatched) = runtime_rules.scan_for_match(&state) else {
+        return Err(TestFailure::message("expected unmatched runtime scan"));
+    };
+
+    match unmatched.into_final_miss() {
+        RuleAttemptMiss::OnceReturnStateMismatch(rule) if rule.position().get() == 2 => Ok(()),
+        RuleAttemptMiss::AlwaysRewriteStateMismatch(_)
+        | RuleAttemptMiss::OnceRewriteStateMismatch(_)
+        | RuleAttemptMiss::AlwaysReturnStateMismatch(_)
+        | RuleAttemptMiss::OnceReturnStateMismatch(_)
+        | RuleAttemptMiss::OnceRewriteConsumed(_)
+        | RuleAttemptMiss::OnceReturnConsumed(_) => {
+            Err(TestFailure::message("unexpected final runtime scan miss"))
+        }
+    }
+}
+
+/// # Errors
+///
+/// Returns `TestFailure` if an unmatched ordinary scan changes the public stable
+/// terminal's state or step contract.
+#[test]
+fn ordinary_execution_stable_terminal_keeps_public_contract() -> TestResult {
+    let program = parse_program("z=x\n(once)y=(return)done")?;
+    let limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, DEFAULT_BYTE_BUDGET>::new();
+    let session = program.steps(admitted_run(b"a", limits)?)?;
+
+    match expect_step_transition(session.step())? {
+        BorrowedStepTransition::Stable(stable) => {
+            ensure_eq!(stable.steps(), StepCount::ZERO)?;
+            ensure_eq!(
+                runtime_view_bytes(stable.state()).as_slice(),
+                b"a".as_slice(),
+            )
+        }
+        BorrowedStepTransition::AlwaysRewritten(_)
+        | BorrowedStepTransition::OnceRewritten(_)
+        | BorrowedStepTransition::AlwaysReturned(_)
+        | BorrowedStepTransition::OnceReturned(_)
+        | BorrowedStepTransition::Failed(_) => {
+            Err(TestFailure::message("expected public stable terminal"))
+        }
+    }
 }
 
 /// # Errors

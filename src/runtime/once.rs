@@ -22,6 +22,22 @@ pub(crate) struct RuntimeRuleTable<'program> {
     remaining: Vec<RuntimeRuleCell<'program>>,
 }
 
+/// Outcome of scanning the ordinary runtime rule table.
+#[derive(Debug)]
+pub(crate) enum RuntimeRuleScan<'program, 'state, 'once> {
+    /// A rule matched and carries the commit permit needed after success.
+    Matched(MatchedRuleApplication<'program, 'state, 'once>),
+    /// All rules were consumed as typed misses.
+    Unmatched(UnmatchedRuntimeRuleScan<'program>),
+}
+
+/// Ordinary runtime scan that exhausted every executable rule as a typed miss.
+#[derive(Debug)]
+pub(crate) struct UnmatchedRuntimeRuleScan<'program> {
+    /// Last miss observed before the executable scan became stable.
+    final_miss: RuleAttemptMiss<'program>,
+}
+
 /// Rule-attempt pass whose history and tail shape are selected by type.
 #[derive(Debug)]
 pub(crate) struct RuntimeRulePass<'program, History, Tail> {
@@ -282,6 +298,32 @@ impl<'program> RuntimeRuleTable<'program> {
         })
     }
 
+    /// Scans executable rules until one matches or every rule has a typed miss.
+    pub(crate) fn scan_for_match<'state, 'once>(
+        &'once mut self,
+        state: &'state State,
+    ) -> RuntimeRuleScan<'program, 'state, 'once> {
+        let mut final_miss = match self.first.attempt(state) {
+            RuleAttempt::Matched(matched) => return RuntimeRuleScan::Matched(matched),
+            RuleAttempt::Missed(miss) => miss,
+        };
+
+        for cell in &mut self.remaining {
+            match cell.attempt(state) {
+                RuleAttempt::Matched(matched) => return RuntimeRuleScan::Matched(matched),
+                RuleAttempt::Missed(miss) => final_miss = miss,
+            }
+        }
+
+        RuntimeRuleScan::Unmatched(UnmatchedRuntimeRuleScan { final_miss })
+    }
+}
+
+impl<'program> UnmatchedRuntimeRuleScan<'program> {
+    /// Consumes the exhausted scan into the last typed rule miss.
+    pub(crate) const fn into_final_miss(self) -> RuleAttemptMiss<'program> {
+        self.final_miss
+    }
 }
 
 impl<'program> StartedRuntimeRuleTable<'program> {
@@ -584,7 +626,6 @@ impl<'program> RuntimeRuleCell<'program> {
             }
         }
     }
-
 }
 
 /// Reserves a rule queue through the runtime-rule allocation boundary.

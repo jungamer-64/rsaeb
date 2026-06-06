@@ -8,7 +8,7 @@ use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, ReturnOutput, ReturnOutputView, RunResult};
 use crate::runtime::action::{AppliedRule, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
-use crate::runtime::once::{RuntimeRulePassState, RuntimeRuleSearch, RuntimeRuleTable};
+use crate::runtime::once::{RuntimeRulePassState, RuntimeRuleScan, RuntimeRuleTable};
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
 use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
@@ -365,9 +365,10 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
             mut runtime_rules,
         } = core;
 
-        let matched = match runtime_rules.find_next_match(&state) {
-            RuntimeRuleSearch::Matched(matched) => matched,
-            RuntimeRuleSearch::Stable => {
+        let matched = match runtime_rules.scan_for_match(&state) {
+            RuntimeRuleScan::Matched(matched) => matched,
+            RuntimeRuleScan::Unmatched(unmatched) => {
+                let _final_miss = unmatched.into_final_miss();
                 return RunAdvance::Stable(TerminalSession {
                     program,
                     core: TerminalRunCore {
