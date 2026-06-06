@@ -1,5 +1,8 @@
 use crate::bytes::RuntimeStateByteCount;
 use crate::error::RuleAttemptStepError;
+use crate::inspect::{
+    AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView,
+};
 use crate::limits::RuleAttemptCount;
 use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
 use crate::program::ExecutableProgram;
@@ -273,53 +276,10 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
             miss,
             cursor,
         } = self;
-        match miss {
-            EvaluatedRuleMiss::AlwaysRewriteStateMismatch(rule) => {
-                BorrowedContinuingRuleAttemptTransition::AlwaysRewriteStateMismatch(
-                    BorrowedAlwaysRewriteStateMismatchRuleAttempt {
-                        attempt,
-                        rule,
-                        cursor,
-                    },
-                )
-            }
-            EvaluatedRuleMiss::OnceRewriteStateMismatch(rule) => {
-                BorrowedContinuingRuleAttemptTransition::OnceRewriteStateMismatch(
-                    BorrowedOnceRewriteStateMismatchRuleAttempt {
-                        attempt,
-                        rule,
-                        cursor,
-                    },
-                )
-            }
-            EvaluatedRuleMiss::AlwaysReturnStateMismatch(rule) => {
-                BorrowedContinuingRuleAttemptTransition::AlwaysReturnStateMismatch(
-                    BorrowedAlwaysReturnStateMismatchRuleAttempt {
-                        attempt,
-                        rule,
-                        cursor,
-                    },
-                )
-            }
-            EvaluatedRuleMiss::OnceReturnStateMismatch(rule) => {
-                BorrowedContinuingRuleAttemptTransition::OnceReturnStateMismatch(
-                    BorrowedOnceReturnStateMismatchRuleAttempt {
-                        attempt,
-                        rule,
-                        cursor,
-                    },
-                )
-            }
-            EvaluatedRuleMiss::OnceRewriteConsumed(rule) => {
-                BorrowedContinuingRuleAttemptTransition::OnceRewriteConsumed(
-                    BorrowedOnceRewriteConsumedRuleAttempt {
-                        attempt,
-                        rule,
-                        cursor,
-                    },
-                )
-            }
-        }
+        visit_evaluated_rule_miss(
+            miss,
+            ContinuingRuleAttemptMissTransition { attempt, cursor },
+        )
     }
 }
 
@@ -388,6 +348,116 @@ impl<'program> CommittedFinalRuleAttemptMiss<'program> {
                 )
             }
         }
+    }
+}
+
+/// Exact constructor target for one evaluated miss shape.
+trait EvaluatedRuleMissVisitor<'program> {
+    /// Transition type produced by this exact destination.
+    type Output;
+
+    /// Constructs the target from a reusable rewrite state mismatch.
+    fn always_rewrite_state_mismatch(self, rule: AlwaysRewriteRuleView<'program>) -> Self::Output;
+
+    /// Constructs the target from a once-only rewrite state mismatch.
+    fn once_rewrite_state_mismatch(self, rule: OnceRewriteRuleView<'program>) -> Self::Output;
+
+    /// Constructs the target from a reusable return state mismatch.
+    fn always_return_state_mismatch(self, rule: AlwaysReturnRuleView<'program>) -> Self::Output;
+
+    /// Constructs the target from a once-only return state mismatch.
+    fn once_return_state_mismatch(self, rule: OnceReturnRuleView<'program>) -> Self::Output;
+
+    /// Constructs the target from an already-consumed once-only rewrite rule.
+    fn once_rewrite_consumed(self, rule: OnceRewriteRuleView<'program>) -> Self::Output;
+}
+
+/// Visits an exact evaluated miss without exposing a generic transition helper.
+fn visit_evaluated_rule_miss<'program, V>(
+    miss: EvaluatedRuleMiss<'program>,
+    visitor: V,
+) -> V::Output
+where
+    V: EvaluatedRuleMissVisitor<'program>,
+{
+    match miss {
+        EvaluatedRuleMiss::AlwaysRewriteStateMismatch(rule) => {
+            visitor.always_rewrite_state_mismatch(rule)
+        }
+        EvaluatedRuleMiss::OnceRewriteStateMismatch(rule) => {
+            visitor.once_rewrite_state_mismatch(rule)
+        }
+        EvaluatedRuleMiss::AlwaysReturnStateMismatch(rule) => {
+            visitor.always_return_state_mismatch(rule)
+        }
+        EvaluatedRuleMiss::OnceReturnStateMismatch(rule) => {
+            visitor.once_return_state_mismatch(rule)
+        }
+        EvaluatedRuleMiss::OnceRewriteConsumed(rule) => visitor.once_rewrite_consumed(rule),
+    }
+}
+
+/// Continuing transition target for evaluated rule-attempt misses.
+struct ContinuingRuleAttemptMissTransition<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
+    /// Rule-attempt count committed by this transition.
+    attempt: RuleAttemptCount,
+    /// Cursor after consuming the non-final rule line.
+    cursor: BorrowedRuleAttemptCursor<'program, E, A>,
+}
+
+impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> EvaluatedRuleMissVisitor<'program>
+    for ContinuingRuleAttemptMissTransition<'program, E, A>
+{
+    type Output = BorrowedContinuingRuleAttemptTransition<'program, E, A>;
+
+    fn always_rewrite_state_mismatch(self, rule: AlwaysRewriteRuleView<'program>) -> Self::Output {
+        BorrowedContinuingRuleAttemptTransition::AlwaysRewriteStateMismatch(
+            BorrowedAlwaysRewriteStateMismatchRuleAttempt {
+                attempt: self.attempt,
+                rule,
+                cursor: self.cursor,
+            },
+        )
+    }
+
+    fn once_rewrite_state_mismatch(self, rule: OnceRewriteRuleView<'program>) -> Self::Output {
+        BorrowedContinuingRuleAttemptTransition::OnceRewriteStateMismatch(
+            BorrowedOnceRewriteStateMismatchRuleAttempt {
+                attempt: self.attempt,
+                rule,
+                cursor: self.cursor,
+            },
+        )
+    }
+
+    fn always_return_state_mismatch(self, rule: AlwaysReturnRuleView<'program>) -> Self::Output {
+        BorrowedContinuingRuleAttemptTransition::AlwaysReturnStateMismatch(
+            BorrowedAlwaysReturnStateMismatchRuleAttempt {
+                attempt: self.attempt,
+                rule,
+                cursor: self.cursor,
+            },
+        )
+    }
+
+    fn once_return_state_mismatch(self, rule: OnceReturnRuleView<'program>) -> Self::Output {
+        BorrowedContinuingRuleAttemptTransition::OnceReturnStateMismatch(
+            BorrowedOnceReturnStateMismatchRuleAttempt {
+                attempt: self.attempt,
+                rule,
+                cursor: self.cursor,
+            },
+        )
+    }
+
+    fn once_rewrite_consumed(self, rule: OnceRewriteRuleView<'program>) -> Self::Output {
+        BorrowedContinuingRuleAttemptTransition::OnceRewriteConsumed(
+            BorrowedOnceRewriteConsumedRuleAttempt {
+                attempt: self.attempt,
+                rule,
+                cursor: self.cursor,
+            },
+        )
     }
 }
 
