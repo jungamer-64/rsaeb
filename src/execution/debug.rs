@@ -6,11 +6,11 @@ use super::session::{
 };
 use super::transition::{
     BorrowedAlwaysReturnRun, BorrowedAlwaysRewriteStep, BorrowedContinuingRuleAttemptTransition,
-    BorrowedFailedRun, BorrowedFinalRuleAttemptTransition, BorrowedMissedRuleAttempt,
-    BorrowedOnceReturnRun, BorrowedOnceRewriteStep, BorrowedRuleAttemptAlwaysReturnRun,
+    BorrowedFailedRun, BorrowedFinalRuleAttemptTransition, BorrowedOnceReturnRun,
+    BorrowedOnceRewriteStep, BorrowedRuleAttemptAlwaysReturnRun,
     BorrowedRuleAttemptAlwaysRewriteStep, BorrowedRuleAttemptFailedRun,
-    BorrowedRuleAttemptOnceReturnRun, BorrowedRuleAttemptOnceRewriteStep,
-    BorrowedRuleAttemptStableRun, BorrowedStableRun, BorrowedStepTransition,
+    BorrowedRuleAttemptOnceReturnRun, BorrowedRuleAttemptOnceRewriteStep, BorrowedStableRun,
+    BorrowedStepTransition,
 };
 
 impl<E: ExecutionPolicy> core::fmt::Debug for BorrowedRunSession<'_, E> {
@@ -92,7 +92,6 @@ impl<E: ExecutionPolicy, A: RuleAttemptPolicy> core::fmt::Debug
 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Missed(missed) => formatter.debug_tuple("Missed").field(missed).finish(),
             Self::AlwaysRewritten(applied) => formatter
                 .debug_tuple("AlwaysRewritten")
                 .field(applied)
@@ -119,7 +118,6 @@ impl<E: ExecutionPolicy, A: RuleAttemptPolicy> core::fmt::Debug
 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Stable(stable) => formatter.debug_tuple("Stable").field(stable).finish(),
             Self::AlwaysRewritten(applied) => formatter
                 .debug_tuple("AlwaysRewritten")
                 .field(applied)
@@ -160,19 +158,6 @@ macro_rules! impl_rewrite_step_debug {
 impl_rewrite_step_debug!(BorrowedAlwaysRewriteStep, "BorrowedAlwaysRewriteStep");
 impl_rewrite_step_debug!(BorrowedOnceRewriteStep, "BorrowedOnceRewriteStep");
 
-impl<E: ExecutionPolicy, A: RuleAttemptPolicy> core::fmt::Debug
-    for BorrowedMissedRuleAttempt<'_, E, A>
-{
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter
-            .debug_struct("BorrowedMissedRuleAttempt")
-            .field("attempt", &self.attempt())
-            .field("miss", &self.miss())
-            .field("state", &self.state())
-            .finish()
-    }
-}
-
 impl core::fmt::Debug for BorrowedStableRun<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
@@ -208,18 +193,6 @@ impl_rule_attempt_rewrite_step_debug!(
     BorrowedRuleAttemptOnceRewriteStep,
     "BorrowedRuleAttemptOnceRewriteStep"
 );
-
-impl core::fmt::Debug for BorrowedRuleAttemptStableRun<'_> {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter
-            .debug_struct("BorrowedRuleAttemptStableRun")
-            .field("attempts", &self.attempts())
-            .field("steps", &self.steps())
-            .field("final_miss", &self.final_miss())
-            .field("state", &self.state())
-            .finish()
-    }
-}
 
 /// Implements debug output for borrowed return terminal witnesses.
 macro_rules! impl_return_run_debug {

@@ -7,7 +7,6 @@ use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
 use crate::program::{ExecutableProgram, ReturnOutput, RunResult};
 use crate::trace::RuntimeStateView;
 
-use super::attempt::RuleMiss;
 use super::engine::TerminalRunCore;
 use super::session::{BorrowedRuleAttemptCursor, BorrowedRunSession};
 
@@ -99,8 +98,6 @@ pub struct BorrowedFailedRun<'program> {
 /// typed pass state.
 pub enum BorrowedContinuingRuleAttemptTransition<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
 {
-    /// One executable rule line was consumed without applying.
-    Missed(BorrowedMissedRuleAttempt<'program, E, A>),
     /// One reusable rewrite rule was applied and execution can continue.
     AlwaysRewritten(BorrowedRuleAttemptAlwaysRewriteStep<'program, E, A>),
     /// One once-only rewrite rule was applied and execution can continue.
@@ -118,8 +115,6 @@ pub enum BorrowedContinuingRuleAttemptTransition<'program, E: ExecutionPolicy, A
 /// This transition type has no missed-continuation variant because a
 /// non-applying final rule exhausts the pass and terminates as stable.
 pub enum BorrowedFinalRuleAttemptTransition<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
-    /// The rule pass completed without a match.
-    Stable(BorrowedRuleAttemptStableRun<'program>),
     /// One reusable rewrite rule was applied and execution can continue.
     AlwaysRewritten(BorrowedRuleAttemptAlwaysRewriteStep<'program, E, A>),
     /// One once-only rewrite rule was applied and execution can continue.
@@ -130,16 +125,6 @@ pub enum BorrowedFinalRuleAttemptTransition<'program, E: ExecutionPolicy, A: Rul
     OnceReturned(BorrowedRuleAttemptOnceReturnRun<'program>),
     /// A matching rule failed before committing runtime state.
     Failed(BorrowedRuleAttemptFailedRun<'program>),
-}
-
-/// One consumed non-applying rule line in a continuing borrowed rule-attempt session.
-pub struct BorrowedMissedRuleAttempt<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
-    /// Rule-attempt count committed by this transition.
-    pub(super) attempt: RuleAttemptCount,
-    /// Non-applying rule information.
-    pub(super) miss: RuleMiss<'program>,
-    /// Cursor after consuming the rule line.
-    pub(super) cursor: BorrowedRuleAttemptCursor<'program, E, A>,
 }
 
 /// One committed reusable rewrite in a borrowed rule-attempt session.
@@ -165,18 +150,6 @@ pub struct BorrowedRuleAttemptOnceRewriteStep<'program, E: ExecutionPolicy, A: R
     pub(super) rule: OnceRewriteRuleView<'program>,
     /// Cursor after the committed rule application.
     pub(super) cursor: BorrowedRuleAttemptCursor<'program, E, A>,
-}
-
-/// Terminal borrowed rule-attempt run state reached by no matching rule.
-pub struct BorrowedRuleAttemptStableRun<'program> {
-    /// Number of consumed rule attempts before stability.
-    pub(super) attempts: RuleAttemptCount,
-    /// Final non-applying rule that exhausted the current pass.
-    pub(super) final_miss: RuleMiss<'program>,
-    /// Parsed program borrowed by the terminal state.
-    pub(super) program: &'program ExecutableProgram,
-    /// Terminal runtime core containing the stable state.
-    pub(super) core: TerminalRunCore,
 }
 
 /// Terminal borrowed rule-attempt run state reached by a reusable `(return)` rule.
@@ -255,32 +228,6 @@ macro_rules! impl_borrowed_rewrite_step {
 impl_borrowed_rewrite_step!(BorrowedAlwaysRewriteStep, AlwaysRewriteRuleView);
 impl_borrowed_rewrite_step!(BorrowedOnceRewriteStep, OnceRewriteRuleView);
 
-impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> BorrowedMissedRuleAttempt<'program, E, A> {
-    /// One-based consumed rule-attempt count.
-    #[must_use]
-    pub const fn attempt(&self) -> RuleAttemptCount {
-        self.attempt
-    }
-
-    /// Non-applying rule information.
-    #[must_use]
-    pub const fn miss(&self) -> &RuleMiss<'program> {
-        &self.miss
-    }
-
-    /// Runtime state after the non-applying rule attempt.
-    #[must_use]
-    pub fn state(&self) -> RuntimeStateView<'_> {
-        self.cursor.state()
-    }
-
-    /// Continue running after observing this missed rule attempt.
-    #[must_use]
-    pub fn into_cursor(self) -> BorrowedRuleAttemptCursor<'program, E, A> {
-        self.cursor
-    }
-}
-
 /// Implements shared accessors for borrowed rule-attempt rewrite witnesses.
 macro_rules! impl_borrowed_rule_attempt_rewrite_step {
     ($step:ident, $rule:ident) => {
@@ -329,47 +276,6 @@ impl<'program> BorrowedStableRun<'program> {
     #[must_use]
     pub const fn steps(&self) -> StepCount {
         self.core.completed_steps()
-    }
-
-    /// Borrow the parsed program used by this terminal state.
-    #[must_use]
-    pub const fn program(&self) -> &'program ExecutableProgram {
-        self.program
-    }
-
-    /// Borrowed final runtime state.
-    #[must_use]
-    pub fn state(&self) -> RuntimeStateView<'_> {
-        self.core.state()
-    }
-
-    /// Materializes this stable run as a run result.
-    ///
-    /// # Errors
-    ///
-    /// Returns `RunFinishError` if final state materialization cannot allocate.
-    pub fn into_result(self) -> Result<RunResult, RunFinishError> {
-        self.core.into_stable_result()
-    }
-}
-
-impl<'program> BorrowedRuleAttemptStableRun<'program> {
-    /// Number of rule attempts consumed before reaching the stable state.
-    #[must_use]
-    pub const fn attempts(&self) -> RuleAttemptCount {
-        self.attempts
-    }
-
-    /// Number of execution steps committed before reaching the stable state.
-    #[must_use]
-    pub const fn steps(&self) -> StepCount {
-        self.core.completed_steps()
-    }
-
-    /// Final non-applying rule that exhausted this rule-attempt pass.
-    #[must_use]
-    pub const fn final_miss(&self) -> &RuleMiss<'program> {
-        &self.final_miss
     }
 
     /// Borrow the parsed program used by this terminal state.

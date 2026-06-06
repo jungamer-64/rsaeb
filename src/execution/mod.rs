@@ -344,8 +344,6 @@
 
 /// Type-selected execution advance kernel.
 mod advance;
-/// Rule miss values.
-mod attempt;
 /// Manual debug formatting for public typestates.
 mod debug;
 /// Shared mutable execution engine behind the public typestates.
@@ -354,18 +352,17 @@ mod engine;
 mod session;
 /// Public step and terminal transition typestates.
 mod transition;
-pub use attempt::RuleMiss;
 pub use session::{
     BorrowedContinuingRuleAttemptSession, BorrowedFinalRuleAttemptSession,
     BorrowedRuleAttemptCursor, BorrowedRunSession,
 };
 pub use transition::{
     BorrowedAlwaysReturnRun, BorrowedAlwaysRewriteStep, BorrowedContinuingRuleAttemptTransition,
-    BorrowedFailedRun, BorrowedFinalRuleAttemptTransition, BorrowedMissedRuleAttempt,
-    BorrowedOnceReturnRun, BorrowedOnceRewriteStep, BorrowedRuleAttemptAlwaysReturnRun,
+    BorrowedFailedRun, BorrowedFinalRuleAttemptTransition, BorrowedOnceReturnRun,
+    BorrowedOnceRewriteStep, BorrowedRuleAttemptAlwaysReturnRun,
     BorrowedRuleAttemptAlwaysRewriteStep, BorrowedRuleAttemptFailedRun,
-    BorrowedRuleAttemptOnceReturnRun, BorrowedRuleAttemptOnceRewriteStep,
-    BorrowedRuleAttemptStableRun, BorrowedStableRun, BorrowedStepTransition,
+    BorrowedRuleAttemptOnceReturnRun, BorrowedRuleAttemptOnceRewriteStep, BorrowedStableRun,
+    BorrowedStepTransition,
 };
 
 pub(crate) use session::{finish_borrowed_run, trace_events};
