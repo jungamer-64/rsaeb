@@ -19,19 +19,6 @@ use crate::runtime::state::State;
 
 use super::engine::{AttemptRunCore, AttemptRunCoreParts, AttemptSession, TerminalAttemptSession};
 use super::session::BorrowedRuleAttemptCursor;
-use super::transition::{
-    BorrowedAlwaysReturnStateMismatchRuleAttempt, BorrowedAlwaysRewriteStateMismatchRuleAttempt,
-    BorrowedContinuingRuleAttemptTransition, BorrowedFinalRuleAttemptTransition,
-    BorrowedOnceReturnStateMismatchRuleAttempt, BorrowedOnceRewriteConsumedRuleAttempt,
-    BorrowedOnceRewriteStateMismatchRuleAttempt, BorrowedRuleAttemptAlwaysReturnRun,
-    BorrowedRuleAttemptAlwaysRewriteStep, BorrowedRuleAttemptFailedRun,
-    BorrowedRuleAttemptOnceReturnRun, BorrowedRuleAttemptOnceRewriteStep,
-    BorrowedRuleAttemptStableAfterAlwaysReturnStateMismatch,
-    BorrowedRuleAttemptStableAfterAlwaysRewriteStateMismatch,
-    BorrowedRuleAttemptStableAfterOnceReturnStateMismatch,
-    BorrowedRuleAttemptStableAfterOnceRewriteConsumed,
-    BorrowedRuleAttemptStableAfterOnceRewriteStateMismatch,
-};
 
 /// Continuing rule-attempt pass behavior shared by first and after-miss states.
 pub(super) trait ContinuingRuleAttemptPass<'program>:
@@ -127,7 +114,7 @@ impl<'program> FinalRuleAttemptPass<'program> for AfterMissFinalRulePass<'progra
 /// Advances a borrowed rule-attempt session whose current rule has successors.
 pub(super) fn advance_continuing_borrowed_rule_attempt<'program, E, A, Pass>(
     session: AttemptSession<'program, E, A, Pass>,
-) -> BorrowedContinuingRuleAttemptTransition<'program, E, A>
+) -> ContinuingRuleAttemptAdvance<'program, E, A>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
@@ -139,7 +126,7 @@ where
 /// Advances a borrowed rule-attempt session whose current rule exhausts the pass.
 pub(super) fn advance_final_borrowed_rule_attempt<'program, E, A, Pass>(
     session: AttemptSession<'program, E, A, Pass>,
-) -> BorrowedFinalRuleAttemptTransition<'program, E, A>
+) -> FinalRuleAttemptAdvance<'program, E, A>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
@@ -151,7 +138,7 @@ where
 /// Advances a rule-attempt step whose selected rule is not final in the pass.
 fn advance_continuing_rule_attempt<'program, E, A, Pass>(
     session: AttemptSession<'program, E, A, Pass>,
-) -> BorrowedContinuingRuleAttemptTransition<'program, E, A>
+) -> ContinuingRuleAttemptAdvance<'program, E, A>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
@@ -201,7 +188,7 @@ where
 /// Advances a rule-attempt step whose selected rule exhausts the pass.
 fn advance_final_rule_attempt<'program, E, A, Pass>(
     session: AttemptSession<'program, E, A, Pass>,
-) -> BorrowedFinalRuleAttemptTransition<'program, E, A>
+) -> FinalRuleAttemptAdvance<'program, E, A>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
