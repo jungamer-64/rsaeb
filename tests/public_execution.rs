@@ -1415,10 +1415,10 @@ fn execution_rule_attempt_limit_is_independent_from_step_limit() -> TestResult {
 
 /// # Errors
 ///
-/// Returns `TestFailure` if failed rule preparation publishes the reserved
-/// rule-attempt count.
+/// Returns `TestFailure` if failed rule preparation publishes reserved
+/// rule-attempt, step, or state progress.
 #[test]
-fn execution_rule_attempt_preparation_failure_drops_attempt_reservation() -> TestResult {
+fn execution_rule_attempt_preparation_failures_drop_attempt_reservation() -> TestResult {
     let limits = DefaultInputRunPolicy::<10, 1, DEFAULT_BYTE_BUDGET>::new();
     let program = parse_program("a=aa")?;
     let input = runtime_input(b"a", limits)?;
@@ -1430,15 +1430,8 @@ fn execution_rule_attempt_preparation_failure_drops_attempt_reservation() -> Tes
                     && error.attempted_len().get() == 2
         ),
         "expected state limit before attempt reservation commits",
-    )
-}
+    )?;
 
-/// # Errors
-///
-/// Returns `TestFailure` if failed once-return output materialization publishes
-/// the reserved rule-attempt or step count.
-#[test]
-fn execution_rule_attempt_once_return_output_failure_drops_attempt_reservation() -> TestResult {
     let limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, 1>::new();
     let program = parse_program("(once)a=(return)ok")?;
     let input = runtime_input(b"a", limits)?;
