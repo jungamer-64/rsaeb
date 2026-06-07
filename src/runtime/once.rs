@@ -664,6 +664,11 @@ impl<'program> RuntimeRulePassParts<'program> {
 
 impl<'program> PendingRuleTail<'program> {
     /// Builds an empty pending tail with enough capacity for all non-current rules.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the pending-rule tail cannot reserve the
+    /// requested runtime-rule capacity.
     fn with_capacity(total_capacity: RequestedCapacity) -> Result<Self, AllocationError> {
         let mut rules = VecDeque::new();
         try_reserve_rule_queue(
@@ -711,6 +716,11 @@ impl<'program> MissedRuleHistoryTail<'program> {
 
 impl<'program> FutureMissBuffer<'program> {
     /// Builds an empty future-miss buffer with capacity for this pass's tail.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AllocationError` if the future-miss buffer cannot reserve the
+    /// requested runtime-rule capacity.
     fn with_capacity(total_capacity: RequestedCapacity) -> Result<Self, AllocationError> {
         let mut rules = VecDeque::new();
         try_reserve_rule_queue(
