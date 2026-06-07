@@ -18,7 +18,6 @@ use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
 
 use super::engine::{AttemptRunCore, AttemptRunCoreParts, AttemptSession, TerminalAttemptSession};
-use super::session::BorrowedRuleAttemptCursor;
 
 /// Continuing rule-attempt pass behavior shared by first and after-miss states.
 pub(super) trait ContinuingRuleAttemptPass<'program>:
@@ -111,6 +110,134 @@ impl<'program> FinalRuleAttemptPass<'program> for AfterMissFinalRulePass<'progra
     }
 }
 
+/// Private result of advancing a continuing rule-attempt pass.
+///
+/// Continuing passes can miss and resume, but they cannot become stable at the
+/// miss boundary because the current target has a successor.
+pub(super) enum ContinuingRuleAttemptAdvance<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
+    /// A non-final rule did not apply and the pass can resume at a typed cursor.
+    Miss(ContinuingRuleAttemptMiss<'program, E, A>),
+    /// A rewrite committed and rule-attempt execution can resume from the first rule.
+    Rewritten(RuleAttemptRewrite<'program, E, A>),
+    /// A return committed and the run is terminal.
+    Returned(RuleAttemptReturn<'program>),
+    /// The attempted rule could not complete.
+    Failed(RuleAttemptFailure<'program>),
+}
+
+/// Private result of advancing a final rule-attempt pass.
+///
+/// Final passes can stabilize after a miss, but they cannot return a
+/// missed-rule continuation because the current target exhausts the pass.
+pub(super) enum FinalRuleAttemptAdvance<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
+    /// The final rule did not apply and the pass stabilized.
+    StableAfterMiss(FinalRuleAttemptStable<'program>),
+    /// A rewrite committed and rule-attempt execution can resume from the first rule.
+    Rewritten(RuleAttemptRewrite<'program, E, A>),
+    /// A return committed and the run is terminal.
+    Returned(RuleAttemptReturn<'program>),
+    /// The attempted rule could not complete.
+    Failed(RuleAttemptFailure<'program>),
+}
+
+/// Continuing-pass miss with the next typed pass still unprojected.
+pub(super) struct ContinuingRuleAttemptMiss<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
+    /// Parsed program used by the cursor projection.
+    pub(super) program: &'program ExecutableProgram,
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Exact miss shape produced by evaluating the current rule.
+    pub(super) miss: EvaluatedRuleMiss<'program>,
+    /// Runtime state split from the selected pass.
+    pub(super) parts: AttemptRunCoreParts<E, A>,
+    /// Typed pass after consuming the missed non-final rule.
+    pub(super) runtime_rules: MissedRuntimeRulePassCursor<'program>,
+}
+
+/// Terminal final-pass miss before public stable projection.
+pub(super) struct FinalRuleAttemptStable<'program> {
+    /// Exact miss shape produced by evaluating the final rule.
+    pub(super) miss: EvaluatedRuleMiss<'program>,
+    /// Terminal state after the final rule line is consumed.
+    pub(super) terminal: TerminalAttemptSession<'program>,
+}
+
+/// Rule-attempt rewrite before public transition projection.
+pub(super) enum RuleAttemptRewrite<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
+    /// A reusable rewrite committed.
+    Always {
+        /// Parsed program used by the cursor projection.
+        program: &'program ExecutableProgram,
+        /// Rule-attempt count committed by this transition.
+        attempt: RuleAttemptCount,
+        /// Step number committed by this transition.
+        step: crate::limits::StepCount,
+        /// Exact committed rule witness.
+        rule: AlwaysRewriteRuleView<'program>,
+        /// Runtime state split from the selected pass.
+        parts: AttemptRunCoreParts<E, A>,
+        /// Reset pass after the committed rewrite.
+        runtime_rules: FirstRuntimeRulePassCursor<'program>,
+    },
+    /// A once-only rewrite committed.
+    Once {
+        /// Parsed program used by the cursor projection.
+        program: &'program ExecutableProgram,
+        /// Rule-attempt count committed by this transition.
+        attempt: RuleAttemptCount,
+        /// Step number committed by this transition.
+        step: crate::limits::StepCount,
+        /// Exact committed rule witness.
+        rule: OnceRewriteRuleView<'program>,
+        /// Runtime state split from the selected pass.
+        parts: AttemptRunCoreParts<E, A>,
+        /// Reset pass after the committed rewrite.
+        runtime_rules: FirstRuntimeRulePassCursor<'program>,
+    },
+}
+
+/// Rule-attempt return before public transition projection.
+pub(super) enum RuleAttemptReturn<'program> {
+    /// A reusable return committed.
+    Always {
+        /// Parsed program used by the terminal projection.
+        program: &'program ExecutableProgram,
+        /// Rule-attempt count committed by this transition.
+        attempt: RuleAttemptCount,
+        /// Step number that executed the return action.
+        step: crate::limits::StepCount,
+        /// Exact committed rule witness.
+        rule: AlwaysReturnRuleView<'program>,
+        /// Materialized return output.
+        output: crate::program::ReturnOutput,
+    },
+    /// A once-only return committed.
+    Once {
+        /// Parsed program used by the terminal projection.
+        program: &'program ExecutableProgram,
+        /// Rule-attempt count committed by this transition.
+        attempt: RuleAttemptCount,
+        /// Step number that executed the return action.
+        step: crate::limits::StepCount,
+        /// Exact committed rule witness.
+        rule: OnceReturnRuleView<'program>,
+        /// Materialized return output.
+        output: crate::program::ReturnOutput,
+    },
+}
+
+/// Rule-attempt failure before public transition projection.
+pub(super) struct RuleAttemptFailure<'program> {
+    /// Runtime error that stopped the candidate attempt before commit.
+    pub(super) error: RuleAttemptStepError,
+    /// Number of rule attempts consumed before the failure was reported.
+    pub(super) attempts: RuleAttemptCount,
+    /// Parsed program borrowed by the failed terminal state.
+    pub(super) program: &'program ExecutableProgram,
+    /// Uncommitted runtime core retained for diagnostic inspection.
+    pub(super) core: super::engine::TerminalRunCore,
+}
+
 /// Advances a borrowed rule-attempt session whose current rule has successors.
 pub(super) fn advance_continuing_borrowed_rule_attempt<'program, E, A, Pass>(
     session: AttemptSession<'program, E, A, Pass>,
@@ -161,7 +288,9 @@ where
     match pass.attempt_current_rule(&parts.state) {
         RuleAttemptEvaluation::Miss(miss) => {
             let attempt = reservation.commit();
-            commit_continuing_miss(program, parts, pass, attempt, miss).into_transition()
+            ContinuingRuleAttemptAdvance::Miss(commit_continuing_miss(
+                program, parts, pass, attempt, miss,
+            ))
         }
         RuleAttemptEvaluation::Matched(matched) => {
             let state_len = parts.state.byte_count();
@@ -211,7 +340,9 @@ where
     match pass.attempt_current_rule(&parts.state) {
         RuleAttemptEvaluation::Miss(miss) => {
             let attempts = reservation.commit();
-            commit_final_miss(program, parts, pass, attempts, miss).into_transition()
+            FinalRuleAttemptAdvance::StableAfterMiss(commit_final_miss(
+                program, parts, pass, attempts, miss,
+            ))
         }
         RuleAttemptEvaluation::Matched(matched) => {
             let state_len = parts.state.byte_count();
@@ -235,236 +366,23 @@ where
     }
 }
 
-/// Committed continuing-pass miss that can only resume with another typed cursor.
-struct CommittedContinuingRuleAttemptMiss<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
-    /// Rule-attempt count committed by this transition.
-    attempt: RuleAttemptCount,
-    /// Exact miss shape produced by evaluating the current rule.
-    miss: EvaluatedRuleMiss<'program>,
-    /// Cursor after consuming the non-final rule line.
-    cursor: BorrowedRuleAttemptCursor<'program, E, A>,
-}
-
-/// Committed final-pass miss that can only terminate as stable.
-struct CommittedFinalRuleAttemptMiss<'program> {
-    /// Exact miss shape produced by evaluating the final rule.
-    miss: EvaluatedRuleMiss<'program>,
-    /// Terminal state after the final rule line is consumed.
-    terminal: TerminalAttemptSession<'program>,
-}
-
-impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
-    CommittedContinuingRuleAttemptMiss<'program, E, A>
-{
-    /// Converts this continuing miss into its only valid public transition.
-    fn into_transition(self) -> BorrowedContinuingRuleAttemptTransition<'program, E, A> {
-        let Self {
-            attempt,
-            miss,
-            cursor,
-        } = self;
-        visit_evaluated_rule_miss(
-            miss,
-            ContinuingRuleAttemptMissTransition { attempt, cursor },
-        )
-    }
-}
-
-impl<'program> CommittedFinalRuleAttemptMiss<'program> {
-    /// Converts this final miss into its only valid public transition.
-    fn into_transition<E, A>(self) -> BorrowedFinalRuleAttemptTransition<'program, E, A>
-    where
-        E: ExecutionPolicy,
-        A: RuleAttemptPolicy,
-    {
-        let Self { miss, terminal } = self;
-        let TerminalAttemptSession {
-            program,
-            core,
-            attempts,
-        } = terminal;
-        match miss {
-            EvaluatedRuleMiss::AlwaysRewriteStateMismatch(rule) => {
-                BorrowedFinalRuleAttemptTransition::StableAfterAlwaysRewriteStateMismatch(
-                    BorrowedRuleAttemptStableAfterAlwaysRewriteStateMismatch {
-                        attempts,
-                        rule,
-                        program,
-                        core,
-                    },
-                )
-            }
-            EvaluatedRuleMiss::OnceRewriteStateMismatch(rule) => {
-                BorrowedFinalRuleAttemptTransition::StableAfterOnceRewriteStateMismatch(
-                    BorrowedRuleAttemptStableAfterOnceRewriteStateMismatch {
-                        attempts,
-                        rule,
-                        program,
-                        core,
-                    },
-                )
-            }
-            EvaluatedRuleMiss::AlwaysReturnStateMismatch(rule) => {
-                BorrowedFinalRuleAttemptTransition::StableAfterAlwaysReturnStateMismatch(
-                    BorrowedRuleAttemptStableAfterAlwaysReturnStateMismatch {
-                        attempts,
-                        rule,
-                        program,
-                        core,
-                    },
-                )
-            }
-            EvaluatedRuleMiss::OnceReturnStateMismatch(rule) => {
-                BorrowedFinalRuleAttemptTransition::StableAfterOnceReturnStateMismatch(
-                    BorrowedRuleAttemptStableAfterOnceReturnStateMismatch {
-                        attempts,
-                        rule,
-                        program,
-                        core,
-                    },
-                )
-            }
-            EvaluatedRuleMiss::OnceRewriteConsumed(rule) => {
-                BorrowedFinalRuleAttemptTransition::StableAfterOnceRewriteConsumed(
-                    BorrowedRuleAttemptStableAfterOnceRewriteConsumed {
-                        attempts,
-                        rule,
-                        program,
-                        core,
-                    },
-                )
-            }
-        }
-    }
-}
-
-/// Exact constructor target for one evaluated miss shape.
-trait EvaluatedRuleMissVisitor<'program> {
-    /// Transition type produced by this exact destination.
-    type Output;
-
-    /// Constructs the target from a reusable rewrite state mismatch.
-    fn always_rewrite_state_mismatch(self, rule: AlwaysRewriteRuleView<'program>) -> Self::Output;
-
-    /// Constructs the target from a once-only rewrite state mismatch.
-    fn once_rewrite_state_mismatch(self, rule: OnceRewriteRuleView<'program>) -> Self::Output;
-
-    /// Constructs the target from a reusable return state mismatch.
-    fn always_return_state_mismatch(self, rule: AlwaysReturnRuleView<'program>) -> Self::Output;
-
-    /// Constructs the target from a once-only return state mismatch.
-    fn once_return_state_mismatch(self, rule: OnceReturnRuleView<'program>) -> Self::Output;
-
-    /// Constructs the target from an already-consumed once-only rewrite rule.
-    fn once_rewrite_consumed(self, rule: OnceRewriteRuleView<'program>) -> Self::Output;
-}
-
-/// Visits an exact evaluated miss without exposing a generic transition helper.
-fn visit_evaluated_rule_miss<'program, V>(
-    miss: EvaluatedRuleMiss<'program>,
-    visitor: V,
-) -> V::Output
-where
-    V: EvaluatedRuleMissVisitor<'program>,
-{
-    match miss {
-        EvaluatedRuleMiss::AlwaysRewriteStateMismatch(rule) => {
-            visitor.always_rewrite_state_mismatch(rule)
-        }
-        EvaluatedRuleMiss::OnceRewriteStateMismatch(rule) => {
-            visitor.once_rewrite_state_mismatch(rule)
-        }
-        EvaluatedRuleMiss::AlwaysReturnStateMismatch(rule) => {
-            visitor.always_return_state_mismatch(rule)
-        }
-        EvaluatedRuleMiss::OnceReturnStateMismatch(rule) => {
-            visitor.once_return_state_mismatch(rule)
-        }
-        EvaluatedRuleMiss::OnceRewriteConsumed(rule) => visitor.once_rewrite_consumed(rule),
-    }
-}
-
-/// Continuing transition target for evaluated rule-attempt misses.
-struct ContinuingRuleAttemptMissTransition<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
-    /// Rule-attempt count committed by this transition.
-    attempt: RuleAttemptCount,
-    /// Cursor after consuming the non-final rule line.
-    cursor: BorrowedRuleAttemptCursor<'program, E, A>,
-}
-
-impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> EvaluatedRuleMissVisitor<'program>
-    for ContinuingRuleAttemptMissTransition<'program, E, A>
-{
-    type Output = BorrowedContinuingRuleAttemptTransition<'program, E, A>;
-
-    fn always_rewrite_state_mismatch(self, rule: AlwaysRewriteRuleView<'program>) -> Self::Output {
-        BorrowedContinuingRuleAttemptTransition::AlwaysRewriteStateMismatch(
-            BorrowedAlwaysRewriteStateMismatchRuleAttempt {
-                attempt: self.attempt,
-                rule,
-                cursor: self.cursor,
-            },
-        )
-    }
-
-    fn once_rewrite_state_mismatch(self, rule: OnceRewriteRuleView<'program>) -> Self::Output {
-        BorrowedContinuingRuleAttemptTransition::OnceRewriteStateMismatch(
-            BorrowedOnceRewriteStateMismatchRuleAttempt {
-                attempt: self.attempt,
-                rule,
-                cursor: self.cursor,
-            },
-        )
-    }
-
-    fn always_return_state_mismatch(self, rule: AlwaysReturnRuleView<'program>) -> Self::Output {
-        BorrowedContinuingRuleAttemptTransition::AlwaysReturnStateMismatch(
-            BorrowedAlwaysReturnStateMismatchRuleAttempt {
-                attempt: self.attempt,
-                rule,
-                cursor: self.cursor,
-            },
-        )
-    }
-
-    fn once_return_state_mismatch(self, rule: OnceReturnRuleView<'program>) -> Self::Output {
-        BorrowedContinuingRuleAttemptTransition::OnceReturnStateMismatch(
-            BorrowedOnceReturnStateMismatchRuleAttempt {
-                attempt: self.attempt,
-                rule,
-                cursor: self.cursor,
-            },
-        )
-    }
-
-    fn once_rewrite_consumed(self, rule: OnceRewriteRuleView<'program>) -> Self::Output {
-        BorrowedContinuingRuleAttemptTransition::OnceRewriteConsumed(
-            BorrowedOnceRewriteConsumedRuleAttempt {
-                attempt: self.attempt,
-                rule,
-                cursor: self.cursor,
-            },
-        )
-    }
-}
-
 /// Reports a continuing-pass rule-attempt failure with the uncommitted runtime state.
 fn failed_continuing_rule_attempt<'program, E, A, Pass>(
     program: &'program ExecutableProgram,
     core: AttemptRunCore<E, A, Pass>,
     error: RuleAttemptStepError,
-) -> BorrowedContinuingRuleAttemptTransition<'program, E, A>
+) -> ContinuingRuleAttemptAdvance<'program, E, A>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
     let attempts = core.completed_attempts();
-    BorrowedContinuingRuleAttemptTransition::Failed(BorrowedRuleAttemptFailedRun::new(
+    ContinuingRuleAttemptAdvance::Failed(RuleAttemptFailure {
         error,
         attempts,
         program,
-        core.into_terminal(),
-    ))
+        core: core.into_terminal(),
+    })
 }
 
 /// Reports a final-pass rule-attempt failure with the uncommitted runtime state.
@@ -472,18 +390,18 @@ fn failed_final_rule_attempt<'program, E, A, Pass>(
     program: &'program ExecutableProgram,
     core: AttemptRunCore<E, A, Pass>,
     error: RuleAttemptStepError,
-) -> BorrowedFinalRuleAttemptTransition<'program, E, A>
+) -> FinalRuleAttemptAdvance<'program, E, A>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
     let attempts = core.completed_attempts();
-    BorrowedFinalRuleAttemptTransition::Failed(BorrowedRuleAttemptFailedRun::new(
+    FinalRuleAttemptAdvance::Failed(RuleAttemptFailure {
         error,
         attempts,
         program,
-        core.into_terminal(),
-    ))
+        core: core.into_terminal(),
+    })
 }
 
 /// Commits a non-final rule-attempt miss and returns its resumable miss witness.
@@ -493,17 +411,19 @@ fn commit_continuing_miss<'program, E, A, Pass>(
     pass: Pass,
     attempt: RuleAttemptCount,
     miss: EvaluatedRuleMiss<'program>,
-) -> CommittedContinuingRuleAttemptMiss<'program, E, A>
+) -> ContinuingRuleAttemptMiss<'program, E, A>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
     Pass: ContinuingRuleAttemptPass<'program>,
 {
     let runtime_rules = pass.commit_attempt_miss();
-    CommittedContinuingRuleAttemptMiss {
+    ContinuingRuleAttemptMiss {
+        program,
         attempt,
         miss,
-        cursor: BorrowedRuleAttemptCursor::from_after_miss_parts(program, parts, runtime_rules),
+        parts,
+        runtime_rules,
     }
 }
 
@@ -514,14 +434,14 @@ fn commit_final_miss<'program, E, A, Pass>(
     pass: Pass,
     attempts: RuleAttemptCount,
     miss: EvaluatedRuleMiss<'program>,
-) -> CommittedFinalRuleAttemptMiss<'program>
+) -> FinalRuleAttemptStable<'program>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
     Pass: FinalRuleAttemptPass<'program>,
 {
     let core = parts.with_pass(pass);
-    CommittedFinalRuleAttemptMiss {
+    FinalRuleAttemptStable {
         miss,
         terminal: TerminalAttemptSession {
             program,
@@ -537,7 +457,7 @@ fn committed_continuing_rule_attempt_application<'program, E, A, Pass>(
     core: AttemptRunCore<E, A, Pass>,
     attempt: RuleAttemptCount,
     applied: AppliedRule<'program>,
-) -> BorrowedContinuingRuleAttemptTransition<'program, E, A>
+) -> ContinuingRuleAttemptAdvance<'program, E, A>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
@@ -548,65 +468,51 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let (parts, runtime_rules) = core.into_parts();
-            let cursor = BorrowedRuleAttemptCursor::from_first_parts(
+            ContinuingRuleAttemptAdvance::Rewritten(RuleAttemptRewrite::Always {
                 program,
+                attempt,
+                step,
+                rule,
                 parts,
-                runtime_rules.reset_attempt_after_rewrite(),
-            );
-            BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(
-                BorrowedRuleAttemptAlwaysRewriteStep {
-                    attempt,
-                    step,
-                    rule,
-                    cursor,
-                },
-            )
+                runtime_rules: runtime_rules.reset_attempt_after_rewrite(),
+            })
         }
         AppliedRule::OnceRewritten(committed) => {
             let step = committed.step();
             let rule = committed.rule();
             let (parts, runtime_rules) = core.into_parts();
-            let cursor = BorrowedRuleAttemptCursor::from_first_parts(
+            ContinuingRuleAttemptAdvance::Rewritten(RuleAttemptRewrite::Once {
                 program,
+                attempt,
+                step,
+                rule,
                 parts,
-                runtime_rules.reset_attempt_after_rewrite(),
-            );
-            BorrowedContinuingRuleAttemptTransition::OnceRewritten(
-                BorrowedRuleAttemptOnceRewriteStep {
-                    attempt,
-                    step,
-                    rule,
-                    cursor,
-                },
-            )
+                runtime_rules: runtime_rules.reset_attempt_after_rewrite(),
+            })
         }
         AppliedRule::AlwaysReturned(committed) => {
             let step = committed.step();
             let rule = committed.rule();
             let output = committed.into_output();
-            BorrowedContinuingRuleAttemptTransition::AlwaysReturned(
-                BorrowedRuleAttemptAlwaysReturnRun {
-                    attempt,
-                    step,
-                    rule,
-                    program,
-                    output,
-                },
-            )
+            ContinuingRuleAttemptAdvance::Returned(RuleAttemptReturn::Always {
+                program,
+                attempt,
+                step,
+                rule,
+                output,
+            })
         }
         AppliedRule::OnceReturned(committed) => {
             let step = committed.step();
             let rule = committed.rule();
             let output = committed.into_output();
-            BorrowedContinuingRuleAttemptTransition::OnceReturned(
-                BorrowedRuleAttemptOnceReturnRun {
-                    attempt,
-                    step,
-                    rule,
-                    program,
-                    output,
-                },
-            )
+            ContinuingRuleAttemptAdvance::Returned(RuleAttemptReturn::Once {
+                program,
+                attempt,
+                step,
+                rule,
+                output,
+            })
         }
     }
 }
@@ -617,7 +523,7 @@ fn committed_final_rule_attempt_application<'program, E, A, Pass>(
     core: AttemptRunCore<E, A, Pass>,
     attempt: RuleAttemptCount,
     applied: AppliedRule<'program>,
-) -> BorrowedFinalRuleAttemptTransition<'program, E, A>
+) -> FinalRuleAttemptAdvance<'program, E, A>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
@@ -628,45 +534,37 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let (parts, runtime_rules) = core.into_parts();
-            let cursor = BorrowedRuleAttemptCursor::from_first_parts(
+            FinalRuleAttemptAdvance::Rewritten(RuleAttemptRewrite::Always {
                 program,
+                attempt,
+                step,
+                rule,
                 parts,
-                runtime_rules.reset_attempt_after_rewrite(),
-            );
-            BorrowedFinalRuleAttemptTransition::AlwaysRewritten(
-                BorrowedRuleAttemptAlwaysRewriteStep {
-                    attempt,
-                    step,
-                    rule,
-                    cursor,
-                },
-            )
+                runtime_rules: runtime_rules.reset_attempt_after_rewrite(),
+            })
         }
         AppliedRule::OnceRewritten(committed) => {
             let step = committed.step();
             let rule = committed.rule();
             let (parts, runtime_rules) = core.into_parts();
-            let cursor = BorrowedRuleAttemptCursor::from_first_parts(
+            FinalRuleAttemptAdvance::Rewritten(RuleAttemptRewrite::Once {
                 program,
-                parts,
-                runtime_rules.reset_attempt_after_rewrite(),
-            );
-            BorrowedFinalRuleAttemptTransition::OnceRewritten(BorrowedRuleAttemptOnceRewriteStep {
                 attempt,
                 step,
                 rule,
-                cursor,
+                parts,
+                runtime_rules: runtime_rules.reset_attempt_after_rewrite(),
             })
         }
         AppliedRule::AlwaysReturned(committed) => {
             let step = committed.step();
             let rule = committed.rule();
             let output = committed.into_output();
-            BorrowedFinalRuleAttemptTransition::AlwaysReturned(BorrowedRuleAttemptAlwaysReturnRun {
+            FinalRuleAttemptAdvance::Returned(RuleAttemptReturn::Always {
+                program,
                 attempt,
                 step,
                 rule,
-                program,
                 output,
             })
         }
@@ -674,11 +572,11 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let output = committed.into_output();
-            BorrowedFinalRuleAttemptTransition::OnceReturned(BorrowedRuleAttemptOnceReturnRun {
+            FinalRuleAttemptAdvance::Returned(RuleAttemptReturn::Once {
+                program,
                 attempt,
                 step,
                 rule,
-                program,
                 output,
             })
         }
