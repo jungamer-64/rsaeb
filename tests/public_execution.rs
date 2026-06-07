@@ -898,8 +898,8 @@ where
 ///
 /// Returns `TestFailure` if the single-rule attempt does not fail or publishes
 /// uncommitted progress.
-fn expect_uncommitted_single_rule_final_attempt_failure<'program, E>(
-    program: &'program ExecutableProgram,
+fn expect_uncommitted_single_rule_final_attempt_failure<E>(
+    program: &ExecutableProgram,
     input: AdmittedRun<E>,
     expected_state: &[u8],
 ) -> Result<RuleAttemptStepError, TestFailure>
