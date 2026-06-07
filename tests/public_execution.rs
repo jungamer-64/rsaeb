@@ -1417,6 +1417,40 @@ fn execution_rule_attempt_preparation_failure_drops_attempt_reservation() -> Tes
 
 /// # Errors
 ///
+/// Returns `TestFailure` if failed once-return output materialization publishes
+/// the reserved rule-attempt or step count.
+#[test]
+fn execution_rule_attempt_once_return_output_failure_drops_attempt_reservation() -> TestResult {
+    let limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, 1>::new();
+    let program = parse_program("(once)a=(return)ok")?;
+    let input = runtime_input(b"a", limits)?;
+    let cursor = program.rule_attempts::<StaticRuleAttemptPolicy<10>, _>(input)?;
+    let BorrowedRuleAttemptCursor::Final(execution) = cursor else {
+        return Err(TestFailure::message(
+            "expected single-rule start as final cursor",
+        ));
+    };
+
+    let failed = expect_failed_final_rule_attempt(execution.step())?;
+    ensure_eq!(failed.completed_attempts().get(), 0)?;
+    ensure_eq!(failed.completed_steps().get(), 0)?;
+    ensure_eq!(
+        runtime_view_bytes(failed.state())?.as_slice(),
+        b"a".as_slice(),
+    )?;
+    ensure_matches(
+        matches!(
+            failed.into_error(),
+            RuleAttemptStepError::Step(RunStepError::ReturnOutputLimit(error))
+                if error.limit() == ReturnByteLimit::new(1)
+                    && error.attempted_len().get() == 2
+        ),
+        "expected once-return output limit before attempt reservation commits",
+    )
+}
+
+/// # Errors
+///
 /// Returns `TestFailure` if execution state views do not expose initial and
 /// current state bytes correctly.
 #[test]

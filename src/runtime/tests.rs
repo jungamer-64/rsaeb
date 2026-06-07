@@ -101,10 +101,10 @@ fn expect_step_transition<'program, E: ExecutionPolicy>(
 
 /// # Errors
 ///
-/// Returns `TestFailure` if a failed once-rule commit attempt mutates runtime
-/// state before the commit boundary.
+/// Returns `TestFailure` if failed terminal return output preparation mutates
+/// runtime state before the step commit boundary.
 #[test]
-fn once_rule_failure_preserves_state_before_step_commit() -> TestResult {
+fn terminal_return_preparation_failure_preserves_state_before_step_commit() -> TestResult {
     let program = parse_program("(once)a=(return)ok")?;
     let limits = DefaultInputRunPolicy::<1, DEFAULT_BYTE_BUDGET, 1>::new();
     let input = admitted_run(b"a", limits)?;

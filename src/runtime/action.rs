@@ -121,7 +121,7 @@ pub(crate) struct PreparedAlwaysReturnRule<'program, 'budget, E: ExecutionPolicy
     output: ReturnOutput,
 }
 
-/// Prepared once-only return before its step and once-state side effects commit.
+/// Prepared once-only return before its terminal step side effect commits.
 #[derive(Debug)]
 pub(crate) struct PreparedOnceReturnRule<'program, 'budget, E: ExecutionPolicy> {
     /// Matched once-only return rule.
@@ -246,7 +246,7 @@ pub(crate) fn materialize_return_output(
     )?)
 }
 
-/// Prepares one matched rule without committing state, completed-step count, or once-rule side effects.
+/// Prepares one matched rule without committing state, completed-step count, or once-rewrite side effects.
 ///
 /// # Errors
 ///

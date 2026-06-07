@@ -209,10 +209,7 @@ pub(crate) fn attempt_once_return_rule<'program, 'state, 'once>(
     };
 
     RuleAttemptEvaluation::Matched(MatchedRuleApplication::OnceReturn(
-        MatchedOnceReturnApplication {
-            rule,
-            state_match,
-        },
+        MatchedOnceReturnApplication { rule, state_match },
     ))
 }
 
