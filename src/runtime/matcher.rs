@@ -138,24 +138,45 @@ impl<'program, 'state> MatchedOnceReturnApplication<'program, 'state> {
     }
 }
 
-/// Evaluates a reusable rewrite rule against the current runtime state.
-pub(crate) fn attempt_always_rewrite_rule<'program, 'state, 'once>(
-    rule: AlwaysRewriteRuleView<'program>,
-    state: &'state State,
-) -> RuleAttemptEvaluation<'program, 'state, 'once> {
-    let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
-        StatePayloadMatch::Matched(state_match) => state_match,
-        StatePayloadMatch::Mismatched => {
-            return RuleAttemptEvaluation::Miss(EvaluatedRuleMiss::AlwaysRewriteStateMismatch(
+/// Declares one exact rule-attempt evaluator whose success needs no once-state
+/// commit permit.
+macro_rules! impl_rule_attempt_without_once_state_commit {
+    (
+        $(#[$meta:meta])*
+        $function:ident,
+        $rule:ident,
+        $miss:ident,
+        $matched_variant:ident,
+        $matched:ident
+    ) => {
+        $(#[$meta])*
+        pub(crate) fn $function<'program, 'state, 'once>(
+            rule: $rule<'program>,
+            state: &'state State,
+        ) -> RuleAttemptEvaluation<'program, 'state, 'once> {
+            let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
+                StatePayloadMatch::Matched(state_match) => state_match,
+                StatePayloadMatch::Mismatched => {
+                    return RuleAttemptEvaluation::Miss(EvaluatedRuleMiss::$miss(rule));
+                }
+            };
+
+            RuleAttemptEvaluation::Matched(MatchedRuleApplication::$matched_variant($matched {
                 rule,
-            ));
+                state_match,
+            }))
         }
     };
-
-    RuleAttemptEvaluation::Matched(MatchedRuleApplication::AlwaysRewrite(
-        MatchedAlwaysRewriteApplication { rule, state_match },
-    ))
 }
+
+impl_rule_attempt_without_once_state_commit!(
+    /// Evaluates a reusable rewrite rule against the current runtime state.
+    attempt_always_rewrite_rule,
+    AlwaysRewriteRuleView,
+    AlwaysRewriteStateMismatch,
+    AlwaysRewrite,
+    MatchedAlwaysRewriteApplication
+);
 
 /// Evaluates a fresh once-only rewrite rule against the current runtime state.
 pub(crate) fn attempt_once_rewrite_rule<'program, 'state, 'once>(
@@ -179,39 +200,23 @@ pub(crate) fn attempt_once_rewrite_rule<'program, 'state, 'once>(
     ))
 }
 
-/// Evaluates a reusable return rule against the current runtime state.
-pub(crate) fn attempt_always_return_rule<'program, 'state, 'once>(
-    rule: AlwaysReturnRuleView<'program>,
-    state: &'state State,
-) -> RuleAttemptEvaluation<'program, 'state, 'once> {
-    let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
-        StatePayloadMatch::Matched(state_match) => state_match,
-        StatePayloadMatch::Mismatched => {
-            return RuleAttemptEvaluation::Miss(EvaluatedRuleMiss::AlwaysReturnStateMismatch(rule));
-        }
-    };
+impl_rule_attempt_without_once_state_commit!(
+    /// Evaluates a reusable return rule against the current runtime state.
+    attempt_always_return_rule,
+    AlwaysReturnRuleView,
+    AlwaysReturnStateMismatch,
+    AlwaysReturn,
+    MatchedAlwaysReturnApplication
+);
 
-    RuleAttemptEvaluation::Matched(MatchedRuleApplication::AlwaysReturn(
-        MatchedAlwaysReturnApplication { rule, state_match },
-    ))
-}
-
-/// Evaluates a fresh once-only return rule against the current runtime state.
-pub(crate) fn attempt_once_return_rule<'program, 'state, 'once>(
-    rule: OnceReturnRuleView<'program>,
-    state: &'state State,
-) -> RuleAttemptEvaluation<'program, 'state, 'once> {
-    let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
-        StatePayloadMatch::Matched(state_match) => state_match,
-        StatePayloadMatch::Mismatched => {
-            return RuleAttemptEvaluation::Miss(EvaluatedRuleMiss::OnceReturnStateMismatch(rule));
-        }
-    };
-
-    RuleAttemptEvaluation::Matched(MatchedRuleApplication::OnceReturn(
-        MatchedOnceReturnApplication { rule, state_match },
-    ))
-}
+impl_rule_attempt_without_once_state_commit!(
+    /// Evaluates a fresh once-only terminal return rule against the current runtime state.
+    attempt_once_return_rule,
+    OnceReturnRuleView,
+    OnceReturnStateMismatch,
+    OnceReturn,
+    MatchedOnceReturnApplication
+);
 
 /// Compares a single parsed rule pattern with the current runtime state.
 pub(crate) fn match_rule_state<'state>(
