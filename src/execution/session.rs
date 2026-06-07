@@ -88,17 +88,6 @@ enum FinalRuleAttemptSession<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
     AfterMiss(AttemptSession<'program, E, A, AfterMissFinalRulePass<'program>>),
 }
 
-/// Advances one public rule-attempt session wrapper through its private kernel.
-macro_rules! step_rule_attempt_session {
-    ($session:expr, $session_type:ident, $advance:ident, $project:ident) => {{
-        let advance = match $session {
-            $session_type::First(session) => $advance(session),
-            $session_type::AfterMiss(session) => $advance(session),
-        };
-        $project(advance)
-    }};
-}
-
 /// Runs a borrowed program to completion.
 ///
 /// # Errors
@@ -366,12 +355,18 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
     /// Advances a continuing rule-attempt session by exactly one executable rule line.
     #[must_use]
     pub fn step(self) -> BorrowedContinuingRuleAttemptTransition<'program, E, A> {
-        step_rule_attempt_session!(
-            self.session,
-            ContinuingRuleAttemptSession,
-            advance_continuing_borrowed_rule_attempt,
-            project_continuing_rule_attempt_advance
-        )
+        match self.session {
+            ContinuingRuleAttemptSession::First(session) => {
+                project_continuing_rule_attempt_advance(advance_continuing_borrowed_rule_attempt(
+                    session,
+                ))
+            }
+            ContinuingRuleAttemptSession::AfterMiss(session) => {
+                project_continuing_rule_attempt_advance(advance_continuing_borrowed_rule_attempt(
+                    session,
+                ))
+            }
+        }
     }
 }
 
@@ -417,12 +412,14 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
     /// Advances a final rule-attempt session by exactly one executable rule line.
     #[must_use]
     pub fn step(self) -> BorrowedFinalRuleAttemptTransition<'program, E, A> {
-        step_rule_attempt_session!(
-            self.session,
-            FinalRuleAttemptSession,
-            advance_final_borrowed_rule_attempt,
-            project_final_rule_attempt_advance
-        )
+        match self.session {
+            FinalRuleAttemptSession::First(session) => {
+                project_final_rule_attempt_advance(advance_final_borrowed_rule_attempt(session))
+            }
+            FinalRuleAttemptSession::AfterMiss(session) => {
+                project_final_rule_attempt_advance(advance_final_borrowed_rule_attempt(session))
+            }
+        }
     }
 }
 

@@ -86,25 +86,9 @@ pub(crate) type AfterMissFinalRulePass<'program> =
 /// Sealed boundary for the four valid runtime rule-attempt pass shapes.
 pub(crate) trait RuntimeRulePassState<'program>: pass_state::Sealed {}
 
-/// Boundary for tails that can rebuild a pass after non-empty miss history.
-pub(crate) trait MissedRuntimeRuleTail<'program>: missed_tail::Sealed {
-    /// Appends any reset-time pending rules after `remaining` and returns the
-    /// spare attempted-rule buffer for the rebuilt first pass.
-    fn append_to_reset_remaining(
-        self,
-        remaining: &mut RuntimeRuleResetQueue<'program>,
-    ) -> RuntimeRuleResetQueue<'program>;
-}
-
 /// Private sealing traits for runtime pass states.
 pub(crate) mod pass_state {
     /// Marker implemented only by valid rule-attempt pass shapes.
-    pub(crate) trait Sealed {}
-}
-
-/// Private sealing traits for reset-capable missed-pass tails.
-pub(crate) mod missed_tail {
-    /// Marker implemented only by valid missed-pass tail shapes.
     pub(crate) trait Sealed {}
 }
 
@@ -157,12 +141,6 @@ struct RuntimeRulePassParts<'program> {
     remaining: VecDeque<RuntimeRuleCell<'program>>,
     /// Empty pre-reserved buffer for missed rules in the current pass.
     attempted: VecDeque<RuntimeRuleCell<'program>>,
-}
-
-/// Queue used only while rebuilding a rule-attempt pass after a rewrite.
-pub(crate) struct RuntimeRuleResetQueue<'program> {
-    /// Buffered runtime rule cells retained behind the reset boundary.
-    rules: VecDeque<RuntimeRuleCell<'program>>,
 }
 
 /// One executable rule classified by its run-local availability shape.
@@ -254,31 +232,6 @@ impl<'program> RuntimeRulePassState<'program> for FirstFinalRulePass<'program> {
 
 impl<'program> pass_state::Sealed for AfterMissFinalRulePass<'program> {}
 impl<'program> RuntimeRulePassState<'program> for AfterMissFinalRulePass<'program> {}
-
-impl<'program> missed_tail::Sealed for ContinuingRuleTail<'program> {}
-impl<'program> MissedRuntimeRuleTail<'program> for ContinuingRuleTail<'program> {
-    fn append_to_reset_remaining(
-        self,
-        output: &mut RuntimeRuleResetQueue<'program>,
-    ) -> RuntimeRuleResetQueue<'program> {
-        output.push_back(self.next);
-        let mut remaining = self.remaining;
-        while let Some(rule) = remaining.pop_front() {
-            output.push_back(rule);
-        }
-        RuntimeRuleResetQueue::from_rules(remaining)
-    }
-}
-
-impl<'program> missed_tail::Sealed for FinalRuleTail<'program> {}
-impl<'program> MissedRuntimeRuleTail<'program> for FinalRuleTail<'program> {
-    fn append_to_reset_remaining(
-        self,
-        _output: &mut RuntimeRuleResetQueue<'program>,
-    ) -> RuntimeRuleResetQueue<'program> {
-        RuntimeRuleResetQueue::from_rules(self.into_attempted_spare())
-    }
-}
 
 impl<'program> StartedRuntimeRuleTable<'program> {
     /// Moves out the typed started pass.
@@ -446,30 +399,6 @@ impl<'program>
     }
 }
 
-impl<'program, Tail> RuntimeRulePass<'program, MissedRuntimeRules<'program>, Tail>
-where
-    Tail: MissedRuntimeRuleTail<'program>,
-{
-    /// Resets a pass with non-empty miss history after a rewrite.
-    pub(crate) fn reset_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program> {
-        let Self {
-            current,
-            history,
-            tail,
-        } = self;
-        let (first, remaining) = history.into_parts();
-        let mut remaining = RuntimeRuleResetQueue::from_rules(remaining);
-        remaining.push_back(current);
-        let attempted = tail.append_to_reset_remaining(&mut remaining);
-        RuntimeRulePassParts {
-            current: first,
-            remaining: remaining.into_rules(),
-            attempted: attempted.into_rules(),
-        }
-        .into_first_pass_cursor()
-    }
-}
-
 impl<'program> RuntimeRulePass<'program, NoMissedRules<'program>, FinalRuleTail<'program>> {
     /// Resets a first-rule final pass after a rewrite.
     pub(crate) fn reset_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program> {
@@ -557,23 +486,6 @@ impl<'program> RuntimeRulePassParts<'program> {
                 },
             }),
         }
-    }
-}
-
-impl<'program> RuntimeRuleResetQueue<'program> {
-    /// Wraps a reset-time rule queue without exposing runtime cells outside this module.
-    fn from_rules(rules: VecDeque<RuntimeRuleCell<'program>>) -> Self {
-        Self { rules }
-    }
-
-    /// Appends one runtime rule to the reset queue.
-    fn push_back(&mut self, rule: RuntimeRuleCell<'program>) {
-        self.rules.push_back(rule);
-    }
-
-    /// Unwraps the rebuilt reset queue for pass construction.
-    fn into_rules(self) -> VecDeque<RuntimeRuleCell<'program>> {
-        self.rules
     }
 }
 
