@@ -1,17 +1,20 @@
-use crate::error::{RunError, RunFinishError, RunStartError, RunStepError, TracedRunError};
+use crate::error::{RunError, RunFinishError, RunStartError, TracedRunError};
 use crate::input::AdmittedRun;
-use crate::inspect::{
-    AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView,
-};
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
-use crate::program::{ExecutableProgram, ReturnOutput, ReturnOutputView, RunResult};
+use crate::program::{ExecutableProgram, RunResult};
 use crate::runtime::action::{AppliedRule, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptBudgetState, RuntimeBudgetState};
 use crate::runtime::once::{RuntimeRulePassState, RuntimeRuleScan, RuntimeRuleTable};
 use crate::runtime::rewrite::RewriteScratch;
 use crate::runtime::state::State;
 use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
+
+use super::session::BorrowedRunSession;
+use super::transition::{
+    BorrowedAlwaysReturnRun, BorrowedAlwaysRewriteStep, BorrowedFailedRun, BorrowedOnceReturnRun,
+    BorrowedOnceRewriteStep, BorrowedStableRun, BorrowedStepTransition,
+};
 
 /// Active mutable runtime state tied to one borrowed executable program.
 #[derive(Debug)]
@@ -112,14 +115,6 @@ impl<'program, E: ExecutionPolicy> ActiveRunCore<'program, E> {
     /// Borrows the current runtime state.
     pub(super) fn state(&self) -> RuntimeStateView<'_> {
         self.state.view()
-    }
-
-    /// Converts active runtime state into terminal runtime state.
-    fn into_terminal(self) -> TerminalRunCore {
-        TerminalRunCore {
-            steps: self.budget.completed_steps(),
-            state: self.state,
-        }
     }
 }
 
@@ -263,7 +258,7 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
     ///
     /// Failed preparation returns a terminal transition that preserves
     /// uncommitted runtime state.
-    pub(super) fn advance_run_step(self) -> RunAdvance<'program, E> {
+    pub(super) fn advance_run_step(self) -> BorrowedStepTransition<'program, E> {
         let Session { program, core } = self;
         let ActiveRunCore {
             mut state,
@@ -275,7 +270,7 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
         let matched = match runtime_rules.scan_for_match(&state) {
             RuntimeRuleScan::Matched(matched) => matched,
             RuntimeRuleScan::Unmatched => {
-                return RunAdvance::Stable(TerminalSession {
+                return BorrowedStepTransition::Stable(BorrowedStableRun {
                     program,
                     core: TerminalRunCore {
                         state,
@@ -288,16 +283,14 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
         let prepared = match prepare_matched_rule(&mut scratch, &mut budget, state_len, matched) {
             Ok(prepared) => prepared,
             Err(error) => {
-                return RunAdvance::Failed(RunFailure {
+                return BorrowedStepTransition::Failed(BorrowedFailedRun::new(
                     error,
-                    terminal: TerminalSession {
-                        program,
-                        core: TerminalRunCore {
-                            state,
-                            steps: budget.completed_steps(),
-                        },
+                    program,
+                    TerminalRunCore {
+                        state,
+                        steps: budget.completed_steps(),
                     },
-                });
+                ));
             }
         };
         let applied = prepared.commit(&mut state, &mut scratch);
@@ -307,7 +300,7 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
             budget,
             runtime_rules,
         };
-        run_advance_from_applied(program, core, applied)
+        committed_run_transition(program, core, applied)
     }
 
     /// Runs this session to completion.
@@ -320,13 +313,78 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
         let mut session = self;
         loop {
             match session.advance_run_step() {
-                RunAdvance::Rewritten(rewrite) => session = rewrite.into_continuation(),
-                RunAdvance::Returned(returned) => return Ok(returned.into_result()),
-                RunAdvance::Stable(terminal) => {
-                    return terminal.core.into_stable_result();
+                BorrowedStepTransition::AlwaysRewritten(rewrite) => {
+                    session = rewrite.into_session().session;
                 }
-                RunAdvance::Failed(failure) => return Err(failure.into_finish_error()),
+                BorrowedStepTransition::OnceRewritten(rewrite) => {
+                    session = rewrite.into_session().session;
+                }
+                BorrowedStepTransition::AlwaysReturned(returned) => {
+                    return Ok(returned.into_result());
+                }
+                BorrowedStepTransition::OnceReturned(returned) => return Ok(returned.into_result()),
+                BorrowedStepTransition::Stable(stable) => return stable.into_result(),
+                BorrowedStepTransition::Failed(failure) => {
+                    return Err(RunFinishError::from(failure.into_error()));
+                }
             }
+        }
+    }
+}
+
+/// Builds the canonical ordinary transition for one committed runtime action.
+fn committed_run_transition<'program, E>(
+    program: &'program ExecutableProgram,
+    core: ActiveRunCore<'program, E>,
+    applied: AppliedRule<'program>,
+) -> BorrowedStepTransition<'program, E>
+where
+    E: ExecutionPolicy,
+{
+    match applied {
+        AppliedRule::AlwaysRewritten(committed) => {
+            BorrowedStepTransition::AlwaysRewritten(BorrowedAlwaysRewriteStep {
+                step: committed.step(),
+                rule: committed.rule(),
+                session: BorrowedRunSession {
+                    session: Session { program, core },
+                },
+            })
+        }
+        AppliedRule::OnceRewritten(committed) => {
+            BorrowedStepTransition::OnceRewritten(BorrowedOnceRewriteStep {
+                step: committed.step(),
+                rule: committed.rule(),
+                session: BorrowedRunSession {
+                    session: Session { program, core },
+                },
+            })
+        }
+        AppliedRule::AlwaysReturned(committed) => {
+            let step = committed.step();
+            let rule = committed.rule();
+            let output_view = committed.output_view();
+            let output = committed.into_output();
+            BorrowedStepTransition::AlwaysReturned(BorrowedAlwaysReturnRun {
+                step,
+                rule,
+                output_view,
+                program,
+                output,
+            })
+        }
+        AppliedRule::OnceReturned(committed) => {
+            let step = committed.step();
+            let rule = committed.rule();
+            let output_view = committed.output_view();
+            let output = committed.into_output();
+            BorrowedStepTransition::OnceReturned(BorrowedOnceReturnRun {
+                step,
+                rule,
+                output_view,
+                program,
+                output,
+            })
         }
     }
 }
@@ -388,23 +446,52 @@ impl<'program, E: ExecutionPolicy> Session<'program, E> {
         let mut session = self;
         loop {
             match session.advance_run_step() {
-                RunAdvance::Rewritten(rewrite) => {
-                    session = rewrite.trace(&mut trace).map_err(TracedRunError::Trace)?;
+                BorrowedStepTransition::AlwaysRewritten(rewrite) => {
+                    trace(BorrowedTraceEvent::AlwaysRewritten {
+                        step: rewrite.step(),
+                        rule: rewrite.rule(),
+                        state: rewrite.state(),
+                    })
+                    .map_err(TracedRunError::Trace)?;
+                    session = rewrite.into_session().session;
                 }
-                RunAdvance::Returned(returned) => {
-                    return returned.trace(&mut trace).map_err(TracedRunError::Trace);
+                BorrowedStepTransition::OnceRewritten(rewrite) => {
+                    trace(BorrowedTraceEvent::OnceRewritten {
+                        step: rewrite.step(),
+                        rule: rewrite.rule(),
+                        state: rewrite.state(),
+                    })
+                    .map_err(TracedRunError::Trace)?;
+                    session = rewrite.into_session().session;
                 }
-                RunAdvance::Stable(terminal) => {
-                    return terminal
-                        .core
-                        .into_stable_result()
+                BorrowedStepTransition::AlwaysReturned(returned) => {
+                    trace(BorrowedTraceEvent::AlwaysReturned {
+                        step: returned.step,
+                        rule: returned.rule,
+                        output: returned.output_view,
+                    })
+                    .map_err(TracedRunError::Trace)?;
+                    return Ok(returned.into_result());
+                }
+                BorrowedStepTransition::OnceReturned(returned) => {
+                    trace(BorrowedTraceEvent::OnceReturned {
+                        step: returned.step,
+                        rule: returned.rule,
+                        output: returned.output_view,
+                    })
+                    .map_err(TracedRunError::Trace)?;
+                    return Ok(returned.into_result());
+                }
+                BorrowedStepTransition::Stable(stable) => {
+                    return stable
+                        .into_result()
                         .map_err(RunError::from)
                         .map_err(TracedRunError::Run);
                 }
-                RunAdvance::Failed(failure) => {
-                    return Err(TracedRunError::Run(RunError::from(
-                        failure.into_finish_error(),
-                    )));
+                BorrowedStepTransition::Failed(failure) => {
+                    return Err(TracedRunError::Run(RunError::from(RunFinishError::from(
+                        failure.into_error(),
+                    ))));
                 }
             }
         }

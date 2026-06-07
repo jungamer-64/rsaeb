@@ -4,7 +4,7 @@ use crate::inspect::{
 };
 use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
-use crate::program::{ExecutableProgram, ReturnOutput, RunResult};
+use crate::program::{ExecutableProgram, ReturnOutput, ReturnOutputView, RunResult};
 use crate::trace::RuntimeStateView;
 
 use super::engine::TerminalRunCore;
@@ -63,6 +63,8 @@ pub struct BorrowedAlwaysReturnRun<'program> {
     pub(super) step: StepCount,
     /// Borrowed return rule committed by this transition.
     pub(super) rule: AlwaysReturnRuleView<'program>,
+    /// Borrowed return output retained for trace event emission.
+    pub(super) output_view: ReturnOutputView<'program>,
     /// Parsed program borrowed by the terminal state.
     pub(super) program: &'program ExecutableProgram,
     /// Materialized return output produced by the committed return rule.
@@ -75,6 +77,8 @@ pub struct BorrowedOnceReturnRun<'program> {
     pub(super) step: StepCount,
     /// Borrowed return rule committed by this transition.
     pub(super) rule: OnceReturnRuleView<'program>,
+    /// Borrowed return output retained for trace event emission.
+    pub(super) output_view: ReturnOutputView<'program>,
     /// Parsed program borrowed by the terminal state.
     pub(super) program: &'program ExecutableProgram,
     /// Materialized return output produced by the committed return rule.
