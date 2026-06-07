@@ -12,9 +12,12 @@ use crate::runtime::once::{
 use crate::trace::{BorrowedTraceEvent, RuntimeStateView};
 
 use super::advance::{
-    ContinuingRuleAttemptAdvance, ContinuingRuleAttemptMiss, FinalRuleAttemptAdvance,
-    FinalRuleAttemptStable, RuleAttemptFailure, RuleAttemptReturn, RuleAttemptRewrite,
-    advance_continuing_borrowed_rule_attempt, advance_final_borrowed_rule_attempt,
+    ContinuingRuleAttemptAdvance, ContinuingRuleAttemptAlwaysReturn,
+    ContinuingRuleAttemptAlwaysRewrite, ContinuingRuleAttemptMiss, ContinuingRuleAttemptOnceReturn,
+    ContinuingRuleAttemptOnceRewrite, FinalRuleAttemptAdvance, FinalRuleAttemptAlwaysReturn,
+    FinalRuleAttemptAlwaysRewrite, FinalRuleAttemptOnceReturn, FinalRuleAttemptOnceRewrite,
+    FinalRuleAttemptStable, RuleAttemptFailure, advance_continuing_borrowed_rule_attempt,
+    advance_final_borrowed_rule_attempt,
 };
 use super::engine::{
     AttemptRunCoreParts, AttemptSession, RunAdvance, RunReturn, RunRewrite, Session,
@@ -433,11 +436,17 @@ where
 {
     match advance {
         ContinuingRuleAttemptAdvance::Miss(missed) => project_continuing_rule_attempt_miss(missed),
-        ContinuingRuleAttemptAdvance::Rewritten(rewritten) => {
-            project_continuing_rule_attempt_rewrite(rewritten)
+        ContinuingRuleAttemptAdvance::AlwaysRewritten(rewritten) => {
+            project_continuing_rule_attempt_always_rewrite(rewritten)
         }
-        ContinuingRuleAttemptAdvance::Returned(returned) => {
-            project_continuing_rule_attempt_return(returned)
+        ContinuingRuleAttemptAdvance::OnceRewritten(rewritten) => {
+            project_continuing_rule_attempt_once_rewrite(rewritten)
+        }
+        ContinuingRuleAttemptAdvance::AlwaysReturned(returned) => {
+            project_continuing_rule_attempt_always_return(returned)
+        }
+        ContinuingRuleAttemptAdvance::OnceReturned(returned) => {
+            project_continuing_rule_attempt_once_return(returned)
         }
         ContinuingRuleAttemptAdvance::Failed(failure) => {
             BorrowedContinuingRuleAttemptTransition::Failed(project_rule_attempt_failure(failure))
@@ -457,10 +466,18 @@ where
         FinalRuleAttemptAdvance::StableAfterMiss(stable) => {
             project_final_rule_attempt_stable(stable)
         }
-        FinalRuleAttemptAdvance::Rewritten(rewritten) => {
-            project_final_rule_attempt_rewrite(rewritten)
+        FinalRuleAttemptAdvance::AlwaysRewritten(rewritten) => {
+            project_final_rule_attempt_always_rewrite(rewritten)
         }
-        FinalRuleAttemptAdvance::Returned(returned) => project_final_rule_attempt_return(returned),
+        FinalRuleAttemptAdvance::OnceRewritten(rewritten) => {
+            project_final_rule_attempt_once_rewrite(rewritten)
+        }
+        FinalRuleAttemptAdvance::AlwaysReturned(returned) => {
+            project_final_rule_attempt_always_return(returned)
+        }
+        FinalRuleAttemptAdvance::OnceReturned(returned) => {
+            project_final_rule_attempt_once_return(returned)
+        }
         FinalRuleAttemptAdvance::Failed(failure) => {
             BorrowedFinalRuleAttemptTransition::Failed(project_rule_attempt_failure(failure))
         }
@@ -595,155 +612,160 @@ where
     }
 }
 
-/// Projects a continuing committed rewrite into a public resumable transition.
-fn project_continuing_rule_attempt_rewrite<'program, E, A>(
-    rewritten: RuleAttemptRewrite<'program, E, A>,
+/// Projects a continuing-pass reusable rewrite into a public resumable transition.
+fn project_continuing_rule_attempt_always_rewrite<'program, E, A>(
+    rewritten: ContinuingRuleAttemptAlwaysRewrite<'program, E, A>,
 ) -> BorrowedContinuingRuleAttemptTransition<'program, E, A>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
-    match rewritten {
-        RuleAttemptRewrite::Always {
-            program,
-            attempt,
-            step,
-            rule,
-            parts,
-            runtime_rules,
-        } => {
-            let cursor = BorrowedRuleAttemptCursor::from_first_parts(program, parts, runtime_rules);
-            BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(
-                BorrowedRuleAttemptAlwaysRewriteStep {
-                    attempt,
-                    step,
-                    rule,
-                    cursor,
-                },
-            )
-        }
-        RuleAttemptRewrite::Once {
-            program,
-            attempt,
-            step,
-            rule,
-            parts,
-            runtime_rules,
-        } => {
-            let cursor = BorrowedRuleAttemptCursor::from_first_parts(program, parts, runtime_rules);
-            BorrowedContinuingRuleAttemptTransition::OnceRewritten(
-                BorrowedRuleAttemptOnceRewriteStep {
-                    attempt,
-                    step,
-                    rule,
-                    cursor,
-                },
-            )
-        }
-    }
+    let ContinuingRuleAttemptAlwaysRewrite {
+        program,
+        attempt,
+        step,
+        rule,
+        parts,
+        runtime_rules,
+    } = rewritten;
+    let cursor = BorrowedRuleAttemptCursor::from_first_parts(program, parts, runtime_rules);
+    BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(BorrowedRuleAttemptAlwaysRewriteStep {
+        attempt,
+        step,
+        rule,
+        cursor,
+    })
 }
 
-/// Projects a final-pass committed rewrite into a public resumable transition.
-fn project_final_rule_attempt_rewrite<'program, E, A>(
-    rewritten: RuleAttemptRewrite<'program, E, A>,
+/// Projects a continuing-pass once-only rewrite into a public resumable transition.
+fn project_continuing_rule_attempt_once_rewrite<'program, E, A>(
+    rewritten: ContinuingRuleAttemptOnceRewrite<'program, E, A>,
+) -> BorrowedContinuingRuleAttemptTransition<'program, E, A>
+where
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+{
+    let ContinuingRuleAttemptOnceRewrite {
+        program,
+        attempt,
+        step,
+        rule,
+        parts,
+        runtime_rules,
+    } = rewritten;
+    let cursor = BorrowedRuleAttemptCursor::from_first_parts(program, parts, runtime_rules);
+    BorrowedContinuingRuleAttemptTransition::OnceRewritten(BorrowedRuleAttemptOnceRewriteStep {
+        attempt,
+        step,
+        rule,
+        cursor,
+    })
+}
+
+/// Projects a final-pass reusable rewrite into a public resumable transition.
+fn project_final_rule_attempt_always_rewrite<'program, E, A>(
+    rewritten: FinalRuleAttemptAlwaysRewrite<'program, E, A>,
 ) -> BorrowedFinalRuleAttemptTransition<'program, E, A>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
 {
-    match rewritten {
-        RuleAttemptRewrite::Always {
-            program,
-            attempt,
-            step,
-            rule,
-            parts,
-            runtime_rules,
-        } => {
-            let cursor = BorrowedRuleAttemptCursor::from_first_parts(program, parts, runtime_rules);
-            BorrowedFinalRuleAttemptTransition::AlwaysRewritten(
-                BorrowedRuleAttemptAlwaysRewriteStep {
-                    attempt,
-                    step,
-                    rule,
-                    cursor,
-                },
-            )
-        }
-        RuleAttemptRewrite::Once {
-            program,
-            attempt,
-            step,
-            rule,
-            parts,
-            runtime_rules,
-        } => {
-            let cursor = BorrowedRuleAttemptCursor::from_first_parts(program, parts, runtime_rules);
-            BorrowedFinalRuleAttemptTransition::OnceRewritten(BorrowedRuleAttemptOnceRewriteStep {
-                attempt,
-                step,
-                rule,
-                cursor,
-            })
-        }
-    }
+    let FinalRuleAttemptAlwaysRewrite {
+        program,
+        attempt,
+        step,
+        rule,
+        parts,
+        runtime_rules,
+    } = rewritten;
+    let cursor = BorrowedRuleAttemptCursor::from_first_parts(program, parts, runtime_rules);
+    BorrowedFinalRuleAttemptTransition::AlwaysRewritten(BorrowedRuleAttemptAlwaysRewriteStep {
+        attempt,
+        step,
+        rule,
+        cursor,
+    })
 }
 
-/// Projects exact return payloads into the selected public rule-attempt transition.
-macro_rules! project_rule_attempt_return {
-    ($returned:expr, $transition:ident) => {
-        match $returned {
-            RuleAttemptReturn::Always {
+/// Projects a final-pass once-only rewrite into a public resumable transition.
+fn project_final_rule_attempt_once_rewrite<'program, E, A>(
+    rewritten: FinalRuleAttemptOnceRewrite<'program, E, A>,
+) -> BorrowedFinalRuleAttemptTransition<'program, E, A>
+where
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+{
+    let FinalRuleAttemptOnceRewrite {
+        program,
+        attempt,
+        step,
+        rule,
+        parts,
+        runtime_rules,
+    } = rewritten;
+    let cursor = BorrowedRuleAttemptCursor::from_first_parts(program, parts, runtime_rules);
+    BorrowedFinalRuleAttemptTransition::OnceRewritten(BorrowedRuleAttemptOnceRewriteStep {
+        attempt,
+        step,
+        rule,
+        cursor,
+    })
+}
+
+/// Declares one destination-specific rule-attempt return projection function.
+macro_rules! impl_rule_attempt_return_projection {
+    ($function:ident, $input:ident, $transition:ident, $variant:ident, $run:ident) => {
+        fn $function<'program, E, A>(returned: $input<'program>) -> $transition<'program, E, A>
+        where
+            E: ExecutionPolicy,
+            A: RuleAttemptPolicy,
+        {
+            let $input {
                 program,
                 attempt,
                 step,
                 rule,
                 output,
-            } => $transition::AlwaysReturned(BorrowedRuleAttemptAlwaysReturnRun {
+            } = returned;
+            $transition::$variant($run {
                 attempt,
                 step,
                 rule,
                 program,
                 output,
-            }),
-            RuleAttemptReturn::Once {
-                program,
-                attempt,
-                step,
-                rule,
-                output,
-            } => $transition::OnceReturned(BorrowedRuleAttemptOnceReturnRun {
-                attempt,
-                step,
-                rule,
-                program,
-                output,
-            }),
+            })
         }
     };
 }
 
-/// Projects a continuing-pass return into the public terminal transition.
-fn project_continuing_rule_attempt_return<'program, E, A>(
-    returned: RuleAttemptReturn<'program>,
-) -> BorrowedContinuingRuleAttemptTransition<'program, E, A>
-where
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-{
-    project_rule_attempt_return!(returned, BorrowedContinuingRuleAttemptTransition)
-}
-
-/// Projects a final-pass return into the public terminal transition.
-fn project_final_rule_attempt_return<'program, E, A>(
-    returned: RuleAttemptReturn<'program>,
-) -> BorrowedFinalRuleAttemptTransition<'program, E, A>
-where
-    E: ExecutionPolicy,
-    A: RuleAttemptPolicy,
-{
-    project_rule_attempt_return!(returned, BorrowedFinalRuleAttemptTransition)
-}
+impl_rule_attempt_return_projection!(
+    project_continuing_rule_attempt_always_return,
+    ContinuingRuleAttemptAlwaysReturn,
+    BorrowedContinuingRuleAttemptTransition,
+    AlwaysReturned,
+    BorrowedRuleAttemptAlwaysReturnRun
+);
+impl_rule_attempt_return_projection!(
+    project_continuing_rule_attempt_once_return,
+    ContinuingRuleAttemptOnceReturn,
+    BorrowedContinuingRuleAttemptTransition,
+    OnceReturned,
+    BorrowedRuleAttemptOnceReturnRun
+);
+impl_rule_attempt_return_projection!(
+    project_final_rule_attempt_always_return,
+    FinalRuleAttemptAlwaysReturn,
+    BorrowedFinalRuleAttemptTransition,
+    AlwaysReturned,
+    BorrowedRuleAttemptAlwaysReturnRun
+);
+impl_rule_attempt_return_projection!(
+    project_final_rule_attempt_once_return,
+    FinalRuleAttemptOnceReturn,
+    BorrowedFinalRuleAttemptTransition,
+    OnceReturned,
+    BorrowedRuleAttemptOnceReturnRun
+);
 
 /// Projects a private rule-attempt failure into the public failed-run value.
 fn project_rule_attempt_failure(

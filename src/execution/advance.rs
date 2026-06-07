@@ -3,9 +3,9 @@ use crate::error::RuleAttemptStepError;
 use crate::inspect::{
     AlwaysReturnRuleView, AlwaysRewriteRuleView, OnceReturnRuleView, OnceRewriteRuleView,
 };
-use crate::limits::RuleAttemptCount;
+use crate::limits::{RuleAttemptCount, StepCount};
 use crate::policy::{ExecutionPolicy, RuleAttemptPolicy};
-use crate::program::ExecutableProgram;
+use crate::program::{ExecutableProgram, ReturnOutput};
 use crate::runtime::action::{AppliedRule, PreparedRuleStep, prepare_matched_rule};
 use crate::runtime::budget::{RuleAttemptReservation, RuntimeBudgetState};
 use crate::runtime::matcher::{EvaluatedRuleMiss, MatchedRuleApplication, RuleAttemptEvaluation};
@@ -24,10 +24,14 @@ use super::engine::{AttemptRunCore, AttemptRunCoreParts, AttemptSession, Termina
 pub(super) enum ContinuingRuleAttemptAdvance<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     /// A non-final rule did not apply and the pass can resume at a typed cursor.
     Miss(ContinuingRuleAttemptMiss<'program, E, A>),
-    /// A rewrite committed and rule-attempt execution can resume from the first rule.
-    Rewritten(RuleAttemptRewrite<'program, E, A>),
-    /// A return committed and the run is terminal.
-    Returned(RuleAttemptReturn<'program>),
+    /// A reusable rewrite committed and rule-attempt execution can resume from the first rule.
+    AlwaysRewritten(ContinuingRuleAttemptAlwaysRewrite<'program, E, A>),
+    /// A once-only rewrite committed and rule-attempt execution can resume from the first rule.
+    OnceRewritten(ContinuingRuleAttemptOnceRewrite<'program, E, A>),
+    /// A reusable return committed and the run is terminal.
+    AlwaysReturned(ContinuingRuleAttemptAlwaysReturn<'program>),
+    /// A once-only return committed and the run is terminal.
+    OnceReturned(ContinuingRuleAttemptOnceReturn<'program>),
     /// The attempted rule could not complete.
     Failed(RuleAttemptFailure<'program>),
 }
@@ -39,10 +43,14 @@ pub(super) enum ContinuingRuleAttemptAdvance<'program, E: ExecutionPolicy, A: Ru
 pub(super) enum FinalRuleAttemptAdvance<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
     /// The final rule did not apply and the pass stabilized.
     StableAfterMiss(FinalRuleAttemptStable<'program>),
-    /// A rewrite committed and rule-attempt execution can resume from the first rule.
-    Rewritten(RuleAttemptRewrite<'program, E, A>),
-    /// A return committed and the run is terminal.
-    Returned(RuleAttemptReturn<'program>),
+    /// A reusable rewrite committed and rule-attempt execution can resume from the first rule.
+    AlwaysRewritten(FinalRuleAttemptAlwaysRewrite<'program, E, A>),
+    /// A once-only rewrite committed and rule-attempt execution can resume from the first rule.
+    OnceRewritten(FinalRuleAttemptOnceRewrite<'program, E, A>),
+    /// A reusable return committed and the run is terminal.
+    AlwaysReturned(FinalRuleAttemptAlwaysReturn<'program>),
+    /// A once-only return committed and the run is terminal.
+    OnceReturned(FinalRuleAttemptOnceReturn<'program>),
     /// The attempted rule could not complete.
     Failed(RuleAttemptFailure<'program>),
 }
@@ -67,6 +75,135 @@ pub(super) struct FinalRuleAttemptStable<'program> {
     pub(super) miss: EvaluatedRuleMiss<'program>,
     /// Terminal state after the final rule line is consumed.
     pub(super) terminal: TerminalAttemptSession<'program>,
+}
+
+/// Continuing-pass reusable rewrite before public transition projection.
+pub(super) struct ContinuingRuleAttemptAlwaysRewrite<
+    'program,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+> {
+    /// Parsed program used by the cursor projection.
+    pub(super) program: &'program ExecutableProgram,
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Step number committed by this transition.
+    pub(super) step: StepCount,
+    /// Exact committed rule witness.
+    pub(super) rule: AlwaysRewriteRuleView<'program>,
+    /// Runtime state split from the selected pass.
+    pub(super) parts: AttemptRunCoreParts<E, A>,
+    /// Reset pass after the committed rewrite.
+    pub(super) runtime_rules: FirstRuntimeRulePassCursor<'program>,
+}
+
+/// Continuing-pass once-only rewrite before public transition projection.
+pub(super) struct ContinuingRuleAttemptOnceRewrite<
+    'program,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+> {
+    /// Parsed program used by the cursor projection.
+    pub(super) program: &'program ExecutableProgram,
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Step number committed by this transition.
+    pub(super) step: StepCount,
+    /// Exact committed rule witness.
+    pub(super) rule: OnceRewriteRuleView<'program>,
+    /// Runtime state split from the selected pass.
+    pub(super) parts: AttemptRunCoreParts<E, A>,
+    /// Reset pass after the committed rewrite.
+    pub(super) runtime_rules: FirstRuntimeRulePassCursor<'program>,
+}
+
+/// Final-pass reusable rewrite before public transition projection.
+pub(super) struct FinalRuleAttemptAlwaysRewrite<'program, E: ExecutionPolicy, A: RuleAttemptPolicy>
+{
+    /// Parsed program used by the cursor projection.
+    pub(super) program: &'program ExecutableProgram,
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Step number committed by this transition.
+    pub(super) step: StepCount,
+    /// Exact committed rule witness.
+    pub(super) rule: AlwaysRewriteRuleView<'program>,
+    /// Runtime state split from the selected pass.
+    pub(super) parts: AttemptRunCoreParts<E, A>,
+    /// Reset pass after the committed rewrite.
+    pub(super) runtime_rules: FirstRuntimeRulePassCursor<'program>,
+}
+
+/// Final-pass once-only rewrite before public transition projection.
+pub(super) struct FinalRuleAttemptOnceRewrite<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
+    /// Parsed program used by the cursor projection.
+    pub(super) program: &'program ExecutableProgram,
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Step number committed by this transition.
+    pub(super) step: StepCount,
+    /// Exact committed rule witness.
+    pub(super) rule: OnceRewriteRuleView<'program>,
+    /// Runtime state split from the selected pass.
+    pub(super) parts: AttemptRunCoreParts<E, A>,
+    /// Reset pass after the committed rewrite.
+    pub(super) runtime_rules: FirstRuntimeRulePassCursor<'program>,
+}
+
+/// Continuing-pass reusable return before public transition projection.
+pub(super) struct ContinuingRuleAttemptAlwaysReturn<'program> {
+    /// Parsed program used by the terminal projection.
+    pub(super) program: &'program ExecutableProgram,
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Step number that executed the return action.
+    pub(super) step: StepCount,
+    /// Exact committed rule witness.
+    pub(super) rule: AlwaysReturnRuleView<'program>,
+    /// Materialized return output.
+    pub(super) output: ReturnOutput,
+}
+
+/// Continuing-pass once-only return before public transition projection.
+pub(super) struct ContinuingRuleAttemptOnceReturn<'program> {
+    /// Parsed program used by the terminal projection.
+    pub(super) program: &'program ExecutableProgram,
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Step number that executed the return action.
+    pub(super) step: StepCount,
+    /// Exact committed rule witness.
+    pub(super) rule: OnceReturnRuleView<'program>,
+    /// Materialized return output.
+    pub(super) output: ReturnOutput,
+}
+
+/// Final-pass reusable return before public transition projection.
+pub(super) struct FinalRuleAttemptAlwaysReturn<'program> {
+    /// Parsed program used by the terminal projection.
+    pub(super) program: &'program ExecutableProgram,
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Step number that executed the return action.
+    pub(super) step: StepCount,
+    /// Exact committed rule witness.
+    pub(super) rule: AlwaysReturnRuleView<'program>,
+    /// Materialized return output.
+    pub(super) output: ReturnOutput,
+}
+
+/// Final-pass once-only return before public transition projection.
+pub(super) struct FinalRuleAttemptOnceReturn<'program> {
+    /// Parsed program used by the terminal projection.
+    pub(super) program: &'program ExecutableProgram,
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Step number that executed the return action.
+    pub(super) step: StepCount,
+    /// Exact committed rule witness.
+    pub(super) rule: OnceReturnRuleView<'program>,
+    /// Materialized return output.
+    pub(super) output: ReturnOutput,
 }
 
 /// Rule-attempt failure before public transition projection.
@@ -311,7 +448,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let (parts, runtime_rules) = core.into_parts();
-            ContinuingRuleAttemptAdvance::Rewritten(RuleAttemptRewrite::Always {
+            ContinuingRuleAttemptAdvance::AlwaysRewritten(ContinuingRuleAttemptAlwaysRewrite {
                 program,
                 attempt,
                 step,
@@ -324,7 +461,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let (parts, runtime_rules) = core.into_parts();
-            ContinuingRuleAttemptAdvance::Rewritten(RuleAttemptRewrite::Once {
+            ContinuingRuleAttemptAdvance::OnceRewritten(ContinuingRuleAttemptOnceRewrite {
                 program,
                 attempt,
                 step,
@@ -337,7 +474,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let output = committed.into_output();
-            ContinuingRuleAttemptAdvance::Returned(RuleAttemptReturn::Always {
+            ContinuingRuleAttemptAdvance::AlwaysReturned(ContinuingRuleAttemptAlwaysReturn {
                 program,
                 attempt,
                 step,
@@ -349,7 +486,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let output = committed.into_output();
-            ContinuingRuleAttemptAdvance::Returned(RuleAttemptReturn::Once {
+            ContinuingRuleAttemptAdvance::OnceReturned(ContinuingRuleAttemptOnceReturn {
                 program,
                 attempt,
                 step,
@@ -377,7 +514,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let (parts, runtime_rules) = core.into_parts();
-            FinalRuleAttemptAdvance::Rewritten(RuleAttemptRewrite::Always {
+            FinalRuleAttemptAdvance::AlwaysRewritten(FinalRuleAttemptAlwaysRewrite {
                 program,
                 attempt,
                 step,
@@ -390,7 +527,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let (parts, runtime_rules) = core.into_parts();
-            FinalRuleAttemptAdvance::Rewritten(RuleAttemptRewrite::Once {
+            FinalRuleAttemptAdvance::OnceRewritten(FinalRuleAttemptOnceRewrite {
                 program,
                 attempt,
                 step,
@@ -403,7 +540,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let output = committed.into_output();
-            FinalRuleAttemptAdvance::Returned(RuleAttemptReturn::Always {
+            FinalRuleAttemptAdvance::AlwaysReturned(FinalRuleAttemptAlwaysReturn {
                 program,
                 attempt,
                 step,
@@ -415,7 +552,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let output = committed.into_output();
-            FinalRuleAttemptAdvance::Returned(RuleAttemptReturn::Once {
+            FinalRuleAttemptAdvance::OnceReturned(FinalRuleAttemptOnceReturn {
                 program,
                 attempt,
                 step,
