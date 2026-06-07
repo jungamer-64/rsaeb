@@ -1,4 +1,4 @@
-use super::once::{OnceReturnCommitPermit, OnceRewriteCommitPermit};
+use super::once::OnceRewriteCommitPermit;
 use super::state::{State, StateMatch, StatePayloadMatch};
 use crate::bytes::Payload;
 use crate::inspect::{
@@ -40,7 +40,7 @@ pub(crate) enum MatchedRuleApplication<'program, 'state, 'once> {
     /// Matched reusable terminal return rule.
     AlwaysReturn(MatchedAlwaysReturnApplication<'program, 'state>),
     /// Matched once-only terminal return rule.
-    OnceReturn(MatchedOnceReturnApplication<'program, 'state, 'once>),
+    OnceReturn(MatchedOnceReturnApplication<'program, 'state>),
 }
 
 /// Matched reusable non-terminal rewrite rule.
@@ -74,13 +74,11 @@ pub(crate) struct MatchedAlwaysReturnApplication<'program, 'state> {
 
 /// Matched once-only terminal return rule.
 #[derive(Debug)]
-pub(crate) struct MatchedOnceReturnApplication<'program, 'state, 'once> {
+pub(crate) struct MatchedOnceReturnApplication<'program, 'state> {
     /// Parsed rule selected by the matcher.
     rule: OnceReturnRuleView<'program>,
     /// Runtime-state range matched by the rule left side.
     state_match: StateMatch<'state>,
-    /// Once-state side effect to apply only after successful return materialization.
-    commit: OnceReturnCommitPermit<'program, 'once>,
 }
 
 impl<'program, 'state> MatchedAlwaysRewriteApplication<'program, 'state> {
@@ -126,7 +124,7 @@ impl<'program, 'state> MatchedAlwaysReturnApplication<'program, 'state> {
     }
 }
 
-impl<'program, 'state, 'once> MatchedOnceReturnApplication<'program, 'state, 'once> {
+impl<'program, 'state> MatchedOnceReturnApplication<'program, 'state> {
     /// Splits matched once-only return data into preparation parts.
     pub(crate) fn into_parts(
         self,
@@ -134,10 +132,9 @@ impl<'program, 'state, 'once> MatchedOnceReturnApplication<'program, 'state, 'on
         OnceReturnRuleView<'program>,
         StateMatch<'state>,
         &'program Payload,
-        OnceReturnCommitPermit<'program, 'once>,
     ) {
         let output = self.rule.into_rule().output();
-        (self.rule, self.state_match, output, self.commit)
+        (self.rule, self.state_match, output)
     }
 }
 
@@ -202,7 +199,6 @@ pub(crate) fn attempt_always_return_rule<'program, 'state, 'once>(
 /// Evaluates a fresh once-only return rule against the current runtime state.
 pub(crate) fn attempt_once_return_rule<'program, 'state, 'once>(
     rule: OnceReturnRuleView<'program>,
-    commit: OnceReturnCommitPermit<'program, 'once>,
     state: &'state State,
 ) -> RuleAttemptEvaluation<'program, 'state, 'once> {
     let state_match = match match_rule_state(rule.into_rule().pattern(), state) {
@@ -216,7 +212,6 @@ pub(crate) fn attempt_once_return_rule<'program, 'state, 'once>(
         MatchedOnceReturnApplication {
             rule,
             state_match,
-            commit,
         },
     ))
 }

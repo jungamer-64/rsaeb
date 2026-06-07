@@ -1,5 +1,4 @@
 use alloc::{collections::VecDeque, vec::Vec};
-use core::marker::PhantomData;
 
 use crate::allocation::{
     AllocationContext, AllocationError, RequestedCapacity, try_push, try_reserve_total_exact,
@@ -290,22 +289,9 @@ pub(crate) struct OnceRewriteCommitPermit<'program, 'once> {
     linearity: OnceRewriteCommitLinearity,
 }
 
-/// Linear commit permit for a matched fresh once-only return rule.
-#[derive(Debug)]
-pub(crate) struct OnceReturnCommitPermit<'program, 'once> {
-    /// Fresh once-return cell borrowed until the terminal commit boundary.
-    cell: PhantomData<&'once mut RuntimeRuleCell<'program>>,
-    /// Non-copy token that keeps this permit linear.
-    linearity: OnceReturnCommitLinearity,
-}
-
 /// Non-copy marker carried by once-rewrite commit permits.
 #[derive(Debug)]
 struct OnceRewriteCommitLinearity;
-
-/// Non-copy marker carried by once-return commit permits.
-#[derive(Debug)]
-struct OnceReturnCommitLinearity;
 
 impl<'program> pass_state::Sealed for FirstContinuingRulePass<'program> {}
 impl<'program> RuntimeRulePassState<'program> for FirstContinuingRulePass<'program> {}
@@ -835,8 +821,7 @@ impl<'program> RuntimeRuleCell<'program> {
             Self::AlwaysReturn(cell) => attempt_always_return_rule(cell.rule, state),
             Self::FreshOnceReturn(cell) => {
                 let rule = cell.rule;
-                let commit = OnceReturnCommitPermit::new(self);
-                attempt_once_return_rule(rule, commit, state)
+                attempt_once_return_rule(rule, state)
             }
         }
     }
@@ -891,33 +876,8 @@ impl<'program, 'once> OnceRewriteCommitPermit<'program, 'once> {
     }
 }
 
-impl<'program, 'once> OnceReturnCommitPermit<'program, 'once> {
-    /// Creates the commit permit for a fresh once-only return cell.
-    fn new(_cell: &'once mut RuntimeRuleCell<'program>) -> Self {
-        Self {
-            cell: PhantomData,
-            linearity: OnceReturnCommitLinearity::new(),
-        }
-    }
-
-    /// Consumes this permit at the terminal once-return commit boundary.
-    pub(crate) fn commit(self) {
-        let Self {
-            cell: _cell,
-            linearity: _linearity,
-        } = self;
-    }
-}
-
 impl OnceRewriteCommitLinearity {
     /// Creates the non-copy marker for one once-rewrite permit.
-    const fn new() -> Self {
-        Self
-    }
-}
-
-impl OnceReturnCommitLinearity {
-    /// Creates the non-copy marker for one once-return permit.
     const fn new() -> Self {
         Self
     }
