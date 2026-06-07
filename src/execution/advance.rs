@@ -10,12 +10,10 @@ use crate::runtime::action::{AppliedRule, PreparedRuleStep, prepare_matched_rule
 use crate::runtime::budget::{RuleAttemptReservation, RuntimeBudgetState};
 use crate::runtime::matcher::{EvaluatedRuleMiss, MatchedRuleApplication, RuleAttemptEvaluation};
 use crate::runtime::once::{
-    AfterMissContinuingRulePass, AfterMissFinalRulePass, FirstContinuingRulePass,
-    FirstFinalRulePass, FirstRuntimeRulePassCursor, MissedRuntimeRulePassCursor,
-    RuntimeRulePassState,
+    ContinuingRuleAttemptPass, FinalRuleAttemptPass, FirstRuntimeRulePassCursor,
+    MissedRuntimeRulePassCursor,
 };
 use crate::runtime::rewrite::RewriteScratch;
-use crate::runtime::state::State;
 
 use super::engine::{AttemptRunCore, AttemptRunCoreParts, AttemptSession, TerminalAttemptSession};
 
