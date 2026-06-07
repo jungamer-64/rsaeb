@@ -22,6 +22,24 @@ use super::engine::{AttemptRunCore, AttemptRunCoreParts, AttemptSession, Termina
 /// Continuing passes can miss and resume, but they cannot become stable at the
 /// miss boundary because the current target has a successor.
 pub(super) enum ContinuingRuleAttemptAdvance<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
+    /// A reusable rewrite rule was available but did not match and the pass can resume.
+    AlwaysRewriteStateMismatch(RuleAttemptAlwaysRewriteMissContinuation<'program, E, A>),
+    /// A once-only rewrite rule was available but did not match and the pass can resume.
+    OnceRewriteStateMismatch(RuleAttemptOnceRewriteMissContinuation<'program, E, A>),
+    /// A reusable return rule was available but did not match and the pass can resume.
+    AlwaysReturnStateMismatch(RuleAttemptAlwaysReturnMissContinuation<'program, E, A>),
+    /// A once-only return rule was available but did not match and the pass can resume.
+    OnceReturnStateMismatch(RuleAttemptOnceReturnMissContinuation<'program, E, A>),
+    /// A consumed once-only rewrite rule was attempted and the pass can resume.
+    OnceRewriteConsumed(RuleAttemptOnceRewriteConsumedContinuation<'program, E, A>),
+    /// A reusable rewrite committed and rule-attempt execution can resume from the first rule.
+    AlwaysRewritten(RuleAttemptAlwaysRewriteContinuation<'program, E, A>),
+    /// A once-only rewrite committed and rule-attempt execution can resume from the first rule.
+    OnceRewritten(RuleAttemptOnceRewriteContinuation<'program, E, A>),
+    /// A reusable return committed and the run is terminal.
+    AlwaysReturned(RuleAttemptAlwaysReturnTerminal<'program>),
+    /// A once-only return committed and the run is terminal.
+    OnceReturned(RuleAttemptOnceReturnTerminal<'program>),
     /// The attempted rule could not complete.
     Failed(RuleAttemptFailure<'program>),
 }
@@ -31,8 +49,226 @@ pub(super) enum ContinuingRuleAttemptAdvance<'program, E: ExecutionPolicy, A: Ru
 /// Final passes can stabilize after a miss, but they cannot return a
 /// missed-rule continuation because the current target exhausts the pass.
 pub(super) enum FinalRuleAttemptAdvance<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> {
+    /// The pass ended after a reusable rewrite rule did not match.
+    StableAfterAlwaysRewriteStateMismatch(
+        RuleAttemptStableAfterAlwaysRewriteStateMismatch<'program>,
+    ),
+    /// The pass ended after a once-only rewrite rule did not match.
+    StableAfterOnceRewriteStateMismatch(RuleAttemptStableAfterOnceRewriteStateMismatch<'program>),
+    /// The pass ended after a reusable return rule did not match.
+    StableAfterAlwaysReturnStateMismatch(RuleAttemptStableAfterAlwaysReturnStateMismatch<'program>),
+    /// The pass ended after a once-only return rule did not match.
+    StableAfterOnceReturnStateMismatch(RuleAttemptStableAfterOnceReturnStateMismatch<'program>),
+    /// The pass ended after a consumed once-only rewrite rule.
+    StableAfterOnceRewriteConsumed(RuleAttemptStableAfterOnceRewriteConsumed<'program>),
+    /// A reusable rewrite committed and rule-attempt execution can resume from the first rule.
+    AlwaysRewritten(RuleAttemptAlwaysRewriteContinuation<'program, E, A>),
+    /// A once-only rewrite committed and rule-attempt execution can resume from the first rule.
+    OnceRewritten(RuleAttemptOnceRewriteContinuation<'program, E, A>),
+    /// A reusable return committed and the run is terminal.
+    AlwaysReturned(RuleAttemptAlwaysReturnTerminal<'program>),
+    /// A once-only return committed and the run is terminal.
+    OnceReturned(RuleAttemptOnceReturnTerminal<'program>),
     /// The attempted rule could not complete.
     Failed(RuleAttemptFailure<'program>),
+}
+
+/// Continuing-pass reusable rewrite miss after the next cursor has been selected.
+pub(super) struct RuleAttemptAlwaysRewriteMissContinuation<
+    'program,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+> {
+    /// Parsed program used by the cursor projection.
+    pub(super) program: &'program ExecutableProgram,
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Exact non-applying rule witness.
+    pub(super) rule: AlwaysRewriteRuleView<'program>,
+    /// Runtime state split from the selected pass.
+    pub(super) parts: AttemptRunCoreParts<E, A>,
+    /// Typed pass after consuming the missed non-final rule.
+    pub(super) runtime_rules: MissedRuntimeRulePassCursor<'program>,
+}
+
+/// Continuing-pass once-only rewrite miss after the next cursor has been selected.
+pub(super) struct RuleAttemptOnceRewriteMissContinuation<
+    'program,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+> {
+    /// Parsed program used by the cursor projection.
+    pub(super) program: &'program ExecutableProgram,
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Exact non-applying rule witness.
+    pub(super) rule: OnceRewriteRuleView<'program>,
+    /// Runtime state split from the selected pass.
+    pub(super) parts: AttemptRunCoreParts<E, A>,
+    /// Typed pass after consuming the missed non-final rule.
+    pub(super) runtime_rules: MissedRuntimeRulePassCursor<'program>,
+}
+
+/// Continuing-pass reusable return miss after the next cursor has been selected.
+pub(super) struct RuleAttemptAlwaysReturnMissContinuation<
+    'program,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+> {
+    /// Parsed program used by the cursor projection.
+    pub(super) program: &'program ExecutableProgram,
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Exact non-applying rule witness.
+    pub(super) rule: AlwaysReturnRuleView<'program>,
+    /// Runtime state split from the selected pass.
+    pub(super) parts: AttemptRunCoreParts<E, A>,
+    /// Typed pass after consuming the missed non-final rule.
+    pub(super) runtime_rules: MissedRuntimeRulePassCursor<'program>,
+}
+
+/// Continuing-pass once-only return miss after the next cursor has been selected.
+pub(super) struct RuleAttemptOnceReturnMissContinuation<
+    'program,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+> {
+    /// Parsed program used by the cursor projection.
+    pub(super) program: &'program ExecutableProgram,
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Exact non-applying rule witness.
+    pub(super) rule: OnceReturnRuleView<'program>,
+    /// Runtime state split from the selected pass.
+    pub(super) parts: AttemptRunCoreParts<E, A>,
+    /// Typed pass after consuming the missed non-final rule.
+    pub(super) runtime_rules: MissedRuntimeRulePassCursor<'program>,
+}
+
+/// Continuing-pass consumed once-only rewrite after the next cursor has been selected.
+pub(super) struct RuleAttemptOnceRewriteConsumedContinuation<
+    'program,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+> {
+    /// Parsed program used by the cursor projection.
+    pub(super) program: &'program ExecutableProgram,
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Exact consumed rule witness.
+    pub(super) rule: OnceRewriteRuleView<'program>,
+    /// Runtime state split from the selected pass.
+    pub(super) parts: AttemptRunCoreParts<E, A>,
+    /// Typed pass after consuming the missed non-final rule.
+    pub(super) runtime_rules: MissedRuntimeRulePassCursor<'program>,
+}
+
+/// Terminal final-pass reusable rewrite miss.
+pub(super) struct RuleAttemptStableAfterAlwaysRewriteStateMismatch<'program> {
+    /// Exact final non-applying rule witness.
+    pub(super) rule: AlwaysRewriteRuleView<'program>,
+    /// Terminal state after the final rule line is consumed.
+    pub(super) terminal: TerminalAttemptSession<'program>,
+}
+
+/// Terminal final-pass once-only rewrite miss.
+pub(super) struct RuleAttemptStableAfterOnceRewriteStateMismatch<'program> {
+    /// Exact final non-applying rule witness.
+    pub(super) rule: OnceRewriteRuleView<'program>,
+    /// Terminal state after the final rule line is consumed.
+    pub(super) terminal: TerminalAttemptSession<'program>,
+}
+
+/// Terminal final-pass reusable return miss.
+pub(super) struct RuleAttemptStableAfterAlwaysReturnStateMismatch<'program> {
+    /// Exact final non-applying rule witness.
+    pub(super) rule: AlwaysReturnRuleView<'program>,
+    /// Terminal state after the final rule line is consumed.
+    pub(super) terminal: TerminalAttemptSession<'program>,
+}
+
+/// Terminal final-pass once-only return miss.
+pub(super) struct RuleAttemptStableAfterOnceReturnStateMismatch<'program> {
+    /// Exact final non-applying rule witness.
+    pub(super) rule: OnceReturnRuleView<'program>,
+    /// Terminal state after the final rule line is consumed.
+    pub(super) terminal: TerminalAttemptSession<'program>,
+}
+
+/// Terminal final-pass consumed once-only rewrite.
+pub(super) struct RuleAttemptStableAfterOnceRewriteConsumed<'program> {
+    /// Exact consumed rule witness.
+    pub(super) rule: OnceRewriteRuleView<'program>,
+    /// Terminal state after the final rule line is consumed.
+    pub(super) terminal: TerminalAttemptSession<'program>,
+}
+
+/// Committed reusable rewrite before public transition projection.
+pub(super) struct RuleAttemptAlwaysRewriteContinuation<
+    'program,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+> {
+    /// Parsed program used by the cursor projection.
+    pub(super) program: &'program ExecutableProgram,
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Step number committed by this transition.
+    pub(super) step: StepCount,
+    /// Exact committed rule witness.
+    pub(super) rule: AlwaysRewriteRuleView<'program>,
+    /// Runtime state split from the selected pass.
+    pub(super) parts: AttemptRunCoreParts<E, A>,
+    /// Reset pass after the committed rewrite.
+    pub(super) runtime_rules: FirstRuntimeRulePassCursor<'program>,
+}
+
+/// Committed once-only rewrite before public transition projection.
+pub(super) struct RuleAttemptOnceRewriteContinuation<
+    'program,
+    E: ExecutionPolicy,
+    A: RuleAttemptPolicy,
+> {
+    /// Parsed program used by the cursor projection.
+    pub(super) program: &'program ExecutableProgram,
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Step number committed by this transition.
+    pub(super) step: StepCount,
+    /// Exact committed rule witness.
+    pub(super) rule: OnceRewriteRuleView<'program>,
+    /// Runtime state split from the selected pass.
+    pub(super) parts: AttemptRunCoreParts<E, A>,
+    /// Reset pass after the committed rewrite.
+    pub(super) runtime_rules: FirstRuntimeRulePassCursor<'program>,
+}
+
+/// Committed reusable return before public transition projection.
+pub(super) struct RuleAttemptAlwaysReturnTerminal<'program> {
+    /// Parsed program used by the terminal projection.
+    pub(super) program: &'program ExecutableProgram,
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Step number that executed the return action.
+    pub(super) step: StepCount,
+    /// Exact committed rule witness.
+    pub(super) rule: AlwaysReturnRuleView<'program>,
+    /// Materialized return output.
+    pub(super) output: ReturnOutput,
+}
+
+/// Committed once-only return before public transition projection.
+pub(super) struct RuleAttemptOnceReturnTerminal<'program> {
+    /// Parsed program used by the terminal projection.
+    pub(super) program: &'program ExecutableProgram,
+    /// Rule-attempt count committed by this transition.
+    pub(super) attempt: RuleAttemptCount,
+    /// Step number that executed the return action.
+    pub(super) step: StepCount,
+    /// Exact committed rule witness.
+    pub(super) rule: OnceReturnRuleView<'program>,
+    /// Materialized return output.
+    pub(super) output: ReturnOutput,
 }
 
 /// Rule-attempt failure before public transition projection.
@@ -97,9 +333,7 @@ where
     match pass.attempt_current_rule(&parts.state) {
         RuleAttemptEvaluation::Miss(miss) => {
             let attempt = reservation.commit();
-            ContinuingRuleAttemptAdvance::Miss(commit_continuing_miss(
-                program, parts, pass, attempt, miss,
-            ))
+            commit_continuing_miss(program, parts, pass, attempt, miss)
         }
         RuleAttemptEvaluation::Matched(matched) => {
             let state_len = parts.state.byte_count();
@@ -149,9 +383,7 @@ where
     match pass.attempt_current_rule(&parts.state) {
         RuleAttemptEvaluation::Miss(miss) => {
             let attempts = reservation.commit();
-            FinalRuleAttemptAdvance::StableAfterMiss(commit_final_miss(
-                program, parts, pass, attempts, miss,
-            ))
+            commit_final_miss(program, parts, pass, attempts, miss)
         }
         RuleAttemptEvaluation::Matched(matched) => {
             let state_len = parts.state.byte_count();
@@ -220,19 +452,69 @@ fn commit_continuing_miss<'program, E, A, Pass>(
     pass: Pass,
     attempt: RuleAttemptCount,
     miss: EvaluatedRuleMiss<'program>,
-) -> ContinuingRuleAttemptMiss<'program, E, A>
+) -> ContinuingRuleAttemptAdvance<'program, E, A>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
     Pass: ContinuingRuleAttemptPass<'program>,
 {
     let runtime_rules = pass.commit_attempt_miss();
-    ContinuingRuleAttemptMiss {
-        program,
-        attempt,
-        miss,
-        parts,
-        runtime_rules,
+    match miss {
+        EvaluatedRuleMiss::AlwaysRewriteStateMismatch(rule) => {
+            ContinuingRuleAttemptAdvance::AlwaysRewriteStateMismatch(
+                RuleAttemptAlwaysRewriteMissContinuation {
+                    program,
+                    attempt,
+                    rule,
+                    parts,
+                    runtime_rules,
+                },
+            )
+        }
+        EvaluatedRuleMiss::OnceRewriteStateMismatch(rule) => {
+            ContinuingRuleAttemptAdvance::OnceRewriteStateMismatch(
+                RuleAttemptOnceRewriteMissContinuation {
+                    program,
+                    attempt,
+                    rule,
+                    parts,
+                    runtime_rules,
+                },
+            )
+        }
+        EvaluatedRuleMiss::AlwaysReturnStateMismatch(rule) => {
+            ContinuingRuleAttemptAdvance::AlwaysReturnStateMismatch(
+                RuleAttemptAlwaysReturnMissContinuation {
+                    program,
+                    attempt,
+                    rule,
+                    parts,
+                    runtime_rules,
+                },
+            )
+        }
+        EvaluatedRuleMiss::OnceReturnStateMismatch(rule) => {
+            ContinuingRuleAttemptAdvance::OnceReturnStateMismatch(
+                RuleAttemptOnceReturnMissContinuation {
+                    program,
+                    attempt,
+                    rule,
+                    parts,
+                    runtime_rules,
+                },
+            )
+        }
+        EvaluatedRuleMiss::OnceRewriteConsumed(rule) => {
+            ContinuingRuleAttemptAdvance::OnceRewriteConsumed(
+                RuleAttemptOnceRewriteConsumedContinuation {
+                    program,
+                    attempt,
+                    rule,
+                    parts,
+                    runtime_rules,
+                },
+            )
+        }
     }
 }
 
@@ -243,20 +525,44 @@ fn commit_final_miss<'program, E, A, Pass>(
     pass: Pass,
     attempts: RuleAttemptCount,
     miss: EvaluatedRuleMiss<'program>,
-) -> FinalRuleAttemptStable<'program>
+) -> FinalRuleAttemptAdvance<'program, E, A>
 where
     E: ExecutionPolicy,
     A: RuleAttemptPolicy,
     Pass: FinalRuleAttemptPass<'program>,
 {
     let core = parts.with_pass(pass);
-    FinalRuleAttemptStable {
-        miss,
-        terminal: TerminalAttemptSession {
-            program,
-            core: core.into_terminal(),
-            attempts,
-        },
+    let terminal = TerminalAttemptSession {
+        program,
+        core: core.into_terminal(),
+        attempts,
+    };
+    match miss {
+        EvaluatedRuleMiss::AlwaysRewriteStateMismatch(rule) => {
+            FinalRuleAttemptAdvance::StableAfterAlwaysRewriteStateMismatch(
+                RuleAttemptStableAfterAlwaysRewriteStateMismatch { rule, terminal },
+            )
+        }
+        EvaluatedRuleMiss::OnceRewriteStateMismatch(rule) => {
+            FinalRuleAttemptAdvance::StableAfterOnceRewriteStateMismatch(
+                RuleAttemptStableAfterOnceRewriteStateMismatch { rule, terminal },
+            )
+        }
+        EvaluatedRuleMiss::AlwaysReturnStateMismatch(rule) => {
+            FinalRuleAttemptAdvance::StableAfterAlwaysReturnStateMismatch(
+                RuleAttemptStableAfterAlwaysReturnStateMismatch { rule, terminal },
+            )
+        }
+        EvaluatedRuleMiss::OnceReturnStateMismatch(rule) => {
+            FinalRuleAttemptAdvance::StableAfterOnceReturnStateMismatch(
+                RuleAttemptStableAfterOnceReturnStateMismatch { rule, terminal },
+            )
+        }
+        EvaluatedRuleMiss::OnceRewriteConsumed(rule) => {
+            FinalRuleAttemptAdvance::StableAfterOnceRewriteConsumed(
+                RuleAttemptStableAfterOnceRewriteConsumed { rule, terminal },
+            )
+        }
     }
 }
 
@@ -277,7 +583,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let (parts, runtime_rules) = core.into_parts();
-            ContinuingRuleAttemptAdvance::AlwaysRewritten(ContinuingRuleAttemptAlwaysRewrite {
+            ContinuingRuleAttemptAdvance::AlwaysRewritten(RuleAttemptAlwaysRewriteContinuation {
                 program,
                 attempt,
                 step,
@@ -290,7 +596,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let (parts, runtime_rules) = core.into_parts();
-            ContinuingRuleAttemptAdvance::OnceRewritten(ContinuingRuleAttemptOnceRewrite {
+            ContinuingRuleAttemptAdvance::OnceRewritten(RuleAttemptOnceRewriteContinuation {
                 program,
                 attempt,
                 step,
@@ -303,7 +609,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let output = committed.into_output();
-            ContinuingRuleAttemptAdvance::AlwaysReturned(ContinuingRuleAttemptAlwaysReturn {
+            ContinuingRuleAttemptAdvance::AlwaysReturned(RuleAttemptAlwaysReturnTerminal {
                 program,
                 attempt,
                 step,
@@ -315,7 +621,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let output = committed.into_output();
-            ContinuingRuleAttemptAdvance::OnceReturned(ContinuingRuleAttemptOnceReturn {
+            ContinuingRuleAttemptAdvance::OnceReturned(RuleAttemptOnceReturnTerminal {
                 program,
                 attempt,
                 step,
@@ -343,7 +649,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let (parts, runtime_rules) = core.into_parts();
-            FinalRuleAttemptAdvance::AlwaysRewritten(FinalRuleAttemptAlwaysRewrite {
+            FinalRuleAttemptAdvance::AlwaysRewritten(RuleAttemptAlwaysRewriteContinuation {
                 program,
                 attempt,
                 step,
@@ -356,7 +662,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let (parts, runtime_rules) = core.into_parts();
-            FinalRuleAttemptAdvance::OnceRewritten(FinalRuleAttemptOnceRewrite {
+            FinalRuleAttemptAdvance::OnceRewritten(RuleAttemptOnceRewriteContinuation {
                 program,
                 attempt,
                 step,
@@ -369,7 +675,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let output = committed.into_output();
-            FinalRuleAttemptAdvance::AlwaysReturned(FinalRuleAttemptAlwaysReturn {
+            FinalRuleAttemptAdvance::AlwaysReturned(RuleAttemptAlwaysReturnTerminal {
                 program,
                 attempt,
                 step,
@@ -381,7 +687,7 @@ where
             let step = committed.step();
             let rule = committed.rule();
             let output = committed.into_output();
-            FinalRuleAttemptAdvance::OnceReturned(FinalRuleAttemptOnceReturn {
+            FinalRuleAttemptAdvance::OnceReturned(RuleAttemptOnceReturnTerminal {
                 program,
                 attempt,
                 step,
