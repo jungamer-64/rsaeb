@@ -298,8 +298,8 @@ struct OnceRewriteCommitLinearity;
 
 impl<'program> pass_state::Sealed for FirstContinuingRulePass<'program> {}
 impl<'program> RuntimeRulePassState<'program> for FirstContinuingRulePass<'program> {}
-impl<'program> continuing_pass::Sealed for FirstContinuingRulePass<'program> {}
-impl<'program> ContinuingRuleAttemptPass<'program> for FirstContinuingRulePass<'program> {
+impl<'program> rule_attempt_pass::Sealed for FirstContinuingRulePass<'program> {}
+impl<'program> RuleAttemptPass<'program> for FirstContinuingRulePass<'program> {
     fn attempt_current_rule<'state, 'once>(
         &'once mut self,
         state: &'state State,
@@ -307,19 +307,22 @@ impl<'program> ContinuingRuleAttemptPass<'program> for FirstContinuingRulePass<'
         self.attempt_current(state)
     }
 
-    fn commit_attempt_miss(self) -> MissedRuntimeRulePassCursor<'program> {
-        self.commit_miss()
-    }
-
     fn reset_attempt_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program> {
         self.reset_after_rewrite()
+    }
+}
+
+impl<'program> continuing_pass::Sealed for FirstContinuingRulePass<'program> {}
+impl<'program> ContinuingRuleAttemptPass<'program> for FirstContinuingRulePass<'program> {
+    fn commit_attempt_miss(self) -> MissedRuntimeRulePassCursor<'program> {
+        self.commit_miss()
     }
 }
 
 impl<'program> pass_state::Sealed for AfterMissContinuingRulePass<'program> {}
 impl<'program> RuntimeRulePassState<'program> for AfterMissContinuingRulePass<'program> {}
-impl<'program> continuing_pass::Sealed for AfterMissContinuingRulePass<'program> {}
-impl<'program> ContinuingRuleAttemptPass<'program> for AfterMissContinuingRulePass<'program> {
+impl<'program> rule_attempt_pass::Sealed for AfterMissContinuingRulePass<'program> {}
+impl<'program> RuleAttemptPass<'program> for AfterMissContinuingRulePass<'program> {
     fn attempt_current_rule<'state, 'once>(
         &'once mut self,
         state: &'state State,
@@ -327,19 +330,22 @@ impl<'program> ContinuingRuleAttemptPass<'program> for AfterMissContinuingRulePa
         self.attempt_current(state)
     }
 
-    fn commit_attempt_miss(self) -> MissedRuntimeRulePassCursor<'program> {
-        self.commit_miss()
-    }
-
     fn reset_attempt_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program> {
         self.reset_after_rewrite()
+    }
+}
+
+impl<'program> continuing_pass::Sealed for AfterMissContinuingRulePass<'program> {}
+impl<'program> ContinuingRuleAttemptPass<'program> for AfterMissContinuingRulePass<'program> {
+    fn commit_attempt_miss(self) -> MissedRuntimeRulePassCursor<'program> {
+        self.commit_miss()
     }
 }
 
 impl<'program> pass_state::Sealed for FirstFinalRulePass<'program> {}
 impl<'program> RuntimeRulePassState<'program> for FirstFinalRulePass<'program> {}
-impl<'program> final_pass::Sealed for FirstFinalRulePass<'program> {}
-impl<'program> FinalRuleAttemptPass<'program> for FirstFinalRulePass<'program> {
+impl<'program> rule_attempt_pass::Sealed for FirstFinalRulePass<'program> {}
+impl<'program> RuleAttemptPass<'program> for FirstFinalRulePass<'program> {
     fn attempt_current_rule<'state, 'once>(
         &'once mut self,
         state: &'state State,
@@ -351,11 +357,14 @@ impl<'program> FinalRuleAttemptPass<'program> for FirstFinalRulePass<'program> {
         self.reset_after_rewrite()
     }
 }
+
+impl<'program> final_pass::Sealed for FirstFinalRulePass<'program> {}
+impl<'program> FinalRuleAttemptPass<'program> for FirstFinalRulePass<'program> {}
 
 impl<'program> pass_state::Sealed for AfterMissFinalRulePass<'program> {}
 impl<'program> RuntimeRulePassState<'program> for AfterMissFinalRulePass<'program> {}
-impl<'program> final_pass::Sealed for AfterMissFinalRulePass<'program> {}
-impl<'program> FinalRuleAttemptPass<'program> for AfterMissFinalRulePass<'program> {
+impl<'program> rule_attempt_pass::Sealed for AfterMissFinalRulePass<'program> {}
+impl<'program> RuleAttemptPass<'program> for AfterMissFinalRulePass<'program> {
     fn attempt_current_rule<'state, 'once>(
         &'once mut self,
         state: &'state State,
@@ -367,6 +376,9 @@ impl<'program> FinalRuleAttemptPass<'program> for AfterMissFinalRulePass<'progra
         self.reset_after_rewrite()
     }
 }
+
+impl<'program> final_pass::Sealed for AfterMissFinalRulePass<'program> {}
+impl<'program> FinalRuleAttemptPass<'program> for AfterMissFinalRulePass<'program> {}
 
 impl<'program> missed_tail::Sealed for ContinuingRuleTail<'program> {}
 impl<'program> MissedRuntimeRuleTail<'program> for ContinuingRuleTail<'program> {

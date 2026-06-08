@@ -90,7 +90,13 @@ enum BorrowedRuleAttemptSignature {
         rule_position: usize,
         state: Vec<u8>,
     },
-    Applied {
+    AlwaysRewritten {
+        attempt: usize,
+        step: usize,
+        rule_position: usize,
+        state: Vec<u8>,
+    },
+    OnceRewritten {
         attempt: usize,
         step: usize,
         rule_position: usize,
@@ -126,11 +132,29 @@ enum BorrowedRuleAttemptSignature {
         rule_position: usize,
         state: Vec<u8>,
     },
-    Return {
+    AlwaysReturned {
         attempt: usize,
         step: usize,
         rule_position: usize,
         output: Vec<u8>,
+    },
+    OnceReturned {
+        attempt: usize,
+        step: usize,
+        rule_position: usize,
+        output: Vec<u8>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExpectedRuleAttemptStepLimit {
+    RuntimeState {
+        limit: RuntimeStateByteLimit,
+        attempted_len: usize,
+    },
+    ReturnOutput {
+        limit: ReturnByteLimit,
+        attempted_len: usize,
     },
 }
 
@@ -154,9 +178,20 @@ macro_rules! borrowed_once_rewrite_consumed {
     };
 }
 
-macro_rules! borrowed_apply {
+macro_rules! borrowed_always_rewritten {
     ($attempt:expr, $step:expr, $rule_position:expr, $state:expr) => {
-        BorrowedRuleAttemptSignature::Applied {
+        BorrowedRuleAttemptSignature::AlwaysRewritten {
+            attempt: $attempt,
+            step: $step,
+            rule_position: $rule_position,
+            state: $state.to_vec(),
+        }
+    };
+}
+
+macro_rules! borrowed_once_rewritten {
+    ($attempt:expr, $step:expr, $rule_position:expr, $state:expr) => {
+        BorrowedRuleAttemptSignature::OnceRewritten {
             attempt: $attempt,
             step: $step,
             rule_position: $rule_position,
@@ -245,7 +280,7 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
                             cursor = missed.into_cursor();
                         }
                         BorrowedContinuingRuleAttemptTransition::AlwaysRewritten(applied) => {
-                            signatures.push(BorrowedRuleAttemptSignature::Applied {
+                            signatures.push(BorrowedRuleAttemptSignature::AlwaysRewritten {
                                 attempt: applied.attempt().get(),
                                 step: applied.step().get(),
                                 rule_position: applied.rule().position().get(),
@@ -254,7 +289,7 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
                             cursor = applied.into_cursor();
                         }
                         BorrowedContinuingRuleAttemptTransition::OnceRewritten(applied) => {
-                            signatures.push(BorrowedRuleAttemptSignature::Applied {
+                            signatures.push(BorrowedRuleAttemptSignature::OnceRewritten {
                                 attempt: applied.attempt().get(),
                                 step: applied.step().get(),
                                 rule_position: applied.rule().position().get(),
@@ -263,7 +298,7 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
                             cursor = applied.into_cursor();
                         }
                         BorrowedContinuingRuleAttemptTransition::AlwaysReturned(returned) => {
-                            signatures.push(BorrowedRuleAttemptSignature::Return {
+                            signatures.push(BorrowedRuleAttemptSignature::AlwaysReturned {
                                 attempt: returned.attempt().get(),
                                 step: returned.step().get(),
                                 rule_position: returned.rule().position().get(),
@@ -272,7 +307,7 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
                             return Ok(signatures);
                         }
                         BorrowedContinuingRuleAttemptTransition::OnceReturned(returned) => {
-                            signatures.push(BorrowedRuleAttemptSignature::Return {
+                            signatures.push(BorrowedRuleAttemptSignature::OnceReturned {
                                 attempt: returned.attempt().get(),
                                 step: returned.step().get(),
                                 rule_position: returned.rule().position().get(),
@@ -333,7 +368,7 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
                             return Ok(signatures);
                         }
                         BorrowedFinalRuleAttemptTransition::AlwaysRewritten(applied) => {
-                            signatures.push(BorrowedRuleAttemptSignature::Applied {
+                            signatures.push(BorrowedRuleAttemptSignature::AlwaysRewritten {
                                 attempt: applied.attempt().get(),
                                 step: applied.step().get(),
                                 rule_position: applied.rule().position().get(),
@@ -342,7 +377,7 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
                             cursor = applied.into_cursor();
                         }
                         BorrowedFinalRuleAttemptTransition::OnceRewritten(applied) => {
-                            signatures.push(BorrowedRuleAttemptSignature::Applied {
+                            signatures.push(BorrowedRuleAttemptSignature::OnceRewritten {
                                 attempt: applied.attempt().get(),
                                 step: applied.step().get(),
                                 rule_position: applied.rule().position().get(),
@@ -351,7 +386,7 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
                             cursor = applied.into_cursor();
                         }
                         BorrowedFinalRuleAttemptTransition::AlwaysReturned(returned) => {
-                            signatures.push(BorrowedRuleAttemptSignature::Return {
+                            signatures.push(BorrowedRuleAttemptSignature::AlwaysReturned {
                                 attempt: returned.attempt().get(),
                                 step: returned.step().get(),
                                 rule_position: returned.rule().position().get(),
@@ -360,7 +395,7 @@ macro_rules! collect_borrowed_rule_attempt_signatures {
                             return Ok(signatures);
                         }
                         BorrowedFinalRuleAttemptTransition::OnceReturned(returned) => {
-                            signatures.push(BorrowedRuleAttemptSignature::Return {
+                            signatures.push(BorrowedRuleAttemptSignature::OnceReturned {
                                 attempt: returned.attempt().get(),
                                 step: returned.step().get(),
                                 rule_position: returned.rule().position().get(),
@@ -923,6 +958,77 @@ where
     Ok(failed.into_error())
 }
 
+/// Returns the error from a failed after-miss final rule-attempt transition.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the first attempt does not miss, the second attempt
+/// does not fail, or uncommitted progress becomes observable.
+fn expect_after_miss_final_attempt_failure<E>(
+    program: &ExecutableProgram,
+    input: AdmittedRun<E>,
+    expected_state: &[u8],
+) -> Result<RuleAttemptStepError, TestFailure>
+where
+    E: ExecutionPolicy,
+{
+    let cursor = program.rule_attempts::<StaticRuleAttemptPolicy<10>, _>(input)?;
+    let BorrowedRuleAttemptCursor::Continuing(execution) = cursor else {
+        return Err(TestFailure::message(
+            "expected non-matching first rule to be continuing",
+        ));
+    };
+    let BorrowedContinuingRuleAttemptTransition::AlwaysRewriteStateMismatch(missed) =
+        expect_continuing_rule_attempt_transition(execution.step())?
+    else {
+        return Err(TestFailure::message("expected first attempt to miss"));
+    };
+    ensure_eq!(missed.attempt().get(), 1)?;
+
+    let BorrowedRuleAttemptCursor::Final(execution) = missed.into_cursor() else {
+        return Err(TestFailure::message(
+            "expected after-miss cursor to select final rule",
+        ));
+    };
+    let failed = expect_failed_final_rule_attempt(execution.step())?;
+    ensure_eq!(failed.completed_attempts().get(), 1)?;
+    ensure_eq!(failed.completed_steps().get(), 0)?;
+    ensure_eq!(
+        runtime_view_bytes(failed.state())?.as_slice(),
+        expected_state,
+    )?;
+    Ok(failed.into_error())
+}
+
+/// Ensures a rule-attempt step error is the expected limit failure.
+///
+/// # Errors
+///
+/// Returns `TestFailure` if the error shape or limit details differ.
+fn ensure_rule_attempt_step_limit(
+    error: RuleAttemptStepError,
+    expected: ExpectedRuleAttemptStepLimit,
+    message: &'static str,
+) -> TestResult {
+    match (error, expected) {
+        (
+            RuleAttemptStepError::Step(RunStepError::RuntimeStateLimit(error)),
+            ExpectedRuleAttemptStepLimit::RuntimeState {
+                limit,
+                attempted_len,
+            },
+        ) if error.limit() == limit && error.attempted_len().get() == attempted_len => Ok(()),
+        (
+            RuleAttemptStepError::Step(RunStepError::ReturnOutputLimit(error)),
+            ExpectedRuleAttemptStepLimit::ReturnOutput {
+                limit,
+                attempted_len,
+            },
+        ) if error.limit() == limit && error.attempted_len().get() == attempted_len => Ok(()),
+        _ => Err(TestFailure::message(message)),
+    }
+}
+
 /// # Errors
 ///
 /// Returns `TestFailure` if rewrite order, anchors, once rules, or runtime-only
@@ -1037,10 +1143,10 @@ fn execution_rule_attempt_surface_reports_misses_and_resets_after_apply() -> Tes
         borrowed_rule_attempt_signatures::<20>(&program, b"a")?,
         vec![
             borrowed_state_mismatch!(1, 1, b"a"),
-            borrowed_apply!(2, 1, 2, b"b"),
+            borrowed_always_rewritten!(2, 1, 2, b"b"),
             borrowed_state_mismatch!(3, 1, b"b"),
             borrowed_state_mismatch!(4, 2, b"b"),
-            borrowed_apply!(5, 2, 3, b"c"),
+            borrowed_always_rewritten!(5, 2, 3, b"c"),
             borrowed_state_mismatch!(6, 1, b"c"),
             borrowed_state_mismatch!(7, 2, b"c"),
             borrowed_stable_after_always_rewrite_state_mismatch!(8, 2, 3, b"c",),
@@ -1063,7 +1169,7 @@ fn execution_rule_attempt_surface_reports_misses_resets_and_returns() -> TestRes
                 rule_position: 1,
                 state: b"a".to_vec(),
             },
-            BorrowedRuleAttemptSignature::Applied {
+            BorrowedRuleAttemptSignature::AlwaysRewritten {
                 attempt: 2,
                 step: 1,
                 rule_position: 2,
@@ -1079,7 +1185,7 @@ fn execution_rule_attempt_surface_reports_misses_resets_and_returns() -> TestRes
                 rule_position: 2,
                 state: b"b".to_vec(),
             },
-            BorrowedRuleAttemptSignature::Return {
+            BorrowedRuleAttemptSignature::AlwaysReturned {
                 attempt: 5,
                 step: 2,
                 rule_position: 3,
@@ -1299,10 +1405,10 @@ fn execution_rule_attempt_preserves_interleaved_once_state() -> TestResult {
     ensure_eq!(
         borrowed_rule_attempt_signatures::<10>(&program, b"a")?,
         vec![
-            borrowed_apply!(1, 1, 1, b"b"),
+            borrowed_once_rewritten!(1, 1, 1, b"b"),
             borrowed_once_rewrite_consumed!(2, 1, b"b"),
             borrowed_state_mismatch!(3, 2, b"b"),
-            borrowed_apply!(4, 2, 3, b"c"),
+            borrowed_once_rewritten!(4, 2, 3, b"c"),
             borrowed_once_rewrite_consumed!(5, 1, b"c"),
             borrowed_state_mismatch!(6, 2, b"c"),
             borrowed_stable_after_once_rewrite_consumed!(7, 2, 3, b"c",),
@@ -1318,9 +1424,9 @@ fn execution_rule_attempt_preserves_interleaved_once_state() -> TestResult {
 fn execution_rule_attempt_once_state_is_run_local_for_reused_program() -> TestResult {
     let program = parse_program("(once)a=b\nb=c")?;
     let expected = vec![
-        borrowed_apply!(1, 1, 1, b"b"),
+        borrowed_once_rewritten!(1, 1, 1, b"b"),
         borrowed_once_rewrite_consumed!(2, 1, b"b"),
-        borrowed_apply!(3, 2, 2, b"c"),
+        borrowed_always_rewritten!(3, 2, 2, b"c"),
         borrowed_once_rewrite_consumed!(4, 1, b"c"),
         borrowed_stable_after_always_rewrite_state_mismatch!(5, 2, 2, b"c",),
     ];
@@ -1420,28 +1526,58 @@ fn execution_rule_attempt_limit_is_independent_from_step_limit() -> TestResult {
 #[test]
 fn execution_rule_attempt_preparation_failures_drop_attempt_reservation() -> TestResult {
     let limits = DefaultInputRunPolicy::<10, 1, DEFAULT_BYTE_BUDGET>::new();
+    let program = parse_program("a=aa\nz=z")?;
+    let input = runtime_input(b"a", limits)?;
+    let cursor = program.rule_attempts::<StaticRuleAttemptPolicy<10>, _>(input)?;
+    let BorrowedRuleAttemptCursor::Continuing(execution) = cursor else {
+        return Err(TestFailure::message(
+            "expected matched first rule to be continuing",
+        ));
+    };
+    let failed = expect_failed_continuing_rule_attempt(execution.step())?;
+    ensure_eq!(failed.completed_attempts().get(), 0)?;
+    ensure_eq!(failed.completed_steps().get(), 0)?;
+    ensure_eq!(runtime_view_bytes(failed.state())?.as_slice(), b"a")?;
+    ensure_rule_attempt_step_limit(
+        failed.into_error(),
+        ExpectedRuleAttemptStepLimit::RuntimeState {
+            limit: RuntimeStateByteLimit::new(1),
+            attempted_len: 2,
+        },
+        "expected continuing preparation failure before attempt reservation commits",
+    )?;
+
+    let program = parse_program("z=z\na=aa")?;
+    let input = runtime_input(b"a", limits)?;
+    ensure_rule_attempt_step_limit(
+        expect_after_miss_final_attempt_failure(&program, input, b"a")?,
+        ExpectedRuleAttemptStepLimit::RuntimeState {
+            limit: RuntimeStateByteLimit::new(1),
+            attempted_len: 2,
+        },
+        "expected after-miss final preparation failure to keep prior attempts only",
+    )?;
+
     let program = parse_program("a=aa")?;
     let input = runtime_input(b"a", limits)?;
-    ensure_matches(
-        matches!(
-            expect_uncommitted_single_rule_final_attempt_failure(&program, input, b"a")?,
-            RuleAttemptStepError::Step(RunStepError::RuntimeStateLimit(error))
-                if error.limit() == RuntimeStateByteLimit::new(1)
-                    && error.attempted_len().get() == 2
-        ),
+    ensure_rule_attempt_step_limit(
+        expect_uncommitted_single_rule_final_attempt_failure(&program, input, b"a")?,
+        ExpectedRuleAttemptStepLimit::RuntimeState {
+            limit: RuntimeStateByteLimit::new(1),
+            attempted_len: 2,
+        },
         "expected state limit before attempt reservation commits",
     )?;
 
     let limits = DefaultInputRunPolicy::<10, DEFAULT_BYTE_BUDGET, 1>::new();
     let program = parse_program("(once)a=(return)ok")?;
     let input = runtime_input(b"a", limits)?;
-    ensure_matches(
-        matches!(
-            expect_uncommitted_single_rule_final_attempt_failure(&program, input, b"a")?,
-            RuleAttemptStepError::Step(RunStepError::ReturnOutputLimit(error))
-                if error.limit() == ReturnByteLimit::new(1)
-                    && error.attempted_len().get() == 2
-        ),
+    ensure_rule_attempt_step_limit(
+        expect_uncommitted_single_rule_final_attempt_failure(&program, input, b"a")?,
+        ExpectedRuleAttemptStepLimit::ReturnOutput {
+            limit: ReturnByteLimit::new(1),
+            attempted_len: 2,
+        },
         "expected once-return output limit before attempt reservation commits",
     )
 }
