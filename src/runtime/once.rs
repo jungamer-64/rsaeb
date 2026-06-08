@@ -85,35 +85,32 @@ pub(crate) type AfterMissFinalRulePass<'program> =
 /// Sealed boundary for the four valid runtime rule-attempt pass shapes.
 pub(crate) trait RuntimeRulePassState<'program>: pass_state::Sealed {}
 
-/// Continuing rule-attempt pass behavior owned by the runtime pass state.
-pub(crate) trait ContinuingRuleAttemptPass<'program>:
-    RuntimeRulePassState<'program> + continuing_pass::Sealed + Sized
+/// Shared rule-attempt pass behavior for every typed runtime pass shape.
+pub(crate) trait RuleAttemptPass<'program>:
+    RuntimeRulePassState<'program> + rule_attempt_pass::Sealed + Sized
 {
     /// Attempts this pass's current target.
     fn attempt_current_rule<'state, 'once>(
         &'once mut self,
         state: &'state State,
     ) -> RuleAttemptEvaluation<'program, 'state, 'once>;
-
-    /// Commits a miss and advances to the next typed pass.
-    fn commit_attempt_miss(self) -> MissedRuntimeRulePassCursor<'program>;
 
     /// Resets this pass after a committed rewrite.
     fn reset_attempt_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program>;
 }
 
+/// Continuing rule-attempt pass behavior owned by the runtime pass state.
+pub(crate) trait ContinuingRuleAttemptPass<'program>:
+    RuleAttemptPass<'program> + continuing_pass::Sealed + Sized
+{
+    /// Commits a miss and advances to the next typed pass.
+    fn commit_attempt_miss(self) -> MissedRuntimeRulePassCursor<'program>;
+}
+
 /// Final rule-attempt pass behavior owned by the runtime pass state.
 pub(crate) trait FinalRuleAttemptPass<'program>:
-    RuntimeRulePassState<'program> + final_pass::Sealed + Sized
+    RuleAttemptPass<'program> + final_pass::Sealed + Sized
 {
-    /// Attempts this pass's current target.
-    fn attempt_current_rule<'state, 'once>(
-        &'once mut self,
-        state: &'state State,
-    ) -> RuleAttemptEvaluation<'program, 'state, 'once>;
-
-    /// Resets this pass after a committed rewrite.
-    fn reset_attempt_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program>;
 }
 
 /// Boundary for tails that can rebuild a pass after non-empty miss history.
@@ -128,6 +125,12 @@ trait MissedRuntimeRuleTail<'program>: missed_tail::Sealed {
 
 /// Private sealing traits for runtime pass states.
 pub(crate) mod pass_state {
+    /// Marker implemented only by valid rule-attempt pass shapes.
+    pub(crate) trait Sealed {}
+}
+
+/// Private sealing traits for shared runtime pass capabilities.
+pub(crate) mod rule_attempt_pass {
     /// Marker implemented only by valid rule-attempt pass shapes.
     pub(crate) trait Sealed {}
 }
