@@ -162,15 +162,15 @@ impl<'program, E: ExecutionPolicy, A: RuleAttemptPolicy> BorrowedRuleAttemptCurs
         admitted: AdmittedRun<E>,
     ) -> Result<Self, RunStartError> {
         let runtime_rules = StartedRuntimeRuleTable::from_program(program)?;
-        Ok(Self::from_parts(
+        Ok(Self::from_runtime_pass(
             program,
             AttemptRunCoreParts::new(admitted),
             runtime_rules.into_pass_cursor(),
         ))
     }
 
-    /// Projects rule-attempt core parts into the public cursor.
-    pub(super) fn from_parts(
+    /// Projects a runtime pass cursor into the public rule-attempt cursor.
+    pub(super) fn from_runtime_pass(
         program: &'program ExecutableProgram,
         parts: AttemptRunCoreParts<E, A>,
         cursor: RuntimeRulePassCursor<'program>,
