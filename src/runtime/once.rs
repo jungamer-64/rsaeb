@@ -58,61 +58,6 @@ pub(crate) enum RuntimeRulePassCursor<'program, History> {
     Final(RuntimeRulePass<'program, History, FinalRuleTail<'program>>),
 }
 
-/// Rule-attempt pass at the start of a scan.
-pub(crate) type FirstRuntimeRulePassCursor<'program> =
-    RuntimeRulePassCursor<'program, NoMissedRules<'program>>;
-
-/// Rule-attempt pass after the history has become non-empty.
-pub(crate) type MissedRuntimeRulePassCursor<'program> =
-    RuntimeRulePassCursor<'program, MissedRuntimeRules<'program>>;
-
-/// Continuing pass whose current target is still the first rule in the scan.
-pub(crate) type FirstContinuingRulePass<'program> =
-    RuntimeRulePass<'program, NoMissedRules<'program>, ContinuingRuleTail<'program>>;
-
-/// Continuing pass after one or more rules have missed.
-pub(crate) type AfterMissContinuingRulePass<'program> =
-    RuntimeRulePass<'program, MissedRuntimeRules<'program>, ContinuingRuleTail<'program>>;
-
-/// Final pass whose current target is still the first rule in the scan.
-pub(crate) type FirstFinalRulePass<'program> =
-    RuntimeRulePass<'program, NoMissedRules<'program>, FinalRuleTail<'program>>;
-
-/// Final pass after one or more rules have missed.
-pub(crate) type AfterMissFinalRulePass<'program> =
-    RuntimeRulePass<'program, MissedRuntimeRules<'program>, FinalRuleTail<'program>>;
-
-/// Sealed boundary for the four valid runtime rule-attempt pass shapes.
-pub(crate) trait RuntimeRulePassState<'program>: pass_state::Sealed {}
-
-/// Shared rule-attempt pass behavior for every typed runtime pass shape.
-pub(crate) trait RuleAttemptPass<'program>:
-    RuntimeRulePassState<'program> + rule_attempt_pass::Sealed + Sized
-{
-    /// Attempts this pass's current target.
-    fn attempt_current_rule<'state, 'once>(
-        &'once mut self,
-        state: &'state State,
-    ) -> RuleAttemptEvaluation<'program, 'state, 'once>;
-
-    /// Resets this pass after a committed rewrite.
-    fn reset_attempt_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program>;
-}
-
-/// Continuing rule-attempt pass behavior owned by the runtime pass state.
-pub(crate) trait ContinuingRuleAttemptPass<'program>:
-    RuleAttemptPass<'program> + continuing_pass::Sealed + Sized
-{
-    /// Commits a miss and advances to the next typed pass.
-    fn commit_attempt_miss(self) -> MissedRuntimeRulePassCursor<'program>;
-}
-
-/// Final rule-attempt pass behavior owned by the runtime pass state.
-pub(crate) trait FinalRuleAttemptPass<'program>:
-    RuleAttemptPass<'program> + final_pass::Sealed + Sized
-{
-}
-
 /// Boundary for tails that can rebuild a pass after non-empty miss history.
 trait MissedRuntimeRuleTail<'program>: missed_tail::Sealed {
     /// Appends reset-time pending rules after `remaining` and returns the buffer
@@ -121,30 +66,6 @@ trait MissedRuntimeRuleTail<'program>: missed_tail::Sealed {
         self,
         remaining: &mut ResetRemainingRules<'program>,
     ) -> FutureMissBuffer<'program>;
-}
-
-/// Private sealing traits for runtime pass states.
-pub(crate) mod pass_state {
-    /// Marker implemented only by valid rule-attempt pass shapes.
-    pub(crate) trait Sealed {}
-}
-
-/// Private sealing traits for shared runtime pass capabilities.
-pub(crate) mod rule_attempt_pass {
-    /// Marker implemented only by valid rule-attempt pass shapes.
-    pub(crate) trait Sealed {}
-}
-
-/// Private sealing traits for continuing runtime pass capabilities.
-pub(crate) mod continuing_pass {
-    /// Marker implemented only by continuing pass states.
-    pub(crate) trait Sealed {}
-}
-
-/// Private sealing traits for final runtime pass capabilities.
-pub(crate) mod final_pass {
-    /// Marker implemented only by final pass states.
-    pub(crate) trait Sealed {}
 }
 
 /// Private sealing traits for reset-capable missed-pass tails.
@@ -295,90 +216,6 @@ pub(crate) struct OnceRewriteCommitPermit<'program, 'once> {
 /// Non-copy marker carried by once-rewrite commit permits.
 #[derive(Debug)]
 struct OnceRewriteCommitLinearity;
-
-impl<'program> pass_state::Sealed for FirstContinuingRulePass<'program> {}
-impl<'program> RuntimeRulePassState<'program> for FirstContinuingRulePass<'program> {}
-impl<'program> rule_attempt_pass::Sealed for FirstContinuingRulePass<'program> {}
-impl<'program> RuleAttemptPass<'program> for FirstContinuingRulePass<'program> {
-    fn attempt_current_rule<'state, 'once>(
-        &'once mut self,
-        state: &'state State,
-    ) -> RuleAttemptEvaluation<'program, 'state, 'once> {
-        self.attempt_current(state)
-    }
-
-    fn reset_attempt_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program> {
-        self.reset_after_rewrite()
-    }
-}
-
-impl<'program> continuing_pass::Sealed for FirstContinuingRulePass<'program> {}
-impl<'program> ContinuingRuleAttemptPass<'program> for FirstContinuingRulePass<'program> {
-    fn commit_attempt_miss(self) -> MissedRuntimeRulePassCursor<'program> {
-        self.commit_miss()
-    }
-}
-
-impl<'program> pass_state::Sealed for AfterMissContinuingRulePass<'program> {}
-impl<'program> RuntimeRulePassState<'program> for AfterMissContinuingRulePass<'program> {}
-impl<'program> rule_attempt_pass::Sealed for AfterMissContinuingRulePass<'program> {}
-impl<'program> RuleAttemptPass<'program> for AfterMissContinuingRulePass<'program> {
-    fn attempt_current_rule<'state, 'once>(
-        &'once mut self,
-        state: &'state State,
-    ) -> RuleAttemptEvaluation<'program, 'state, 'once> {
-        self.attempt_current(state)
-    }
-
-    fn reset_attempt_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program> {
-        self.reset_after_rewrite()
-    }
-}
-
-impl<'program> continuing_pass::Sealed for AfterMissContinuingRulePass<'program> {}
-impl<'program> ContinuingRuleAttemptPass<'program> for AfterMissContinuingRulePass<'program> {
-    fn commit_attempt_miss(self) -> MissedRuntimeRulePassCursor<'program> {
-        self.commit_miss()
-    }
-}
-
-impl<'program> pass_state::Sealed for FirstFinalRulePass<'program> {}
-impl<'program> RuntimeRulePassState<'program> for FirstFinalRulePass<'program> {}
-impl<'program> rule_attempt_pass::Sealed for FirstFinalRulePass<'program> {}
-impl<'program> RuleAttemptPass<'program> for FirstFinalRulePass<'program> {
-    fn attempt_current_rule<'state, 'once>(
-        &'once mut self,
-        state: &'state State,
-    ) -> RuleAttemptEvaluation<'program, 'state, 'once> {
-        self.attempt_current(state)
-    }
-
-    fn reset_attempt_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program> {
-        self.reset_after_rewrite()
-    }
-}
-
-impl<'program> final_pass::Sealed for FirstFinalRulePass<'program> {}
-impl<'program> FinalRuleAttemptPass<'program> for FirstFinalRulePass<'program> {}
-
-impl<'program> pass_state::Sealed for AfterMissFinalRulePass<'program> {}
-impl<'program> RuntimeRulePassState<'program> for AfterMissFinalRulePass<'program> {}
-impl<'program> rule_attempt_pass::Sealed for AfterMissFinalRulePass<'program> {}
-impl<'program> RuleAttemptPass<'program> for AfterMissFinalRulePass<'program> {
-    fn attempt_current_rule<'state, 'once>(
-        &'once mut self,
-        state: &'state State,
-    ) -> RuleAttemptEvaluation<'program, 'state, 'once> {
-        self.attempt_current(state)
-    }
-
-    fn reset_attempt_after_rewrite(self) -> FirstRuntimeRulePassCursor<'program> {
-        self.reset_after_rewrite()
-    }
-}
-
-impl<'program> final_pass::Sealed for AfterMissFinalRulePass<'program> {}
-impl<'program> FinalRuleAttemptPass<'program> for AfterMissFinalRulePass<'program> {}
 
 impl<'program> missed_tail::Sealed for ContinuingRuleTail<'program> {}
 impl<'program> MissedRuntimeRuleTail<'program> for ContinuingRuleTail<'program> {
