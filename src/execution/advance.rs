@@ -374,6 +374,11 @@ where
 }
 
 /// Reserves the next rule-attempt count without touching transition projection.
+///
+/// # Errors
+///
+/// Returns `RuleAttemptStepError` if the rule-attempt budget is exhausted or
+/// the next attempt count cannot be represented.
 fn reserve_next_rule_attempt<A>(
     attempt_budget: &mut RuleAttemptBudgetState<A>,
     state_len: RuntimeStateByteCount,
@@ -385,6 +390,11 @@ where
 }
 
 /// Prepares a matched rule-attempt application without committing progress.
+///
+/// # Errors
+///
+/// Returns `RuleAttemptStepError` if step reservation, rewrite preparation,
+/// return-output materialization, or allocation fails.
 fn prepare_rule_attempt_application<'program, 'once, 'budget, E>(
     scratch: &mut RewriteScratch,
     budget: &'budget mut RuntimeBudgetState<E>,
